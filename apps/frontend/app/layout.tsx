@@ -7,9 +7,7 @@ import "./globals.css";
 const navigation = [
   { href: "/ai-design", label: "AI 设计" },
   { href: "/diy", label: "DIY 创作" },
-  { href: "/gallery", label: "设计广场" },
-  { href: "/crystal-library", label: "水晶百科" },
-  { href: "/profile", label: "用户中心" }
+  { href: "/#inspiration", label: "设计灵感" }
 ];
 
 export const metadata: Metadata = {
@@ -24,14 +22,14 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
   return (
     <html lang="zh-CN">
       <body>
-        <header className="border-b border-[var(--border)] bg-[var(--surface)]/90">
-          <nav className="mx-auto flex max-w-6xl flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between" aria-label="主导航">
-            <Link className="text-lg font-semibold tracking-[0.12em]" href="/">
-              玄矶 MYSTCRAG
+        <header className="sticky top-0 z-50 border-b border-[var(--border)]/70 bg-[var(--surface)]/88 backdrop-blur-xl">
+          <nav className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5 sm:h-20 sm:px-8" aria-label="主导航">
+            <Link className="font-serif text-lg tracking-[0.18em] sm:text-xl" href="/" aria-label="玄矶 Mystcrag 首页">
+              玄矶 <span className="text-[0.68em] tracking-[0.24em] text-[var(--muted)]">MYSTCRAG</span>
             </Link>
-            <div className="flex gap-4 overflow-x-auto text-sm text-[var(--muted)]">
+            <div className="flex items-center gap-4 text-sm text-[var(--muted)] sm:gap-7">
               {navigation.map((item) => (
-                <Link className="shrink-0 transition-colors hover:text-[var(--accent)]" href={item.href} key={item.href}>
+                <Link className="shrink-0 transition-colors duration-300 hover:text-[var(--accent)]" href={item.href} key={item.href}>
                   {item.label}
                 </Link>
               ))}
@@ -39,6 +37,12 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
           </nav>
         </header>
         {children}
+        <footer className="border-t border-[var(--border)] px-5 py-10 text-sm text-[var(--muted)]">
+          <div className="mx-auto flex max-w-7xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p>玄矶 Mystcrag · 让设计承接此刻的感受</p>
+            <p>文化意象仅作设计灵感，不代表科学功效或确定性结果。</p>
+          </div>
+        </footer>
       </body>
     </html>
   );
