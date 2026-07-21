@@ -95,10 +95,10 @@ test("does not present a private design as published", () => {
 test("renders actionable flagged and rejected compliance states", () => {
   assert.match(
     renderToStaticMarkup(<ComplianceNotice design={withCompliance("FLAGGED")} />),
-    /requires compliance review/
+    /需要人工确认/
   );
   assert.match(
     renderToStaticMarkup(<ComplianceNotice design={withCompliance("REJECTED")} />),
-    /cannot be published or ordered/
+    /暂不可发布或下单/
   );
 });

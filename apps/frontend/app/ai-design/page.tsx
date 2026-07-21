@@ -1,5 +1,9 @@
-import { PageScaffold } from "../../components/page-scaffold";
+import type { Metadata } from "next";
+
+import { QuestionnaireWizard } from "../../src/features/questionnaire/components/questionnaire-wizard";
+
+export const metadata: Metadata = { title: "AI 设计问卷" };
 
 export default function AiDesignPage() {
-  return <PageScaffold eyebrow="AI Design" title="AI 设计" description="从情绪、风格、色彩与预算出发，生成结构化的手串设计方案。" />;
+  return <QuestionnaireWizard />;
 }
