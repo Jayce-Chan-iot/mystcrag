@@ -12,7 +12,7 @@ Date: 2026-07-21
 - Post-rebase implementation HEAD: `949bf57369605dd6f82b536018dbf0397ea5a2f9`
 - Previous handoff/report HEAD: `d873ecec5f8c74d2273f6bfbeb07f730ff08ada1`
 - Report correction commit: `fcf4f4e6bfeecea084ea8c1058611d5e21f4447c`
-- Final documentation commit: `PENDING`
+- Final documentation commit: `d81e7a110845573a94a29185d38e9be9a617608a`
 
 The branch merge-base with local `main` was confirmed as `750b6b932e71644533f24a4b4c8786ec5b403a45`, and that commit is an ancestor of the report-correction work.
 
