@@ -1,0 +1,151 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum DesignStatus {
+  DRAFT
+  GENERATED
+  SAVED
+  ARCHIVED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  IN_PRODUCTION
+  SHIPPED
+  COMPLETED
+  CANCELLED
+}
+
+model User {
+  id               String            @id @default(cuid())
+  email            String?           @unique
+  displayName      String?           @map("display_name")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  designHistory    DesignHistory[]
+  communityDesigns CommunityDesign[]
+  orders           Order[]
+
+  @@map("users")
+}
+
+model Crystal {
+  id                 String     @id @default(cuid())
+  nameCn             String     @map("name_cn")
+  nameEn             String     @map("name_en")
+  mineralName        String     @map("mineral_name")
+  gemologicalInfo    Json       @map("gemological_info")
+  colorTags          String[]   @map("color_tags")
+  visualTags         String[]   @map("visual_tags")
+  styleTags          String[]   @map("style_tags")
+  emotionTags        String[]   @map("emotion_tags")
+  cultureTags        String[]   @map("culture_tags")
+  priceLevel         Int        @map("price_level")
+  marketAvailability String?    @map("market_availability")
+  costRange          Json?      @map("cost_range")
+  imageReference     String?    @map("image_reference")
+  complianceNote     String     @map("compliance_note")
+  createdAt          DateTime   @default(now()) @map("created_at")
+  updatedAt          DateTime   @updatedAt @map("updated_at")
+  materials          Material[]
+
+  @@map("crystals")
+}
+
+model DesignTemplate {
+  id                 String          @id @default(cuid())
+  name               String
+  theme              String
+  emotion            String[]
+  targetUser         String?         @map("target_user")
+  style              String[]
+  colorPalette       String[]        @map("color_palette")
+  crystalCombination Json            @map("crystal_combination")
+  beadSequence       Json            @map("bead_sequence")
+  metalAccessories   Json?           @map("metal_accessories")
+  priceRange         Json            @map("price_range")
+  popularityScore    Float           @default(0) @map("popularity_score")
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+  designHistory      DesignHistory[]
+
+  @@map("design_templates")
+}
+
+model DesignHistory {
+  id              String           @id @default(cuid())
+  userId          String           @map("user_id")
+  templateId      String?          @map("template_id")
+  name            String
+  story           String?
+  configuration   Json
+  quotedPrice     Decimal?         @map("quoted_price") @db.Decimal(10, 2)
+  status          DesignStatus     @default(DRAFT)
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  template        DesignTemplate?  @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  communityDesign CommunityDesign?
+  orders          Order[]
+
+  @@index([userId, createdAt])
+  @@map("design_history")
+}
+
+model CommunityDesign {
+  id              String        @id @default(cuid())
+  designHistoryId String        @unique @map("design_history_id")
+  publishedById   String        @map("published_by_id")
+  title           String
+  story           String?
+  sharingConsent  Boolean       @default(false) @map("sharing_consent")
+  publishedAt     DateTime?     @map("published_at")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  designHistory   DesignHistory @relation(fields: [designHistoryId], references: [id], onDelete: Cascade)
+  publishedBy     User          @relation(fields: [publishedById], references: [id], onDelete: Cascade)
+
+  @@index([publishedAt])
+  @@map("community_designs")
+}
+
+model Material {
+  id             String   @id @default(cuid())
+  crystalId      String?  @map("crystal_id")
+  sku            String   @unique
+  name           String
+  materialType   String   @map("material_type")
+  specifications Json?
+  unitPrice      Decimal  @map("unit_price") @db.Decimal(10, 2)
+  stockQuantity  Int      @default(0) @map("stock_quantity")
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  crystal        Crystal? @relation(fields: [crystalId], references: [id], onDelete: SetNull)
+
+  @@index([crystalId])
+  @@map("materials")
+}
+
+model Order {
+  id              String        @id @default(cuid())
+  userId          String        @map("user_id")
+  designHistoryId String        @map("design_history_id")
+  status          OrderStatus   @default(PENDING)
+  totalAmount     Decimal       @map("total_amount") @db.Decimal(10, 2)
+  productionNote  String?       @map("production_note")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  user            User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  designHistory   DesignHistory @relation(fields: [designHistoryId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+  @@map("orders")
+}

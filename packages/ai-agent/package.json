@@ -1,0 +1,23 @@
+{
+  "name": "@mystcrag/ai-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./emotion-agent": "./emotion-agent/index.ts",
+    "./crystal-agent": "./crystal-agent/index.ts",
+    "./design-agent": "./design-agent/index.ts",
+    "./pricing-agent": "./pricing-agent/index.ts",
+    "./compliance-agent": "./compliance-agent/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "node --test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

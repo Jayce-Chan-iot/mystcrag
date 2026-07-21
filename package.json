@@ -1,0 +1,22 @@
+{
+  "name": "mystcrag",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI-powered personalized crystal bracelet design platform.",
+  "packageManager": "pnpm@11.4.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "lint": "turbo run lint",
+    "test": "node --test tests/*.test.mjs && turbo run test",
+    "typecheck": "turbo run typecheck",
+    "validate": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.6",
+    "typescript": "^6.0.3"
+  }
+}
