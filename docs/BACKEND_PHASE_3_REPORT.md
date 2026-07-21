@@ -8,8 +8,8 @@
 - Base commit before Phase 3 implementation: `64957c1c90a893a4f8a4c0ffdf372200c8df466e`
 - Pre-rebase HEAD: `e7974e603aca046f1a10bc31f93e522298d02325`
 - Post-rebase HEAD: `5d10c322643d3982deaa179563077913080943b8`
-- Pre-completion report commit: `bffd842` (`docs: supplement backend phase 3 report`)
-- Final handoff commit: the `docs: complete backend phase 3 handoff` commit containing this report; its immutable hash is recorded in the final handoff output because a commit cannot embed its own hash.
+- Pre-completion report commit: `ea5331b` (`docs: supplement backend phase 3 report`)
+- Final handoff commit: `ea83e8f` (`docs: complete backend phase 3 handoff`)
 - Report generation date: 2026-07-21
 
 ## Scope
