@@ -11,19 +11,33 @@ export type NumericTransform = {
   readonly radialOffsetMm: number;
 };
 
+export type RenderGeometry =
+  | { readonly kind: "SPHERE"; readonly diameterMm: number }
+  | { readonly kind: "CYLINDER"; readonly diameterMm: number; readonly depthMm: number }
+  | {
+      readonly kind: "BOX";
+      readonly widthMm: number;
+      readonly heightMm: number;
+      readonly depthMm: number;
+    };
+
 export type RenderItem = {
   readonly componentId: string;
   readonly componentType: "BEAD" | "ACCESSORY";
+  readonly accessoryType?: "SPACER" | "PENDANT" | "METAL_PART" | "CONNECTOR";
+  readonly placementMode: "INLINE" | "ANCHORED";
   readonly sequenceIndex: number;
   readonly anchorComponentId?: string;
+  readonly anchorSlot?: number;
   readonly transform: NumericTransform;
   readonly geometryKey: string;
+  readonly geometry: RenderGeometry;
   readonly materialKey: string;
   readonly textureAssetKey?: string;
+  readonly assetStatus: "AVAILABLE" | "FALLBACK";
   readonly interactionState: {
-    readonly selected: false;
-    readonly hovered: false;
-    readonly draggable: true;
+    readonly selectable: true;
+    readonly draggable: false;
   };
 };
 
