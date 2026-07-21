@@ -62,10 +62,24 @@ test("frontend cannot import server-only contract or database modules", async ()
   assertNoMatches(matches);
 });
 
-test("backend API boundary does not expose Prisma or database package types", async () => {
+test("backend HTTP boundary does not expose Prisma or database package types", async () => {
+  const repositoryBackedServices = new Set([
+    "apps/backend/src/modules/community/publication.service.ts",
+    "apps/backend/src/modules/design/design.service.ts",
+    "apps/backend/src/modules/design/inventory.service.ts",
+    "apps/backend/src/modules/design/pricing.service.ts",
+    "apps/backend/src/modules/order/order.service.ts"
+  ]);
   const matches = await matchingFiles(
-    ["apps/backend/src/contracts", "apps/backend/src/modules/design", "apps/backend/src/validation"],
-    /from\s+["'](?:@prisma\/client|@mystcrag\/database)["']/
+    [
+      "apps/backend/src/contracts",
+      "apps/backend/src/modules/community",
+      "apps/backend/src/modules/design",
+      "apps/backend/src/modules/order",
+      "apps/backend/src/validation"
+    ],
+    /from\s+["'](?:@prisma\/client|@mystcrag\/database)["']/,
+    repositoryBackedServices
   );
   assertNoMatches(matches);
 });

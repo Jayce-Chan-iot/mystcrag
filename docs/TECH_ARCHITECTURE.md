@@ -42,3 +42,16 @@ provider unknown -> AI candidate validation -> server enrichment -> DesignV1
 - Root architecture tests enforce these directions and protect the server-only commercial boundary.
 
 Runtime AI providers, full 3D rendering, authentication, persistence adapters, live catalog pricing, and commerce workflows remain deferred. Phase 2B does not change Prisma.
+
+## Phase 2C persistence flow
+
+`@mystcrag/database` now owns the Prisma client lifecycle, domain-safe mappers, repositories, PostgreSQL transaction boundaries, and the baseline migration. Backend domain services depend on repositories and never access Prisma models directly.
+
+```text
+authenticated/test actorId -> Backend service -> Repository transaction
+                                              |-> Design current row + immutable revision
+                                              |-> fixed-revision publication
+                                              `-> server price/inventory checks + immutable order snapshot
+```
+
+Versioned JSON aggregates remain Design Contract values and are Zod-validated on write and read. Structured columns own identity, ownership, lifecycle, querying, currency, versions, and BIGINT minor-unit money. Phase 2C supplies real persistence services but keeps the Phase 2B HTTP routes in their explicit development-stub mode until authentication and endpoint orchestration are connected.

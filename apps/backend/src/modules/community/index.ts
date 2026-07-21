@@ -4,3 +4,5 @@ export const communityModule = {
   name: "community",
   description: "Permission-aware community publishing boundary."
 } satisfies BackendModule;
+
+export * from "./publication.service.js";

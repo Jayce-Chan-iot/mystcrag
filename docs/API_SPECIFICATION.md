@@ -66,6 +66,8 @@ POST /api/orders/from-design
 
 Uses `CreateOrderFromDesignRequestSchema` and `CreateOrderFromDesignResponseSchema`, with a compliance guard before service execution.
 
-## Initialization status
+## Phase 2C service status
 
-`/health`, `/api/modules`, and the six validated design/order stub routes are registered. Authentication, ownership checks, catalog/inventory validation, persistence, live pricing, and successful product operations remain unimplemented.
+`/health`, `/api/modules`, and the six validated design/order routes remain registered as development stubs. Phase 2C adds repository-backed `DesignService`, `PublicationService`, `OrderService`, `PricingService`, and `InventoryService` with explicit `actorId`, but does not connect them to public HTTP success paths before authentication exists.
+
+Persistence conflicts map to the existing stable codes: stale `expectedRevision` becomes `CONFLICT`; server price/version mismatch becomes `PRICE_CHANGED`; latest stock mismatch becomes `INVENTORY_CHANGED`; consent and compliance failures retain `CONSENT_REQUIRED` and `COMPLIANCE_BLOCKED`. Clients never submit `ownerId`, unit costs, trusted totals, or trusted inventory. Order intent is limited to design/revision identity plus `expectedTotalPriceMinor` and `expectedPricingVersion`.

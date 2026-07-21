@@ -3,22 +3,33 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
-    "build": "prisma validate",
+    "build": "prisma validate && tsc --noEmit",
     "db:format": "prisma format",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
+    "db:migrate": "prisma migrate deploy",
     "lint": "prisma validate",
-    "test": "prisma validate",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:test": "tsx --test src/**/*.test.ts",
+    "test": "tsx --test src/**/*.unit.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@mystcrag/design-contract": "workspace:*",
+    "@prisma/adapter-pg": "^7.9.0",
     "@prisma/client": "^7.9.0",
-    "dotenv": "^17.2.2"
+    "dotenv": "^17.2.2",
+    "pg": "^8.22.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
+    "@types/pg": "^8.20.0",
     "prisma": "^7.9.0",
+    "tsx": "^4.23.1",
     "typescript": "^6.0.3"
   }
 }

@@ -9,6 +9,7 @@ allowBuilds:
   sharp: true
   unrs-resolver: true
 minimumReleaseAgeExclude:
+  - '@prisma/adapter-pg@7.9.0'
   - '@prisma/client-runtime-utils@7.9.0'
   - '@prisma/client@7.9.0'
   - '@prisma/config@7.9.0'
@@ -17,3 +18,4 @@ minimumReleaseAgeExclude:
   - '@prisma/fetch-engine@7.9.0'
   - '@prisma/get-platform@7.9.0'
   - prisma@7.9.0
+  - '@prisma/driver-adapter-utils@7.9.0'
