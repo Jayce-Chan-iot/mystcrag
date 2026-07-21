@@ -6,7 +6,11 @@ Copy this template into the Agent's Phase 3 report or handoff message. Do not om
 
 - Agent role:
 - Branch name:
+- remoteStatus: `NOT_CONFIGURED`
+- integrationBaseline: `LOCAL_MAIN`
 - Baseline commit:
+- Pre-rebase commit:
+- Post-rebase commit:
 - Final commit:
 
 ## Change scope
@@ -16,6 +20,8 @@ Copy this template into the Agent's Phase 3 report or handoff message. Do not om
 - New or changed interfaces:
 - Shared assets changed:
 - Approved decision-log entries:
+- Rebase conflict files:
+- Conflict owners and resolutions:
 
 ## Verification
 

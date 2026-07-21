@@ -1,8 +1,10 @@
 # Mystcrag Phase 3 Parallel Development Plan
 
-Date: 2026-07-21  
-Status: Approved  
-Local baseline: `64957c1 feat: add versioned design persistence and order snapshots`
+Date: 2026-07-21
+Status: Approved
+Original feature baseline: `64957c1 feat: add versioned design persistence and order snapshots`
+remoteStatus: `NOT_CONFIGURED`
+integrationBaseline: `LOCAL_MAIN`
 
 ## 1. Team roles
 
@@ -17,23 +19,31 @@ Local baseline: `64957c1 feat: add versioned design persistence and order snapsh
 
 Each Agent records its baseline and final commit in `HANDOFF_TEMPLATE.md` format. A branch belongs to exactly one role and must not be reused by another Agent.
 
-## 2. Branch rules
+## 2. Branch and integration rules
 
-All Phase 3 role branches are created from the same latest reviewed `main` baseline. Before starting work, every Agent must run:
+Phase 3 currently uses local Git branches without a configured remote. Do not run `git fetch origin`, `git pull origin`, or claim remote synchronization. Until a remote is deliberately configured, local `main` is the only integration baseline.
+
+Before starting or synchronizing work, confirm the local integration baseline with:
 
 ```sh
+git switch main
 git status
-git branch --show-current
+git log --oneline -n 10
 ```
 
-If the branch is incorrect, the Agent stops and switches to its assigned branch. Agents never develop directly on `main` and never merge another Agent's work branch into their own. To synchronize after a newer `main` is available, use:
+The Tech Lead confirms that `main` is clean and contains every approved management baseline. Then switch to the assigned branch and rebase it on local `main`:
 
 ```sh
-git fetch
-git rebase origin/main
+git switch <role-branch>
+git status
+git rebase main
 ```
 
-If a conflict touches another owner's module, do not resolve it by changing that module. Record the conflict and ask the Tech Lead to coordinate it.
+Local rebase is the Phase 3 synchronization policy because it keeps each role's commits linear and reviewable. Do not rebase a branch after it has been shared outside this local single-developer, multi-window workflow without explicit coordination. Agents never develop directly on `main` and never merge another Agent's work branch into their own.
+
+If the branch is incorrect or the worktree is not clean, stop. If a conflict touches another owner's module, do not resolve it by changing that module. Record the conflict and ask the Tech Lead to coordinate it. Shared-file conflicts belong to the Tech Lead; module conflicts belong to that module's Lead.
+
+When a remote and protected branch are configured in the future, the Tech Lead must add a reviewed remote synchronization and Pull Request policy before Agents use it.
 
 ## 3. Directory ownership
 
@@ -145,6 +155,6 @@ The Tech Lead reviews the diff, report, test evidence, API/Contract compatibilit
 
 These rules apply to every Codex Agent without exception:
 
-1. **Independent Git branch.** Work only on the assigned branch, never on `main` or another Agent's branch, and confirm the branch is based on the latest reviewed `main` before development.
+1. **Independent Git branch.** Work only on the assigned branch, never on `main` or another Agent's branch, and confirm the branch is rebased on the current clean local `main` integration baseline before development.
 2. **Owned module only.** Modify only the assigned directories and report. Log and obtain approval for every cross-module or shared-protocol change before implementation.
 3. **Validation before commit and merge.** Run `pnpm validate` and require lint, TypeScript, unit tests, Prisma validation, Backend build, and Frontend production build to pass. A failing branch must not be committed, handed off, or merged. After each merge, the Tech Lead reruns `pnpm install` and `pnpm validate`.
