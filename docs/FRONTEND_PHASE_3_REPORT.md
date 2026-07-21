@@ -11,7 +11,7 @@ Date: 2026-07-21
 - Pre-rebase HEAD: `1a2cb7e0118c61127aca4273fd7c40ed45e3e33b`
 - Post-rebase implementation HEAD: `9b53037af74fda2450912112320b2eb3fd72e1d4`
 - Incorrectly titled previous handoff commit: `3bacf17ff0b751060d2da5616af3e20161eeaee5`
-- Correct report correction commit: `PENDING — recorded by the follow-up documentation commit`
+- Correct report correction commit: `80d7feea9fee47216d510fd3cb744bacbb22db3c` (`docs: finalize frontend phase 3 handoff`)
 
 Commit `3bacf17ff0b751060d2da5616af3e20161eeaee5` contains Frontend report content, but its subject incorrectly references the AI role. Its history is intentionally preserved: this correction does not amend, rebase away, or otherwise rewrite that commit. A subsequent commit with the Frontend-specific subject corrects the handoff record.
 
