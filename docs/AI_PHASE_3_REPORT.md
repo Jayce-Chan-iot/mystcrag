@@ -1,77 +1,105 @@
-# Mystcrag AI Phase 3 Report
+# Mystcrag AI Phase 3 Final Handoff Report
 
 Date: 2026-07-21
 
 ## Identity
 
-- Agent role: AI Lead
-- Branch name: `feature/ai-recommendation`
-- Baseline commit: `64957c1 feat: add versioned design persistence and order snapshots`
-- Final post-rebase implementation commit: `949bf57369605dd6f82b536018dbf0397ea5a2f9 feat: implement rule based bracelet recommendation`
-- Report amendment commit: recorded in the handoff message because a commit cannot embed its own hash.
+- Agent role: `AI Lead`
+- Branch: `feature/ai-recommendation`
+- Integration baseline: `LOCAL_MAIN`
+- Local main baseline: `750b6b932e71644533f24a4b4c8786ec5b403a45`
+- Pre-rebase HEAD: `f10ce823830fa19bb7344ca15e3dbbb778da1686`
+- Post-rebase implementation HEAD: `949bf57369605dd6f82b536018dbf0397ea5a2f9`
+- Previous handoff/report HEAD: `d873ecec5f8c74d2273f6bfbeb07f730ff08ada1`
+- Report correction commit: `PENDING`
+- Final documentation commit: `PENDING`
 
-## Change scope
+The branch merge-base with local `main` was confirmed as `750b6b932e71644533f24a4b4c8786ec5b403a45`, and that commit is an ancestor of the report-correction work.
 
-- Changed modules: `packages/ai-agent` and module-local AI fixtures/tests.
-- Changed files: Emotion, Crystal, Design, Pricing, and Compliance Agent implementations; AI candidate and recommendation schemas; candidate-to-DesignV1 adapter; Provider adapters; recommendation service; fixtures; package exports; AI tests; this report.
-- New or changed interfaces: `LLMProvider`, `MockProvider`, `RuleBasedProvider`, `RecommendationRequestSchema`, `RecommendationProviderOutputSchema`, and `generateRecommendations`.
-- Shared assets changed: None.
-- Approved decision-log entries: None required. Design Contract V1, API, database, and architecture protocols were not changed.
+## Exact file inventory
 
-## Agent implementation
+Source: `git diff --name-status main...HEAD`. This is the complete 26-file difference from local `main` through the AI implementation and handoff report.
 
-- Emotion Agent maps questionnaire goals and free text onto six standard emotion tags. It uses design-preference language only and does not diagnose mental state.
-- Crystal Agent scores color, style, and emotion overlap, then filters disabled, out-of-stock, explicitly excluded, and over-budget catalog fixtures.
-- Design Agent scores Design DNA templates and deterministically creates three differentiated candidates. Every candidate contains a final twelve-bead component sequence with contiguous `positionIndex` values; no grouped `count` representation is used.
-- Pricing Agent supplies only currency, budget band, and eligible product IDs. It does not decide a sale price and does not emit unit, cost, or total price fields.
-- Compliance Agent detects medical effects, psychological diagnosis, guaranteed wealth, guaranteed fortune change, and deterministic fortune prediction. Cultural content is consistently labeled as `文化参考`, `设计灵感`, and `非科学功效` with the stable Design Contract disclaimer key.
-- Provider flow treats every implementation result as `unknown`, applies strict recommendation and AI Candidate schema validation, runs compliance normalization, and returns candidates only after both boundaries pass.
-- A real network LLM provider is intentionally absent. The provider interface is replaceable without changing the rule pipeline or candidate trust boundary.
+```text
+A	docs/AI_PHASE_3_REPORT.md
+M	packages/ai-agent/compliance-agent/index.ts
+M	packages/ai-agent/contracts.ts
+M	packages/ai-agent/crystal-agent/index.ts
+M	packages/ai-agent/design-agent/index.ts
+M	packages/ai-agent/emotion-agent/index.ts
+M	packages/ai-agent/index.ts
+M	packages/ai-agent/package.json
+M	packages/ai-agent/pricing-agent/index.ts
+M	packages/ai-agent/src/adapters/ai-candidate-to-design-v1.ts
+M	packages/ai-agent/src/adapters/legacy-design-to-ai-candidate.ts
+M	packages/ai-agent/src/contracts/index.ts
+A	packages/ai-agent/src/contracts/recommendation.ts
+A	packages/ai-agent/src/fixtures/crystals.ts
+A	packages/ai-agent/src/fixtures/design-dna.ts
+A	packages/ai-agent/src/fixtures/index.ts
+A	packages/ai-agent/src/providers/index.ts
+A	packages/ai-agent/src/providers/llm-provider.ts
+A	packages/ai-agent/src/providers/mock-provider.ts
+A	packages/ai-agent/src/providers/rule-based-provider.ts
+A	packages/ai-agent/src/recommendation/index.ts
+A	packages/ai-agent/src/recommendation/recommendation-service.ts
+M	packages/ai-agent/src/schemas/ai-design-candidate.schema.ts
+A	packages/ai-agent/src/schemas/recommendation-output.schema.ts
+M	packages/ai-agent/tests/ai-candidate-adapter.test.ts
+A	packages/ai-agent/tests/rule-based-recommendation.test.ts
+```
+
+## Implementation summary
+
+- `RuleBasedProvider` composes the rule Agents into the V1 deterministic recommendation flow and returns three differentiated bracelet candidates without a network dependency.
+- `MockProvider` returns cloned configured `unknown` values for malformed output, unknown-field, schema-boundary, and compliance tests.
+- `LLMProvider` is the replaceable provider interface. Its provider result is never trusted by its TypeScript implementation identity.
+- Emotion Agent maps questionnaire goals and free text to six standardized emotion tags without psychological diagnosis.
+- Crystal Agent filters and scores catalog fixtures using emotion, style, color, currency budget, product status, inventory, and explicit exclusions.
+- Design Agent scores Design DNA templates and emits three actual ordered twelve-bead component sequences with contiguous `positionIndex` values; it does not use grouped `count` data as the final arrangement.
+- Pricing boundary exposes only currency, budget band, and eligible product IDs. It does not choose or emit a trusted unit, cost, or total sale price.
+- Compliance Agent scans candidate copy for medical effects, psychological diagnosis, guaranteed wealth, guaranteed fortune change, and deterministic fortune prediction.
+- `AiDesignCandidateSchema` and `RecommendationProviderOutputSchema` strictly validate provider candidates and reject extra unknown fields.
+- `aiCandidateToDesignV1` is the one-way boundary that verifies catalog mappings, applies server-owned enrichment, and validates the final `DesignV1`.
+- Crystal test data: 20 records, including one out-of-stock product and one disabled product.
+- Design DNA data: 12 templates.
+- Standard emotion tags: 6 (`calm`, `focus`, `confidence`, `joy`, `connection`, `renewal`).
+- Standard style tags: 6 (`minimal`, `eastern-contemporary`, `romantic`, `natural`, `modern`, `vintage`).
+- CNY and TWD use independent fixture prices and budget bands. There is no exchange-rate conversion path.
+- Out-of-stock, disabled, explicitly excluded, and budget-ineligible bead products are removed before design generation.
+- Real LLM status: **this phase does not enable or call a real LLM Provider**. There is no model SDK, API key, prompt execution, model retry, or network model billing path.
 
 ## Rule recommendation flow
 
 ```text
 questionnaire preferences
-  -> Emotion Agent standard emotionTags
+  -> Emotion Agent emotionTags
   -> normalized styleTags and colorTags
-  -> Crystal Agent status, inventory, exclusion, and budget filtering
+  -> Crystal Agent budget/status/inventory/exclusion filters
   -> crystal tag-match scoring
   -> Design DNA template scoring
   -> three differentiated ordered bead sequences
-  -> Provider result treated as unknown
+  -> provider result treated as unknown
   -> RecommendationProviderOutputSchema
   -> AiDesignCandidateSchema
   -> Compliance normalization
-  -> trusted AI Candidate output
-  -> Backend-owned enrichment
+  -> AI Candidate
+  -> Backend orchestration and authoritative enrichment
   -> aiCandidateToDesignV1
   -> DesignV1Schema
 ```
 
-Template scores combine emotion, style, color, and popularity signals. Crystal scores combine emotion, style, color, availability, and budget eligibility. Equal scores use stable identifier ordering, so identical inputs and fixture versions produce identical outputs.
+Template scores combine emotion, style, color, and popularity signals. Crystal scores combine emotion, style, color, availability, and budget eligibility. Equal scores use stable identifier ordering, so the same request and fixture versions produce the same candidates.
 
-## Provider adapters
+## Contract boundary
 
-- `LLMProvider` is the provider-neutral asynchronous interface. Its return type is always `unknown` at the trust boundary.
-- `MockProvider` returns a cloned configured value for malformed-output, unknown-field, schema, and compliance tests.
-- `RuleBasedProvider` composes the five rule Agents and returns three deterministic candidates without a network dependency.
-- Real LLM call status: **No real LLM call exists or is enabled.** There is no model SDK, API key, prompt execution, network retry, or model billing path in V1.
-
-## Dataset scale
-
-- Crystal fixtures: 20 products, including one out-of-stock case and one disabled case.
-- Design DNA fixtures: 12 templates.
-- Standard design styles: 6 (`minimal`, `eastern-contemporary`, `romantic`, `natural`, `modern`, `vintage`).
-- Standard emotion goals: 6 (`calm`, `focus`, `confidence`, `joy`, `connection`, `renewal`).
-- Currency contexts: independent CNY and TWD catalog values and budget bands; no exchange-rate path.
-
-## Candidate and DesignV1 boundary
-
-- AI Candidate contains creative suggestions only: design name/story, emotion/style/color tags, cultural inspiration, recommendation reasons, source template IDs, crystal/product IDs, and final component order.
-- Strict candidate schemas reject additional unknown fields and attempts to set `unitPriceMinor`, `unitCostMinor`, `totalPriceMinor`, inventory, owner/design identity, revision/timestamps, visibility, or publication consent.
-- Candidate data is not a trusted price, stock, publication, persistence, or order record.
-- Backend must supply authoritative IDs, timestamps, catalog assets, prices, pricing versions, provenance, and bracelet context through `AiDesignServerEnrichment`.
-- `aiCandidateToDesignV1` validates the Candidate, normalizes compliance, verifies catalog mappings, performs server-owned enrichment, and finally validates the complete result with `DesignV1Schema`. It returns no partially trusted design.
+- Raw AI Provider output is always handled as `unknown` before runtime validation.
+- AI may suggest creative candidate content, catalog IDs, and component order. AI does not set server-owned design/component identity, `revision`, timestamps, `unitPriceMinor`, `unitCostMinor`, `totalPriceMinor`, authoritative inventory, `visibility`, `publishConsent`, owner data, or order data.
+- A candidate must pass `RecommendationProviderOutputSchema`, `AiDesignCandidateSchema`, and compliance normalization before it is handed to the Backend orchestration layer.
+- Backend owns authoritative catalog, inventory, price, identity, time, pricing-version, and provenance enrichment through `AiDesignServerEnrichment`.
+- `aiCandidateToDesignV1` returns either a complete schema-valid `DesignV1` or structured rejection issues; it does not return a partially trusted design.
+- The AI package does not redeclare `DesignV1`; it imports the canonical schema and types from `@mystcrag/design-contract`.
+- This branch does not modify `@mystcrag/design-contract`.
 
 ## Compliance detection range
 
@@ -81,44 +109,87 @@ Template scores combine emotion, style, color, and popularity signals. Crystal s
 - Guaranteed fortune-change claims.
 - Deterministic destiny or fortune predictions.
 
-Scanning covers design name, design story, recommendation reasons, and cultural-reference/inspiration text in Chinese and English rule patterns. Cultural fields use `文化参考`, `设计灵感`, `非科学功效`, and `CULTURAL_REFERENCE_NOT_SCIENTIFIC_EFFECT`. V1 compliance is deterministic keyword/rule detection, not a medical classifier or model-based semantic review.
+Scanning covers design name, design story, recommendation reasons, and cultural-reference/inspiration text through deterministic Chinese and English rule patterns. Cultural content uses `文化参考`, `设计灵感`, `非科学功效`, and `CULTURAL_REFERENCE_NOT_SCIENTIFIC_EFFECT`. This is rule-based copy detection, not a medical classifier or model-based semantic review.
 
-## Determinism evaluation
+## Tests and validation evidence
 
-- Repeated `RuleBasedProvider` calls with the same request, context, and fixture version are asserted with deep equality.
-- Template and crystal rankings use explicit score weights plus stable ID tie-breaking.
-- Candidate count is fixed at three, each source template is distinct, component positions are contiguous, and every physical bead is represented individually.
-- The deterministic test passes as part of the AI package's 25/25 test suite.
+AI tests: **25/25 passed**.
 
-## Verification
+Principal AI test categories:
 
-- Focused checks and results: `pnpm --filter @mystcrag/ai-agent lint` passed; `pnpm --filter @mystcrag/ai-agent test` passed 25/25 tests; `git diff --check -- packages/ai-agent` passed.
-- Tests added or updated: emotion mapping, style/color matching, budget and inventory filtering, template scoring, three-candidate differentiation, ordered components, five compliance categories, malformed/extra Provider output, determinism, Candidate Schema, CNY/TWD contexts, forbidden price/cost/inventory/publication fields, and generated-candidate conversion through `aiCandidateToDesignV1`.
-- `pnpm validate` command: `pnpm validate`.
-- `pnpm validate` result: Passed in the dedicated `feature/ai-recommendation` worktree: 7/7 lint tasks, 7/7 typecheck tasks, 7/7 root architecture tests, all workspace tests including AI 25/25, and 7/7 build tasks.
-- Validation commit: Working tree before `feat: implement rule based bracelet recommendation`.
+- emotion mapping;
+- style matching;
+- color matching;
+- budget filtering;
+- inventory and product-status filtering;
+- Design DNA template scoring;
+- three-candidate diversity and actual component order;
+- compliance detection across all five restricted categories;
+- invalid, non-object, and extra-field Provider output;
+- deterministic repeated output;
+- prohibited server-owned price, cost, inventory, identity, and publication fields;
+- Candidate Schema validation and conversion through the DesignV1 adapter.
+
+Workspace validation evidence from `pnpm validate`:
+
+- lint: 7/7 workspace tasks passed;
+- strict TypeScript: 7/7 workspace typecheck tasks passed;
+- root architecture tests: 7/7 passed;
+- AI Agent tests: 25/25 passed;
+- Design Contract tests: 25/25 passed;
+- Backend tests: 9/9 passed;
+- Frontend tests: 8/8 passed;
+- Three Engine tests: 10/10 passed;
+- Database unit tests: 4/4 passed;
+- UI package: no test cases and no failures;
+- Prisma validation: schema valid;
+- Backend build: passed;
+- Frontend production build: passed, including static generation of all application routes;
+- all seven workspace build tasks: passed.
+
+`pnpm validate` covers lint, strict TypeScript, architecture and workspace tests, Prisma validation, Backend build, and Frontend production build.
+
+## Shared assets
+
+The `main...HEAD` file inventory confirms:
+
+- `pnpm-lock.yaml` was not modified;
+- `packages/design-contract` was not modified;
+- `docs/API_SPECIFICATION.md` was not modified;
+- `docs/DATABASE_SCHEMA.md` and the database schema were not modified;
+- `docs/DECISION_LOG.md` was not modified;
+- no Decision Log approval was required because no shared contract, API, database, or architecture asset changed.
 
 ## Backend integration
 
 1. Backend validates or maps its questionnaire DTO into `RecommendationRequestSchema` input.
 2. Backend calls `generateRecommendations(new RuleBasedProvider(), request, context)` and handles `READY | REJECTED` without trusting Provider JSON.
 3. For a selected candidate, Backend loads authoritative catalog, inventory, price, identity, timestamp, and provenance values into `AiDesignServerEnrichment`.
-4. Backend calls `aiCandidateToDesignV1(candidate, enrichment)` and returns only a schema-valid public projection. Production integration must not reuse fixture prices as authoritative catalog prices.
+4. Backend calls `aiCandidateToDesignV1(candidate, enrichment)` and returns only a schema-valid public projection.
 
-No Backend file was changed by the AI Lead.
+Production integration must not reuse fixture prices or fixture inventory as authoritative commercial data. No Backend file was changed by the AI Lead.
 
-## Handoff notes
+## Remaining limitations
 
-- Known limitations: fixed expert weights; twelve-bead templates; bead-only V1 candidates; static fixtures; conservative inventory filtering; keyword-based compliance; no retries, observability, production prompt management, or real LLM SDK.
-- Unfinished work: production catalog/inventory adapters, accessory generation, wrist-size-derived bead count, localized explanation copy, and a separately approved real Provider implementation.
-- Cross-module dependencies: Backend owns trusted enrichment and selection persistence; `@mystcrag/design-contract` remains the candidate-to-design destination; 3D consumes the resulting validated `DesignV1`.
-- Merge risks: the shared working directory contained concurrent uncommitted Backend, Database, Three Engine, and lockfile changes. They are excluded from this AI commit and must be reviewed/committed by their owners.
-- Recommended reviewer focus: strict unknown-field rejection, no trusted commercial/publication fields in candidates, deterministic ranking, compliance coverage, and Backend use of authoritative enrichment.
+- A real LLM Provider is not enabled.
+- Recommendation is currently deterministic and rule-driven with fixed expert weights.
+- Crystal and Design DNA data are test/seed scale, not a production catalog or reviewed production knowledge base.
+- Final price is decided and recalculated by Backend-owned pricing orchestration, never by AI output.
+- Authoritative inventory is decided by Backend/Product Repository data, never by AI fixtures.
+- User-behavior learning, automatic weight learning, embeddings, and vector retrieval are not implemented.
+- Candidate sequences currently use fixed twelve-bead, bead-only Design DNA patterns; accessory generation and wrist-size-derived bead counts remain deferred.
+- Compliance uses deterministic keyword rules and still requires a future reviewed escalation path for production edge cases.
+
+## Handoff assessment
+
+- Remaining blockers for the AI branch: None within the documented Phase 3 scope.
+- Merge readiness: Ready for Tech Lead review and merge after confirming both documentation commit hashes and rerunning the integration gate in merge order.
+- Recommended reviewer focus: exact trust boundaries, no server-field leakage, deterministic ranking, compliance coverage, authoritative Backend enrichment, and the exact file inventory above.
 
 ## Agent confirmation
 
-- [x] I confirmed the assigned branch before development.
-- [x] I changed only my owned module, owned tests, and role report.
-- [x] No shared Contract, API, database, architecture, or 3D-contract change was required.
+- [x] The assigned branch and local-main ancestry were confirmed before correction.
+- [x] This correction changes only `docs/AI_PHASE_3_REPORT.md`.
+- [x] No business implementation, other module, shared contract, API, database, or architecture asset was changed.
 - [x] No commercial cost, supplier, prompt, hidden reasoning, or private conversation data leaks through candidate output.
-- [x] I ran `pnpm validate` successfully on the final change.
+- [x] `pnpm validate` passed before the report correction commit.
