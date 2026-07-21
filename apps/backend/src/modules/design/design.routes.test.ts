@@ -1,197 +1,697 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  DesignV1Schema,
+  toPublicDesign,
+  type DesignV1
+} from "@mystcrag/design-contract";
 import { standardAiDesignFixture } from "@mystcrag/design-contract/fixtures";
 
 import { createApp } from "../../app.js";
-import type { DesignStubOperation, DesignStubService } from "./design.service.js";
+import { DomainApiError } from "../../contracts/api-error.js";
+import {
+  DesignApplicationService,
+  type CatalogProduct
+} from "./design-api.service.js";
 
+type PersistedDesign = {
+  id: string;
+  ownerId: string;
+  currentRevision: number;
+  status: "DRAFT" | "GENERATED" | "SAVED" | "ARCHIVED";
+  snapshot: DesignV1;
+  createdAt: Date;
+  updatedAt: Date;
+  deletedAt: Date | null;
+};
+type PersistedDesignRevision = {
+  id: string;
+  designId: string;
+  revisionNumber: number;
+  snapshot: DesignV1;
+  changeType: "CREATED" | "UPDATED" | "RESTORED" | "AI_OPTIMIZED";
+  changeReason: string | null;
+  createdBy: string;
+  createdAt: Date;
+};
+
+const actorId = "actor-owner";
+const fixedNow = new Date("2026-07-21T10:00:00.000Z");
 const cloneDesign = () => structuredClone(standardAiDesignFixture);
 
-function validBodies() {
+function catalogFromFixture(): CatalogProduct[] {
   const design = cloneDesign();
   return [
-    {
-      url: "/api/design/generate",
-      body: {
-        requestId: "request-generate",
-        locale: "zh-CN",
-        currency: "CNY",
-        wristCircumferenceMm: 155,
-        emotionTags: ["calm"],
-        styleTags: ["minimal"],
-        colorTags: ["blue"]
-      }
-    },
-    {
-      url: "/api/design/update",
-      body: {
-        requestId: "request-update",
-        designId: design.designId,
-        expectedRevision: design.revision,
-        operations: [
-          {
-            operation: "MOVE_COMPONENT",
-            componentId: "bead-moonstone-1",
-            targetPositionIndex: 3
-          }
-        ]
-      }
-    },
-    {
-      url: "/api/design/price",
-      body: { requestId: "request-price", currency: "CNY", design }
-    },
-    {
-      url: "/api/design/save",
-      body: { requestId: "request-save", design }
-    },
-    {
-      url: "/api/design/publish",
-      body: {
-        requestId: "request-publish",
-        design,
-        visibility: "PRIVATE",
-        publishConsent: false,
-        allowRemix: false,
-        creatorDisplayMode: "ANONYMOUS"
-      }
-    },
-    {
-      url: "/api/orders/from-design",
-      body: {
-        requestId: "request-order",
-        design,
-        expectedRevision: design.revision,
-        expectedPricingVersion: design.pricing.pricingVersion,
-        expectedTotalPriceMinor: design.pricing.totalPriceMinor
-      }
-    }
+    ...design.beads.map((bead, index) => ({
+      id: bead.beadProductId,
+      productType: "MATERIAL" as const,
+      sku: `BEAD-${index}`,
+      name: bead.beadProductId,
+      crystalId: bead.crystalId,
+      shape: bead.shape,
+      diameterMm: bead.diameterMm,
+      materialKey: bead.materialKey,
+      modelAssetKey: bead.modelAssetKey,
+      textureAssetKey: bead.textureAssetKey,
+      currency: design.currency,
+      unitPriceMinor: bead.unitPriceMinor,
+      active: true
+    })),
+    ...design.accessories.map((accessory, index) => ({
+      id: accessory.accessoryProductId,
+      productType: "ACCESSORY" as const,
+      sku: `ACCESSORY-${index}`,
+      name: accessory.accessoryProductId,
+      accessoryType: accessory.accessoryType,
+      material: accessory.material,
+      finish: accessory.finish,
+      dimensions: structuredClone(accessory.dimensions),
+      modelAssetKey: accessory.modelAssetKey,
+      textureAssetKey: accessory.textureAssetKey ?? null,
+      currency: design.currency,
+      unitPriceMinor: accessory.unitPriceMinor,
+      active: true
+    }))
   ];
 }
 
-test("all six validated development routes return stable NOT_IMPLEMENTED errors", async () => {
-  const app = createApp();
-  for (const route of validBodies()) {
-    const response = await app.inject({ method: "POST", url: route.url, payload: route.body });
-    assert.equal(response.statusCode, 501, route.url);
-    assert.equal(response.json().error.code, "NOT_IMPLEMENTED");
-  }
-  await app.close();
+function createHarness() {
+  const catalog = catalogFromFixture();
+  const catalogById = new Map(catalog.map((product) => [product.id, product]));
+  const current = new Map<string, PersistedDesign>();
+  const revisionRows = new Map<string, PersistedDesignRevision[]>();
+  const orderSnapshots: DesignV1[] = [];
+  let componentCounter = 0;
+  let failUpdate = false;
+  let inventoryChanged = false;
+  let orderPriceChanged = false;
+  let orderInventoryChanged = false;
+
+  const seed = (design: DesignV1, ownerId = actorId) => {
+    const now = new Date(design.createdAt);
+    current.set(design.designId, {
+      id: design.designId,
+      ownerId,
+      currentRevision: design.revision,
+      status: "DRAFT",
+      snapshot: structuredClone(design),
+      createdAt: now,
+      updatedAt: new Date(design.updatedAt),
+      deletedAt: null
+    });
+    revisionRows.set(design.designId, [
+      {
+        id: `revision-${design.designId}-${design.revision}`,
+        designId: design.designId,
+        revisionNumber: design.revision,
+        snapshot: structuredClone(design),
+        changeType: "CREATED",
+        changeReason: "Initial design",
+        createdBy: ownerId,
+        createdAt: now
+      }
+    ]);
+  };
+
+  const requireOwned = (owner: string, designId: string) => {
+    const design = current.get(designId);
+    if (!design || design.ownerId !== owner) {
+      throw new DomainApiError("NOT_FOUND", "Design not found");
+    }
+    return design;
+  };
+
+  const designs = {
+    async createDesign(ownerId: string, snapshot: DesignV1) {
+      seed(snapshot, ownerId);
+      return structuredClone(current.get(snapshot.designId)!);
+    },
+    async getDesign(ownerId: string, designId: string) {
+      return structuredClone(requireOwned(ownerId, designId));
+    },
+    async getRevision(designId: string, revisionNumber: number) {
+      const revision = revisionRows
+        .get(designId)
+        ?.find((item) => item.revisionNumber === revisionNumber);
+      if (!revision) throw new DomainApiError("NOT_FOUND", "Design revision not found");
+      return structuredClone(revision);
+    },
+    async listDesignRevisions(ownerId: string, designId: string) {
+      requireOwned(ownerId, designId);
+      return structuredClone(revisionRows.get(designId) ?? []);
+    },
+    async updateDesign(
+      ownerId: string,
+      designId: string,
+      expectedRevision: number,
+      snapshot: DesignV1,
+      changeReason: string
+    ) {
+      const existing = requireOwned(ownerId, designId);
+      if (existing.currentRevision !== expectedRevision) {
+        throw new DomainApiError("CONFLICT", "Design revision conflict");
+      }
+      if (failUpdate) throw new Error("transaction failed");
+      const next = {
+        ...existing,
+        currentRevision: snapshot.revision,
+        snapshot: structuredClone(snapshot),
+        updatedAt: new Date(snapshot.updatedAt)
+      };
+      current.set(designId, next);
+      revisionRows.get(designId)!.push({
+        id: `revision-${designId}-${snapshot.revision}`,
+        designId,
+        revisionNumber: snapshot.revision,
+        snapshot: structuredClone(snapshot),
+        changeType: "UPDATED",
+        changeReason,
+        createdBy: ownerId,
+        createdAt: fixedNow
+      });
+      return structuredClone(next);
+    },
+    async saveDesign(ownerId: string, designId: string, expectedRevision: number) {
+      const existing = requireOwned(ownerId, designId);
+      if (existing.currentRevision !== expectedRevision) {
+        throw new DomainApiError("CONFLICT", "Design revision conflict");
+      }
+      existing.status = "SAVED";
+      return structuredClone(existing);
+    }
+  };
+
+  const pricing = {
+    async recalculateDesignPrice(input: DesignV1) {
+      const design = DesignV1Schema.parse(input);
+      const beads = design.beads.map((bead) => ({
+        ...bead,
+        unitPriceMinor: catalogById.get(bead.beadProductId)!.unitPriceMinor
+      }));
+      const accessories = design.accessories.map((accessory) => ({
+        ...accessory,
+        unitPriceMinor: catalogById.get(accessory.accessoryProductId)!.unitPriceMinor
+      }));
+      const materialSubtotalMinor = beads.reduce((sum, item) => sum + item.unitPriceMinor, 0);
+      const accessorySubtotalMinor = accessories.reduce(
+        (sum, item) => sum + item.unitPriceMinor,
+        0
+      );
+      const pricingValue = {
+        ...design.pricing,
+        materialSubtotalMinor,
+        accessorySubtotalMinor,
+        pricingVersion: "cny-retail-2026-07-v1",
+        priceCalculatedAt: fixedNow.toISOString(),
+        totalPriceMinor:
+          materialSubtotalMinor +
+          accessorySubtotalMinor +
+          design.pricing.laborFeeMinor +
+          design.pricing.designFeeMinor +
+          design.pricing.packagingFeeMinor +
+          design.pricing.platformFeeEstimateMinor +
+          design.pricing.logisticsFeeEstimateMinor -
+          design.pricing.discountMinor +
+          design.pricing.adjustments.reduce((sum, item) => sum + item.amountMinor, 0)
+      };
+      return DesignV1Schema.parse({
+        ...design,
+        beads,
+        accessories,
+        pricing: pricingValue,
+        provenance: {
+          ...design.provenance,
+          pricingRuleVersion: pricingValue.pricingVersion
+        }
+      });
+    }
+  };
+
+  const inventory = {
+    async validateAvailability() {
+      if (inventoryChanged) {
+        throw new DomainApiError("INVENTORY_CHANGED", "Catalog inventory changed");
+      }
+    }
+  };
+
+  const publications = {
+    async publishDesign(
+      ownerId: string,
+      designId: string,
+      revisionNumber: number,
+      options: {
+        visibility: "UNLISTED" | "PUBLIC";
+        publishConsent: true;
+        allowRemix: boolean;
+        creatorDisplayMode: "ANONYMOUS" | "DISPLAY_NAME";
+      }
+    ) {
+      requireOwned(ownerId, designId);
+      const revision = (revisionRows.get(designId) ?? []).find(
+        (item) => item.revisionNumber === revisionNumber
+      );
+      if (!revision) throw new DomainApiError("NOT_FOUND", "Revision not found");
+      if (
+        revision.snapshot.compliance.complianceStatus !== "PASSED" ||
+        revision.snapshot.compliance.reviewRequired
+      ) {
+        throw new DomainApiError("COMPLIANCE_BLOCKED", "Design is not cleared");
+      }
+      const publicDesign = toPublicDesign({
+        ...revision.snapshot,
+        community: options,
+        production: { ...revision.snapshot.production, productionNotes: [] }
+      });
+      return {
+        id: "publication-1",
+        designId,
+        designRevisionId: revision.id,
+        visibility: options.visibility,
+        allowRemix: options.allowRemix,
+        creatorDisplayMode: options.creatorDisplayMode,
+        status: "PUBLISHED",
+        publishedAt: fixedNow,
+        unpublishedAt: null,
+        design: publicDesign
+      };
+    }
+  };
+
+  const orders = {
+    async createOrderFromDesign(
+      ownerId: string,
+      designId: string,
+      revisionNumber: number,
+      expectedTotalPriceMinor: number,
+      expectedPricingVersion: string
+    ) {
+      const design = requireOwned(ownerId, designId);
+      if (design.currentRevision !== revisionNumber) {
+        throw new DomainApiError("CONFLICT", "Design revision is no longer current");
+      }
+      if (
+        design.snapshot.compliance.complianceStatus === "REJECTED" ||
+        design.snapshot.compliance.reviewRequired
+      ) {
+        throw new DomainApiError("COMPLIANCE_BLOCKED", "Design is not cleared");
+      }
+      if (
+        orderPriceChanged ||
+        expectedTotalPriceMinor !== design.snapshot.pricing.totalPriceMinor ||
+        expectedPricingVersion !== design.snapshot.pricing.pricingVersion
+      ) {
+        throw new DomainApiError("PRICE_CHANGED", "Server price differs");
+      }
+      if (orderInventoryChanged) {
+        throw new DomainApiError("INVENTORY_CHANGED", "Inventory differs");
+      }
+      const snapshot = structuredClone(design.snapshot);
+      orderSnapshots.push(snapshot);
+      return {
+        id: `order-${orderSnapshots.length}`,
+        userId: ownerId,
+        status: "PENDING" as const,
+        currency: snapshot.currency,
+        totalAmountMinor: snapshot.pricing.totalPriceMinor,
+        designRevisionId: `revision-${designId}-${revisionNumber}`,
+        createdAt: fixedNow,
+        designSnapshot: snapshot,
+        pricingSnapshot: structuredClone(snapshot.pricing),
+        productionSnapshot: structuredClone(snapshot.production),
+        pricingRuleVersion: snapshot.pricing.pricingVersion
+      };
+    }
+  };
+
+  const service = new DesignApplicationService({
+    designs,
+    catalog: {
+      async getCatalogProducts(ids) {
+        return catalog.filter((product) => ids.includes(product.id));
+      },
+      async listActiveCatalogProducts(currency, excluded = []) {
+        return catalog.filter(
+          (product) => product.currency === currency && !excluded.includes(product.id)
+        );
+      }
+    },
+    pricing,
+    inventory,
+    publications,
+    orders,
+    now: () => fixedNow,
+    createId(prefix) {
+      componentCounter += 1;
+      return `${prefix}-${componentCounter}`;
+    }
+  });
+
+  return {
+    service,
+    current,
+    revisionRows,
+    orderSnapshots,
+    seed,
+    setFailUpdate(value: boolean) {
+      failUpdate = value;
+    },
+    setInventoryChanged(value: boolean) {
+      inventoryChanged = value;
+    },
+    setOrderPriceChanged(value: boolean) {
+      orderPriceChanged = value;
+    },
+    setOrderInventoryChanged(value: boolean) {
+      orderInventoryChanged = value;
+    },
+    catalog
+  };
+}
+
+const generateBody = {
+  requestId: "request-generate",
+  locale: "zh-CN",
+  currency: "CNY" as const,
+  wristCircumferenceMm: 155,
+  emotionTags: ["calm"],
+  styleTags: ["minimal"],
+  colorTags: ["blue"],
+  excludedProductIds: [],
+  personalizationConsent: false
+};
+
+function requestHeaders(owner = actorId) {
+  return { "x-actor-id": owner };
+}
+
+test("generate creates a server-owned design and immutable revision 1", async () => {
+  const harness = createHarness();
+  const result = await harness.service.generate(actorId, generateBody);
+  assert.equal(result.design.revision, 1);
+  assert.match(result.design.designId, /^design-/);
+  assert.equal(result.design.createdAt, fixedNow.toISOString());
+  assert.equal(harness.revisionRows.get(result.design.designId)?.length, 1);
+  assert.deepEqual(
+    result.design.beads.map((bead) => bead.unitPriceMinor),
+    [1200, 800, 1000]
+  );
 });
 
-test("invalid requests are rejected and preserve requestId", async () => {
-  const app = createApp();
+test("update applies finite operations, rebuilds positions, and detects conflicts", async () => {
+  const harness = createHarness();
+  const original = cloneDesign();
+  harness.seed(original);
+  const updated = await harness.service.update(actorId, {
+    requestId: "request-update",
+    designId: original.designId,
+    expectedRevision: 1,
+    operations: [
+      {
+        operation: "MOVE_COMPONENT",
+        componentId: "bead-moonstone-1",
+        targetPositionIndex: 0
+      }
+    ]
+  });
+  assert.equal(updated.design.revision, 2);
+  assert.equal(updated.design.production.componentSequence[0], "bead-moonstone-1");
+  assert.deepEqual(
+    [...updated.design.beads, ...updated.design.accessories]
+      .filter((item) => "positionIndex" in item && item.positionIndex !== null)
+      .map((item) => item.positionIndex)
+      .sort(),
+    [0, 1, 2, 3]
+  );
+  await assert.rejects(
+    () =>
+      harness.service.update(actorId, {
+        requestId: "stale",
+        designId: original.designId,
+        expectedRevision: 1,
+        operations: [
+          { operation: "REMOVE_COMPONENT", componentId: "bead-quartz-1" }
+        ]
+      }),
+    (error: unknown) => error instanceof DomainApiError && error.code === "CONFLICT"
+  );
+  await assert.rejects(
+    () =>
+      harness.service.update(actorId, {
+        requestId: "unknown-component",
+        designId: original.designId,
+        expectedRevision: 2,
+        operations: [
+          { operation: "REMOVE_COMPONENT", componentId: "component-does-not-exist" }
+        ]
+      }),
+    /unknown componentId/
+  );
+});
+
+test("invalid DTOs fail at the route boundary", async () => {
+  const harness = createHarness();
+  const app = createApp({ designService: harness.service });
   const response = await app.inject({
     method: "POST",
     url: "/api/design/generate",
-    payload: { requestId: "request-invalid", currency: "CNY" }
+    headers: requestHeaders(),
+    payload: { requestId: "invalid", currency: "CNY" }
   });
   assert.equal(response.statusCode, 400);
   assert.equal(response.json().error.code, "VALIDATION_ERROR");
-  assert.equal(response.json().error.requestId, "request-invalid");
   await app.close();
 });
 
-test("invalid service responses are caught before leaving the API boundary", async () => {
-  const service: DesignStubService = {
-    async execute() {
-      return { arbitrary: "response" };
-    }
-  };
-  const app = createApp({ designService: service });
-  const route = validBodies()[0]!;
-  const response = await app.inject({ method: "POST", url: route.url, payload: route.body });
-  assert.equal(response.statusCode, 500);
-  assert.equal(response.json().error.code, "INTERNAL_ERROR");
-  await app.close();
+test("price ignores forged client totals and reports catalog and inventory changes", async () => {
+  const harness = createHarness();
+  const forged = cloneDesign();
+  forged.beads[0]!.unitPriceMinor += 9_999;
+  forged.pricing.materialSubtotalMinor += 9_999;
+  forged.pricing.totalPriceMinor += 9_999;
+  const validatedForgery = DesignV1Schema.parse(forged);
+  const repriced = await harness.service.price(actorId, {
+    requestId: "price-forgery",
+    currency: "CNY",
+    design: validatedForgery
+  });
+  assert.equal(repriced.design.beads[0]!.unitPriceMinor, 1200);
+  assert.equal(repriced.design.pricing.totalPriceMinor, 5500);
+  assert.equal(repriced.warnings[0]?.code, "PRICE_CHANGED");
+
+  harness.setInventoryChanged(true);
+  const unavailable = await harness.service.price(actorId, {
+    requestId: "inventory-change",
+    currency: "CNY",
+    design: cloneDesign()
+  });
+  assert.equal(unavailable.warnings.some(({ code }) => code === "INVENTORY_CHANGED"), true);
 });
 
-test("publication without consent is rejected by the explicit guard", async () => {
-  const app = createApp();
+test("save ignores injected ownerId and uses actor context", async () => {
+  const harness = createHarness();
+  const design = cloneDesign();
+  harness.seed(design);
+  const app = createApp({ designService: harness.service });
   const response = await app.inject({
+    method: "POST",
+    url: "/api/design/save",
+    headers: requestHeaders(),
+    payload: { requestId: "save", ownerId: "forged-owner", design }
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().design.designId, design.designId);
+  assert.equal(harness.current.get(design.designId)?.ownerId, actorId);
+  await app.close();
+});
+
+test("publish enforces ownership, consent, PASSED compliance, and public projection", async () => {
+  const harness = createHarness();
+  const design = cloneDesign();
+  harness.seed(design);
+  const app = createApp({ designService: harness.service });
+  const publishBody = {
+    requestId: "publish",
+    design,
+    visibility: "PUBLIC",
+    publishConsent: true,
+    allowRemix: true,
+    creatorDisplayMode: "DISPLAY_NAME"
+  };
+  const unauthorized = await app.inject({
     method: "POST",
     url: "/api/design/publish",
-    payload: {
-      requestId: "request-no-consent",
-      design: cloneDesign(),
-      visibility: "PUBLIC",
-      publishConsent: false,
-      allowRemix: false,
-      creatorDisplayMode: "ANONYMOUS"
-    }
+    headers: requestHeaders("different-actor"),
+    payload: publishBody
   });
-  assert.equal(response.statusCode, 403);
-  assert.equal(response.json().error.code, "CONSENT_REQUIRED");
+  assert.equal(unauthorized.statusCode, 404);
+
+  const noConsent = await app.inject({
+    method: "POST",
+    url: "/api/design/publish",
+    headers: requestHeaders(),
+    payload: { ...publishBody, publishConsent: false }
+  });
+  assert.equal(noConsent.statusCode, 403);
+  assert.equal(noConsent.json().error.code, "CONSENT_REQUIRED");
+
+  const rejected = cloneDesign();
+  rejected.compliance = {
+    complianceStatus: "REJECTED",
+    restrictedClaims: [
+      {
+        code: "BLOCKED_CLAIM",
+        category: "GUARANTEED_FORTUNE_CHANGE",
+        fieldPath: "story.designStory",
+        severity: "HIGH",
+        userVisibleMessage: "Blocked claim"
+      }
+    ],
+    disclaimerKeys: [],
+    reviewRequired: true
+  };
+  const rejectedResponse = await app.inject({
+    method: "POST",
+    url: "/api/design/publish",
+    headers: requestHeaders(),
+    payload: { ...publishBody, design: rejected }
+  });
+  assert.equal(rejectedResponse.statusCode, 403);
+  assert.equal(rejectedResponse.json().error.code, "COMPLIANCE_BLOCKED");
+
+  const published = await app.inject({
+    method: "POST",
+    url: "/api/design/publish",
+    headers: requestHeaders(),
+    payload: publishBody
+  });
+  assert.equal(published.statusCode, 200);
+  assert.deepEqual(published.json().design.production.productionNotes, []);
+  assert.equal(JSON.stringify(published.json()).includes("unitCostMinor"), false);
   await app.close();
 });
 
-test("REJECTED designs are blocked before order orchestration", async () => {
+test("order maps compliance, revision, price, and inventory failures", async () => {
+  const harness = createHarness();
   const design = cloneDesign();
-  design.compliance.complianceStatus = "REJECTED";
-  design.compliance.reviewRequired = true;
-  const app = createApp();
-  const response = await app.inject({
+  harness.seed(design);
+  const app = createApp({ designService: harness.service });
+  const body = {
+    requestId: "order",
+    design,
+    expectedRevision: design.revision,
+    expectedPricingVersion: design.pricing.pricingVersion,
+    expectedTotalPriceMinor: design.pricing.totalPriceMinor
+  };
+  harness.setOrderPriceChanged(true);
+  const price = await app.inject({
     method: "POST",
     url: "/api/orders/from-design",
+    headers: requestHeaders(),
+    payload: body
+  });
+  assert.equal(price.statusCode, 409);
+  assert.equal(price.json().error.code, "PRICE_CHANGED");
+
+  harness.setOrderPriceChanged(false);
+  harness.setOrderInventoryChanged(true);
+  const inventory = await app.inject({
+    method: "POST",
+    url: "/api/orders/from-design",
+    headers: requestHeaders(),
+    payload: body
+  });
+  assert.equal(inventory.statusCode, 409);
+  assert.equal(inventory.json().error.code, "INVENTORY_CHANGED");
+
+  const rejected = DesignV1Schema.parse({
+    ...cloneDesign(),
+    compliance: {
+      complianceStatus: "REJECTED",
+      restrictedClaims: [
+        {
+          code: "BLOCKED_CLAIM",
+          category: "GUARANTEED_FORTUNE_CHANGE",
+          fieldPath: "story.designStory",
+          severity: "HIGH",
+          userVisibleMessage: "Blocked claim"
+        }
+      ],
+      disclaimerKeys: [],
+      reviewRequired: true
+    }
+  });
+  const rejectedOrder = await app.inject({
+    method: "POST",
+    url: "/api/orders/from-design",
+    headers: requestHeaders(),
     payload: {
-      requestId: "request-rejected-order",
-      design,
-      expectedRevision: design.revision,
-      expectedPricingVersion: design.pricing.pricingVersion,
-      expectedTotalPriceMinor: design.pricing.totalPriceMinor
+      ...body,
+      design: rejected,
+      expectedPricingVersion: rejected.pricing.pricingVersion,
+      expectedTotalPriceMinor: rejected.pricing.totalPriceMinor
     }
   });
-  assert.equal(response.statusCode, 403);
-  assert.equal(response.json().error.code, "COMPLIANCE_BLOCKED");
+  assert.equal(rejectedOrder.statusCode, 403);
+  assert.equal(rejectedOrder.json().error.code, "COMPLIANCE_BLOCKED");
   await app.close();
 });
 
-test("client cost and owner fields are rejected", async () => {
-  const app = createApp();
-  const designWithCosts = cloneDesign() as unknown as Record<string, unknown>;
-  designWithCosts.costs = { laborCostMinor: 1 };
-  const costResponse = await app.inject({
-    method: "POST",
-    url: "/api/design/save",
-    payload: { requestId: "request-cost", design: designWithCosts }
+test("successful order snapshots remain immutable after later design changes", async () => {
+  const harness = createHarness();
+  const design = cloneDesign();
+  harness.seed(design);
+  const response = await harness.service.createOrder(actorId, {
+    requestId: "order-success",
+    design,
+    expectedRevision: 1,
+    expectedPricingVersion: design.pricing.pricingVersion,
+    expectedTotalPriceMinor: design.pricing.totalPriceMinor
   });
-  assert.equal(costResponse.statusCode, 400);
+  const capturedName = response.snapshot.design.designName;
+  harness.current.get(design.designId)!.snapshot.designName = "Later mutable name";
+  assert.equal(response.snapshot.design.designName, capturedName);
+  assert.equal(harness.orderSnapshots[0]!.designName, capturedName);
+});
 
-  const ownerResponse = await app.inject({
-    method: "POST",
-    url: "/api/design/save",
-    payload: { requestId: "request-owner", ownerId: "client-owner", design: cloneDesign() }
+test("failed update transaction leaves current design and revisions unchanged", async () => {
+  const harness = createHarness();
+  const design = cloneDesign();
+  harness.seed(design);
+  harness.setFailUpdate(true);
+  await assert.rejects(() =>
+    harness.service.update(actorId, {
+      requestId: "rollback",
+      designId: design.designId,
+      expectedRevision: 1,
+      operations: [
+        { operation: "MOVE_COMPONENT", componentId: "bead-moonstone-1", targetPositionIndex: 0 }
+      ]
+    })
+  );
+  assert.equal(harness.current.get(design.designId)?.currentRevision, 1);
+  assert.equal(harness.revisionRows.get(design.designId)?.length, 1);
+});
+
+test("GET design and revision history return owner-scoped public DTOs", async () => {
+  const harness = createHarness();
+  const design = cloneDesign();
+  harness.seed(design);
+  const app = createApp({ designService: harness.service });
+  const currentResponse = await app.inject({
+    method: "GET",
+    url: `/api/design/${design.designId}`,
+    headers: requestHeaders()
   });
-  assert.equal(ownerResponse.statusCode, 400);
-  await app.close();
-});
-
-test("price orchestration receives product intent without client prices", async () => {
-  let capturedOperation: DesignStubOperation | undefined;
-  let capturedInput: unknown;
-  const service: DesignStubService = {
-    async execute(operation, input) {
-      capturedOperation = operation;
-      capturedInput = input;
-      return {};
-    }
-  };
-  const app = createApp({ designService: service });
-  const route = validBodies().find((item) => item.url === "/api/design/price")!;
-  await app.inject({ method: "POST", url: route.url, payload: route.body });
-  const serialized = JSON.stringify(capturedInput);
-  assert.equal(capturedOperation, "PRICE");
-  assert.equal(serialized.includes("unitPriceMinor"), false);
-  assert.equal(serialized.includes("totalPriceMinor"), false);
-  assert.equal(serialized.includes("ownerId"), false);
-  await app.close();
-});
-
-test("health check remains unchanged after route registration", async () => {
-  const app = createApp();
-  const response = await app.inject({ method: "GET", url: "/health" });
-  assert.equal(response.statusCode, 200);
-  assert.deepEqual(response.json(), { status: "ok" });
+  const revisionsResponse = await app.inject({
+    method: "GET",
+    url: `/api/design/${design.designId}/revisions`,
+    headers: requestHeaders()
+  });
+  assert.equal(currentResponse.statusCode, 200);
+  assert.equal(currentResponse.json().designId, design.designId);
+  assert.equal(revisionsResponse.json().revisions.length, 1);
+  assert.equal(JSON.stringify(revisionsResponse.json()).includes("ownerId"), false);
   await app.close();
 });

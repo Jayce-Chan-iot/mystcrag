@@ -1,11 +1,21 @@
 import type {
+  DatabaseClient,
   DesignRepository,
   PersistedDesign,
   PersistedDesignRevision
 } from "@mystcrag/database";
+import {
+  DesignRepository as DatabaseDesignRepository,
+  InventoryRepository as DatabaseInventoryRepository,
+  OrderRepository as DatabaseOrderRepository,
+  PricingRepository as DatabasePricingRepository,
+  ProductRepository as DatabaseProductRepository,
+  PublicationRepository as DatabasePublicationRepository
+} from "@mystcrag/database";
 import type { DesignV1 } from "@mystcrag/design-contract";
 
 import { DomainApiError } from "../../contracts/api-error.js";
+import { DesignApplicationService } from "./design-api.service.js";
 
 export type DesignStubOperation =
   | "GENERATE"
@@ -71,4 +81,15 @@ export class DesignService {
   ): Promise<PersistedDesignRevision[]> {
     return this.designs.listDesignRevisions(actorId, designId);
   }
+}
+
+export function createDesignApplicationService(client: DatabaseClient) {
+  return new DesignApplicationService({
+    designs: new DatabaseDesignRepository(client),
+    catalog: new DatabaseProductRepository(client),
+    pricing: new DatabasePricingRepository(client),
+    inventory: new DatabaseInventoryRepository(client),
+    publications: new DatabasePublicationRepository(client),
+    orders: new DatabaseOrderRepository(client)
+  });
 }

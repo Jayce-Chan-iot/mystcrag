@@ -17,13 +17,21 @@ export type Publication = {
   design: PublicDesignV1;
 };
 
+export type PublishDesignOptions = {
+  visibility: "UNLISTED" | "PUBLIC";
+  publishConsent: true;
+  allowRemix: boolean;
+  creatorDisplayMode: "ANONYMOUS" | "DISPLAY_NAME";
+};
+
 export class PublicationRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
   async publishDesign(
     actorId: string,
     designId: string,
-    revisionNumber: number
+    revisionNumber: number,
+    options?: PublishDesignOptions
   ): Promise<Publication> {
     return this.prisma.$transaction(async (tx) => {
       const design = await tx.design.findFirst({
@@ -35,10 +43,11 @@ export class PublicationRepository {
       });
       if (!revision) throw new PersistenceError("NOT_FOUND", "Design revision not found");
       const snapshot = parseDesignSnapshot(revision.snapshot);
-      if (!snapshot.community.publishConsent) {
+      const community = options ?? snapshot.community;
+      if (!community.publishConsent) {
         throw new PersistenceError("CONSENT_REQUIRED", "Publication requires explicit consent");
       }
-      if (snapshot.community.visibility === "PRIVATE") {
+      if (community.visibility === "PRIVATE") {
         throw new PersistenceError("VALIDATION_ERROR", "Private designs cannot be published");
       }
       if (
@@ -52,10 +61,10 @@ export class PublicationRepository {
           designId,
           designRevisionId: revision.id,
           publishedById: actorId,
-          visibility: snapshot.community.visibility,
+          visibility: community.visibility,
           publishConsent: true,
-          allowRemix: snapshot.community.allowRemix,
-          creatorDisplayMode: snapshot.community.creatorDisplayMode
+          allowRemix: community.allowRemix,
+          creatorDisplayMode: community.creatorDisplayMode
         }
       });
       return {
@@ -70,6 +79,7 @@ export class PublicationRepository {
         unpublishedAt: row.unpublishedAt,
         design: toPublicDesign({
           ...snapshot,
+          community,
           production: { ...snapshot.production, productionNotes: [] }
         })
       };

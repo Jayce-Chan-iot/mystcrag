@@ -14,84 +14,93 @@ import {
 } from "@mystcrag/design-contract";
 import type { FastifyInstance } from "fastify";
 
-import { handleStubRoute, type StubRouteContract } from "./design.controller.js";
 import {
-  NotImplementedDesignStubService,
-  type DesignStubService
-} from "./design.service.js";
-
-export type { DesignStubService } from "./design.service.js";
-
-const routeContracts = [
-  {
-    method: "POST",
-    url: "/api/design/generate",
-    contract: {
-      operation: "GENERATE",
-      requestSchema: GenerateDesignRequestSchema,
-      responseSchema: GenerateDesignResponseSchema
-    }
-  },
-  {
-    method: "POST",
-    url: "/api/design/update",
-    contract: {
-      operation: "UPDATE",
-      requestSchema: UpdateDesignRequestSchema,
-      responseSchema: UpdateDesignResponseSchema
-    }
-  },
-  {
-    method: "POST",
-    url: "/api/design/price",
-    contract: {
-      operation: "PRICE",
-      requestSchema: PriceDesignRequestSchema,
-      responseSchema: PriceDesignResponseSchema
-    }
-  },
-  {
-    method: "POST",
-    url: "/api/design/save",
-    contract: {
-      operation: "SAVE",
-      requestSchema: SaveDesignRequestSchema,
-      responseSchema: SaveDesignResponseSchema
-    }
-  },
-  {
-    method: "POST",
-    url: "/api/design/publish",
-    contract: {
-      operation: "PUBLISH",
-      requestSchema: PublishDesignRequestSchema,
-      responseSchema: PublishDesignResponseSchema
-    }
-  },
-  {
-    method: "POST",
-    url: "/api/orders/from-design",
-    contract: {
-      operation: "CREATE_ORDER",
-      requestSchema: CreateOrderFromDesignRequestSchema,
-      responseSchema: CreateOrderFromDesignResponseSchema
-    }
-  }
-] as const satisfies ReadonlyArray<{
-  method: "POST";
-  url: string;
-  contract: StubRouteContract;
-}>;
+  actorIdFromRequestContext,
+  handleDesignGet,
+  handleDesignPost,
+  type ActorResolver
+} from "./design.controller.js";
+import type { DesignApiService } from "./design-api.service.js";
 
 export function registerDesignContractRoutes(
   app: FastifyInstance,
-  service: DesignStubService = new NotImplementedDesignStubService()
+  service: DesignApiService,
+  actorResolver: ActorResolver = actorIdFromRequestContext
 ) {
-  for (const route of routeContracts) {
-    app.route({
-      method: route.method,
-      url: route.url,
-      handler: (request, reply) => handleStubRoute(request, reply, route.contract, service)
-    });
-  }
+  app.post("/api/design/generate", (request, reply) =>
+    handleDesignPost(
+      request,
+      reply,
+      GenerateDesignRequestSchema,
+      GenerateDesignResponseSchema,
+      actorResolver,
+      (api, actorId, input) => api.generate(actorId, input),
+      service
+    )
+  );
+  app.post("/api/design/update", (request, reply) =>
+    handleDesignPost(
+      request,
+      reply,
+      UpdateDesignRequestSchema,
+      UpdateDesignResponseSchema,
+      actorResolver,
+      (api, actorId, input) => api.update(actorId, input),
+      service
+    )
+  );
+  app.post("/api/design/price", (request, reply) =>
+    handleDesignPost(
+      request,
+      reply,
+      PriceDesignRequestSchema,
+      PriceDesignResponseSchema,
+      actorResolver,
+      (api, actorId, input) => api.price(actorId, input),
+      service
+    )
+  );
+  app.post("/api/design/save", (request, reply) =>
+    handleDesignPost(
+      request,
+      reply,
+      SaveDesignRequestSchema,
+      SaveDesignResponseSchema,
+      actorResolver,
+      (api, actorId, input) => api.save(actorId, input),
+      service,
+      { ignoreOwnerId: true }
+    )
+  );
+  app.post("/api/design/publish", (request, reply) =>
+    handleDesignPost(
+      request,
+      reply,
+      PublishDesignRequestSchema,
+      PublishDesignResponseSchema,
+      actorResolver,
+      (api, actorId, input) => api.publish(actorId, input),
+      service
+    )
+  );
+  app.post("/api/orders/from-design", (request, reply) =>
+    handleDesignPost(
+      request,
+      reply,
+      CreateOrderFromDesignRequestSchema,
+      CreateOrderFromDesignResponseSchema,
+      actorResolver,
+      (api, actorId, input) => api.createOrder(actorId, input),
+      service
+    )
+  );
+  app.get<{ Params: { id: string } }>("/api/design/:id", (request, reply) =>
+    handleDesignGet(request, reply, actorResolver, service, false)
+  );
+  app.get<{ Params: { id: string } }>(
+    "/api/design/:id/revisions",
+    (request, reply) => handleDesignGet(request, reply, actorResolver, service, true)
+  );
 }
+
+export type { DesignApiService } from "./design-api.service.js";

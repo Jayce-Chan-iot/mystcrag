@@ -122,9 +122,13 @@ test(
       await designs.updateDesign(actorId, created.id, 2, revision3, "continue editing");
       assert.equal((await publications.getPublication(publication.id)).design.revision, 2);
 
-      const order = await orders.createOrderFromDesign(actorId, created.id, 2, 5_500, "cny-retail-2026-07-v1");
+      await assert.rejects(
+        () => orders.createOrderFromDesign(actorId, created.id, 2, 5_500, "cny-retail-2026-07-v1"),
+        (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT"
+      );
+      const order = await orders.createOrderFromDesign(actorId, created.id, 3, 5_500, "cny-retail-2026-07-v1");
       assert.equal(order.totalAmountMinor, 5_500);
-      assert.equal(order.designSnapshot.revision, 2);
+      assert.equal(order.designSnapshot.revision, 3);
       await assert.rejects(() => prisma.orderDesignSnapshot.update({ where: { orderId: order.id }, data: { pricingRuleVersion: "forbidden" } }));
 
       await prisma.materialProduct.update({
@@ -132,7 +136,7 @@ test(
         data: { unitPriceMinor: minorToBigInt(1_300, "unitPriceMinor") }
       });
       await assert.rejects(
-        () => orders.createOrderFromDesign(actorId, created.id, 2, 5_500, "cny-retail-2026-07-v1"),
+        () => orders.createOrderFromDesign(actorId, created.id, 3, 5_500, "cny-retail-2026-07-v1"),
         (error: unknown) => error instanceof PersistenceError && error.code === "PRICE_CHANGED"
       );
       assert.equal((await orders.getOrder(actorId, order.id)).totalAmountMinor, 5_500);
@@ -142,7 +146,7 @@ test(
       });
       const orderCount = await prisma.order.count();
       await assert.rejects(
-        () => orders.createOrderFromDesign(actorId, created.id, 2, 5_500, "cny-retail-2026-07-v1"),
+        () => orders.createOrderFromDesign(actorId, created.id, 3, 5_500, "cny-retail-2026-07-v1"),
         (error: unknown) => error instanceof PersistenceError && error.code === "INVENTORY_CHANGED"
       );
       assert.equal(await prisma.order.count(), orderCount);

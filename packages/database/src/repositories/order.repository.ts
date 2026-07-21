@@ -51,6 +51,9 @@ export class OrderRepository {
       if (!revision || revision.design.ownerId !== actorId || revision.design.deletedAt) {
         throw new PersistenceError("NOT_FOUND", "Design revision not found");
       }
+      if (revision.design.currentRevision !== revisionNumber) {
+        throw new PersistenceError("CONFLICT", "Design revision is no longer current");
+      }
       const design = parseDesignSnapshot(revision.snapshot);
       if (
         design.compliance.complianceStatus === "REJECTED" ||
