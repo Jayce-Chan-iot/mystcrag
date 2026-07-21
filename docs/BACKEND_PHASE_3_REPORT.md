@@ -7,7 +7,44 @@ Date: 2026-07-21
 - Agent role: Backend Lead
 - Branch name: `feature/backend-design-api`
 - Baseline commit: `64957c1c90a893a4f8a4c0ffdf372200c8df466e`
-- Final commit: the commit containing this report, `feat: implement design backend vertical slice`
+- Final implementation commit: `5d10c322643d3982deaa179563077913080943b8` (`feat: implement design backend vertical slice`)
+
+## Change scope
+
+Changed files in the implementation commit:
+
+- `apps/backend/src/app.ts`
+- `apps/backend/src/index.ts`
+- `apps/backend/src/modules/design/design-api.service.ts`
+- `apps/backend/src/modules/design/design.controller.ts`
+- `apps/backend/src/modules/design/design.routes.ts`
+- `apps/backend/src/modules/design/design.routes.test.ts`
+- `apps/backend/src/modules/design/design.service.ts`
+- `apps/backend/src/modules/design/index.ts`
+- `packages/database/src/repositories/design.repository.ts`
+- `packages/database/src/repositories/order.repository.ts`
+- `packages/database/src/repositories/persistence.integration.test.ts`
+- `packages/database/src/repositories/product.repository.ts`
+- `packages/database/src/repositories/publication.repository.ts`
+- `docs/BACKEND_PHASE_3_REPORT.md`
+
+Changed modules:
+
+- Backend HTTP routing, request-context identity resolution, error mapping, application orchestration, runtime composition, and module-local tests.
+- Database design, product catalog, publication, and order repositories plus their integration test.
+
+New or changed interfaces:
+
+- `DesignApiService`: HTTP-facing application operations for generate, update, price, save, get, revisions, publish, and create order.
+- `DesignGenerationAdapter`: provider boundary accepting validated generation intent and returning untrusted `unknown` candidate data.
+- `DesignApplicationDependencies`: repository-port composition used by production repositories and deterministic test doubles.
+- `CatalogProduct`: server-only catalog DTO containing SKU and product metadata without commercial cost.
+- `PublishDesignOptions`: explicit consent, visibility, remix, and creator-display settings stored against a fixed revision.
+- `DesignRepository.saveDesign`: owner- and revision-conditional save-state transition.
+
+Shared assets changed: None. `packages/design-contract`, shared architecture/API specifications, root manifests, and root tests were not changed.
+
+Approved decision-log entries: None required because the implementation stayed within the existing approved Design Contract V1, API DTO, persistence schema, and Backend/Database ownership boundaries.
 
 ## Implemented API
 
@@ -73,8 +110,10 @@ Focused results:
 ## Validation
 
 - `pnpm validate` command: `pnpm validate`
-- Result: passed after repository-boundary imports were confined to the approved composition file.
-- Validation commit: the commit containing this report.
+- Result: passed after repository-boundary imports were confined to the approved `design.service.ts` composition file.
+- Validation commit: `5d10c322643d3982deaa179563077913080943b8`.
+- Gate coverage: workspace lint, strict TypeScript, 7 architecture tests, all workspace unit tests, Prisma schema validation, Backend production build, and Frontend production build.
+- Earlier gate evidence: the first full run failed only the repository-boundary architecture test because new application files imported database types directly. The imports were replaced with Backend-owned ports and structural error mapping; the focused architecture suite and two subsequent full `pnpm validate` runs passed.
 
 ## Known limitations
 
@@ -83,6 +122,13 @@ Focused results:
 - Live PostgreSQL migration, trigger, and transaction execution was not available without `DATABASE_URL`; the checked-in integration suite remains the executable database evidence.
 - Catalog SKU is used only inside the trusted server catalog boundary because Design Contract V1 has no public SKU field.
 - Inventory validation does not reserve stock. Payment, Shopee, tax, shipping integrations, promotions, and exchange-rate conversion remain out of scope.
+
+## Unfinished work
+
+- Replace the request-header actor seam with verified authentication middleware while preserving the same actor-context service boundary.
+- Run the PostgreSQL integration test against the reviewed baseline migration on a host with `DATABASE_URL` configured and retain trigger/rollback evidence.
+- Replace `MockDesignGenerationAdapter` with the separately owned AI provider integration after its output is available through the same untrusted-candidate boundary.
+- Add inventory reservation/idempotency before enabling payment or external commerce workflows.
 
 ## Cross-module dependencies
 
@@ -97,6 +143,7 @@ Focused results:
 - Review the publication projection override against the fixed immutable revision.
 - Review the current-revision requirement for order creation and its `CONFLICT` mapping.
 - Parallel uncommitted AI and Three Engine changes were present in the shared worktree during validation; they were not staged or included in the Backend commit.
+- No database schema or migration changed. The Backend commit therefore does not require a new migration, but it does require the existing `20260721140000_init_mystcrag_persistence_v1` baseline.
 
 ## Agent confirmation
 
