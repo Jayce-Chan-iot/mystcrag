@@ -5,6 +5,8 @@ const requiredPaths = [
   "apps/frontend/app",
   "apps/backend/src/modules",
   "packages/ui/src",
+  "packages/design-contract/src",
+  "packages/design-contract/tests",
   "packages/ai-agent/emotion-agent",
   "packages/ai-agent/crystal-agent",
   "packages/ai-agent/design-agent",
