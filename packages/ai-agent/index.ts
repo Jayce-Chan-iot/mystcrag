@@ -6,3 +6,7 @@ export type { PricingAgent, PricingAgentInput, PricingAgentOutput } from "./pric
 export type { ComplianceAgent, ComplianceAgentInput, ComplianceAgentOutput } from "./compliance-agent/index";
 export * from "./src/adapters/index";
 export * from "./src/schemas/ai-design-candidate.schema";
+export * from "./src/schemas/recommendation-output.schema";
+export * from "./src/contracts/recommendation";
+export * from "./src/providers/index";
+export * from "./src/recommendation/index";
