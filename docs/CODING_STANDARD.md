@@ -48,3 +48,13 @@ gen()
 - Use strict TypeScript. Avoid `any`; model untrusted values as `unknown` and validate at runtime boundaries.
 - Do not commit generated output, local environment files, or credentials.
 - Run `pnpm validate` before handing work to another Agent.
+
+## Design contract boundaries
+
+- Import `DesignV1`, `PublicDesignV1`, design enums, and API DTOs from `@mystcrag/design-contract`; do not redeclare them in consumers.
+- Treat provider output, HTTP input, and HTTP output as untrusted and validate them at their boundary.
+- Only server code may import `@mystcrag/design-contract/internal`. Frontend code must not import database or commercial-cost types.
+- Use `componentId` for UI and scene identity. `positionIndex` expresses main-ring order and is not a stable identity.
+- Format money through currency metadata. CNY uses fen while TWD V1 values use whole-dollar minor units; do not divide every currency by 100.
+- Keep deprecated grouped types and their adapters in named legacy compatibility paths. New feature code must not import them.
+- Three Engine runtime descriptors must be plain data and must not leak Three.js objects into shared contracts or API DTOs.

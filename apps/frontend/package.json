@@ -6,10 +6,11 @@
     "build": "next build",
     "dev": "next dev",
     "lint": "eslint . --max-warnings=0",
-    "test": "node --test",
+    "test": "tsx --test src/**/*.test.tsx",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@mystcrag/design-contract": "workspace:*",
     "@mystcrag/ui": "workspace:*",
     "next": "^16.2.10",
     "react": "^19.2.7",
@@ -24,6 +25,7 @@
     "eslint-config-next": "^16.2.10",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.3.3",
+    "tsx": "^4.20.5",
     "typescript": "^6.0.3"
   }
 }

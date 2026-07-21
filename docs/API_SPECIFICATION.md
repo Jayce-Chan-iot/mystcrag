@@ -10,7 +10,9 @@ Define communication between frontend, backend, AI and 3D engine.
 
 The package exports request and response schemas for Generate Design, Update Design, Price Design, Save Design, Publish Design, and Create Order From Design. Every response uses `PublicDesignV1`; commercial costs and supplier references are not public API fields. Update requests use the finite operation union rather than arbitrary JSON Patch.
 
-Phase 2A defines DTOs only. Backend routes, authorization, catalog pricing, inventory checks, persistence, and error-to-HTTP mapping remain unimplemented. Existing placeholder examples below are not the V1 wire contract and must not be copied into new code.
+Phase 2B registers development-level HTTP boundaries for all six design operations. Every request is parsed with its shared request schema and every successful service value is parsed with its shared response schema. Business orchestration remains a stub, so a valid request currently returns the stable `NOT_IMPLEMENTED` domain error instead of fabricated product data.
+
+Errors use `{ error: { code, message, fieldErrors?, requestId } }`. Supported stable codes are `VALIDATION_ERROR`, `NOT_IMPLEMENTED`, `NOT_FOUND`, `CONFLICT`, `COMPLIANCE_BLOCKED`, `CONSENT_REQUIRED`, `INVENTORY_CHANGED`, `PRICE_CHANGED`, and `INTERNAL_ERROR`. Publish rejects public or unlisted requests without consent; order creation rejects a `REJECTED` design before service execution.
 
 ## Service endpoints
 
@@ -32,22 +34,21 @@ Create user profile.
 
 POST /api/design/generate
 
-Input:
+Uses `GenerateDesignRequestSchema` and `GenerateDesignResponseSchema`. It never returns an independent `threeConfig` copy.
 
-{ emotion:"", style:"", color:"", budget:"" }
+POST /api/design/update
 
-Output:
+Uses `UpdateDesignRequestSchema` and `UpdateDesignResponseSchema`.
 
-{ design_name:"", story:"", crystals:\[\], style:"", price:"",
-three_config:{} }
+POST /api/design/price
 
-The snake_case example above is retained only to describe the initialization placeholder. The approved future route must validate `GenerateDesignRequestSchema` and return `GenerateDesignResponseSchema`; it must not return an independent `three_config` copy of the design.
+Uses `PriceDesignRequestSchema` and `PriceDesignResponseSchema`. The mapper retains product IDs and currency as pricing intent but discards all client-supplied unit and total prices before orchestration.
 
 ## Design Save API
 
 POST /api/design/save
 
-Save user created design.
+Uses `SaveDesignRequestSchema` and `SaveDesignResponseSchema`.
 
 ## Community API
 
@@ -55,16 +56,16 @@ GET /api/community/designs
 
 Return popular designs.
 
-POST /api/community/publish
+POST /api/design/publish
 
-Publish user design.
+Uses `PublishDesignRequestSchema` and `PublishDesignResponseSchema`, with a consent guard before service execution.
 
 ## Order API
 
-POST /api/orders
+POST /api/orders/from-design
 
-Create production order.
+Uses `CreateOrderFromDesignRequestSchema` and `CreateOrderFromDesignResponseSchema`, with a compliance guard before service execution.
 
 ## Initialization status
 
-Only `/health` and `/api/modules` are implemented in the project scaffold. All product endpoints above remain contractual placeholders and require validation, authorization, service, and persistence layers before implementation.
+`/health`, `/api/modules`, and the six validated design/order stub routes are registered. Authentication, ownership checks, catalog/inventory validation, persistence, live pricing, and successful product operations remain unimplemented.

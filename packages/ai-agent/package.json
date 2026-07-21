@@ -5,6 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./index.ts",
+    "./adapters": "./src/adapters/index.ts",
+    "./schemas": "./src/schemas/ai-design-candidate.schema.ts",
+    "./legacy": "./src/contracts/legacy-design.ts",
     "./emotion-agent": "./emotion-agent/index.ts",
     "./crystal-agent": "./crystal-agent/index.ts",
     "./design-agent": "./design-agent/index.ts",
@@ -14,10 +17,16 @@
   "scripts": {
     "build": "tsc --noEmit",
     "lint": "tsc --noEmit",
-    "test": "node --test",
+    "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@mystcrag/design-contract": "workspace:*",
+    "zod": "^4.4.3"
+  },
   "devDependencies": {
+    "@types/node": "^22.18.0",
+    "tsx": "^4.20.5",
     "typescript": "^6.0.3"
   }
 }

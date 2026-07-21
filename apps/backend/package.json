@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "fastify": "^5.10.0"
+    "@mystcrag/design-contract": "workspace:*",
+    "fastify": "^5.10.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

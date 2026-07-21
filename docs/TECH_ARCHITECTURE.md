@@ -21,9 +21,24 @@ packages/
 - Frontend communicates with backend APIs; it does not access PostgreSQL directly.
 - Backend coordinates domain modules and owns request validation, authorization, and persistence access.
 - AI modules remain independent from UI, database, and LLM provider implementations.
-- The 3D engine consumes structured bracelet configuration and must not depend on prompt output text.
+- The 3D engine consumes validated `DesignV1` through a one-way pure-data adapter and must not depend on prompt output text.
 - Database changes are introduced through Prisma migrations after schema review.
 - `@mystcrag/design-contract` is a framework-independent package and the only definition source for versioned design JSON and design API DTOs. It must not depend on React, Next.js, Three.js, Prisma, Fastify, or an LLM provider SDK.
 - Public projections and order snapshots never contain commercial cost or supplier data. The internal commercial schema is available only through a server-only package subpath.
 
-Phase 2A adds the independent shared contract without switching existing AI, 3D, Backend, Frontend, or database consumers. Runtime AI providers, full 3D rendering, authentication, product API routes, persistence adapters, and commerce workflows remain deferred.
+## Phase 2B consumer flow
+
+```text
+provider unknown -> AI candidate validation -> server enrichment -> DesignV1
+                                                              |-> backend shared DTO boundary
+                                                              |-> frontend PublicDesignV1 views
+                                                              `-> Three Engine scene descriptor
+```
+
+- AI and Three Engine depend on `@mystcrag/design-contract`; the contract never depends on consumers.
+- Backend validates every request and response with shared schemas. Development stubs stop at the service boundary and never fabricate success DTOs.
+- Frontend imports only the public contract and API DTOs. Internal commercial schemas and database types are forbidden.
+- Legacy grouped types remain in explicit compatibility paths. They are not another source of design truth.
+- Root architecture tests enforce these directions and protect the server-only commercial boundary.
+
+Runtime AI providers, full 3D rendering, authentication, persistence adapters, live catalog pricing, and commerce workflows remain deferred. Phase 2B does not change Prisma.
