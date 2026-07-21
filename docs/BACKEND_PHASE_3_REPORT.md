@@ -10,6 +10,7 @@
 - Post-rebase HEAD: `5d10c322643d3982deaa179563077913080943b8`
 - Pre-completion report commit: `ea5331b` (`docs: supplement backend phase 3 report`)
 - Final handoff commit: `ea83e8f` (`docs: complete backend phase 3 handoff`)
+- Post-rebase handoff checkpoint before this requested report update: `4fafa41378529eec14b6bf5c2b7b5d5614c9711e` (`docs: record backend phase 3 handoff commit`)
 - Report generation date: 2026-07-21
 
 ## Scope
@@ -22,6 +23,104 @@
 - Database scope confirmation: Backend-owned repository APIs changed, but Prisma schema, migrations, seed schema, and database architecture did not change.
 
 ## Implementation
+
+### Route implementation and Mock/Stub status
+
+| Route | Implementation status | Mock or Stub status |
+| --- | --- | --- |
+| `POST /api/design/generate` | Implemented: validates `GenerateDesignRequestSchema`, builds server-owned identity/time/provenance, enriches from catalog, reprices, validates inventory and `DesignV1`, then atomically creates Design plus revision 1. | The creative candidate source is `MockDesignGenerationAdapter`. Catalog, price, inventory, validation, revision, and persistence behavior are not stubbed. |
+| `POST /api/design/update` | Implemented: applies the five finite operations, checks component identity, rebuilds continuous positions, reprices, validates inventory/compliance, and atomically updates current Design plus appends a revision. | Not Mock or Stub in production. Tests inject deterministic repository ports. |
+| `POST /api/design/price` | Implemented: rejects client price authority, reloads catalog prices, validates currency/inventory, recalculates `PricingV1`, and returns change warnings. | Not Mock or Stub in production. |
+| `POST /api/design/save` | Implemented: gets actor identity from request context, ignores injected top-level `ownerId`, verifies exact current revision/snapshot, and conditionally marks the design saved. | Not Mock or Stub in production. |
+| `GET /api/design/:id` | Implemented: owner-scoped repository read returning only `PublicDesignV1`. | Not Mock or Stub in production. |
+| `GET /api/design/:id/revisions` | Implemented: owner-scoped immutable revision listing with public projections. | Not Mock or Stub in production. |
+| `POST /api/design/publish` | Implemented: validates consent, non-private visibility, ownership, fixed revision, PASSED compliance, and returns a production-note-free public projection. | Not Mock or Stub in production. |
+| `POST /api/orders/from-design` | Implemented: checks current revision, compliance, server price/version and latest inventory, then atomically creates Order plus immutable snapshot. | Not Mock or Stub in production. Payment and external commerce remain intentionally out of scope. |
+
+`DesignStubService` and `NotImplementedDesignStubService` remain exported only for Phase 2B compatibility. Production startup composes `DesignApplicationService` and does not register any route against the legacy stub service.
+
+### Repository and Service modifications
+
+Repository changes:
+
+- `DesignRepository`: added owner/revision-conditional `saveDesign`; existing create and update transactions remain the only writers of immutable revisions.
+- `ProductRepository`: added active catalog reads and server-only catalog DTOs containing SKU, product metadata, currency, active status, and trusted sale price without cost leakage.
+- `PublicationRepository`: accepts explicit validated publish options, validates the requested immutable revision in a transaction, stores a fixed revision reference, and builds the safe public projection.
+- `OrderRepository`: requires the requested revision to still be current and keeps compliance, repricing, inventory validation, Order creation, and snapshot creation inside one transaction.
+- Database integration tests: expanded current-revision order conflict and immutable snapshot/rollback coverage.
+
+Service and HTTP changes:
+
+- Added `DesignApplicationService` and its repository-port dependency boundary.
+- Added `DesignGenerationAdapter` plus deterministic `MockDesignGenerationAdapter`.
+- Replaced production route stubs with schema-validated service calls and response validation.
+- Added actor-context resolution, public-safe GET responses, persistence-error mapping, and production Prisma composition/shutdown handling.
+- Kept Backend orchestration independent of Prisma rows and generated database types.
+
+### Transaction boundaries
+
+| Workflow | Transaction boundary |
+| --- | --- |
+| Generate | Candidate parsing, catalog enrichment, pricing, inventory and final schema checks happen before persistence. `DesignRepository.createDesign` creates the current Design and immutable revision 1 in one Prisma transaction. |
+| Update | Operation application, derived-position rebuild, pricing, inventory and final schema checks happen before persistence. `DesignRepository.updateDesign` conditionally updates `(designId, actorId, expectedRevision, deletedAt: null)` and inserts the next immutable revision in one Prisma transaction; either both commit or both roll back. |
+| Price | Read-only catalog/pricing/inventory workflow; no write transaction. |
+| Save | One conditional database update on owner plus expected revision; no revision is fabricated and no multi-write transaction is required. |
+| GET current/revisions | Read-only owner-scoped repository operations. |
+| Publish | Ownership, immutable revision, consent, visibility and compliance validation plus publication insert occur in one `PublicationRepository` transaction. |
+| Create order | Revision/current-state load, compliance check, catalog repricing, expected total/version comparison, latest inventory validation, Order insert and immutable `OrderDesignSnapshot` insert occur in one `OrderRepository` transaction. Any failure aborts the complete write. |
+
+### Database change declaration
+
+- Repository implementation changed: Yes.
+- Prisma schema changed: No.
+- Migration added or changed: No.
+- Seed changed: No.
+- Existing persisted data mutated or backfilled: No.
+- Required database baseline remains `20260721140000_init_mystcrag_persistence_v1`.
+
+### Shared DTO declaration
+
+- `packages/design-contract` changed: No.
+- Shared request/response DTO changed: No.
+- `DesignV1`, `PublicDesignV1`, `PricingV1`, order snapshot, finite update operation, enum, or invariant changed: No.
+- Backend consumes and revalidates the existing shared schemas. Backend-only repository ports and GET response wrappers are not a replacement wire contract.
+
+### API error codes
+
+| Error code | HTTP status | Primary Backend use |
+| --- | ---: | --- |
+| `VALIDATION_ERROR` | 400 | Invalid DTO, missing actor context, invalid component operation, private publish request. |
+| `NOT_IMPLEMENTED` | 501 | Retained only for the legacy compatibility stub; no production Design route uses it. |
+| `NOT_FOUND` | 404 | Missing, deleted, or unowned Design/revision/publication/order resource without ownership disclosure. |
+| `CONFLICT` | 409 | Stale `expectedRevision`, save mismatch, or ordering a non-current revision. |
+| `COMPLIANCE_BLOCKED` | 403 | REJECTED or otherwise uncleared design publication/order attempt. |
+| `CONSENT_REQUIRED` | 403 | Public or unlisted publication without explicit consent. |
+| `INVENTORY_CHANGED` | 409 | Missing/inactive catalog item or insufficient latest inventory. Price route may return the same code as a non-fatal warning. |
+| `PRICE_CHANGED` | 409 | Server total or pricing version differs during order creation. Price route may return the same code as a non-fatal warning. |
+| `INTERNAL_ERROR` | 500 | Invalid persisted data, invalid service response, or unexpected internal failure without leaking raw database details. |
+
+Actor-context absence currently maps to `VALIDATION_ERROR`; an `UNAUTHORIZED` code was not added because shared DTO/error contracts were intentionally unchanged.
+
+### Revision and order snapshot test evidence
+
+- Generate asserts revision starts at 1 and the initial immutable revision row is created.
+- Update asserts revision increments, main-ring positions remain contiguous, and a stale expected revision returns `CONFLICT`.
+- Invalid component identity is rejected before persistence.
+- Failed update transaction asserts both current Design revision and revision-list length remain unchanged.
+- Database integration coverage asserts immutable revision rows cannot be updated through the PostgreSQL trigger path when a live database is configured.
+- Ordering a non-current immutable revision returns `CONFLICT`.
+- Successful order creation captures design, pricing and production data for the exact revision.
+- Mutating the later current design does not alter the returned or persisted order snapshot.
+- Price and inventory failures assert no Order/snapshot is created, proving transaction rollback at the repository boundary.
+- Database trigger-level snapshot immutability is covered by the PostgreSQL integration test, which is checked in but skipped locally when `DATABASE_URL` is absent.
+
+### Post-rebase and final commit hashes
+
+- Local integration baseline: `750b6b932e71644533f24a4b4c8786ec5b403a45`.
+- Pre-rebase implementation HEAD: `e7974e603aca046f1a10bc31f93e522298d02325`.
+- Final post-rebase implementation commit: `5d10c322643d3982deaa179563077913080943b8`.
+- Latest fully recorded handoff checkpoint before this requested report-only update: `4fafa41378529eec14b6bf5c2b7b5d5614c9711e`.
+- This report-only update is committed with `docs: complete backend phase 3 handoff`; its exact SHA is reported in the final handoff message because a Git commit cannot embed its own hash in its committed content.
 
 ### Completed features
 
