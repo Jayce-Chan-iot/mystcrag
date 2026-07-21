@@ -8,6 +8,7 @@ import {
   type SupportedCurrency
 } from "@mystcrag/design-contract";
 
+import { normalizeCandidateCompliance } from "../../compliance-agent/index";
 import { AiDesignCandidateSchema, type AiDesignCandidate } from "../schemas/ai-design-candidate.schema";
 
 export type CatalogBeadEnrichment = {
@@ -70,43 +71,15 @@ export type AiCandidateConversionResult =
   | { readonly status: "READY"; readonly design: DesignV1; readonly issues: readonly [] }
   | { readonly status: "REJECTED"; readonly issues: readonly AiCandidateConversionIssue[] };
 
-const restrictedCopyRules = [
-  {
-    pattern: /(?:cure|diagnos|treat\s+(?:anxiety|depression)|治愈|治疗|诊断)/iu,
-    category: "medical or diagnostic"
-  },
-  {
-    pattern: /(?:guarantee(?:d|s)?\s+(?:wealth|fortune)|保证招财|保证改运)/iu,
-    category: "guaranteed-effect"
-  },
-  {
-    pattern: /(?:certain\s+destiny|deterministic\s+fortune|确定性命运)/iu,
-    category: "deterministic-fortune"
-  }
-] as const;
-
 function findRestrictedCopy(candidate: AiDesignCandidate): AiCandidateConversionIssue[] {
-  const fields = [
-    { fieldPath: "designStory", value: candidate.designStory },
-    ...candidate.recommendationReasons.map((value, index) => ({
-      fieldPath: `recommendationReasons.${index}`,
-      value
-    })),
-    ...candidate.culturalInspiration.map((entry, index) => ({
-      fieldPath: `culturalInspiration.${index}.inspiration`,
-      value: entry.inspiration
-    }))
-  ];
-
-  return fields.flatMap(({ fieldPath, value }) =>
-    restrictedCopyRules
-      .filter((rule) => rule.pattern.test(value))
-      .map((rule) => ({
-        code: "COMPLIANCE_REJECTED" as const,
-        message: `AI candidate contains ${rule.category} wording.`,
-        fieldPath
-      }))
-  );
+  const result = normalizeCandidateCompliance(candidate);
+  return result.status === "PASSED"
+    ? []
+    : result.issues.map((issue) => ({
+        code: "COMPLIANCE_REJECTED",
+        message: issue.message,
+        fieldPath: issue.fieldPath
+      }));
 }
 
 export function aiCandidateToDesignV1(
@@ -226,9 +199,7 @@ export function aiCandidateToDesignV1(
       culturalInspiration: candidate.culturalInspiration,
       designStory: candidate.designStory,
       recommendationReasons: candidate.recommendationReasons,
-      sourceTemplateIds: enrichment.provenance.designTemplateVersion
-        ? [enrichment.provenance.designTemplateVersion]
-        : []
+      sourceTemplateIds: candidate.sourceTemplateIds
     },
     pricing: {
       materialSubtotalMinor,

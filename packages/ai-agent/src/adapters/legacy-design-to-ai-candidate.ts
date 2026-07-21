@@ -33,6 +33,7 @@ export function legacyDesignToAiCandidate(
     culturalInspiration: [],
     designStory: legacy.story,
     recommendationReasons: [],
+    sourceTemplateIds: [],
     components
   });
 }

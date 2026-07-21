@@ -18,6 +18,7 @@ const validCandidate = () => ({
   culturalInspiration: [],
   designStory: "A translucent blue rhythm inspired by rainfall.",
   recommendationReasons: ["Matches the selected palette."],
+  sourceTemplateIds: ["template-blue-orbit"],
   components: [
     {
       componentType: "BEAD",

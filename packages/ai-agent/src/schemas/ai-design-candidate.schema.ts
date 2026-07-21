@@ -29,6 +29,7 @@ export const AiDesignCandidateSchema = z
     culturalInspiration: z.array(CulturalInspirationSchema).max(20),
     designStory: z.string().trim().max(4_000),
     recommendationReasons: z.array(NonEmptyTextSchema).max(30),
+    sourceTemplateIds: z.array(IdentifierSchema).max(30),
     components: z.array(AiBeadCandidateSchema).min(1)
   })
   .superRefine((candidate, context) => {
