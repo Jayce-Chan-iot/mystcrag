@@ -7,7 +7,8 @@ Date: 2026-07-21
 - Agent role: AI Lead
 - Branch name: `feature/ai-recommendation`
 - Baseline commit: `64957c1 feat: add versioned design persistence and order snapshots`
-- Final commit: `feat: implement rule based bracelet recommendation` (hash recorded in the handoff message)
+- Final post-rebase implementation commit: `949bf57369605dd6f82b536018dbf0397ea5a2f9 feat: implement rule based bracelet recommendation`
+- Report amendment commit: recorded in the handoff message because a commit cannot embed its own hash.
 
 ## Change scope
 
@@ -27,6 +28,35 @@ Date: 2026-07-21
 - Provider flow treats every implementation result as `unknown`, applies strict recommendation and AI Candidate schema validation, runs compliance normalization, and returns candidates only after both boundaries pass.
 - A real network LLM provider is intentionally absent. The provider interface is replaceable without changing the rule pipeline or candidate trust boundary.
 
+## Rule recommendation flow
+
+```text
+questionnaire preferences
+  -> Emotion Agent standard emotionTags
+  -> normalized styleTags and colorTags
+  -> Crystal Agent status, inventory, exclusion, and budget filtering
+  -> crystal tag-match scoring
+  -> Design DNA template scoring
+  -> three differentiated ordered bead sequences
+  -> Provider result treated as unknown
+  -> RecommendationProviderOutputSchema
+  -> AiDesignCandidateSchema
+  -> Compliance normalization
+  -> trusted AI Candidate output
+  -> Backend-owned enrichment
+  -> aiCandidateToDesignV1
+  -> DesignV1Schema
+```
+
+Template scores combine emotion, style, color, and popularity signals. Crystal scores combine emotion, style, color, availability, and budget eligibility. Equal scores use stable identifier ordering, so identical inputs and fixture versions produce identical outputs.
+
+## Provider adapters
+
+- `LLMProvider` is the provider-neutral asynchronous interface. Its return type is always `unknown` at the trust boundary.
+- `MockProvider` returns a cloned configured value for malformed-output, unknown-field, schema, and compliance tests.
+- `RuleBasedProvider` composes the five rule Agents and returns three deterministic candidates without a network dependency.
+- Real LLM call status: **No real LLM call exists or is enabled.** There is no model SDK, API key, prompt execution, network retry, or model billing path in V1.
+
 ## Dataset scale
 
 - Crystal fixtures: 20 products, including one out-of-stock case and one disabled case.
@@ -34,6 +64,31 @@ Date: 2026-07-21
 - Standard design styles: 6 (`minimal`, `eastern-contemporary`, `romantic`, `natural`, `modern`, `vintage`).
 - Standard emotion goals: 6 (`calm`, `focus`, `confidence`, `joy`, `connection`, `renewal`).
 - Currency contexts: independent CNY and TWD catalog values and budget bands; no exchange-rate path.
+
+## Candidate and DesignV1 boundary
+
+- AI Candidate contains creative suggestions only: design name/story, emotion/style/color tags, cultural inspiration, recommendation reasons, source template IDs, crystal/product IDs, and final component order.
+- Strict candidate schemas reject additional unknown fields and attempts to set `unitPriceMinor`, `unitCostMinor`, `totalPriceMinor`, inventory, owner/design identity, revision/timestamps, visibility, or publication consent.
+- Candidate data is not a trusted price, stock, publication, persistence, or order record.
+- Backend must supply authoritative IDs, timestamps, catalog assets, prices, pricing versions, provenance, and bracelet context through `AiDesignServerEnrichment`.
+- `aiCandidateToDesignV1` validates the Candidate, normalizes compliance, verifies catalog mappings, performs server-owned enrichment, and finally validates the complete result with `DesignV1Schema`. It returns no partially trusted design.
+
+## Compliance detection range
+
+- Medical-effect claims.
+- Psychological diagnosis.
+- Guaranteed wealth or guaranteed attracting-wealth claims.
+- Guaranteed fortune-change claims.
+- Deterministic destiny or fortune predictions.
+
+Scanning covers design name, design story, recommendation reasons, and cultural-reference/inspiration text in Chinese and English rule patterns. Cultural fields use `文化参考`, `设计灵感`, `非科学功效`, and `CULTURAL_REFERENCE_NOT_SCIENTIFIC_EFFECT`. V1 compliance is deterministic keyword/rule detection, not a medical classifier or model-based semantic review.
+
+## Determinism evaluation
+
+- Repeated `RuleBasedProvider` calls with the same request, context, and fixture version are asserted with deep equality.
+- Template and crystal rankings use explicit score weights plus stable ID tie-breaking.
+- Candidate count is fixed at three, each source template is distinct, component positions are contiguous, and every physical bead is represented individually.
+- The deterministic test passes as part of the AI package's 25/25 test suite.
 
 ## Verification
 
