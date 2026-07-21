@@ -215,4 +215,31 @@ export class DesignRepository {
     }).catch(rethrowPersistenceError);
     if (result.count !== 1) throw new PersistenceError("NOT_FOUND", "Design not found");
   }
+
+
+  async saveDesign(
+    actorId: string,
+    designId: string,
+    expectedRevision: number
+  ): Promise<PersistedDesign> {
+    const result = await this.prisma.design.updateMany({
+      where: {
+        id: designId,
+        ownerId: actorId,
+        currentRevision: expectedRevision,
+        deletedAt: null
+      },
+      data: { status: "SAVED" }
+    }).catch(rethrowPersistenceError);
+    if (result.count !== 1) {
+      const exists = await this.prisma.design.count({
+        where: { id: designId, ownerId: actorId, deletedAt: null }
+      });
+      throw new PersistenceError(
+        exists === 0 ? "NOT_FOUND" : "CONFLICT",
+        exists === 0 ? "Design not found" : "Design revision conflict"
+      );
+    }
+    return this.getDesign(actorId, designId);
+  }
 }
