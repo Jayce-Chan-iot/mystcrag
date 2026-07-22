@@ -134,6 +134,22 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 - Approval date: 2026-07-22
 - Implementation branch or commit: `fix/mvp-browser-integration`; final diff and generated lockfile link remain subject to focused tests and `pnpm validate`.
 
+### DEC-P35-BACKEND-PRODUCTION-BUNDLE-001 — Bundle Backend-owned workspace sources for production startup
+
+- Date: 2026-07-22
+- Proposed by Agent: QA Backend Production Packaging Fix Agent
+- Affected modules: `apps/backend` build configuration, generated `pnpm-lock.yaml` metadata, and the existing Backend dependencies on `@mystcrag/database`, `@mystcrag/ai-agent`, and `@mystcrag/design-contract`
+- Decision: Compile the Backend entry point as a Node.js ESM bundle with `esbuild`, resolving the three Backend-consumed workspace packages to their source entry points. Generate the Prisma client before bundling. Keep Backend-direct Fastify and Zod dependencies external, and bundle the Database package's generated Prisma client, PostgreSQL adapter, and transitive runtime graph so their resolution remains rooted in the owning Database package. The emitted `apps/backend/dist/index.js` must run directly with Node.js without relying on workspace package exports that point at TypeScript source. Add a module-local smoke command that starts that exact artifact against configured PostgreSQL, verifies `/health`, sends `SIGTERM`, and requires a clean exit.
+- Rationale: Plain `tsc` only emits files under `apps/backend/src`. Its output preserves bare workspace imports, but the current private workspace packages intentionally export TypeScript sources whose internal ESM imports refer to non-emitted `.js` files. `node dist/index.js` consequently fails before startup. Bundling the Backend-owned runtime graph produces an executable application artifact; Fastify and Zod keep normal Backend dependency resolution, while Database-owned Prisma and PostgreSQL imports keep the resolution context lost when Database source is inlined into the Backend bundle.
+- Rejected alternatives: Running `tsx src/index.ts` as production; committing generated JavaScript beside every workspace source; changing all package exports and build ownership across Database, AI Agent, and Design Contract; externalizing Database-owned Prisma/PostgreSQL dependencies after moving their importing source into the Backend bundle, which breaks strict pnpm resolution from `apps/backend/dist`.
+- Contract impact: None. Design DTOs, schemas, validation, and provider trust boundaries are unchanged.
+- Database impact: None. Prisma schema, migrations, generated-client semantics, repository behavior, and transaction boundaries are unchanged. Prisma generation is an explicit build prerequisite only.
+- API impact: None. Routes, authentication, error semantics, and response bodies are unchanged.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-07-22
+- Implementation branch or commit: `fix/qa-backend-production-start`; the validated commit hash is recorded in the Git handoff because a commit cannot contain its own SHA.
+
 ---
 
 ## New decision template

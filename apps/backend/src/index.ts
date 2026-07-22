@@ -16,6 +16,24 @@ const app = createApp({
 });
 app.addHook("onClose", async () => database.$disconnect());
 
+let closing = false;
+const shutdown = async (signal: NodeJS.Signals) => {
+  if (closing) {
+    return;
+  }
+  closing = true;
+  app.log.info({ signal }, "Shutting down Backend");
+  try {
+    await app.close();
+  } catch (error) {
+    app.log.error(error);
+    process.exitCode = 1;
+  }
+};
+
+process.once("SIGINT", () => void shutdown("SIGINT"));
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+
 try {
   await app.listen({ host: "0.0.0.0", port });
 } catch (error) {
