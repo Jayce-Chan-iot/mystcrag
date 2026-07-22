@@ -53,10 +53,15 @@ function recommendationRequest(request: GenerateDesignRequest) {
 function adaptCandidate(
   candidate: AiDesignCandidate,
   catalog: readonly CatalogProduct[],
-  optionIndex: number
+  optionIndex: number,
+  excludedProductIds: readonly string[]
 ) {
+  const excluded = new Set(excludedProductIds);
   const materials = catalog.filter(
-    (product) => product.productType === "MATERIAL" && product.active
+    (product) =>
+      product.productType === "MATERIAL" &&
+      product.active &&
+      !excluded.has(product.id)
   );
   if (materials.length === 0) {
     throw new DomainApiError("INVENTORY_CHANGED", "No active material is available.");
@@ -64,10 +69,69 @@ function adaptCandidate(
   const materialByCrystal = new Map(
     materials.map((product) => [product.crystalId, product] as const)
   );
-  const materialProductIds = candidate.components.map((component, position) =>
+  const mappedCandidateIds = candidate.components.map((component, position) =>
     (materialByCrystal.get(component.crystalId) ??
       materials[(position + optionIndex) % materials.length]!).id
   );
+  const firstPosition = new Map<string, number>();
+  const frequency = new Map<string, number>();
+  mappedCandidateIds.forEach((productId, position) => {
+    if (!firstPosition.has(productId)) firstPosition.set(productId, position);
+    frequency.set(productId, (frequency.get(productId) ?? 0) + 1);
+  });
+  const candidateRankedMaterials = [...materials].sort((left, right) =>
+    (frequency.get(right.id) ?? 0) - (frequency.get(left.id) ?? 0) ||
+    (firstPosition.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+      (firstPosition.get(right.id) ?? Number.MAX_SAFE_INTEGER) ||
+    left.id.localeCompare(right.id)
+  );
+
+  const targetBeadCount = 12;
+  let materialProductIds: string[];
+  let compositionReason: string;
+  if (candidateRankedMaterials.length === 1) {
+    materialProductIds = Array.from(
+      { length: targetBeadCount },
+      () => candidateRankedMaterials[0]!.id
+    );
+    compositionReason =
+      "Only one active, non-excluded material is available, so material diversity is not fabricated.";
+  } else if (candidateRankedMaterials.length === 2) {
+    const primaryId = candidateRankedMaterials[0]!.id;
+    const secondaryId = candidateRankedMaterials[1]!.id;
+    if (optionIndex === 0) {
+      materialProductIds = Array.from(
+        { length: targetBeadCount },
+        (_, position) => (position % 2 === 0 ? primaryId : secondaryId)
+      );
+      compositionReason =
+        "Uses an airy alternating rhythm so both eligible materials remain evenly visible.";
+    } else if (optionIndex === 1) {
+      materialProductIds = Array.from(
+        { length: targetBeadCount },
+        (_, position) => (Math.floor(position / 3) % 2 === 0 ? primaryId : secondaryId)
+      );
+      compositionReason =
+        "Uses grouped three-bead color fields to create broad, layered contrast rather than a rotated alternating ring.";
+    } else {
+      materialProductIds = Array.from(
+        { length: targetBeadCount },
+        (_, position) =>
+          position === 0 || position === 1 || position === targetBeadCount - 1
+            ? secondaryId
+            : primaryId
+      );
+      compositionReason =
+        "Uses a three-bead focal arc with a dominant supporting field, changing both count balance and visual emphasis.";
+    }
+  } else {
+    materialProductIds = Array.from(
+      { length: targetBeadCount },
+      (_, position) => mappedCandidateIds[position % mappedCandidateIds.length]!
+    );
+    compositionReason =
+      "Preserves the validated AI candidate sequence across the active, non-excluded server catalog.";
+  }
   return {
     designName: candidate.designName,
     materialProductIds,
@@ -78,7 +142,7 @@ function adaptCandidate(
         ({ reference, inspiration }) => `${reference}；${inspiration}`
       )
     ].join(" "),
-    recommendationReasons: candidate.recommendationReasons,
+    recommendationReasons: [...candidate.recommendationReasons, compositionReason],
     culturalInspiration: candidate.culturalInspiration,
     sourceTemplateIds: candidate.sourceTemplateIds,
     providerMetadata: {
@@ -113,6 +177,11 @@ export class AiRecommendationDesignAdapter implements DesignGenerationAdapter {
       );
     }
     const optionIndex = candidateIndex(request);
-    return adaptCandidate(result.candidates[optionIndex]!, catalog, optionIndex);
+    return adaptCandidate(
+      result.candidates[optionIndex]!,
+      catalog,
+      optionIndex,
+      request.excludedProductIds
+    );
   }
 }
