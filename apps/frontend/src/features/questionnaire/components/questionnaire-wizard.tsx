@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { FlowNotice } from "../../../components/flow-notice";
-import { mockGenerateDesigns } from "../../../lib/api/mock-design-api";
+import { designApi } from "../../../lib/api/design-api";
+import { saveDesignBudgetContext } from "../../../lib/api/design-session";
 import { toFrontendApiError, type FrontendErrorCode } from "../../../lib/api/frontend-api-error";
 import {
   INITIAL_ANSWERS,
@@ -47,8 +48,10 @@ export function QuestionnaireWizard() {
     setIsSubmitting(true);
     setApiError(null);
     try {
-      await mockGenerateDesigns(toGenerateDesignRequest(answers));
-      router.push(`/design/${encodeURIComponent(`session-${Date.now()}`)}`);
+      const request = toGenerateDesignRequest(answers);
+      const response = await designApi.generate(request);
+      saveDesignBudgetContext(response.design.designId, request);
+      router.push(`/design/${encodeURIComponent(response.design.designId)}`);
     } catch (generationError) {
       setApiError(toFrontendApiError(generationError).code === "NETWORK_ERROR" ? "AI_GENERATION_FAILED" : toFrontendApiError(generationError).code);
       setIsSubmitting(false);
@@ -119,7 +122,7 @@ export function QuestionnaireWizard() {
         <div className="mx-auto flex max-w-3xl items-center justify-between gap-4">
           <button className="min-w-24 rounded-full px-5 py-3 text-sm text-[var(--muted)] transition hover:text-[var(--foreground)] disabled:opacity-30" disabled={stepIndex === 0 || isSubmitting} onClick={() => { setStepIndex((current) => getPreviousStepIndex(current)); setError(null); }} type="button">← 上一步</button>
           <button className="min-w-36 rounded-full bg-[var(--foreground)] px-6 py-3 text-sm text-white transition hover:bg-[var(--accent-deep)] disabled:cursor-wait disabled:opacity-60" disabled={isSubmitting} onClick={() => void moveNext()} type="button">
-            {isSubmitting ? "正在生成…" : stepIndex === QUESTIONNAIRE_STEPS.length - 1 ? "生成三套设计" : "继续 →"}
+            {isSubmitting ? "正在生成…" : stepIndex === QUESTIONNAIRE_STEPS.length - 1 ? "生成设计" : "继续 →"}
           </button>
         </div>
       </div>

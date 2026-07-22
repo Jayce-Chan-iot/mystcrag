@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
 export default function DiyPage() {
-  redirect("/diy/rain-after-blue");
+  redirect("/ai-design");
 }

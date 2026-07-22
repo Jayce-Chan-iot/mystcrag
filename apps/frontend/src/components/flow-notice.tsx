@@ -11,16 +11,16 @@ export function FlowNotice({ code, onAction, compact = false }: { code: Frontend
       ? "border-[var(--warning)]/25 bg-[#f8f2e8] text-[var(--warning)]"
       : "border-[var(--border)] bg-[var(--surface-soft)] text-[var(--foreground)]";
 
-  const actionHref = code === "EMPTY_STATE" || code === "COMPLIANCE_BLOCKED" || code === "VALIDATION_ERROR" ? "/ai-design" : undefined;
+  const actionHref = code === "EMPTY_STATE" || code === "NOT_FOUND" || code === "COMPLIANCE_BLOCKED" || code === "VALIDATION_ERROR" ? "/ai-design" : undefined;
 
   return (
     <div className={`rounded-2xl border ${tone} ${compact ? "p-4" : "p-6 sm:p-7"}`} role={content.tone === "danger" ? "alert" : "status"} data-error-code={code}>
       <p className="font-medium">{content.title}</p>
       <p className="mt-2 text-sm leading-6 opacity-80">{content.message}</p>
       {actionHref ? (
-        <Link className="mt-4 inline-flex text-sm font-semibold underline decoration-current/30 underline-offset-4" href={actionHref}>{content.action}</Link>
+        <Link className="mt-4 inline-flex min-h-11 items-center text-sm font-semibold underline decoration-current/30 underline-offset-4" href={actionHref}>{content.action}</Link>
       ) : onAction ? (
-        <button className="mt-4 text-sm font-semibold underline decoration-current/30 underline-offset-4" onClick={onAction} type="button">{content.action}</button>
+        <button className="mt-4 min-h-11 text-sm font-semibold underline decoration-current/30 underline-offset-4" onClick={onAction} type="button">{content.action}</button>
       ) : null}
     </div>
   );
