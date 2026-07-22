@@ -1,0 +1,78 @@
+name: PostgreSQL verification
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/postgres-verification.yml"
+      - "packages/database/**"
+      - "packages/design-contract/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/postgres-verification.yml"
+      - "packages/database/**"
+      - "packages/design-contract/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: mystcrag_seed_test
+          POSTGRES_USER: mystcrag
+          POSTGRES_PASSWORD: mystcrag_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mystcrag -d mystcrag_seed_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.4.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @mystcrag/database db:generate
+
+      - name: Deploy baseline migration to the empty test database
+        run: pnpm db:migrate
+        env:
+          DATABASE_URL: postgresql://mystcrag:mystcrag_dev@localhost:5432/mystcrag_seed_test?schema=public
+
+      - name: Seed the test database
+        run: pnpm db:seed
+        env:
+          DATABASE_URL: postgresql://mystcrag:mystcrag_dev@localhost:5432/mystcrag_seed_test?schema=public
+
+      - name: Repeat seed and verify idempotent fixture counts
+        run: |
+          pnpm db:seed
+          pnpm --filter @mystcrag/database db:verify-seed
+        env:
+          DATABASE_URL: postgresql://mystcrag:mystcrag_dev@localhost:5432/mystcrag_seed_test?schema=public
+
+      - name: Create a fresh isolated database and run live PostgreSQL tests
+        run: pnpm db:test
+        env:
+          TEST_DATABASE_URL: postgresql://mystcrag:mystcrag_dev@localhost:5432/mystcrag_repository_test_${{ github.run_id }}_${{ github.run_attempt }}?schema=public
+
+      - name: Run the complete repository gate
+        run: pnpm validate

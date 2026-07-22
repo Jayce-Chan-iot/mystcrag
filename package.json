@@ -13,7 +13,7 @@
     "db:migrate": "pnpm --filter @mystcrag/database db:migrate",
     "db:reset": "pnpm --filter @mystcrag/database exec prisma migrate reset --force",
     "db:seed": "pnpm --filter @mystcrag/database db:seed",
-    "db:test": "DATABASE_URL=postgresql://mystcrag:mystcrag_dev@localhost:5432/mystcrag_test?schema=public pnpm --filter @mystcrag/database exec prisma migrate reset --force && DATABASE_URL=postgresql://mystcrag:mystcrag_dev@localhost:5432/mystcrag_test?schema=public pnpm --filter @mystcrag/database db:test",
+    "db:test": "pnpm --filter @mystcrag/database db:prepare-test && DATABASE_URL=\"$TEST_DATABASE_URL\" pnpm --filter @mystcrag/database db:migrate && DATABASE_URL=\"$TEST_DATABASE_URL\" pnpm --filter @mystcrag/database db:test",
     "db:up": "docker compose up -d --wait",
     "dev": "turbo run dev --parallel",
     "lint": "turbo run lint",

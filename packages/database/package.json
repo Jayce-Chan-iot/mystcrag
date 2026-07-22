@@ -11,8 +11,10 @@
     "db:format": "prisma format",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
+    "db:prepare-test": "tsx prisma/prepare-test-database.ts",
     "lint": "prisma validate",
     "db:seed": "tsx prisma/seed.ts",
+    "db:verify-seed": "tsx --test prisma/seed.integration.test.ts",
     "db:test": "tsx --test src/**/*.test.ts",
     "test": "tsx --test src/**/*.unit.test.ts",
     "typecheck": "tsc --noEmit"
