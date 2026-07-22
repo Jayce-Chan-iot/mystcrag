@@ -118,6 +118,22 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 - Approval date: 2026-07-22
 - Implementation branch or commit: Candidate `fix/backend-auth-boundary@acd4df8`; implementation remains subject to code review, API specification update, validation, and integration-consumer adaptation.
 
+### DEC-P35-BACKEND-AI-LINK-001 — Connect the rule-based AI recommendation package to Backend generation
+
+- Date: 2026-07-22
+- Proposed by Agent: Autonomous Tech Lead
+- Affected modules: `apps/backend`, `packages/ai-agent` public exports as a consumed dependency, `apps/backend/package.json`, and generated `pnpm-lock.yaml` importer metadata
+- Decision: Allow the Backend design-generation composition layer to depend on `@mystcrag/ai-agent: workspace:*` and adapt the existing validated rule-based recommendation output into the existing `DesignGenerationAdapter`. The adapter may request three differentiated creative candidates but must continue using Backend catalog, inventory, identity, timestamps, pricing, compliance, revision, and persistence as authoritative values. The generated lockfile may contain only the corresponding workspace link. No Design Contract, AI candidate contract, Prisma schema, migration, or public API DTO change is authorized.
+- Rationale: The Phase 3 Backend currently composes a fixed `MockDesignGenerationAdapter` that ignores most questionnaire inputs for material and structure selection. A real browser transport alone would therefore fail the approved product requirement that emotion, color, style, budget, wrist size, cultural inspiration, exclusions, and available inventory materially affect three differentiated proposals. The existing AI package already implements deterministic, provider-independent, compliance-checked recommendation logic; wiring its public boundary avoids duplicating AI logic inside the Frontend or Backend.
+- Rejected alternatives: Keeping the fixed Backend Mock as the production generator; fabricating three variants in browser state; adding a second design DTO; trusting AI prices or inventory; introducing a paid or keyed LLM requirement for the MVP.
+- Contract impact: None. Provider output remains untrusted and `@mystcrag/design-contract` remains the only design protocol.
+- Database impact: None. Existing design/revision persistence and server-owned commerce invariants remain unchanged.
+- API impact: No DTO or route-shape change. `POST /api/design/generate` continues to use the existing shared request/response schemas; the browser may call it for each server-generated option while preserving the original questionnaire context.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-07-22
+- Implementation branch or commit: `fix/mvp-browser-integration`; final diff and generated lockfile link remain subject to focused tests and `pnpm validate`.
+
 ---
 
 ## New decision template
