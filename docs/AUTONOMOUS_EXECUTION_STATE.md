@@ -2,62 +2,50 @@
 
 Updated: 2026-07-22
 
-## Baseline
+## Final state
 
-- Current branch: `main`
-- Current main HEAD: `a4956c031a9dd17d78178435fb8276eb188f7560`
+- Branch: `main`
+- Tested delivery-code baseline: `e3e107a6481f7bf08a1b49223601dd3595af1c2a`
 - Integration mode: `LOCAL_MAIN`
 - Remote status: `NOT_CONFIGURED`
-- Current phase: Phase 3.5 first remediation batch
-- MVP readiness: `BLOCKED`
-- QA rerun status: `NOT_STARTED`
+- Phase: MVP delivery closeout
+- MVP readiness: `READY`
+- Independent QA: `COMPLETED`, 33/33 acceptance items passed
+- Open release blockers: 0
 
-## Product completion
+The exact final documentation commit is intentionally reported by the final Git handoff rather than embedded here, because a commit cannot contain its own hash. The code baseline above is the implementation tested by independent QA; the closeout changes after it are documentation and local environment guidance only.
 
-- Phase 3 UI, Backend lifecycle, rule-based AI, Design Contract V1, persistence model, and standalone Three Engine are present.
-- The complete browser-to-Backend-to-PostgreSQL-to-Three user journey is not yet admitted on `main`.
-- Blocking defects remain `BUG-P3-001` through `BUG-P3-005`; mobile target and favicon fixes are tracked as `BUG-P3-006` and `BUG-P3-007`.
+## Delivered product
 
-## Active agents and worktrees
+- Real browser-to-Backend-to-PostgreSQL lifecycle for Generate, Get, Update, Price, Save, reload recovery, and Order.
+- Three persisted, materially distinct rule-based recommendations that honor exclusions and budget state.
+- Backend-owned identity, inventory, revision, price, and immutable order-snapshot authority.
+- Real React Three Fiber / Three.js WebGL DIY scene with stable `componentId` selection and a usable fallback.
+- Development/test signed Bearer authentication with production fail-closed behavior.
+- PostgreSQL 17 migration, idempotent seed, live integrity/rollback tests, and runnable compiled Backend artifact.
 
-| Role | Branch | Worktree | State |
-| --- | --- | --- | --- |
-| Database Verification Lead | `fix/postgres-verification` | `/private/tmp/mystcrag-postgres-verification` | Cleaning inherited QA history and running PostgreSQL 17 live verification |
-| Backend Security Lead | `fix/backend-auth-boundary` | `/Users/chenyanyan/Codex-project/玄矶水晶DIY设计网页端-backend-auth` | Reviewing verified actor-context candidate |
+## Verification
 
-Deferred branches:
+- Independent QA matrix: 33/33 passed.
+- Architecture tests: 8/8.
+- Design Contract: 25/25.
+- AI Agent: 25/25.
+- Three Engine: 14/14.
+- Database unit/live/seed: 4/4, 17/17, 1/1.
+- Backend: 19/19.
+- Frontend: 44/44.
+- Forced workspace build: 7/7.
 
-- `fix/mvp-browser-integration`: starts only after Auth is admitted and merged.
-- `fix/frontend-three-integration`: starts from post-Auth `main` after Browser ownership is settled.
-- `test/mvp-integration-rerun`: remains idle until all four fix branches and any required UX fixes pass.
+## Closed release defects
 
-## Completed actions
+- `BUG-QA-001`: fresh frozen install now generates Prisma Client.
+- `BUG-QA-002`: compiled Backend artifact starts, serves health/API traffic, and shuts down cleanly.
+- `BUG-QA-003`: sparse legal catalog no longer collapses recommendations into equivalent sequences.
 
-- Read the autonomous product-delivery instruction and repository documentation.
-- Audited current branches, worktrees, scripts, module boundaries, and available runtimes.
-- Verified `chore/phase-3-5-remediation-coordination@07fa144` with `pnpm validate`.
-- Merged the coordination branch into `main` with `--no-ff`.
-- Ran `pnpm install` and `pnpm validate` successfully on `main@a4956c0`.
-- Confirmed local PostgreSQL `17.10` is available; no system installation is required.
+## Known non-blocking boundary
 
-## Current tests
+- `BUG-QA-004` remains an open MINOR console warning: Three environment blur requests more samples than supported. Rendering and the release gate are unaffected in the observed desktop/mobile runs.
+- Product UX Review could not issue a design-health score because its required controlled Browser/Chrome binding was unavailable. Independent functional QA later captured headed Playwright evidence, but that does not retroactively turn the blocked product-design audit into a scored UX audit.
+- Commercial production auth/login, paid/network LLM integration, payments, shipping, tax, reservations, and idempotency are outside this MVP.
 
-- Coordination branch `pnpm validate`: passed.
-- Post-coordination `main` install and `pnpm validate`: passed.
-- Live PostgreSQL gate: in progress on the database verification branch.
-- Auth security gate: in progress on the backend auth branch.
-
-## Shared changes
-
-- `P35-001`, `DEC-P35-POSTGRES-TEST-COMMAND-001`, `DEC-P35-FRONTEND-THREE-LINK-001`, and `DEC-P35-AUTH-BOUNDARY-001` are the only active Phase 3.5 approvals.
-- No Design Contract, Prisma schema, migration semantic, or unapproved DTO change is authorized.
-
-## Hard blockers
-
-- None currently. PostgreSQL 17 is locally available.
-
-## Next automatic action
-
-1. Review Database and Auth branch history, exact diffs, reports, and test evidence.
-2. Merge admitted Database then Auth branches, running `pnpm install` and `pnpm validate` after each.
-3. Rebase and dispatch Browser and Frontend Three integration from post-Auth `main`.
+Historical `BLOCKED` states in remediation/planning reports are retained as execution history; the authoritative release decision is `docs/QA_PHASE_3_REPORT.md`.
