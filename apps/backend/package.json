@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@mystcrag/ai-agent": "workspace:*",
     "@mystcrag/database": "workspace:*",
     "@mystcrag/design-contract": "workspace:*",
     "fastify": "^5.10.0",

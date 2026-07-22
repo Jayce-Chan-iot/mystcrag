@@ -16,6 +16,7 @@ import {
 import { DomainApiError } from "../../contracts/api-error.js";
 import {
   DesignApplicationService,
+  MockDesignGenerationAdapter,
   type CatalogProduct
 } from "./design-api.service.js";
 
@@ -339,6 +340,7 @@ function createHarness() {
   };
 
   const service = new DesignApplicationService({
+    generator: new MockDesignGenerationAdapter(),
     designs,
     catalog: {
       async getCatalogProducts(ids) {

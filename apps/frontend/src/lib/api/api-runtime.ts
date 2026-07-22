@@ -10,8 +10,6 @@ export function resolveMockMode({
 
 export const isMockApiEnabled = resolveMockMode();
 
-export function resolveActorId(): string {
-  const configured = process.env.NEXT_PUBLIC_MYSTCRAG_ACTOR_ID?.trim();
-  if (configured) return configured;
-  return process.env.NODE_ENV === "production" ? "" : "user-phase-2c-demo";
+export function resolveAccessToken(): string {
+  return process.env.NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN?.trim() ?? "";
 }

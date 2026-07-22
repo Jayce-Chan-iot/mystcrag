@@ -1,4 +1,6 @@
 export const FRONTEND_ERROR_CODES = [
+  "UNAUTHORIZED",
+  "FORBIDDEN",
   "VALIDATION_ERROR",
   "NOT_FOUND",
   "CONFLICT",
@@ -23,6 +25,8 @@ export class FrontendApiError extends Error {
 }
 
 export const ERROR_PRESENTATION: Record<FrontendErrorCode, { title: string; message: string; action: string; tone: "warning" | "danger" | "neutral" }> = {
+  UNAUTHORIZED: { title: "需要验证开发会话", message: "请配置明确的短期访问凭证后重新打开页面；系统不会以固定用户静默继续。", action: "重新连接", tone: "warning" },
+  FORBIDDEN: { title: "无法访问这份设计", message: "当前已验证身份不是这份设计的所有者。", action: "重新生成", tone: "danger" },
   VALIDATION_ERROR: { title: "还有信息需要确认", message: "请检查标注的输入项，再继续生成设计。", action: "返回修改", tone: "warning" },
   NOT_FOUND: { title: "没有找到这份设计", message: "设计可能不存在，或当前身份无权查看。", action: "重新生成", tone: "neutral" },
   CONFLICT: { title: "设计已在其他位置更新", message: "我们保留了你当前的操作。请同步最新版本后再尝试。", action: "同步最新设计", tone: "warning" },

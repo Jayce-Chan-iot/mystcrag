@@ -5,6 +5,7 @@ import {
   AccessoryDimensionsSchema,
   AccessoryTypeSchema,
   BeadShapeSchema,
+  CulturalInspirationSchema,
   DesignV1Schema,
   toOrderSnapshot,
   toPublicDesign,
@@ -134,7 +135,16 @@ const AiDesignCandidateSchema = z.strictObject({
   materialProductIds: z.array(z.string().min(1)).min(1),
   accessoryProductIds: z.array(z.string().min(1)),
   designStory: z.string().trim().min(1).max(2_000),
-  recommendationReasons: z.array(z.string().trim().min(1).max(500)).min(1)
+  recommendationReasons: z.array(z.string().trim().min(1).max(500)).min(1),
+  culturalInspiration: z.array(CulturalInspirationSchema),
+  sourceTemplateIds: z.array(z.string().trim().min(1)),
+  providerMetadata: z.strictObject({
+    modelProvider: z.string().trim().min(1),
+    modelName: z.string().trim().min(1),
+    promptVersion: z.string().trim().min(1),
+    knowledgeBaseVersion: z.string().trim().min(1),
+    designTemplateVersion: z.string().trim().min(1).nullable()
+  })
 });
 
 export interface DesignGenerationAdapter {
@@ -155,7 +165,16 @@ export class MockDesignGenerationAdapter implements DesignGenerationAdapter {
       designStory: "A balanced color rhythm inspired by the selected palette and style.",
       recommendationReasons: [
         `Uses ${request.styleTags[0] ?? "balanced"} styling as a visual design direction.`
-      ]
+      ],
+      culturalInspiration: [],
+      sourceTemplateIds: [],
+      providerMetadata: {
+        modelProvider: "mock",
+        modelName: "explicit-development-mock",
+        promptVersion: "mock-design-v1",
+        knowledgeBaseVersion: "mock-catalog-v1",
+        designTemplateVersion: null
+      }
     };
   }
 }
@@ -192,7 +211,7 @@ export type DesignApplicationDependencies = {
   inventory: InventoryStore;
   publications: PublicationStore;
   orders: OrderStore;
-  generator?: DesignGenerationAdapter;
+  generator: DesignGenerationAdapter;
   now?: () => Date;
   createId?: (prefix: string) => string;
 };
@@ -383,10 +402,10 @@ function buildGeneratedDesign(
       emotionTags: request.emotionTags,
       styleTags: request.styleTags,
       colorPalette: request.colorTags,
-      culturalInspiration: [],
+      culturalInspiration: candidate.culturalInspiration,
       designStory: candidate.designStory,
       recommendationReasons: candidate.recommendationReasons,
-      sourceTemplateIds: []
+      sourceTemplateIds: candidate.sourceTemplateIds
     },
     pricing: {
       materialSubtotalMinor,
@@ -418,11 +437,11 @@ function buildGeneratedDesign(
     },
     provenance: {
       generatedBy: "AI" as const,
-      modelProvider: "mock",
-      modelName: "deterministic-design-adapter",
-      promptVersion: "mock-design-v1",
-      knowledgeBaseVersion: "catalog-v1",
-      designTemplateVersion: null,
+      modelProvider: candidate.providerMetadata.modelProvider,
+      modelName: candidate.providerMetadata.modelName,
+      promptVersion: candidate.providerMetadata.promptVersion,
+      knowledgeBaseVersion: candidate.providerMetadata.knowledgeBaseVersion,
+      designTemplateVersion: candidate.providerMetadata.designTemplateVersion,
       pricingRuleVersion: "catalog-pending",
       sourceDesignId: null
     },
@@ -591,7 +610,7 @@ export class DesignApplicationService implements DesignApiService {
   private readonly createId: (prefix: string) => string;
 
   constructor(private readonly dependencies: DesignApplicationDependencies) {
-    this.generator = dependencies.generator ?? new MockDesignGenerationAdapter();
+    this.generator = dependencies.generator;
     this.now = dependencies.now ?? (() => new Date());
     this.createId = dependencies.createId ?? ((prefix) => `${prefix}-${randomUUID()}`);
   }

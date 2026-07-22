@@ -6,6 +6,7 @@ import * as React from "react";
 
 import { FlowNotice } from "../../../components/flow-notice";
 import { createReplaceRequest, designApi } from "../../../lib/api/design-api";
+import { hasOverBudgetAcceptance, loadDesignBudgetContext } from "../../../lib/api/design-session";
 import { toFrontendApiError, type FrontendErrorCode } from "../../../lib/api/frontend-api-error";
 import { toDesignComponentViewModels } from "../model/design-component-view-model";
 import { formatMinorAmount } from "../model/format-minor-amount";
@@ -97,14 +98,16 @@ export function DiyEditor({ designId }: { designId: string }) {
     setOrder(null);
     try {
       const previous = design;
-      const response = await designApi.update(createReplaceRequest(design, selectedBead.componentId, {
+      const updateResponse = await designApi.update(createReplaceRequest(design, selectedBead.componentId, {
         ...selectedMaterial,
         componentId: selectedBead.componentId,
         positionIndex: selectedBead.positionIndex,
         role: selectedBead.role
       }));
-      setDesign(response.design);
-      setNotice(responseNotice(previous, response.design, response.warnings.map((warning) => warning.code)));
+      const priceResponse = await designApi.price(updateResponse.design);
+      const warnings = [...updateResponse.warnings, ...priceResponse.warnings];
+      setDesign(priceResponse.design);
+      setNotice(responseNotice(previous, priceResponse.design, warnings.map((warning) => warning.code)));
     } catch (error) {
       setNotice(toFrontendApiError(error).code);
     } finally {
@@ -127,6 +130,11 @@ export function DiyEditor({ designId }: { designId: string }) {
   };
 
   const createOrder = async () => {
+    const budget = loadDesignBudgetContext(design.designId);
+    if (budget?.maxBudgetMinor !== undefined && design.pricing.totalPriceMinor > budget.maxBudgetMinor && !hasOverBudgetAcceptance(design.designId)) {
+      setNotice("VALIDATION_ERROR");
+      return;
+    }
     setIsOrdering(true);
     setNotice(null);
     try {

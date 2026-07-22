@@ -18,6 +18,8 @@ export type QuestionnaireAnswers = {
   budget: string;
   wrist: string;
   culture: string;
+  excludedProductIds: string[];
+  personalizationConsent: boolean;
 };
 
 export const INITIAL_ANSWERS: QuestionnaireAnswers = {
@@ -26,7 +28,9 @@ export const INITIAL_ANSWERS: QuestionnaireAnswers = {
   style: "",
   budget: "",
   wrist: "",
-  culture: "none"
+  culture: "none",
+  excludedProductIds: [],
+  personalizationConsent: false
 };
 
 export const QUESTION_OPTIONS: Record<Exclude<QuestionnaireStepId, "wrist">, Array<{ value: string; label: string; detail: string; swatches?: string[] }>> = {
@@ -100,7 +104,23 @@ export function toGenerateDesignRequest(answers: QuestionnaireAnswers): Generate
     styleTags: [answers.style, ...(answers.culture === "none" ? [] : [answers.culture])],
     colorTags: [answers.color],
     ...budget,
-    excludedProductIds: [],
-    personalizationConsent: false
+    excludedProductIds: answers.excludedProductIds,
+    personalizationConsent: answers.personalizationConsent
   };
+}
+
+const DESIGN_DIRECTIONS = [
+  { id: "clear-rhythm", styleTag: "airy-rhythm", colorTag: "clear-accent" },
+  { id: "layered-contrast", styleTag: "layered-contrast", colorTag: "smoky-accent" },
+  { id: "focused-balance", styleTag: "focal-balance", colorTag: "neutral-accent" }
+] as const;
+
+export function toGenerateDesignRequests(answers: QuestionnaireAnswers): GenerateDesignRequest[] {
+  const base = toGenerateDesignRequest(answers);
+  return DESIGN_DIRECTIONS.map((direction) => ({
+    ...base,
+    requestId: `${base.requestId}-${direction.id}`,
+    styleTags: [...base.styleTags, direction.styleTag],
+    colorTags: [...base.colorTags, direction.colorTag]
+  }));
 }

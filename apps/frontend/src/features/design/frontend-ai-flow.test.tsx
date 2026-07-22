@@ -18,6 +18,7 @@ import {
   INITIAL_ANSWERS,
   QUESTIONNAIRE_STEPS,
   toGenerateDesignRequest,
+  toGenerateDesignRequests,
   validateQuestionnaireStep
 } from "../questionnaire/model/questionnaire";
 
@@ -36,12 +37,32 @@ test("questionnaire can move forward and return to the previous step without und
 });
 
 test("questionnaire produces a shared Generate Design request DTO", () => {
-  const request = toGenerateDesignRequest({ state: "quiet", color: "mist-blue", style: "minimal", budget: "signature", wrist: "155", culture: "landscape" });
+  const request = toGenerateDesignRequest({ state: "quiet", color: "mist-blue", style: "minimal", budget: "signature", wrist: "155", culture: "landscape", excludedProductIds: ["product-quartz-round-10"], personalizationConsent: true });
   assert.equal(GenerateDesignRequestSchema.safeParse(request).success, true);
   assert.equal(request.wristCircumferenceMm, 155);
-  assert.equal(request.personalizationConsent, false);
+  assert.equal(request.personalizationConsent, true);
+  assert.deepEqual(request.excludedProductIds, ["product-quartz-round-10"]);
   assert.equal(request.minBudgetMinor, 50_000);
   assert.equal(request.maxBudgetMinor, 89_900);
+});
+
+test("questionnaire derives three legal differentiated Backend generation requests", () => {
+  const answers = { state: "quiet", color: "mist-blue", style: "minimal", budget: "entry", wrist: "155", culture: "landscape", excludedProductIds: ["product-quartz-round-10"], personalizationConsent: true };
+  const requests = toGenerateDesignRequests(answers);
+  assert.equal(requests.length, 3);
+  assert.equal(new Set(requests.map(({ requestId }) => requestId)).size, 3);
+  assert.equal(new Set(requests.map(({ styleTags }) => styleTags.at(-1))).size, 3);
+  for (const request of requests) {
+    assert.equal(GenerateDesignRequestSchema.safeParse(request).success, true);
+    assert.deepEqual(request.emotionTags, ["quiet"]);
+    assert.equal(request.styleTags.includes("minimal"), true);
+    assert.equal(request.styleTags.includes("landscape"), true);
+    assert.equal(request.colorTags.includes("mist-blue"), true);
+    assert.equal(request.maxBudgetMinor, 49_900);
+    assert.equal(request.wristCircumferenceMm, 155);
+    assert.deepEqual(request.excludedProductIds, ["product-quartz-round-10"]);
+    assert.equal(request.personalizationConsent, true);
+  }
 });
 
 test("renders three schema-valid design choices and selects each by public designId", () => {

@@ -17,6 +17,9 @@ importers:
 
   apps/backend:
     dependencies:
+      '@mystcrag/ai-agent':
+        specifier: workspace:*
+        version: link:../../packages/ai-agent
       '@mystcrag/database':
         specifier: workspace:*
         version: link:../../packages/database
