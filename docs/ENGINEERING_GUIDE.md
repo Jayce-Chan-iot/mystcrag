@@ -8,6 +8,10 @@
 
 Copy `.env.example` to `.env` for local development. Never commit `.env`.
 
+`pnpm install --frozen-lockfile` runs the root `postinstall` lifecycle and generates the
+ignored Prisma Client in `packages/database/generated`. CI and local installs must not use
+`--ignore-scripts`. The generated directory is disposable build output and is never committed.
+
 ## Commands
 
 - `pnpm dev`: run application development processes.
@@ -16,6 +20,11 @@ Copy `.env.example` to `.env` for local development. Never commit `.env`.
 - `pnpm test`: run architecture and module tests.
 - `pnpm build`: produce application builds and validate packages.
 - `pnpm validate`: run the complete handoff gate.
+
+The root lint, typecheck, test, build, and validate commands run Prisma generation once before
+starting Turborepo. Extra Turbo flags are forwarded to every selected task, so
+`pnpm build --force` bypasses the build cache and `pnpm validate --force` bypasses the cache for
+lint, typecheck, test, and build while keeping those gates sequential.
 
 Database commands run from `packages/database`: `pnpm db:format`, `pnpm db:generate`, and `pnpm db:migrate`.
 
