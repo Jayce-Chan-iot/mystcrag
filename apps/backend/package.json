@@ -4,10 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "prebuild": "pnpm --filter @mystcrag/database db:generate",
+    "build": "node build.mjs",
     "dev": "tsx watch src/index.ts",
     "lint": "tsc --noEmit",
     "start": "node dist/index.js",
+    "smoke:start": "node scripts/smoke-production-start.mjs",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
@@ -20,6 +22,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
+    "esbuild": "^0.28.1",
     "tsx": "^4.20.5",
     "typescript": "^6.0.3"
   }
