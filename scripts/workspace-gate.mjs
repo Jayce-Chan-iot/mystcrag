@@ -1,5 +1,6 @@
 import { readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const TASKS_BY_MODE = {
   build: ["build"],
@@ -40,7 +41,7 @@ for (const task of tasks) {
     const rootTests = readdirSync(new URL("../tests/", import.meta.url))
       .filter((fileName) => fileName.endsWith(".test.mjs"))
       .sort()
-      .map((fileName) => new URL(`../tests/${fileName}`, import.meta.url).pathname);
+      .map((fileName) => fileURLToPath(new URL(`../tests/${fileName}`, import.meta.url)));
 
     run(process.execPath, ["--test", ...rootTests]);
   }

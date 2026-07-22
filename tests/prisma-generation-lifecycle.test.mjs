@@ -28,5 +28,8 @@ test("fresh installs and workspace gates declare serialized Prisma generation", 
     gateSource,
     /run\(pnpmCommand, \["--filter", "@mystcrag\/database", "db:generate"\]\)/
   );
+  assert.match(gateSource, /import \{ fileURLToPath \} from "node:url"/);
+  assert.match(gateSource, /fileURLToPath\(new URL\(`/);
+  assert.doesNotMatch(gateSource, /\.pathname/);
   assert.match(gateSource, /\.\.\.turboArguments/);
 });
