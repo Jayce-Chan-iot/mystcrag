@@ -15,6 +15,7 @@ import {
 import type { DesignV1 } from "@mystcrag/design-contract";
 
 import { DomainApiError } from "../../contracts/api-error.js";
+import { AiRecommendationDesignAdapter } from "./ai-recommendation-design.adapter.js";
 import { DesignApplicationService } from "./design-api.service.js";
 
 export type DesignStubOperation =
@@ -90,6 +91,7 @@ export function createDesignApplicationService(client: DatabaseClient) {
     pricing: new DatabasePricingRepository(client),
     inventory: new DatabaseInventoryRepository(client),
     publications: new DatabasePublicationRepository(client),
-    orders: new DatabaseOrderRepository(client)
+    orders: new DatabaseOrderRepository(client),
+    generator: new AiRecommendationDesignAdapter()
   });
 }

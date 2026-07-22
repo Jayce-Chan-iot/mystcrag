@@ -32,11 +32,13 @@ export const MOCK_MATERIALS: MockMaterial[] = [
 ];
 
 const wait = async () => new Promise<void>((resolve) => setTimeout(resolve, 180));
+const mockDesignStore = new Map(mockDesignOptions.map((design) => [design.designId, structuredClone(design)]));
 
 export async function mockGenerateDesigns(input: GenerateDesignRequest): Promise<GenerateDesignResponse[]> {
   await wait();
   const request = GenerateDesignRequestSchema.parse(input);
-  return mockDesignOptions.map((design, index) => GenerateDesignResponseSchema.parse({
+  return mockDesignOptions.map((design, index) => {
+    const response = GenerateDesignResponseSchema.parse({
     requestId: `${request.requestId}-${index + 1}`,
     design: PublicDesignV1Schema.parse({
       ...design,
@@ -44,7 +46,10 @@ export async function mockGenerateDesigns(input: GenerateDesignRequest): Promise
       production: { ...design.production, wristCircumferenceMm: request.wristCircumferenceMm }
     }),
     warnings: []
-  }));
+    });
+    mockDesignStore.set(response.design.designId, structuredClone(response.design));
+    return response;
+  });
 }
 
 export async function mockGetDesignOptions(sessionId: string): Promise<PublicDesignV1[]> {
@@ -57,7 +62,8 @@ export async function mockGetDesignOptions(sessionId: string): Promise<PublicDes
 }
 
 export function getMockDesign(designId: string): PublicDesignV1 | null {
-  return structuredClone(mockDesignOptions.find((design) => design.designId === designId) ?? mockDesignOptions[0] ?? null);
+  const design = mockDesignStore.get(designId);
+  return design ? structuredClone(design) : null;
 }
 
 export async function mockReplaceBead({
@@ -73,7 +79,7 @@ export async function mockReplaceBead({
 }): Promise<UpdateDesignResponse> {
   await wait();
   if (expectedRevision !== design.revision) throw new FrontendApiError("CONFLICT", "Stale design revision");
-  const material = MOCK_MATERIALS.find((item) => item.id === materialId);
+  const material = MOCK_MATERIALS.find((item) => item.id === materialId || item.materialKey === materialId || item.productId === materialId);
   if (!material) throw new FrontendApiError("INVENTORY_CHANGED", "Material is no longer available");
   const current = design.beads.find((bead) => bead.componentId === componentId);
   if (!current) throw new FrontendApiError("VALIDATION_ERROR", "Selected component is not replaceable");
@@ -108,9 +114,11 @@ export async function mockReplaceBead({
     }
   });
 
-  return UpdateDesignResponseSchema.parse({
+  const response = UpdateDesignResponseSchema.parse({
     requestId: `replace-${componentId}-${updated.revision}`,
     design: updated,
     warnings: priceDifference === 0 ? [] : [{ code: "PRICE_CHANGED", message: "Server mock recalculated the design price." }]
   });
+  mockDesignStore.set(response.design.designId, structuredClone(response.design));
+  return response;
 }

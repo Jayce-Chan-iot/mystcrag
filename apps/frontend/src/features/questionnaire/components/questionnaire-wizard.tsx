@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { FlowNotice } from "../../../components/flow-notice";
-import { mockGenerateDesigns } from "../../../lib/api/mock-design-api";
+import { designApi } from "../../../lib/api/design-api";
+import { saveGeneratedDesignOptions } from "../../../lib/api/design-session";
 import { toFrontendApiError, type FrontendErrorCode } from "../../../lib/api/frontend-api-error";
 import {
   INITIAL_ANSWERS,
@@ -13,6 +14,7 @@ import {
   QUESTIONNAIRE_STEPS,
   QUESTION_OPTIONS,
   toGenerateDesignRequest,
+  toGenerateDesignRequests,
   validateQuestionnaireStep,
   type QuestionnaireAnswers
 } from "../model/questionnaire";
@@ -32,6 +34,15 @@ export function QuestionnaireWizard() {
     setError(null);
   };
 
+  const toggleExcludedProduct = (productId: string) => {
+    setAnswers((current) => ({
+      ...current,
+      excludedProductIds: current.excludedProductIds.includes(productId)
+        ? current.excludedProductIds.filter((id) => id !== productId)
+        : [...current.excludedProductIds, productId]
+    }));
+  };
+
   const moveNext = async () => {
     const validationError = validateQuestionnaireStep(step.id, answers);
     if (validationError) {
@@ -47,8 +58,13 @@ export function QuestionnaireWizard() {
     setIsSubmitting(true);
     setApiError(null);
     try {
-      await mockGenerateDesigns(toGenerateDesignRequest(answers));
-      router.push(`/design/${encodeURIComponent(`session-${Date.now()}`)}`);
+      const request = toGenerateDesignRequest(answers);
+      const responses = await Promise.all(toGenerateDesignRequests(answers).map((option) => designApi.generate(option)));
+      const designIds = responses.map((response) => response.design.designId);
+      const routeDesignId = designIds[0];
+      if (!routeDesignId) throw new Error("Backend did not return a design option.");
+      saveGeneratedDesignOptions(routeDesignId, designIds, request);
+      router.push(`/design/${encodeURIComponent(routeDesignId)}`);
     } catch (generationError) {
       setApiError(toFrontendApiError(generationError).code === "NETWORK_ERROR" ? "AI_GENERATION_FAILED" : toFrontendApiError(generationError).code);
       setIsSubmitting(false);
@@ -94,7 +110,7 @@ export function QuestionnaireWizard() {
             <p className="mt-3 text-sm text-[var(--muted)]" id="wrist-help">常见成人手围约为 140–180 mm。</p>
           </div>
         ) : (
-          <fieldset className="mt-10 grid gap-3 sm:grid-cols-2">
+          <><fieldset className="mt-10 grid gap-3 sm:grid-cols-2">
             <legend className="sr-only">{step.title}</legend>
             {options?.map((option) => {
               const selected = answers[step.id] === option.value;
@@ -109,6 +125,18 @@ export function QuestionnaireWizard() {
               );
             })}
           </fieldset>
+          {step.id === "culture" ? (
+            <div className="mt-8 grid gap-5 rounded-2xl border border-[var(--border)] bg-white/50 p-5">
+              <fieldset>
+                <legend className="font-medium">不想出现的材料（可选）</legend>
+                <p className="mt-1 text-sm text-[var(--muted)]">排除项会随三套方案一起送到 Backend，并在目录筛选前生效。</p>
+                <div className="mt-3 flex flex-wrap gap-3">
+                  {[["product-aquamarine-round-8", "海蓝宝"], ["product-moonstone-round-6", "月光石"], ["product-quartz-round-10", "白水晶"]].map(([id, label]) => <label className="inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--border)] px-4 py-2" key={id}><input checked={answers.excludedProductIds.includes(id!)} onChange={() => toggleExcludedProduct(id!)} type="checkbox" />{label}</label>)}
+                </div>
+              </fieldset>
+              <label className="flex min-h-11 items-start gap-3 text-sm leading-6"><input checked={answers.personalizationConsent} className="mt-1" onChange={(event) => setAnswers((current) => ({ ...current, personalizationConsent: event.target.checked }))} type="checkbox" /><span>同意仅将本次偏好用于生成与保存这三套设计；不用于公开展示。发布仍会单独征求授权。</span></label>
+            </div>
+          ) : null}</>
         )}
 
         {error ? <p className="mt-5 text-sm text-[var(--danger)]" id="question-error" role="alert">{error}</p> : null}
@@ -119,7 +147,7 @@ export function QuestionnaireWizard() {
         <div className="mx-auto flex max-w-3xl items-center justify-between gap-4">
           <button className="min-w-24 rounded-full px-5 py-3 text-sm text-[var(--muted)] transition hover:text-[var(--foreground)] disabled:opacity-30" disabled={stepIndex === 0 || isSubmitting} onClick={() => { setStepIndex((current) => getPreviousStepIndex(current)); setError(null); }} type="button">← 上一步</button>
           <button className="min-w-36 rounded-full bg-[var(--foreground)] px-6 py-3 text-sm text-white transition hover:bg-[var(--accent-deep)] disabled:cursor-wait disabled:opacity-60" disabled={isSubmitting} onClick={() => void moveNext()} type="button">
-            {isSubmitting ? "正在生成…" : stepIndex === QUESTIONNAIRE_STEPS.length - 1 ? "生成三套设计" : "继续 →"}
+            {isSubmitting ? "正在生成…" : stepIndex === QUESTIONNAIRE_STEPS.length - 1 ? "生成设计" : "继续 →"}
           </button>
         </div>
       </div>

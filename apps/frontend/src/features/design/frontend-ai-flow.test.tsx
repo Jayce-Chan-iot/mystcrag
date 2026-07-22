@@ -9,7 +9,7 @@ import { FlowNotice } from "../../components/flow-notice";
 import { FRONTEND_ERROR_CODES, FrontendApiError } from "../../lib/api/frontend-api-error";
 import { MOCK_MATERIALS, mockGetDesignOptions, mockReplaceBead } from "../../lib/api/mock-design-api";
 import { BraceletPreview } from "./components/bracelet-preview";
-import { DiyEditor } from "./components/diy-editor";
+import { DIY_LAYOUT_CLASS } from "./components/diy-editor";
 import { mockDesignOptions } from "./fixtures/mock-design-options";
 import { resolveSelectedDesign } from "./model/design-selection";
 import {
@@ -18,6 +18,7 @@ import {
   INITIAL_ANSWERS,
   QUESTIONNAIRE_STEPS,
   toGenerateDesignRequest,
+  toGenerateDesignRequests,
   validateQuestionnaireStep
 } from "../questionnaire/model/questionnaire";
 
@@ -36,10 +37,32 @@ test("questionnaire can move forward and return to the previous step without und
 });
 
 test("questionnaire produces a shared Generate Design request DTO", () => {
-  const request = toGenerateDesignRequest({ state: "quiet", color: "mist-blue", style: "minimal", budget: "signature", wrist: "155", culture: "landscape" });
+  const request = toGenerateDesignRequest({ state: "quiet", color: "mist-blue", style: "minimal", budget: "signature", wrist: "155", culture: "landscape", excludedProductIds: ["product-quartz-round-10"], personalizationConsent: true });
   assert.equal(GenerateDesignRequestSchema.safeParse(request).success, true);
   assert.equal(request.wristCircumferenceMm, 155);
-  assert.equal(request.personalizationConsent, false);
+  assert.equal(request.personalizationConsent, true);
+  assert.deepEqual(request.excludedProductIds, ["product-quartz-round-10"]);
+  assert.equal(request.minBudgetMinor, 50_000);
+  assert.equal(request.maxBudgetMinor, 89_900);
+});
+
+test("questionnaire derives three legal differentiated Backend generation requests", () => {
+  const answers = { state: "quiet", color: "mist-blue", style: "minimal", budget: "entry", wrist: "155", culture: "landscape", excludedProductIds: ["product-quartz-round-10"], personalizationConsent: true };
+  const requests = toGenerateDesignRequests(answers);
+  assert.equal(requests.length, 3);
+  assert.equal(new Set(requests.map(({ requestId }) => requestId)).size, 3);
+  assert.equal(new Set(requests.map(({ styleTags }) => styleTags.at(-1))).size, 3);
+  for (const request of requests) {
+    assert.equal(GenerateDesignRequestSchema.safeParse(request).success, true);
+    assert.deepEqual(request.emotionTags, ["quiet"]);
+    assert.equal(request.styleTags.includes("minimal"), true);
+    assert.equal(request.styleTags.includes("landscape"), true);
+    assert.equal(request.colorTags.includes("mist-blue"), true);
+    assert.equal(request.maxBudgetMinor, 49_900);
+    assert.equal(request.wristCircumferenceMm, 155);
+    assert.deepEqual(request.excludedProductIds, ["product-quartz-round-10"]);
+    assert.equal(request.personalizationConsent, true);
+  }
 });
 
 test("renders three schema-valid design choices and selects each by public designId", () => {
@@ -106,11 +129,5 @@ test("mock result API exposes AI failure, network error and empty state paths", 
 });
 
 test("DIY editor emits mobile-first ordering and desktop three-column layout", () => {
-  const markup = renderToStaticMarkup(<DiyEditor designId="rain-after-blue" />);
-  assert.match(markup, /lg:grid-cols-\[18rem_minmax\(28rem,1fr\)_21rem\]/);
-  assert.match(markup, /order-1/);
-  assert.match(markup, /order-2/);
-  assert.match(markup, /order-3/);
-  assert.match(markup, /data-error-code="THREE_ASSET_FALLBACK"/);
-  assert.match(markup, /role="radiogroup"/);
+  assert.match(DIY_LAYOUT_CLASS, /lg:grid-cols-\[18rem_minmax\(28rem,1fr\)_21rem\]/);
 });

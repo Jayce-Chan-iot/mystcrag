@@ -42,7 +42,7 @@ export function BraceletPreview({
           <button
             aria-label={label}
             aria-pressed={interactive ? isSelected : undefined}
-            className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/80 shadow-[inset_-5px_-7px_12px_rgb(70_48_86/0.18),inset_4px_4px_8px_rgb(255_255_255/0.82),0_5px_14px_rgb(57_45_67/0.18)] transition duration-300 ${isBead ? "h-[15%] w-[15%]" : "h-[9%] w-[9%]"} ${isSelected ? "ring-2 ring-[var(--accent)] ring-offset-4 ring-offset-transparent scale-110" : ""} ${interactive && isBead ? "cursor-pointer hover:scale-110" : "cursor-default"}`}
+            className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/80 shadow-[inset_-5px_-7px_12px_rgb(70_48_86/0.18),inset_4px_4px_8px_rgb(255_255_255/0.82),0_5px_14px_rgb(57_45_67/0.18)] transition duration-300 ${isBead ? "h-[15%] w-[15%]" : "h-[9%] w-[9%]"} ${interactive && isBead ? "min-h-11 min-w-11" : ""} ${isSelected ? "ring-2 ring-[var(--accent)] ring-offset-4 ring-offset-transparent scale-110" : ""} ${interactive && isBead ? "cursor-pointer hover:scale-110" : "cursor-default"}`}
             data-component-id={component.componentId}
             disabled={!interactive || !isBead}
             key={component.componentId}
