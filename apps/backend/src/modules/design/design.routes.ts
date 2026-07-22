@@ -15,91 +15,96 @@ import {
 import type { FastifyInstance } from "fastify";
 
 import {
-  actorIdFromRequestContext,
+  createAuthenticationPreHandler,
+  type AuthProvider
+} from "../../auth/auth-provider.js";
+import {
   handleDesignGet,
-  handleDesignPost,
-  type ActorResolver
+  handleDesignPost
 } from "./design.controller.js";
 import type { DesignApiService } from "./design-api.service.js";
 
 export function registerDesignContractRoutes(
   app: FastifyInstance,
   service: DesignApiService,
-  actorResolver: ActorResolver = actorIdFromRequestContext
+  authProvider: AuthProvider
 ) {
-  app.post("/api/design/generate", (request, reply) =>
+  const authenticate = createAuthenticationPreHandler(authProvider);
+  const protectedRoute = { preHandler: authenticate };
+
+  app.post("/api/design/generate", protectedRoute, (request, reply) =>
     handleDesignPost(
       request,
       reply,
       GenerateDesignRequestSchema,
       GenerateDesignResponseSchema,
-      actorResolver,
       (api, actorId, input) => api.generate(actorId, input),
       service
     )
   );
-  app.post("/api/design/update", (request, reply) =>
+  app.post("/api/design/update", protectedRoute, (request, reply) =>
     handleDesignPost(
       request,
       reply,
       UpdateDesignRequestSchema,
       UpdateDesignResponseSchema,
-      actorResolver,
       (api, actorId, input) => api.update(actorId, input),
-      service
+      service,
+      { ownerScoped: true }
     )
   );
-  app.post("/api/design/price", (request, reply) =>
+  app.post("/api/design/price", protectedRoute, (request, reply) =>
     handleDesignPost(
       request,
       reply,
       PriceDesignRequestSchema,
       PriceDesignResponseSchema,
-      actorResolver,
       (api, actorId, input) => api.price(actorId, input),
       service
     )
   );
-  app.post("/api/design/save", (request, reply) =>
+  app.post("/api/design/save", protectedRoute, (request, reply) =>
     handleDesignPost(
       request,
       reply,
       SaveDesignRequestSchema,
       SaveDesignResponseSchema,
-      actorResolver,
       (api, actorId, input) => api.save(actorId, input),
       service,
-      { ignoreOwnerId: true }
+      { ignoreOwnerId: true, ownerScoped: true }
     )
   );
-  app.post("/api/design/publish", (request, reply) =>
+  app.post("/api/design/publish", protectedRoute, (request, reply) =>
     handleDesignPost(
       request,
       reply,
       PublishDesignRequestSchema,
       PublishDesignResponseSchema,
-      actorResolver,
       (api, actorId, input) => api.publish(actorId, input),
-      service
+      service,
+      { ownerScoped: true }
     )
   );
-  app.post("/api/orders/from-design", (request, reply) =>
+  app.post("/api/orders/from-design", protectedRoute, (request, reply) =>
     handleDesignPost(
       request,
       reply,
       CreateOrderFromDesignRequestSchema,
       CreateOrderFromDesignResponseSchema,
-      actorResolver,
       (api, actorId, input) => api.createOrder(actorId, input),
-      service
+      service,
+      { ownerScoped: true }
     )
   );
-  app.get<{ Params: { id: string } }>("/api/design/:id", (request, reply) =>
-    handleDesignGet(request, reply, actorResolver, service, false)
+  app.get<{ Params: { id: string } }>(
+    "/api/design/:id",
+    protectedRoute,
+    (request, reply) => handleDesignGet(request, reply, service, false)
   );
   app.get<{ Params: { id: string } }>(
     "/api/design/:id/revisions",
-    (request, reply) => handleDesignGet(request, reply, actorResolver, service, true)
+    protectedRoute,
+    (request, reply) => handleDesignGet(request, reply, service, true)
   );
 }
 
