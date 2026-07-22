@@ -29,7 +29,7 @@ Copy `.env.example` to `.env`, then use:
 - `pnpm db:up`: start PostgreSQL 17 and wait for readiness.
 - `pnpm db:migrate`: deploy reviewed migrations to `mystcrag`.
 - `pnpm db:seed`: idempotently insert the Phase 2C catalog and lifecycle fixtures.
-- `pnpm db:test`: reset the isolated `mystcrag_test` database, deploy migrations, and run repository integration tests.
+- `TEST_DATABASE_URL=... pnpm db:test`: require a dedicated empty `mystcrag_*test*` database, create it when absent, deploy migrations, and run repository integration tests. It refuses a non-empty database instead of resetting or deleting data.
 - `pnpm db:reset`: destructively reset only the configured development database.
 - `pnpm db:down`: stop the Compose stack without deleting its volume.
 
