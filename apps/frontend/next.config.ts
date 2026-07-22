@@ -4,7 +4,7 @@ const backendOrigin = (process.env.MYSTCRAG_BACKEND_ORIGIN ?? process.env.NEXT_P
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  transpilePackages: ["@mystcrag/ui", "@mystcrag/design-contract"],
+  transpilePackages: ["@mystcrag/ui", "@mystcrag/design-contract", "@mystcrag/three-engine"],
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${backendOrigin}/api/:path*` }];
   }

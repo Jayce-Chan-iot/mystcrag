@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@mystcrag/design-contract": "workspace:*",
+    "@mystcrag/three-engine": "workspace:*",
     "@mystcrag/ui": "workspace:*",
     "next": "^16.2.10",
     "react": "^19.2.7",

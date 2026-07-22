@@ -1,6 +1,8 @@
 "use client";
 
 import type { CreateOrderFromDesignResponse, PublicDesignV1 } from "@mystcrag/design-contract";
+import type { MaterialQuality } from "@mystcrag/three-engine";
+import type { ScenePerformanceStats } from "@mystcrag/three-engine/react";
 import Link from "next/link";
 import * as React from "react";
 
@@ -10,8 +12,8 @@ import { hasOverBudgetAcceptance, loadDesignBudgetContext } from "../../../lib/a
 import { toFrontendApiError, type FrontendErrorCode } from "../../../lib/api/frontend-api-error";
 import { toDesignComponentViewModels } from "../model/design-component-view-model";
 import { formatMinorAmount } from "../model/format-minor-amount";
-import { BraceletPreview } from "./bracelet-preview";
 import { ComplianceNotice } from "./compliance-notice";
+import { ThreeBraceletPreview } from "./three-bracelet-preview";
 
 export const DIY_LAYOUT_CLASS = "grid min-w-0 gap-5 lg:grid-cols-[18rem_minmax(28rem,1fr)_21rem]";
 
@@ -43,6 +45,8 @@ export function DiyEditor({ designId }: { designId: string }) {
   const [isOrdering, setIsOrdering] = React.useState(false);
   const [savedAt, setSavedAt] = React.useState<string | null>(null);
   const [order, setOrder] = React.useState<CreateOrderFromDesignResponse | null>(null);
+  const [quality, setQuality] = React.useState<MaterialQuality | undefined>(undefined);
+  const [performanceStats, setPerformanceStats] = React.useState<ScenePerformanceStats | null>(null);
 
   const loadDesign = React.useCallback(async () => {
     try {
@@ -200,11 +204,19 @@ export function DiyEditor({ designId }: { designId: string }) {
         </aside>
 
         <section className="order-1 grid min-h-[30rem] min-w-0 place-items-center overflow-hidden rounded-[1.7rem] border border-[var(--border)] bg-[radial-gradient(circle_at_50%_45%,#fff,rgba(231,226,217,.78),rgba(213,205,218,.72))] p-4 lg:order-2 lg:min-h-[43rem]" aria-labelledby="bracelet-preview-title">
-          <h2 className="sr-only" id="bracelet-preview-title">手串编辑预览</h2>
-          <div>
-            <BraceletPreview design={design} interactive onSelect={setSelectedComponentId} selectedComponentId={selectedComponentId} />
-            <div className="mx-auto -mt-3 max-w-md rounded-full border border-white/80 bg-white/65 px-4 py-2 text-center text-xs text-[var(--muted)] backdrop-blur" data-error-code="THREE_ASSET_FALLBACK">
-              轻量预览 · 材质加载异常时使用可靠替代外观
+          <h2 className="sr-only" id="bracelet-preview-title">3D 手串编辑预览</h2>
+          <div className="w-full min-w-0">
+            <ThreeBraceletPreview design={design} onPerformanceStats={setPerformanceStats} onSelect={setSelectedComponentId} quality={quality} selectedComponentId={selectedComponentId} />
+            <div className="mx-auto mt-3 flex max-w-lg flex-wrap items-center justify-center gap-3 rounded-2xl border border-white/80 bg-white/65 px-4 py-2 text-xs text-[var(--muted)] backdrop-blur">
+              <label htmlFor="scene-quality">画质</label>
+              <select className="min-h-11 rounded-full border border-[var(--border)] bg-white px-3 py-1 text-[var(--foreground)]" id="scene-quality" onChange={(event) => setQuality(event.target.value === "AUTO" ? undefined : event.target.value as MaterialQuality)} value={quality ?? "AUTO"}>
+                <option value="AUTO">AUTO</option>
+                <option value="LOW">LOW</option>
+                <option value="MEDIUM">MEDIUM</option>
+                <option value="HIGH">HIGH</option>
+              </select>
+              <span>移动端 HIGH 自动降为 LOW</span>
+              {performanceStats ? <span data-dpr={performanceStats.dpr} data-draw-calls={performanceStats.drawCalls} data-material-count={performanceStats.materialCount} data-quality={performanceStats.quality} data-scene-init-ms={performanceStats.initializationMs} data-texture-count={performanceStats.textureCount} data-triangles={performanceStats.triangles}>场景 {performanceStats.initializationMs}ms · {performanceStats.drawCalls} draw calls</span> : null}
             </div>
           </div>
         </section>
@@ -218,7 +230,16 @@ export function DiyEditor({ designId }: { designId: string }) {
           <section className="border-t border-[var(--border)] pt-5" aria-labelledby="component-list-title">
             <div className="flex items-center justify-between"><h2 className="font-serif text-xl" id="component-list-title">组件清单</h2><span className="text-xs text-[var(--muted)]">{components.length} 件</span></div>
             <ol className="mt-3 max-h-44 space-y-2 overflow-y-auto pr-1 text-sm">
-              {components.map((component) => <li className={`flex items-center justify-between rounded-xl px-3 py-2 ${component.componentId === selectedComponentId ? "bg-[var(--accent-soft)]" : "bg-[var(--surface-soft)]/65"}`} data-component-id={component.componentId} key={component.componentId}><span>{component.label}</span><span className="text-xs text-[var(--muted)]">{component.positionIndex !== undefined ? `#${component.positionIndex + 1}` : "挂饰"}</span></li>)}
+              {components.map((component) => {
+                const selectable = design.beads.some((bead) => bead.componentId === component.componentId);
+                return (
+                  <li data-component-id={component.componentId} key={component.componentId}>
+                    <button aria-pressed={selectable ? component.componentId === selectedComponentId : undefined} className={`flex min-h-11 w-full items-center justify-between rounded-xl px-3 py-2 text-left ${component.componentId === selectedComponentId ? "bg-[var(--accent-soft)]" : "bg-[var(--surface-soft)]/65"}`} disabled={!selectable} onClick={() => setSelectedComponentId(component.componentId)} type="button">
+                      <span>{component.label}</span><span className="text-xs text-[var(--muted)]">{component.positionIndex !== undefined ? `#${component.positionIndex + 1}` : "挂饰"}</span>
+                    </button>
+                  </li>
+                );
+              })}
             </ol>
           </section>
           <section className="border-t border-[var(--border)] pt-5" aria-labelledby="design-note-title"><h2 className="font-serif text-xl" id="design-note-title">设计说明</h2><p className="mt-3 text-sm leading-6 text-[var(--muted)]">{design.story.designStory}</p></section>
