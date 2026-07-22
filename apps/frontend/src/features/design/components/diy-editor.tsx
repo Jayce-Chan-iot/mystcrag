@@ -106,8 +106,11 @@ export function DiyEditor({ designId }: { designId: string }) {
       }));
       const priceResponse = await designApi.price(updateResponse.design);
       const warnings = [...updateResponse.warnings, ...priceResponse.warnings];
-      setDesign(priceResponse.design);
-      setNotice(responseNotice(previous, priceResponse.design, warnings.map((warning) => warning.code)));
+      // Price is an authoritative commercial check, but /price does not persist a
+      // revision. Keep the persisted /update design so a subsequent save cannot
+      // submit an unpersisted priceCalculatedAt value.
+      setDesign(updateResponse.design);
+      setNotice(responseNotice(previous, updateResponse.design, warnings.map((warning) => warning.code)));
     } catch (error) {
       setNotice(toFrontendApiError(error).code);
     } finally {

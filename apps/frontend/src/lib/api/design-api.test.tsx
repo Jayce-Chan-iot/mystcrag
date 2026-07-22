@@ -40,7 +40,7 @@ test("real generate request sends complete questionnaire answers and budget to B
   assert.deepEqual(sent.excludedProductIds, ["product-quartz-round-10"]);
   assert.equal(sent.personalizationConsent, true);
   assert.equal((calls[0]?.init?.headers as Record<string, string>).authorization, "Bearer verified-test-token");
-  assert.equal("x-actor-id" in (calls[0]?.init?.headers as Record<string, string>), false);
+  assert.equal(Object.hasOwn(calls[0]?.init?.headers as object, "x-actor-id"), false);
 });
 
 test("refresh loads the persisted design through GET instead of fixed Mock options", async () => {
