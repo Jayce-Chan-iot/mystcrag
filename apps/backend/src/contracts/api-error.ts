@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 export const ApiErrorCodeSchema = z.enum([
+  "UNAUTHORIZED",
+  "FORBIDDEN",
   "VALIDATION_ERROR",
   "NOT_IMPLEMENTED",
   "NOT_FOUND",
@@ -31,6 +33,8 @@ export type ApiFieldError = z.infer<typeof ApiFieldErrorSchema>;
 export type ApiErrorEnvelope = z.infer<typeof ApiErrorEnvelopeSchema>;
 
 const statusByCode: Record<ApiErrorCode, number> = {
+  UNAUTHORIZED: 401,
+  FORBIDDEN: 403,
   VALIDATION_ERROR: 400,
   NOT_IMPLEMENTED: 501,
   NOT_FOUND: 404,

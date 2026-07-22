@@ -12,7 +12,17 @@ The package exports request and response schemas for Generate Design, Update Des
 
 Phase 2B registers development-level HTTP boundaries for all six design operations. Every request is parsed with its shared request schema and every successful service value is parsed with its shared response schema. Business orchestration remains a stub, so a valid request currently returns the stable `NOT_IMPLEMENTED` domain error instead of fabricated product data.
 
-Errors use `{ error: { code, message, fieldErrors?, requestId } }`. Supported stable codes are `VALIDATION_ERROR`, `NOT_IMPLEMENTED`, `NOT_FOUND`, `CONFLICT`, `COMPLIANCE_BLOCKED`, `CONSENT_REQUIRED`, `INVENTORY_CHANGED`, `PRICE_CHANGED`, and `INTERNAL_ERROR`. Publish rejects public or unlisted requests without consent; order creation rejects a `REJECTED` design before service execution.
+Errors use `{ error: { code, message, fieldErrors?, requestId } }`. Supported stable codes are `UNAUTHORIZED`, `FORBIDDEN`, `VALIDATION_ERROR`, `NOT_IMPLEMENTED`, `NOT_FOUND`, `CONFLICT`, `COMPLIANCE_BLOCKED`, `CONSENT_REQUIRED`, `INVENTORY_CHANGED`, `PRICE_CHANGED`, and `INTERNAL_ERROR`. Publish rejects public or unlisted requests without consent; order creation rejects a `REJECTED` design before service execution.
+
+## Authentication and actor context
+
+All Design and Order routes listed below are protected. Clients send `Authorization: Bearer <credential>`; an `AuthProvider` verifies the credential signature, exact issuer, required audience, and expiry before the Backend creates a request-local `ActorContext`. Controllers obtain `actorId` only from that verified context and pass it to owner-scoped services. Authentication fields are not added to Design Contract DTOs, and request bodies never supply authoritative ownership.
+
+`x-actor-id` is not an authentication mechanism. A request that supplies only `x-actor-id` receives `401 UNAUTHORIZED`, and the header cannot replace or override the subject of a valid verified credential. Missing, malformed, forged, expired, wrong-issuer, and wrong-audience credentials receive the same generic `401 UNAUTHORIZED` envelope. The response does not echo the credential or expose verifier details.
+
+Owner-scoped routes use `403 FORBIDDEN` with a generic message when a verified actor cannot access the requested resource. Missing and differently owned resources are not distinguished at this boundary, preventing ownership disclosure.
+
+The built-in signed-token provider is for explicitly enabled test/development use only. It requires `NODE_ENV=test|development`, `MYSTCRAG_AUTH_PROVIDER=signed-test`, `MYSTCRAG_ENABLE_SIGNED_TEST_AUTH=true`, and configured signing secret, issuer, and audience values. It is rejected in production even when the opt-in flag is present. Production startup without a supported authentication provider fails safely rather than falling back to a fixed, anonymous, header-derived, or test actor.
 
 ## Service endpoints
 
@@ -34,21 +44,29 @@ Create user profile.
 
 POST /api/design/generate
 
-Uses `GenerateDesignRequestSchema` and `GenerateDesignResponseSchema`. It never returns an independent `threeConfig` copy.
+Requires verified authentication. Uses `GenerateDesignRequestSchema` and `GenerateDesignResponseSchema`. It never returns an independent `threeConfig` copy.
 
 POST /api/design/update
 
-Uses `UpdateDesignRequestSchema` and `UpdateDesignResponseSchema`.
+Requires verified authentication and owner access. Uses `UpdateDesignRequestSchema` and `UpdateDesignResponseSchema`.
 
 POST /api/design/price
 
-Uses `PriceDesignRequestSchema` and `PriceDesignResponseSchema`. The mapper retains product IDs and currency as pricing intent but discards all client-supplied unit and total prices before orchestration.
+Requires verified authentication. Uses `PriceDesignRequestSchema` and `PriceDesignResponseSchema`. The mapper retains product IDs and currency as pricing intent but discards all client-supplied unit and total prices before orchestration.
+
+GET /api/design/:id
+
+Requires verified authentication and returns the actor-owned current `PublicDesignV1`.
+
+GET /api/design/:id/revisions
+
+Requires verified authentication and returns the actor-owned immutable revision history using public projections.
 
 ## Design Save API
 
 POST /api/design/save
 
-Uses `SaveDesignRequestSchema` and `SaveDesignResponseSchema`.
+Requires verified authentication and owner access. Uses `SaveDesignRequestSchema` and `SaveDesignResponseSchema`.
 
 ## Community API
 
@@ -58,13 +76,13 @@ Return popular designs.
 
 POST /api/design/publish
 
-Uses `PublishDesignRequestSchema` and `PublishDesignResponseSchema`, with a consent guard before service execution.
+Requires verified authentication and owner access. Uses `PublishDesignRequestSchema` and `PublishDesignResponseSchema`, with a consent guard before service execution.
 
 ## Order API
 
 POST /api/orders/from-design
 
-Uses `CreateOrderFromDesignRequestSchema` and `CreateOrderFromDesignResponseSchema`, with a compliance guard before service execution.
+Requires verified authentication and owner access. Uses `CreateOrderFromDesignRequestSchema` and `CreateOrderFromDesignResponseSchema`, with a compliance guard before service execution.
 
 ## Phase 2C service status
 

@@ -9,6 +9,10 @@ import {
 import { standardAiDesignFixture } from "@mystcrag/design-contract/fixtures";
 
 import { createApp } from "../../app.js";
+import {
+  SignedTestTokenAuthProvider,
+  signTestAccessToken
+} from "../../auth/signed-test-auth-provider.js";
 import { DomainApiError } from "../../contracts/api-error.js";
 import {
   DesignApplicationService,
@@ -38,6 +42,15 @@ type PersistedDesignRevision = {
 
 const actorId = "actor-owner";
 const fixedNow = new Date("2026-07-21T10:00:00.000Z");
+const authSecret = "mystcrag-backend-auth-test-secret-2026";
+const authIssuer = "https://auth.test.mystcrag.local";
+const authAudience = "mystcrag-backend";
+const authProvider = new SignedTestTokenAuthProvider({
+  secret: authSecret,
+  issuer: authIssuer,
+  audience: authAudience,
+  now: () => fixedNow
+});
 const cloneDesign = () => structuredClone(standardAiDesignFixture);
 
 function catalogFromFixture(): CatalogProduct[] {
@@ -382,8 +395,21 @@ const generateBody = {
   personalizationConsent: false
 };
 
-function requestHeaders(owner = actorId) {
-  return { "x-actor-id": owner };
+function requestHeaders(
+  owner = actorId,
+  overrides: { audience?: string; expiresAtEpochSeconds?: number; issuer?: string } = {}
+) {
+  const token = signTestAccessToken(
+    {
+      subject: owner,
+      issuer: overrides.issuer ?? authIssuer,
+      audience: overrides.audience ?? authAudience,
+      expiresAtEpochSeconds:
+        overrides.expiresAtEpochSeconds ?? Math.floor(fixedNow.getTime() / 1000) + 3600
+    },
+    authSecret
+  );
+  return { authorization: `Bearer ${token}` };
 }
 
 test("generate creates a server-owned design and immutable revision 1", async () => {
@@ -452,7 +478,7 @@ test("update applies finite operations, rebuilds positions, and detects conflict
 
 test("invalid DTOs fail at the route boundary", async () => {
   const harness = createHarness();
-  const app = createApp({ designService: harness.service });
+  const app = createApp({ designService: harness.service, authProvider });
   const response = await app.inject({
     method: "POST",
     url: "/api/design/generate",
@@ -493,11 +519,11 @@ test("save ignores injected ownerId and uses actor context", async () => {
   const harness = createHarness();
   const design = cloneDesign();
   harness.seed(design);
-  const app = createApp({ designService: harness.service });
+  const app = createApp({ designService: harness.service, authProvider });
   const response = await app.inject({
     method: "POST",
     url: "/api/design/save",
-    headers: requestHeaders(),
+    headers: { ...requestHeaders(), "x-actor-id": "forged-owner" },
     payload: { requestId: "save", ownerId: "forged-owner", design }
   });
   assert.equal(response.statusCode, 200);
@@ -510,7 +536,7 @@ test("publish enforces ownership, consent, PASSED compliance, and public project
   const harness = createHarness();
   const design = cloneDesign();
   harness.seed(design);
-  const app = createApp({ designService: harness.service });
+  const app = createApp({ designService: harness.service, authProvider });
   const publishBody = {
     requestId: "publish",
     design,
@@ -525,7 +551,8 @@ test("publish enforces ownership, consent, PASSED compliance, and public project
     headers: requestHeaders("different-actor"),
     payload: publishBody
   });
-  assert.equal(unauthorized.statusCode, 404);
+  assert.equal(unauthorized.statusCode, 403);
+  assert.equal(unauthorized.json().error.code, "FORBIDDEN");
 
   const noConsent = await app.inject({
     method: "POST",
@@ -576,7 +603,7 @@ test("order maps compliance, revision, price, and inventory failures", async () 
   const harness = createHarness();
   const design = cloneDesign();
   harness.seed(design);
-  const app = createApp({ designService: harness.service });
+  const app = createApp({ designService: harness.service, authProvider });
   const body = {
     requestId: "order",
     design,
@@ -678,7 +705,7 @@ test("GET design and revision history return owner-scoped public DTOs", async ()
   const harness = createHarness();
   const design = cloneDesign();
   harness.seed(design);
-  const app = createApp({ designService: harness.service });
+  const app = createApp({ designService: harness.service, authProvider });
   const currentResponse = await app.inject({
     method: "GET",
     url: `/api/design/${design.designId}`,
@@ -693,5 +720,65 @@ test("GET design and revision history return owner-scoped public DTOs", async ()
   assert.equal(currentResponse.json().designId, design.designId);
   assert.equal(revisionsResponse.json().revisions.length, 1);
   assert.equal(JSON.stringify(revisionsResponse.json()).includes("ownerId"), false);
+
+  const forbiddenResponse = await app.inject({
+    method: "GET",
+    url: `/api/design/${design.designId}`,
+    headers: requestHeaders("different-actor")
+  });
+  assert.equal(forbiddenResponse.statusCode, 403);
+  assert.equal(forbiddenResponse.json().error.code, "FORBIDDEN");
+  await app.close();
+});
+
+test("protected routes reject missing, invalid, expired, and wrong-audience credentials", async () => {
+  const harness = createHarness();
+  const app = createApp({ designService: harness.service, authProvider });
+
+  for (const route of [
+    { method: "POST" as const, url: "/api/design/generate" },
+    { method: "POST" as const, url: "/api/design/update" },
+    { method: "POST" as const, url: "/api/design/price" },
+    { method: "POST" as const, url: "/api/design/save" },
+    { method: "POST" as const, url: "/api/design/publish" },
+    { method: "POST" as const, url: "/api/orders/from-design" },
+    { method: "GET" as const, url: "/api/design/design-id" },
+    { method: "GET" as const, url: "/api/design/design-id/revisions" }
+  ]) {
+    const response = await app.inject(route);
+    assert.equal(response.statusCode, 401, `${route.method} ${route.url}`);
+    assert.equal(response.json().error.code, "UNAUTHORIZED");
+  }
+
+  const cases = [
+    { name: "invalid", headers: { authorization: "Bearer secret-token-value" } },
+    {
+      name: "expired",
+      headers: requestHeaders(actorId, {
+        expiresAtEpochSeconds: Math.floor(fixedNow.getTime() / 1000) - 1
+      })
+    },
+    {
+      name: "wrong audience",
+      headers: requestHeaders(actorId, { audience: "different-service" })
+    },
+    {
+      name: "wrong issuer",
+      headers: requestHeaders(actorId, { issuer: "https://attacker.example" })
+    },
+    { name: "x-actor-id only", headers: { "x-actor-id": actorId } }
+  ];
+
+  for (const credentialCase of cases) {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/design/generate",
+      headers: credentialCase.headers,
+      payload: generateBody
+    });
+    assert.equal(response.statusCode, 401, credentialCase.name);
+    assert.equal(response.json().error.code, "UNAUTHORIZED", credentialCase.name);
+    assert.equal(response.body.includes("secret-token-value"), false, credentialCase.name);
+  }
   await app.close();
 });

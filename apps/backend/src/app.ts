@@ -1,15 +1,15 @@
 import Fastify from "fastify";
 
+import type { AuthProvider } from "./auth/auth-provider.js";
 import { backendModules } from "./modules/index.js";
 import {
   registerDesignContractRoutes,
   type DesignApiService
 } from "./modules/design/design.routes.js";
-import type { ActorResolver } from "./modules/design/design.controller.js";
 
 export type CreateAppOptions = {
   readonly designService?: DesignApiService;
-  readonly actorResolver?: ActorResolver;
+  readonly authProvider?: AuthProvider;
 };
 
 export function createApp(options: CreateAppOptions = {}) {
@@ -18,7 +18,10 @@ export function createApp(options: CreateAppOptions = {}) {
   app.get("/health", async () => ({ status: "ok" }));
   app.get("/api/modules", async () => ({ modules: backendModules }));
   if (options.designService) {
-    registerDesignContractRoutes(app, options.designService, options.actorResolver);
+    if (!options.authProvider) {
+      throw new Error("An authentication provider is required for Design API routes.");
+    }
+    registerDesignContractRoutes(app, options.designService, options.authProvider);
   }
 
   return app;
