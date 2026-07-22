@@ -54,6 +54,70 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 - Approval date: 2026-07-21
 - Implementation branch or commit: `feature/three-bracelet-scene` at pre-rebase commit `61e964b`
 
+### P35-001 — Establish Phase 3.5 remediation governance
+
+- Date: 2026-07-22
+- Proposed by Agent: Tech Lead
+- Affected modules: Phase 3.5 Backend Security, Database Verification, Browser Integration, Frontend Three Integration, and QA rerun workflow
+- Decision: Use four role-owned fix branches and one deferred QA rerun branch; require clean role-only history, fixed merge order, shared-change approval, complete handoff evidence, and `pnpm install` plus `pnpm validate` after every merge.
+- Rationale: The first QA gate confirmed that individually passing modules do not prove the real browser, authentication, Three, and PostgreSQL MVP path. Phase 3.5 needs explicit cross-module boundaries and evidence without Contract drift or premature QA imports.
+- Rejected alternatives: Fixing directly on `main`; one shared remediation branch; merging the old QA commit through a fix branch; accepting Mock/fixture evidence as a production path; restarting QA before all four post-merge gates pass.
+- Contract impact: None. `@mystcrag/design-contract` remains the single source of design DTOs and invariants.
+- Database impact: No schema or migration semantic change is authorized.
+- API impact: Existing design DTOs remain unchanged; the separately approved authentication decision governs auth error/context semantics.
+- Approval status: `APPROVED`
+- Approved by: Tech Lead
+- Approval date: 2026-07-22
+- Implementation branch or commit: `chore/phase-3-5-remediation-coordination`; `docs/PHASE_3_5_REMEDIATION_PLAN.md`
+
+### DEC-P35-POSTGRES-TEST-COMMAND-001 — Guard the live PostgreSQL test command
+
+- Date: 2026-07-22
+- Proposed by Agent: Database Verification Lead
+- Affected modules: Root `package.json`, `packages/database` test infrastructure, PostgreSQL CI service
+- Decision: Replace the root `db:test` reset command with the reviewed `TEST_DATABASE_URL` preparation, migration, and repository-test chain. The preparer must reject missing, unsafe, non-test, or non-empty database targets. No Prisma Schema or migration SQL change is authorized.
+- Rationale: BUG-P3-004 requires repeatable live PostgreSQL evidence while preventing an implicit fixed local URL and destructive reset from targeting an unintended database.
+- Rejected alternatives: Counting only Prisma validation or unit doubles; keeping a hard-coded development password/URL as the authoritative test target; using `prisma migrate reset --force` without a test-database guard; modifying production schema to simplify tests.
+- Contract impact: None.
+- Database impact: Test orchestration only. The reviewed migration and schema remain unchanged.
+- API impact: None.
+- Approval status: `APPROVED`
+- Approved by: Tech Lead
+- Approval date: 2026-07-22
+- Implementation branch or commit: Candidate `fix/postgres-verification@d923f06`; approval retains only the exact root `db:test` script scope reviewed on 2026-07-22. The branch remains subject to history cleanup and handoff review.
+
+### DEC-P35-FRONTEND-THREE-LINK-001 — Link Three Engine into the Frontend workspace importer
+
+- Date: 2026-07-22
+- Proposed by Agent: 3D Integration Lead
+- Affected modules: `apps/frontend/package.json`, `pnpm-lock.yaml`, `packages/three-engine` public exports as a consumer dependency
+- Decision: Allow the Frontend to declare `@mystcrag/three-engine: workspace:*` and retain the generated three-line lockfile importer link `link:../../packages/three-engine`. No registry dependency, version upgrade, root manifest change, or Design Contract change is authorized.
+- Rationale: BUG-P3-002 cannot mount the real Three Engine while the Frontend lacks an explicit workspace dependency. The generated link records the existing internal package without expanding the registry dependency closure.
+- Rejected alternatives: Deep relative imports into `packages/three-engine`; duplicating scene code inside Frontend; loading an undeclared package; copying Three runtime types into the shared Contract.
+- Contract impact: None. Frontend consumes the existing public Three adapter/runtime boundary.
+- Database impact: None.
+- API impact: None.
+- Approval status: `APPROVED`
+- Approved by: Tech Lead
+- Approval date: 2026-07-22
+- Implementation branch or commit: Candidate `fix/frontend-three-integration@210010a`; approval retains only the exact Frontend importer and three-line lockfile diff reviewed on 2026-07-22. The branch remains subject to history cleanup, auth adaptation, and handoff review.
+
+### DEC-P35-AUTH-BOUNDARY-001 — Require verified Backend actor context
+
+- Date: 2026-07-22
+- Proposed by Agent: Backend Security Lead
+- Affected modules: `apps/backend` authentication/context boundary, Frontend integration consumers, QA security tests, `docs/API_SPECIFICATION.md`
+- Decision: Protected design/order routes must resolve `actorId` only from verified authentication claims. Remove `x-actor-id` as an external identity source. Add stable generic `UNAUTHORIZED` and owner-safe `FORBIDDEN` behavior, and document it in the API specification before handoff. Development/test authentication must be explicitly enabled, signature/issuer/audience/expiry verified, and rejected as a production fallback.
+- Rationale: BUG-P3-005 shows that an arbitrary actor header defeats owner-scoped persistence even when request bodies correctly reject `ownerId`. Browser and 3D proxy integration need one authoritative identity boundary before QA reruns.
+- Rejected alternatives: Renaming the actor header; trusting a server-configured actor ID without credential verification; anonymous owner routes; embedding authentication fields in Design Contract DTOs; shipping a production test-token fallback.
+- Contract impact: None. Design Contract request/response DTOs do not gain identity fields.
+- Database impact: None. Existing owner predicates and transaction boundaries remain unchanged.
+- API impact: Protected routes gain documented 401/403 authentication/authorization behavior; design DTO success schemas and existing domain error meanings remain unchanged.
+- Approval status: `APPROVED`
+- Approved by: Tech Lead
+- Approval date: 2026-07-22
+- Implementation branch or commit: Candidate `fix/backend-auth-boundary@acd4df8`; implementation remains subject to code review, API specification update, validation, and integration-consumer adaptation.
+
 ---
 
 ## New decision template
