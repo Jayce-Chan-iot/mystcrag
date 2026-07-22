@@ -178,3 +178,66 @@ The in-app browser runtime reported no available browser instance, so this role 
 ## Rollback and merge risks
 
 The branch is independently reversible as one controlled merge. The generated lockfile change is only `@mystcrag/backend -> @mystcrag/ai-agent: link:../../packages/ai-agent`. Main merge risk is the documented `apps/frontend` overlap with the Three integration branch; no protocol resolution is needed because both sides use `PublicDesignV1` and `componentId`.
+
+## QA remediation: distinct two-material recommendations
+
+Date: 2026-07-22
+
+- Branch: `fix/qa-distinct-recommendations`
+- Baseline: `main@f6635732abd38be7f53e8d8d7c28179e7c39329a`
+- Severity: core-flow `MAJOR`
+- Owned scope: Backend AI composition adapter and Backend-local tests; this report is the only documentation change.
+- Prohibited-scope confirmation: no Frontend, Three Engine, AI internals, Design Contract, Database, schema, migration, repository, or authentication file changed.
+
+### Root cause
+
+`adaptCandidate` applied `optionIndex` only when an AI crystal could not be mapped to an exact Backend catalog crystal. After excluding `product-aquamarine-round-8`, exact moonstone/quartz mappings still succeeded, so Rain After Blue and Silver Mist converged to the same alternating twelve-product ring. Their names and stories differed, but the producible visual material sequence did not.
+
+### Correction
+
+The adapter now rechecks `active` and request-excluded product IDs at the composition boundary, ranks the remaining materials deterministically from each validated candidate's frequency and first occurrence, and composes two-material candidates with direction-specific visual grammar:
+
+- airy rhythm: even alternating visibility;
+- layered contrast: grouped three-bead color fields;
+- focal balance: a three-bead focal arc with a dominant supporting field, changing both count balance and emphasis.
+
+The three grammars are not rotations or reflections of each other. Each produces exactly twelve Backend catalog product IDs, and the chosen grammar is appended to the public recommendation reasons so the difference is explainable. With three or more eligible materials, the validated AI candidate sequence remains authoritative. With only one eligible material, the adapter repeats that real material and explicitly explains that diversity cannot be fabricated.
+
+Server authority is unchanged: AI does not provide trusted price, inventory, identity, revision, or persistence state. Provider metadata, Design DNA source IDs, structured cultural inspiration, story, request preferences, and exclusions remain intact.
+
+### Exact diff
+
+```text
+M apps/backend/src/modules/design/ai-recommendation-design.adapter.ts
+M apps/backend/src/modules/design/ai-recommendation-design.adapter.test.ts
+M apps/backend/src/modules/design/design.routes.test.ts
+M docs/INTEGRATION_FIX_REPORT.md
+```
+
+### Regression and lifecycle evidence
+
+Backend-local coverage now proves:
+
+- the exact aquamarine-exclusion/two-material scenario returns three distinct sequences;
+- canonical ring signatures remain distinct after considering every rotation and reflection;
+- each option has twelve active, non-excluded products;
+- at least one option changes material counts, so diversity is not a string change or pure ring rotation;
+- names, structured cultural inspiration, Design DNA source, provider metadata, story, and reasons remain populated;
+- the one-material edge case never invents a product ID;
+- the complete `DesignApplicationService` path retains all three differences after Backend pricing, identity assignment, revision creation, and persistence.
+
+Focused Backend test result: `19/19` passed with strict typecheck.
+
+A fresh temporary PostgreSQL 17 instance plus the real signed-Bearer Backend composition reproduced the QA questionnaire with aquamarine excluded. Generate and owner-scoped Get persisted these three Revision 1 designs:
+
+- Rain After Blue: alternating moonstone/quartz, total `10,800` CNY minor units;
+- Moonlit Tide: grouped three-bead quartz/moonstone fields, total `10,800`;
+- Silver Mist: three-quartz focal arc plus nine moonstones, total `10,200`.
+
+All three had unique design IDs, unique twelve-product sequences, `modelProvider: rule-based`, and an explicit composition reason. PostgreSQL contained all three rows. The temporary Backend and PostgreSQL instance were stopped after verification.
+
+Final workspace gate: `pnpm validate` passed on the final implementation tree.
+
+### Risk and merge readiness
+
+The composition intentionally intervenes only when exactly two eligible materials remain, because that is where validated candidates can collapse after authoritative catalog filtering. The one-material case cannot achieve material diversity without violating catalog truth and is reported honestly. The change is deterministic and independently reversible. Merge readiness: `READY` after clean diff and final validation.

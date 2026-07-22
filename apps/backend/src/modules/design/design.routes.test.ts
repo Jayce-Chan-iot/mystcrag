@@ -14,10 +14,12 @@ import {
   signTestAccessToken
 } from "../../auth/signed-test-auth-provider.js";
 import { DomainApiError } from "../../contracts/api-error.js";
+import { AiRecommendationDesignAdapter } from "./ai-recommendation-design.adapter.js";
 import {
   DesignApplicationService,
   MockDesignGenerationAdapter,
-  type CatalogProduct
+  type CatalogProduct,
+  type DesignGenerationAdapter
 } from "./design-api.service.js";
 
 type PersistedDesign = {
@@ -90,7 +92,9 @@ function catalogFromFixture(): CatalogProduct[] {
   ];
 }
 
-function createHarness() {
+function createHarness(
+  generator: DesignGenerationAdapter = new MockDesignGenerationAdapter()
+) {
   const catalog = catalogFromFixture();
   const catalogById = new Map(catalog.map((product) => [product.id, product]));
   const current = new Map<string, PersistedDesign>();
@@ -340,7 +344,7 @@ function createHarness() {
   };
 
   const service = new DesignApplicationService({
-    generator: new MockDesignGenerationAdapter(),
+    generator,
     designs,
     catalog: {
       async getCatalogProducts(ids) {
@@ -425,6 +429,37 @@ test("generate creates a server-owned design and immutable revision 1", async ()
     result.design.beads.map((bead) => bead.unitPriceMinor),
     [1200, 800, 1000]
   );
+});
+
+test("AI-generated two-material options remain distinct after pricing and persistence", async () => {
+  const harness = createHarness(new AiRecommendationDesignAdapter());
+  const excludedId = "product-aquamarine-round-8";
+  const directions = ["airy-rhythm", "layered-contrast", "focal-balance"];
+  const results = await Promise.all(directions.map((direction) =>
+    harness.service.generate(actorId, {
+      ...generateBody,
+      requestId: `request-lifecycle-${direction}`,
+      styleTags: ["minimal", "landscape", direction],
+      colorTags: ["mist-blue"],
+      excludedProductIds: [excludedId],
+      minBudgetMinor: 29_900,
+      maxBudgetMinor: 49_900
+    })
+  ));
+  const sequences = results.map(({ design }) =>
+    design.beads.map(({ beadProductId }) => beadProductId)
+  );
+
+  assert.equal(new Set(results.map(({ design }) => design.designId)).size, 3);
+  assert.equal(new Set(sequences.map((sequence) => sequence.join("|"))).size, 3);
+  assert.ok(sequences.every((sequence) => sequence.length === 12));
+  assert.ok(sequences.every((sequence) => !sequence.includes(excludedId)));
+  assert.ok(results.every(({ design }) =>
+    design.revision === 1 &&
+    design.provenance.modelProvider === "rule-based" &&
+    harness.current.has(design.designId) &&
+    harness.revisionRows.get(design.designId)?.length === 1
+  ));
 });
 
 test("update applies finite operations, rebuilds positions, and detects conflicts", async () => {
