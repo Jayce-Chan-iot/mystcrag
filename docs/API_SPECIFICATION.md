@@ -62,6 +62,12 @@ GET /api/design/:id/revisions
 
 Requires verified authentication and returns the actor-owned immutable revision history using public projections.
 
+## Material Catalog API
+
+GET /api/catalog/materials?currency=CNY
+
+Requires verified authentication. Returns every active, addable material product for the requested supported currency using `ListCatalogMaterialsResponseSchema`. Public fields include product identity, bilingual crystal names, color tags, shape, diameter, render asset keys, and authoritative unit price. Unit costs, supplier data, and raw inventory quantities are never returned. DIY updates still revalidate current inventory and pricing before a new design revision is persisted.
+
 ## Design Save API
 
 POST /api/design/save

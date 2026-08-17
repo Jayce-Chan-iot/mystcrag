@@ -1,6 +1,7 @@
 import {
   CreateOrderFromDesignRequestSchema,
   CreateOrderFromDesignResponseSchema,
+  ListCatalogMaterialsResponseSchema,
   GenerateDesignRequestSchema,
   GenerateDesignResponseSchema,
   PublicDesignV1Schema,
@@ -12,12 +13,15 @@ import {
   UpdateDesignResponseSchema,
   type CreateOrderFromDesignRequest,
   type CreateOrderFromDesignResponse,
+  type CatalogMaterialProduct,
   type GenerateDesignRequest,
   type GenerateDesignResponse,
+  type ListCatalogMaterialsResponse,
   type PublicDesignV1,
   type SaveDesignRequest,
   type SaveDesignResponse,
   type PriceDesignResponse,
+  type UpdateDesignOperation,
   type UpdateDesignRequest,
   type UpdateDesignResponse
 } from "@mystcrag/design-contract";
@@ -25,6 +29,7 @@ import { FrontendApiError, type FrontendErrorCode } from "./frontend-api-error";
 import { isMockApiEnabled, resolveAccessToken } from "./api-runtime";
 import {
   getMockDesign,
+  MOCK_MATERIALS,
   mockGenerateDesigns,
   mockReplaceBead
 } from "./mock-design-api";
@@ -142,6 +147,36 @@ export function createDesignApiClient({
       return callApi(`/api/design/${encodeURIComponent(designId)}`, PublicDesignV1Schema, { method: "GET" }, fetcher, accessToken);
     },
 
+    async materials(currency: PublicDesignV1["currency"]): Promise<ListCatalogMaterialsResponse> {
+      if (useMock) {
+        return ListCatalogMaterialsResponseSchema.parse({
+          materials: MOCK_MATERIALS.map((material) => ({
+            beadProductId: material.productId,
+            sku: `MOCK-${material.id.toUpperCase()}`,
+            displayName: material.name,
+            crystalId: material.crystalId,
+            crystalNameCn: material.name,
+            crystalNameEn: material.id,
+            colorTags: [material.id],
+            materialKey: material.materialKey,
+            shape: "ROUND",
+            diameterMm: 8,
+            modelAssetKey: "sphere-round-8mm-v1",
+            textureAssetKey: material.textureAssetKey,
+            currency,
+            unitPriceMinor: material.unitPriceMinor
+          }))
+        });
+      }
+      return callApi(
+        `/api/catalog/materials?currency=${encodeURIComponent(currency)}`,
+        ListCatalogMaterialsResponseSchema,
+        { method: "GET" },
+        fetcher,
+        accessToken
+      );
+    },
+
     async update(input: UpdateDesignRequest): Promise<UpdateDesignResponse> {
       const request = UpdateDesignRequestSchema.parse(input);
       if (useMock) {
@@ -223,5 +258,79 @@ export function createReplaceRequest(
         unitPriceMinor: current.unitPriceMinor
       }
     }]
+  });
+}
+
+function createUpdateRequest(
+  design: PublicDesignV1,
+  operation: UpdateDesignOperation
+): UpdateDesignRequest {
+  return UpdateDesignRequestSchema.parse({
+    requestId: requestId("update"),
+    designId: design.designId,
+    expectedRevision: design.revision,
+    operations: [operation]
+  });
+}
+
+export function createMoveRequest(
+  design: PublicDesignV1,
+  componentId: string,
+  targetPositionIndex: number
+): UpdateDesignRequest {
+  const ringLength = design.production.componentSequence.length;
+  if (!design.production.componentSequence.includes(componentId)) {
+    throw new FrontendApiError("VALIDATION_ERROR", "Only a main-ring component can be moved.");
+  }
+  if (!Number.isInteger(targetPositionIndex) || targetPositionIndex < 0 || targetPositionIndex >= ringLength) {
+    throw new FrontendApiError("VALIDATION_ERROR", "The target bracelet position is invalid.");
+  }
+  return createUpdateRequest(design, {
+    operation: "MOVE_COMPONENT",
+    componentId,
+    targetPositionIndex
+  });
+}
+
+export function createAddRequest(
+  design: PublicDesignV1,
+  material: PublicDesignV1["beads"][number] | CatalogMaterialProduct,
+  positionIndex: number,
+  componentId = `component-${crypto.randomUUID()}`
+): UpdateDesignRequest {
+  const ringLength = design.production.componentSequence.length;
+  const safePosition = Math.min(Math.max(0, positionIndex), ringLength);
+  return createUpdateRequest(design, {
+    operation: "ADD_COMPONENT",
+    component: {
+      componentId,
+      positionIndex: safePosition,
+      beadProductId: material.beadProductId,
+      crystalId: material.crystalId,
+      materialKey: material.materialKey,
+      shape: material.shape,
+      diameterMm: material.diameterMm,
+      quantity: 1,
+      role: "MAIN",
+      modelAssetKey: material.modelAssetKey,
+      textureAssetKey: material.textureAssetKey,
+      unitPriceMinor: material.unitPriceMinor
+    }
+  });
+}
+
+export function createRemoveRequest(
+  design: PublicDesignV1,
+  componentId: string
+): UpdateDesignRequest {
+  if (!design.beads.some((bead) => bead.componentId === componentId)) {
+    throw new FrontendApiError("VALIDATION_ERROR", "Only a bead can be removed from this editor.");
+  }
+  if (design.beads.length <= 1) {
+    throw new FrontendApiError("VALIDATION_ERROR", "A bracelet must retain at least one bead.");
+  }
+  return createUpdateRequest(design, {
+    operation: "REMOVE_COMPONENT",
+    componentId
   });
 }

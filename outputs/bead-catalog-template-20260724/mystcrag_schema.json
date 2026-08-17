@@ -1,0 +1,358 @@
+{
+  "schema_version": "1.0.0",
+  "product": "玄矶 Mystcrag AI 水晶手串设计系统",
+  "workbook": {
+    "filename": "玄矶珠子商品库导入模板_V1.0_简化优化版.xlsx",
+    "header_row": 4,
+    "data_start_row": 5,
+    "preserves_source_template": true,
+    "source_filename": "玄矶珠子商品库导入模板.xlsx"
+  },
+  "principles": {
+    "commercial_a_is_gemological_grade": false,
+    "commercial_a_definition": "市场和供应商常用的商业描述，不代表统一国家标准、实验室评级或宝石学鉴定结论。",
+    "image_quality_must_not_be_guessed": true,
+    "ai_analysis_is_estimation_only": true,
+    "ai_analysis_can_overwrite_master_data": false,
+    "professional_quality_fields_required": false
+  },
+  "import_statuses": [
+    "可导入",
+    "请补全必填",
+    "ID重复",
+    "关联不存在",
+    "格式错误",
+    "枚举错误",
+    "待人工复核",
+    "待填写"
+  ],
+  "enums": {
+    "market_quality_grade": [
+      "COMMERCIAL_A",
+      "NEAR_COMMERCIAL_A",
+      "UNKNOWN"
+    ],
+    "quality_information_source": [
+      "USER_CONFIRMED",
+      "SUPPLIER_CLAIM",
+      "MARKET_DESCRIPTION",
+      "UNKNOWN"
+    ],
+    "boolean_text": [
+      "TRUE",
+      "FALSE"
+    ],
+    "shape": [
+      "ROUND",
+      "FACETED",
+      "OVAL",
+      "BARREL",
+      "CHIP",
+      "OTHER"
+    ],
+    "facet_type": [
+      "NONE",
+      "FACETED",
+      "CUT",
+      "CARVED",
+      "OTHER"
+    ],
+    "pricing_unit": [
+      "PER_BEAD",
+      "PER_STRAND",
+      "PER_PACK",
+      "PER_PIECE"
+    ],
+    "currency": [
+      "CNY",
+      "TWD"
+    ],
+    "inventory_unit": [
+      "BEAD",
+      "STRAND",
+      "PACK",
+      "PIECE"
+    ],
+    "quality_check_status": [
+      "PENDING",
+      "PASSED",
+      "REJECTED",
+      "UNKNOWN"
+    ],
+    "image_type": [
+      "MAIN",
+      "SINGLE_BEAD",
+      "STRAND",
+      "LOT",
+      "DETAIL",
+      "TEXTURE",
+      "OTHER"
+    ],
+    "image_source_type": [
+      "USER_OWNED",
+      "SUPPLIER",
+      "PLATFORM",
+      "WEB",
+      "UNKNOWN"
+    ],
+    "usage_permission": [
+      "OWNED",
+      "AUTHORIZED",
+      "PUBLIC_DOMAIN",
+      "UNKNOWN",
+      "PROHIBITED"
+    ],
+    "review_status": [
+      "PENDING",
+      "PASSED",
+      "REJECTED"
+    ]
+  },
+  "prohibited_formal_entry_fields": [
+    "透明度等级",
+    "颜色浓度",
+    "颜色均匀度",
+    "棉絮程度",
+    "冰裂程度",
+    "黑点程度",
+    "矿缺程度",
+    "表面瑕疵程度",
+    "包裹体类型",
+    "抛光等级",
+    "天然程度",
+    "处理方式推断"
+  ],
+  "sheets": {
+    "水晶主数据": {
+      "role": "crystal_master",
+      "primary_key": "crystal_id",
+      "required_fields": [
+        "crystal_id",
+        "中文名",
+        "英文名",
+        "矿物学名称",
+        "颜色标签",
+        "视觉标签",
+        "风格标签",
+        "价格等级",
+        "合规说明"
+      ],
+      "fields": [
+        {"name": "import_status", "excel_header": "导入状态", "type": "formula"},
+        {"name": "crystal_id", "excel_header": "crystal_id*", "type": "string"},
+        {"name": "name_cn", "excel_header": "中文名*", "type": "string"},
+        {"name": "name_en", "excel_header": "英文名*", "type": "string"},
+        {"name": "mineral_name", "excel_header": "矿物学名称*", "type": "string"},
+        {"name": "gemological_info", "excel_header": "宝石学信息", "type": "string", "required": false},
+        {"name": "color_tags", "excel_header": "颜色标签*", "type": "comma_separated_string"},
+        {"name": "visual_tags", "excel_header": "视觉标签*", "type": "comma_separated_string"},
+        {"name": "style_tags", "excel_header": "风格标签*", "type": "comma_separated_string"},
+        {"name": "emotion_tags", "excel_header": "情绪标签", "type": "comma_separated_string", "required": false},
+        {"name": "culture_tags", "excel_header": "文化标签", "type": "comma_separated_string", "required": false},
+        {"name": "price_level", "excel_header": "价格等级*", "type": "integer", "minimum": 1, "maximum": 5},
+        {"name": "market_availability", "excel_header": "市场供应情况", "type": "enum", "required": false},
+        {"name": "image_reference", "excel_header": "图片参考", "type": "string", "required": false},
+        {"name": "compliance_note", "excel_header": "合规说明*", "type": "string"},
+        {"name": "note", "excel_header": "备注", "type": "string", "required": false},
+        {"name": "owner", "excel_header": "负责人", "type": "string", "required": false}
+      ]
+    },
+    "珠子SKU": {
+      "role": "bead_sku_master",
+      "primary_key": "product_id",
+      "unique_fields": ["product_id", "sku"],
+      "foreign_keys": {
+        "crystal_id": "水晶主数据.crystal_id"
+      },
+      "required_fields": [
+        "product_id",
+        "sku",
+        "crystal_id",
+        "商品名称",
+        "形状",
+        "至少一个尺寸字段",
+        "市场品质等级",
+        "品质信息来源",
+        "计价单位",
+        "单位包含数量",
+        "默认损耗率",
+        "material_key",
+        "商品主图文件名",
+        "是否经过人工确认",
+        "是否适合进入AI设计库",
+        "是否上架",
+        "币种",
+        "售价_最小单位",
+        "成本_最小单位",
+        "可用库存"
+      ],
+      "fields": [
+        {"name": "import_status", "excel_header": "导入状态", "type": "formula"},
+        {"name": "product_id", "excel_header": "product_id*", "type": "string"},
+        {"name": "sku", "excel_header": "sku*", "type": "string"},
+        {"name": "crystal_id", "excel_header": "crystal_id*", "type": "string"},
+        {"name": "product_name", "excel_header": "商品名称*", "type": "string"},
+        {"name": "shape", "excel_header": "形状*", "type": "enum", "enum_ref": "shape"},
+        {"name": "diameter_mm", "excel_header": "直径_mm", "type": "number", "required": false},
+        {"name": "length_mm", "excel_header": "长度_mm", "type": "number", "required": false},
+        {"name": "width_mm", "excel_header": "宽度_mm", "type": "number", "required": false},
+        {"name": "height_mm", "excel_header": "高度_mm", "type": "number", "required": false},
+        {"name": "hole_diameter_mm", "excel_header": "孔径_mm", "type": "number", "required": false},
+        {"name": "facet_type", "excel_header": "切面类型", "type": "enum", "enum_ref": "facet_type", "required": false},
+        {"name": "market_quality_grade", "excel_header": "市场品质等级*", "type": "enum", "enum_ref": "market_quality_grade"},
+        {"name": "quality_information_source", "excel_header": "品质信息来源*", "type": "enum", "enum_ref": "quality_information_source"},
+        {"name": "quality_note", "excel_header": "品质备注", "type": "string", "required": false},
+        {"name": "pricing_unit", "excel_header": "计价单位*", "type": "enum", "enum_ref": "pricing_unit"},
+        {"name": "unit_quantity", "excel_header": "单位包含数量*", "type": "integer", "minimum": 1},
+        {"name": "beads_per_strand", "excel_header": "每串颗数", "type": "integer", "minimum": 1, "required": false},
+        {"name": "strand_length_mm", "excel_header": "串长_mm", "type": "number", "minimum": 0, "required": false},
+        {"name": "default_waste_rate", "excel_header": "默认损耗率*", "type": "number", "minimum": 0, "maximum": 1},
+        {"name": "material_key", "excel_header": "material_key*", "type": "string"},
+        {"name": "model_asset_key", "excel_header": "model_asset_key", "type": "string", "required": false},
+        {"name": "texture_asset_key", "excel_header": "texture_asset_key", "type": "string", "required": false},
+        {"name": "main_image_filename", "excel_header": "商品主图文件名*", "type": "string"},
+        {"name": "human_confirmed", "excel_header": "是否经过人工确认*", "type": "enum", "enum_ref": "boolean_text"},
+        {"name": "ai_design_eligible", "excel_header": "是否适合进入AI设计库*", "type": "enum", "enum_ref": "boolean_text"},
+        {"name": "active", "excel_header": "是否上架*", "type": "enum", "enum_ref": "boolean_text"},
+        {"name": "display_order", "excel_header": "展示排序", "type": "integer", "required": false},
+        {"name": "note", "excel_header": "备注", "type": "string", "required": false},
+        {"name": "currency", "excel_header": "币种*（保留业务字段）", "type": "enum", "enum_ref": "currency", "legacy_preserved": true},
+        {"name": "unit_price_minor", "excel_header": "售价_最小单位*（保留业务字段）", "type": "integer", "minimum": 0, "legacy_preserved": true},
+        {"name": "unit_cost_minor", "excel_header": "成本_最小单位*（保留业务字段）", "type": "integer", "minimum": 0, "legacy_preserved": true},
+        {"name": "available_inventory", "excel_header": "可用库存*（保留业务字段）", "type": "integer", "minimum": 0, "legacy_preserved": true}
+      ]
+    },
+    "配件SKU": {
+      "role": "accessory_sku_master",
+      "preserved_from_source": true,
+      "primary_key": "product_id",
+      "unique_fields": ["product_id", "sku"]
+    },
+    "库存批次": {
+      "role": "inventory_lot",
+      "primary_key": "lot_id",
+      "foreign_keys": {
+        "sku": "珠子SKU.sku"
+      },
+      "required_fields": [
+        "lot_id",
+        "sku",
+        "批次数量",
+        "当前可用数量",
+        "锁定数量",
+        "单位",
+        "批次成本",
+        "币种",
+        "市场品质等级",
+        "品质信息来源",
+        "是否有实拍图片",
+        "是否经过人工确认",
+        "是否可用于 AI 推荐",
+        "质检状态"
+      ],
+      "fields": [
+        {"name": "import_status", "excel_header": "导入状态", "type": "formula"},
+        {"name": "lot_id", "excel_header": "lot_id*", "type": "string"},
+        {"name": "sku", "excel_header": "sku*", "type": "string"},
+        {"name": "supplier_id", "excel_header": "供应商编号", "type": "string", "required": false},
+        {"name": "supplier_name", "excel_header": "供应商名称", "type": "string", "required": false},
+        {"name": "purchase_date", "excel_header": "采购日期", "type": "date", "required": false},
+        {"name": "arrival_date", "excel_header": "到货日期", "type": "date", "required": false},
+        {"name": "lot_quantity", "excel_header": "批次数量*", "type": "integer", "minimum": 0},
+        {"name": "available_quantity", "excel_header": "当前可用数量*", "type": "integer", "minimum": 0},
+        {"name": "locked_quantity", "excel_header": "锁定数量*", "type": "integer", "minimum": 0},
+        {"name": "unit", "excel_header": "单位*", "type": "enum", "enum_ref": "inventory_unit"},
+        {"name": "lot_cost_minor", "excel_header": "批次成本*", "type": "integer", "minimum": 0},
+        {"name": "currency", "excel_header": "币种*", "type": "enum", "enum_ref": "currency"},
+        {"name": "market_quality_grade", "excel_header": "市场品质等级*", "type": "enum", "enum_ref": "market_quality_grade"},
+        {"name": "quality_information_source", "excel_header": "品质信息来源*", "type": "enum", "enum_ref": "quality_information_source"},
+        {"name": "appearance_note", "excel_header": "批次外观备注", "type": "string", "required": false},
+        {"name": "has_actual_image", "excel_header": "是否有实拍图片*", "type": "enum", "enum_ref": "boolean_text"},
+        {"name": "human_confirmed", "excel_header": "是否经过人工确认*", "type": "enum", "enum_ref": "boolean_text"},
+        {"name": "ai_recommendation_eligible", "excel_header": "是否可用于 AI 推荐*", "type": "enum", "enum_ref": "boolean_text"},
+        {"name": "quality_check_status", "excel_header": "质检状态*", "type": "enum", "enum_ref": "quality_check_status"},
+        {"name": "note", "excel_header": "备注", "type": "string", "required": false}
+      ]
+    },
+    "图片资产": {
+      "role": "image_asset",
+      "primary_key": "image_id",
+      "row_granularity": "one_image_per_row",
+      "foreign_keys": {
+        "crystal_id": "水晶主数据.crystal_id",
+        "sku": "珠子SKU.sku",
+        "lot_id": "库存批次.lot_id"
+      },
+      "required_fields": [
+        "image_id",
+        "至少一个关联 ID",
+        "文件名",
+        "相对路径",
+        "image_type",
+        "是否真实实拍",
+        "来源类型",
+        "使用权限",
+        "是否允许 AI 训练",
+        "是否允许商业使用",
+        "是否允许公开展示",
+        "市场品质等级",
+        "品质信息来源",
+        "是否代表当前实际货品",
+        "是否过度修图",
+        "是否疑似 AI 图片",
+        "人工复核状态"
+      ],
+      "fields": [
+        {"name": "import_status", "excel_header": "导入状态", "type": "formula"},
+        {"name": "image_id", "excel_header": "image_id*", "type": "string"},
+        {"name": "crystal_id", "excel_header": "crystal_id", "type": "string", "required": false},
+        {"name": "sku", "excel_header": "sku", "type": "string", "required": false},
+        {"name": "lot_id", "excel_header": "lot_id", "type": "string", "required": false},
+        {"name": "filename", "excel_header": "文件名*", "type": "string"},
+        {"name": "relative_path", "excel_header": "相对路径*", "type": "string"},
+        {"name": "image_type", "excel_header": "image_type*", "type": "enum", "enum_ref": "image_type"},
+        {"name": "is_actual_photo", "excel_header": "是否真实实拍*", "type": "enum", "enum_ref": "boolean_text"},
+        {"name": "source_type", "excel_header": "来源类型*", "type": "enum", "enum_ref": "image_source_type"},
+        {"name": "source_platform", "excel_header": "来源平台", "type": "string", "required": false},
+        {"name": "source_url", "excel_header": "来源链接", "type": "string", "required": false},
+        {"name": "source_author_or_supplier", "excel_header": "来源作者或供应商", "type": "string", "required": false},
+        {"name": "usage_permission", "excel_header": "使用权限*", "type": "enum", "enum_ref": "usage_permission"},
+        {"name": "allow_ai_training", "excel_header": "是否允许 AI 训练*", "type": "enum", "enum_ref": "boolean_text"},
+        {"name": "allow_commercial_use", "excel_header": "是否允许商业使用*", "type": "enum", "enum_ref": "boolean_text"},
+        {"name": "allow_public_display", "excel_header": "是否允许公开展示*", "type": "enum", "enum_ref": "boolean_text"},
+        {"name": "market_quality_grade", "excel_header": "市场品质等级*", "type": "enum", "enum_ref": "market_quality_grade"},
+        {"name": "quality_information_source", "excel_header": "品质信息来源*", "type": "enum", "enum_ref": "quality_information_source"},
+        {"name": "represents_current_goods", "excel_header": "是否代表当前实际货品*", "type": "enum", "enum_ref": "boolean_text"},
+        {"name": "over_edited", "excel_header": "是否过度修图*", "type": "enum", "enum_ref": "boolean_text"},
+        {"name": "suspected_ai_image", "excel_header": "是否疑似 AI 图片*", "type": "enum", "enum_ref": "boolean_text"},
+        {"name": "file_hash", "excel_header": "文件哈希", "type": "string", "required": false},
+        {"name": "manual_review_status", "excel_header": "人工复核状态*", "type": "enum", "enum_ref": "review_status"},
+        {"name": "reviewer", "excel_header": "复核人", "type": "string", "required": false},
+        {"name": "note", "excel_header": "备注", "type": "string", "required": false}
+      ]
+    },
+    "AI分析结果": {
+      "role": "optional_ai_analysis",
+      "all_fields_optional": true,
+      "is_formal_import_source": false,
+      "can_overwrite_other_sheets": false,
+      "fields": [
+        {"name": "analysis_id", "excel_header": "analysis_id", "required": false},
+        {"name": "image_id", "excel_header": "image_id", "required": false},
+        {"name": "sku", "excel_header": "sku", "required": false},
+        {"name": "model_name", "excel_header": "model_name", "required": false},
+        {"name": "model_version", "excel_header": "model_version", "required": false},
+        {"name": "analyzed_at", "excel_header": "analyzed_at", "required": false},
+        {"name": "estimated_transparency", "excel_header": "estimated_transparency", "required": false},
+        {"name": "estimated_inclusion", "excel_header": "estimated_inclusion", "required": false},
+        {"name": "estimated_crack_level", "excel_header": "estimated_crack_level", "required": false},
+        {"name": "estimated_color_uniformity", "excel_header": "estimated_color_uniformity", "required": false},
+        {"name": "estimated_surface_condition", "excel_header": "estimated_surface_condition", "required": false},
+        {"name": "estimated_visual_quality", "excel_header": "estimated_visual_quality", "required": false},
+        {"name": "confidence_score", "excel_header": "confidence_score", "required": false, "minimum": 0, "maximum": 1},
+        {"name": "requires_manual_review", "excel_header": "requires_manual_review", "required": false},
+        {"name": "analysis_note", "excel_header": "analysis_note", "required": false}
+      ]
+    }
+  }
+}

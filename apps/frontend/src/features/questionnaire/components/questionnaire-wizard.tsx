@@ -83,7 +83,7 @@ export function QuestionnaireWizard() {
         <div className="h-full bg-[var(--accent)] transition-all duration-500" style={{ width: `${progress}%` }} />
       </div>
 
-      <section className="animate-reveal-softly mx-auto mt-14 w-full max-w-3xl" key={step.id} aria-labelledby="question-title">
+      <section className="mx-auto mt-14 w-full max-w-3xl sm:animate-reveal-softly" key={step.id} aria-labelledby="question-title">
         <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--accent)]">{step.eyebrow}</p>
         <h1 className="mt-5 font-serif text-3xl leading-tight sm:text-5xl" id="question-title">{step.title}</h1>
         <p className="mt-4 max-w-2xl leading-7 text-[var(--muted)]">{step.description}</p>
@@ -110,18 +110,24 @@ export function QuestionnaireWizard() {
             <p className="mt-3 text-sm text-[var(--muted)]" id="wrist-help">常见成人手围约为 140–180 mm。</p>
           </div>
         ) : (
-          <><fieldset className="mt-10 grid gap-3 sm:grid-cols-2">
+          <><fieldset className="mt-10 grid gap-3 sm:grid-cols-2" role="radiogroup">
             <legend className="sr-only">{step.title}</legend>
             {options?.map((option) => {
               const selected = answers[step.id] === option.value;
               return (
-                <label className={`cursor-pointer rounded-2xl border p-5 transition duration-300 ${selected ? "border-[var(--accent)] bg-[var(--accent-soft)] shadow-[0_12px_30px_rgb(77_55_96/0.08)]" : "border-[var(--border)] bg-white/50 hover:border-[var(--accent)]/55"}`} key={option.value}>
-                  <input className="sr-only" checked={selected} name={step.id} onChange={() => updateAnswer(option.value)} type="radio" value={option.value} />
+                <button
+                  aria-checked={selected}
+                  className={`touch-manipulation rounded-2xl border p-5 text-left transition duration-300 ${selected ? "border-[var(--accent)] bg-[var(--accent-soft)] shadow-[0_12px_30px_rgb(77_55_96/0.08)]" : "border-[var(--border)] bg-white/50 hover:border-[var(--accent)]/55"}`}
+                  key={option.value}
+                  onClick={() => updateAnswer(option.value)}
+                  role="radio"
+                  type="button"
+                >
                   <span className="flex items-start justify-between gap-4">
                     <span><span className="block font-medium">{option.label}</span><span className="mt-2 block text-sm leading-6 text-[var(--muted)]">{option.detail}</span></span>
                     {option.swatches ? <span className="flex pt-1">{option.swatches.map((color) => <span className="-ml-1 h-5 w-5 rounded-full border border-white" key={color} style={{ background: color }} />)}</span> : <span aria-hidden="true" className={`mt-1 h-4 w-4 rounded-full border ${selected ? "border-[var(--accent)] bg-[var(--accent)] shadow-[inset_0_0_0_3px_var(--accent-soft)]" : "border-[var(--border)]"}`} />}
                   </span>
-                </label>
+                </button>
               );
             })}
           </fieldset>

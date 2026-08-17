@@ -4,6 +4,8 @@
 
 Build premium jewelry-level bracelet visualization.
 
+The Three.js engine is an optional visualization capability. It is not the primary interaction surface of the DIY editor. The production DIY route uses a 2.5D, front-facing editor built from rendered bead imagery so touch insertion, ordering, and removal remain direct and predictable.
+
 ## Technology
 
 -   React Three Fiber
@@ -38,6 +40,8 @@ lighting
 ## Interaction
 
 User can: - select bead - replace bead - change style - preview lighting
+
+These interactions describe consumers that intentionally mount the 3D viewer. The main DIY editor owns add, move, remove, save, price verification, and ordering without depending on WebGL. Removing the 3D viewer from that route does not change the canonical design contract or delete the reusable Three Engine package.
 
 ## Package boundary
 

@@ -16,6 +16,9 @@ export type InternalProductPricing = SellableProduct & { unitCostMinor: number }
 export type CatalogMaterialProduct = SellableProduct & {
   productType: "MATERIAL";
   crystalId: string;
+  crystalNameCn: string;
+  crystalNameEn: string;
+  colorTags: string[];
   shape: string;
   diameterMm: number;
   materialKey: string;
@@ -96,7 +99,10 @@ export class ProductRepository {
 
   async getCatalogProducts(productIds: readonly string[]): Promise<CatalogProduct[]> {
     const [materials, accessories] = await Promise.all([
-      this.prisma.materialProduct.findMany({ where: { id: { in: [...productIds] } } }),
+      this.prisma.materialProduct.findMany({
+        where: { id: { in: [...productIds] } },
+        include: { crystal: true }
+      }),
       this.prisma.accessoryProduct.findMany({ where: { id: { in: [...productIds] } } })
     ]);
     return [
@@ -106,6 +112,9 @@ export class ProductRepository {
         sku: row.sku,
         name: row.name,
         crystalId: row.crystalId,
+        crystalNameCn: row.crystal.nameCn,
+        crystalNameEn: row.crystal.nameEn,
+        colorTags: [...row.crystal.colorTags],
         shape: row.shape,
         diameterMm: row.diameterMm,
         materialKey: row.materialKey,

@@ -1,5 +1,9 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";
+import {
+  ListCatalogMaterialsQuerySchema,
+  ListCatalogMaterialsResponseSchema
+} from "@mystcrag/design-contract";
 
 import { actorIdFromVerifiedContext } from "../../auth/auth-provider.js";
 import { DomainApiError, toApiErrorEnvelope } from "../../contracts/api-error.js";
@@ -115,6 +119,24 @@ export async function handleDesignGet(
     return reply.status(200).send(output);
   } catch (error) {
     const domainError = mapError(error, true);
+    return reply
+      .status(domainError.statusCode)
+      .send(toApiErrorEnvelope(domainError, request.id));
+  }
+}
+
+export async function handleCatalogMaterialsGet(
+  request: FastifyRequest<{ Querystring: { currency?: string } }>,
+  reply: FastifyReply,
+  service: DesignApiService
+) {
+  try {
+    const actorId = actorIdFromVerifiedContext(request);
+    const query = validateRequest(ListCatalogMaterialsQuerySchema, request.query);
+    const output = await service.materials(actorId, query.currency);
+    return reply.status(200).send(validateResponse(ListCatalogMaterialsResponseSchema, output));
+  } catch (error) {
+    const domainError = mapError(error, false);
     return reply
       .status(domainError.statusCode)
       .send(toApiErrorEnvelope(domainError, request.id));

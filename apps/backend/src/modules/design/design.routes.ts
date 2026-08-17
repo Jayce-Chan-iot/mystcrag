@@ -20,6 +20,7 @@ import {
 } from "../../auth/auth-provider.js";
 import {
   handleDesignGet,
+  handleCatalogMaterialsGet,
   handleDesignPost
 } from "./design.controller.js";
 import type { DesignApiService } from "./design-api.service.js";
@@ -105,6 +106,11 @@ export function registerDesignContractRoutes(
     "/api/design/:id/revisions",
     protectedRoute,
     (request, reply) => handleDesignGet(request, reply, service, true)
+  );
+  app.get<{ Querystring: { currency?: string } }>(
+    "/api/catalog/materials",
+    protectedRoute,
+    (request, reply) => handleCatalogMaterialsGet(request, reply, service)
   );
 }
 

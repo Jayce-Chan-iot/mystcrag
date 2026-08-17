@@ -65,6 +65,9 @@ function catalogFromFixture(): CatalogProduct[] {
       sku: `BEAD-${index}`,
       name: bead.beadProductId,
       crystalId: bead.crystalId,
+      crystalNameCn: `测试水晶 ${index + 1}`,
+      crystalNameEn: bead.crystalId,
+      colorTags: index === 0 ? ["blue", "cool"] : ["neutral"],
       shape: bead.shape,
       diameterMm: bead.diameterMm,
       materialKey: bead.materialKey,
@@ -513,6 +516,45 @@ test("update applies finite operations, rebuilds positions, and detects conflict
   );
 });
 
+test("update reprices add and remove operations before validating the next snapshot", async () => {
+  const harness = createHarness();
+  const original = cloneDesign();
+  harness.seed(original);
+  const source = original.beads[0]!;
+  const addedComponentId = "bead-added-from-library";
+
+  const added = await harness.service.update(actorId, {
+    requestId: "request-add-component",
+    designId: original.designId,
+    expectedRevision: 1,
+    operations: [
+      {
+        operation: "ADD_COMPONENT",
+        component: {
+          ...source,
+          componentId: addedComponentId,
+          positionIndex: 1,
+          role: "MAIN"
+        }
+      }
+    ]
+  });
+  assert.equal(added.design.beads.length, original.beads.length + 1);
+  assert.equal(
+    added.design.pricing.materialSubtotalMinor,
+    original.pricing.materialSubtotalMinor + source.unitPriceMinor
+  );
+
+  const removed = await harness.service.update(actorId, {
+    requestId: "request-remove-component",
+    designId: original.designId,
+    expectedRevision: 2,
+    operations: [{ operation: "REMOVE_COMPONENT", componentId: addedComponentId }]
+  });
+  assert.equal(removed.design.beads.length, original.beads.length);
+  assert.equal(removed.design.pricing.materialSubtotalMinor, original.pricing.materialSubtotalMinor);
+});
+
 test("invalid DTOs fail at the route boundary", async () => {
   const harness = createHarness();
   const app = createApp({ designService: harness.service, authProvider });
@@ -768,6 +810,29 @@ test("GET design and revision history return owner-scoped public DTOs", async ()
   await app.close();
 });
 
+test("GET material catalog returns active public products without commercial costs", async () => {
+  const harness = createHarness();
+  const app = createApp({ designService: harness.service, authProvider });
+  const response = await app.inject({
+    method: "GET",
+    url: "/api/catalog/materials?currency=CNY",
+    headers: requestHeaders()
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().materials.length, 3);
+  assert.equal(response.json().materials[0].crystalNameCn, "测试水晶 1");
+  assert.equal(response.body.includes("unitCostMinor"), false);
+
+  const invalidCurrency = await app.inject({
+    method: "GET",
+    url: "/api/catalog/materials?currency=USD",
+    headers: requestHeaders()
+  });
+  assert.equal(invalidCurrency.statusCode, 400);
+  assert.equal(invalidCurrency.json().error.code, "VALIDATION_ERROR");
+  await app.close();
+});
+
 test("protected routes reject missing, invalid, expired, and wrong-audience credentials", async () => {
   const harness = createHarness();
   const app = createApp({ designService: harness.service, authProvider });
@@ -780,7 +845,8 @@ test("protected routes reject missing, invalid, expired, and wrong-audience cred
     { method: "POST" as const, url: "/api/design/publish" },
     { method: "POST" as const, url: "/api/orders/from-design" },
     { method: "GET" as const, url: "/api/design/design-id" },
-    { method: "GET" as const, url: "/api/design/design-id/revisions" }
+    { method: "GET" as const, url: "/api/design/design-id/revisions" },
+    { method: "GET" as const, url: "/api/catalog/materials?currency=CNY" }
   ]) {
     const response = await app.inject(route);
     assert.equal(response.statusCode, 401, `${route.method} ${route.url}`);

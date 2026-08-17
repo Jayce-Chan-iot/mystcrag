@@ -36,6 +36,11 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+body:has(main[data-diy-editor-page="true"]) > header,
+body:has(main[data-diy-editor-page="true"]) > footer {
+  display: none;
+}
+
 a {
   text-decoration: none;
 }
@@ -77,6 +82,29 @@ a {
 
 .animate-reveal-softly {
   animation: reveal-softly 480ms ease-out both;
+}
+
+@media (min-width: 1024px) and (max-height: 760px) {
+  .design-result-card {
+    padding: 0.75rem;
+  }
+
+  .design-result-preview {
+    height: 7rem;
+  }
+
+  .design-result-preview > div {
+    width: 7rem;
+  }
+
+  .design-result-tags,
+  .design-result-story {
+    display: none;
+  }
+
+  .design-result-select {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

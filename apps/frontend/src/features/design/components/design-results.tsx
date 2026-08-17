@@ -53,6 +53,7 @@ export function DesignResults({ designId }: { designId: string }) {
     void Promise.all(optionIds.map((optionId) => designApi.get(optionId))).then((results) => {
       if (!active) return;
       setDesigns(results);
+      setSelectedDesignId((current) => results.some((design) => design.designId === current) ? current : results[0]?.designId ?? "");
       setBudget(loadDesignBudgetContext(designId));
       setErrorCode(null);
     }).catch((error: unknown) => {
@@ -61,73 +62,98 @@ export function DesignResults({ designId }: { designId: string }) {
     return () => { active = false; };
   }, [attempt, designId]);
 
+  const selectedDesign = designs.find((design) => design.designId === selectedDesignId) ?? designs[0];
+
   return (
-    <main className="mx-auto min-h-[calc(100vh-5rem)] max-w-6xl px-5 py-12 sm:px-8 sm:py-20">
-      <header className="max-w-3xl">
-        <p className="text-xs uppercase tracking-[0.3em] text-[var(--accent)]">AI Design · persisted result</p>
-        <h1 className="mt-5 font-serif text-4xl sm:text-6xl">你的设计已经生成</h1>
-        <p className="mt-5 leading-8 text-[var(--muted)]">这份结果由 Backend 保存，并以服务端报价和 revision 为准。进入 DIY 后，每次替换都会重新校验价格与库存。</p>
+    <main className="mx-auto min-h-[calc(100vh-5rem)] max-w-[90rem] px-5 pb-28 pt-7 sm:px-8 sm:pt-9" data-results-layout="comparison-grid">
+      <header className="flex flex-wrap items-end justify-between gap-5">
+        <div>
+          <p className="text-[0.68rem] uppercase tracking-[0.3em] text-[var(--accent)]">AI Design · 3 个方案</p>
+          <h1 className="mt-2 font-serif text-3xl sm:text-5xl">你的设计已经生成</h1>
+          <p className="mt-2 text-sm leading-6 text-[var(--muted)]">选择喜欢的方案，下一步可以继续换珠、调整顺序和尺寸。</p>
+        </div>
+        <Link className="inline-flex min-h-11 items-center rounded-full px-4 text-sm text-[var(--accent-deep)] transition hover:bg-[var(--accent-soft)]" href="/ai-design">重新生成方案</Link>
       </header>
 
       {designs.length === 0 && !errorCode ? (
-        <div className="mt-16 h-[34rem] animate-pulse rounded-[2rem] border border-[var(--border)] bg-white/45" aria-label="正在加载已保存设计" aria-live="polite" />
+        <div className="mt-8 h-[34rem] animate-pulse rounded-[2rem] border border-[var(--border)] bg-white/45" aria-label="正在加载已保存设计" aria-live="polite" />
       ) : null}
 
       {errorCode ? (
-        <div className="mt-12 max-w-xl">
+        <div className="mt-8 max-w-xl">
           <FlowNotice code={errorCode} onAction={errorCode === "NETWORK_ERROR" || errorCode === "INTERNAL_ERROR" ? () => setAttempt((value) => value + 1) : undefined} />
         </div>
       ) : null}
 
       {designs.length > 0 ? (
-        <section className="mt-14 grid gap-8" aria-label="三套设计结果">
+        <section className="mt-7 grid gap-4 lg:grid-cols-3" aria-label="三套设计结果">
           {designs.map((design, index) => {
             const selected = selectedDesignId === design.designId;
             const budgetStatus = getBudgetStatus(design.pricing.totalPriceMinor, budget);
             const acceptedOverBudget = acceptedOverBudgetIds.includes(design.designId);
-            return <article className={`grid gap-7 rounded-[2rem] border bg-[var(--surface)] p-5 transition sm:p-7 lg:grid-cols-[minmax(20rem,0.9fr)_1.1fr] ${selected ? "border-[var(--accent)] shadow-[0_24px_70px_rgb(76_56_93/0.13)]" : "border-[var(--border)]"}`} data-design-selected={selected} data-option-index={index + 1} key={design.designId}>
-            <div className="relative grid min-h-80 place-items-center overflow-hidden rounded-[1.4rem] bg-[radial-gradient(circle_at_50%_42%,#fff,rgba(222,214,226,.65),rgba(225,222,213,.8))]">
-              <BraceletPreview design={design} />
-            </div>
-            <div className="flex flex-col">
-              <div className="flex items-start justify-between gap-4">
-                <div><h2 className="font-serif text-4xl">{design.designName}</h2><p className="mt-2 text-sm text-[var(--muted)]">{design.story.styleTags.join(" · ")}</p></div>
-                <div className="flex pt-1" aria-label="色彩方案">{design.story.colorPalette.map((color) => <span className="-ml-1 h-6 w-6 rounded-full border-2 border-[var(--surface)]" key={color} style={{ background: color }} />)}</div>
+            const materialList = [...new Set(design.beads.map((bead) => materialNames[bead.materialKey] ?? bead.crystalId))].join(" · ");
+            return <article className={`design-result-card flex min-h-0 flex-col rounded-[1.5rem] border bg-[var(--surface)] p-4 transition ${selected ? "border-[var(--accent-deep)] shadow-[0_18px_45px_rgb(76_56_93/0.13)] ring-1 ring-[var(--accent)]/20" : "border-[var(--border)]"}`} data-design-selected={selected} data-option-index={index + 1} key={design.designId}>
+              <div className="flex items-center justify-between">
+                <span className={`rounded-full px-3 py-1 text-xs ${selected ? "bg-[var(--accent-deep)] text-white" : "bg-[var(--surface-soft)] text-[var(--muted)]"}`}>方案 {String(index + 1).padStart(2, "0")}</span>
+                <button
+                  aria-label={selected ? `已选择 ${design.designName}` : `选择 ${design.designName}`}
+                  aria-pressed={selected}
+                  className={`grid h-8 w-8 place-items-center rounded-full border text-sm transition ${selected ? "border-[var(--accent-deep)] bg-[var(--accent-deep)] text-white" : "border-[var(--border)] text-transparent hover:border-[var(--accent)]"}`}
+                  disabled={budgetStatus === "OVER_BUDGET" && !acceptedOverBudget}
+                  onClick={() => setSelectedDesignId(design.designId)}
+                  type="button"
+                >
+                  ✓
+                </button>
               </div>
-              <p className="mt-6 text-sm leading-7 text-[var(--muted)]">{design.story.designStory}</p>
-              {design.story.culturalInspiration.length > 0 ? (
-                <div className="mt-4 rounded-2xl bg-[var(--accent-soft)] p-4 text-sm leading-6">
-                  <p className="font-medium">文化参考说明</p>
-                  {design.story.culturalInspiration.map((item) => <p className="mt-1 text-[var(--muted)]" key={`${item.reference}-${item.disclaimerKey}`}>{item.reference} · {item.inspiration}</p>)}
+
+              <div className="design-result-preview mt-1 grid h-[clamp(10rem,26vh,17rem)] place-items-center overflow-hidden rounded-[1.1rem] bg-[var(--surface-soft)]/55">
+                <div className="w-[min(15rem,24vh)]">
+                  <BraceletPreview compact design={design} />
                 </div>
-              ) : null}
-              <div className="mt-6 border-y border-[var(--border)] py-4 text-sm">
-                <p><span className="text-[var(--muted)]">水晶组合</span><span className="float-right">{[...new Set(design.beads.map((bead) => materialNames[bead.materialKey] ?? bead.crystalId))].join(" · ")}</span></p>
-                <p className="mt-3"><span className="text-[var(--muted)]">推荐理由</span></p>
-                <p className="mt-1 leading-6">{design.story.recommendationReasons[0]}</p>
               </div>
-              <div className="mt-6 grid gap-3 rounded-2xl bg-[var(--surface-soft)] p-4 sm:grid-cols-2">
-                <p><span className="block text-xs text-[var(--muted)]">Backend 报价</span><strong className="mt-1 block font-serif text-2xl">{formatMinorAmount({ amountMinor: design.pricing.totalPriceMinor, currency: design.currency, locale: design.locale })}</strong></p>
-                <p data-budget-status={budgetStatus} className={budgetStatus === "OVER_BUDGET" ? "text-[var(--danger)]" : "text-[var(--success)]"}><span className="block text-xs opacity-75">预算状态</span><strong className="mt-1 block">{budgetLabels[budgetStatus]}</strong></p>
-                <p className="text-xs text-[var(--muted)] sm:col-span-2">Revision {design.revision} · {design.pricing.pricingVersion}</p>
+
+              <div className="mt-2 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="truncate font-serif text-2xl">{design.designName}</h2>
+                  <p className="design-result-tags mt-1 truncate text-xs text-[var(--muted)]">{design.story.styleTags.join(" · ")}</p>
+                </div>
+                <div className="flex shrink-0 pt-1" aria-label="色彩方案">{design.story.colorPalette.slice(0, 4).map((color) => <span className="-ml-1 h-5 w-5 rounded-full border-2 border-[var(--surface)]" key={color} style={{ background: color }} />)}</div>
               </div>
+
+              <p className="mt-3 truncate text-xs text-[var(--muted)]" title={materialList}>水晶组合 · {materialList}</p>
+              <p className="design-result-story mt-2 line-clamp-2 min-h-10 text-sm leading-5 text-[var(--muted)]">{design.story.designStory}</p>
+
+              <div className="mt-3 grid grid-cols-2 gap-3 border-t border-[var(--border)] pt-3">
+                <p><span className="block text-xs text-[var(--muted)]">实时价格</span><strong className="mt-1 block font-serif text-xl">{formatMinorAmount({ amountMinor: design.pricing.totalPriceMinor, currency: design.currency, locale: design.locale })}</strong></p>
+                <p data-budget-status={budgetStatus} className={budgetStatus === "OVER_BUDGET" ? "text-right text-[var(--danger)]" : "text-right text-[var(--success)]"}><span className="block text-xs opacity-75">预算状态</span><strong className="mt-1 block text-sm">{budgetLabels[budgetStatus]}</strong></p>
+              </div>
+
               {budgetStatus === "OVER_BUDGET" ? (
-                <label className="mt-5 flex min-h-11 items-center gap-3 rounded-2xl border border-[var(--danger)]/30 bg-[var(--danger)]/5 px-4 py-3 text-sm">
+                <label className="mt-3 flex min-h-11 items-center gap-2 rounded-xl border border-[var(--danger)]/30 bg-[var(--danger)]/5 px-3 py-2 text-xs">
                   <input checked={acceptedOverBudget} onChange={(event) => { const accepted = event.target.checked; setOverBudgetAcceptance(design.designId, accepted); setAcceptedOverBudgetIds((current) => accepted ? [...new Set([...current, design.designId])] : current.filter((id) => id !== design.designId)); }} type="checkbox" />
-                  我已知悉并接受此方案超出预算上限
+                  我已知悉并接受超出预算
                 </label>
               ) : null}
-              <button className={`mt-4 min-h-11 rounded-full px-5 py-3 text-sm transition ${selected ? "bg-[var(--accent)] text-white" : "border border-[var(--border)] hover:border-[var(--accent)]"}`} disabled={budgetStatus === "OVER_BUDGET" && !acceptedOverBudget} onClick={() => setSelectedDesignId(design.designId)} type="button">{selected ? "已选择 ✓" : budgetStatus === "OVER_BUDGET" && !acceptedOverBudget ? "接受超预算后可选择" : "选择这份设计"}</button>
-            </div>
-          </article>;
+              <button className={`design-result-select mt-auto min-h-11 rounded-xl px-5 py-2.5 text-sm transition ${selected ? "bg-[var(--accent-deep)] text-white" : "border border-[var(--border)] hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]"}`} disabled={budgetStatus === "OVER_BUDGET" && !acceptedOverBudget} onClick={() => setSelectedDesignId(design.designId)} type="button">{selected ? "已选择" : budgetStatus === "OVER_BUDGET" && !acceptedOverBudget ? "接受超预算后可选择" : "选择此方案"}</button>
+            </article>;
           })}
         </section>
       ) : null}
 
-      {designs.length > 0 ? (
-        <div className="mt-8 grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
-          <ComplianceNotice design={designs.find((design) => design.designId === selectedDesignId) ?? designs[0]!} />
-          {selectedDesignId ? <Link className="inline-flex min-h-11 items-center justify-center rounded-full bg-[var(--foreground)] px-7 py-3.5 text-center text-sm text-white transition hover:bg-[var(--accent-deep)]" href={`/diy/${encodeURIComponent(selectedDesignId)}`}>进入 DIY 调整 <span aria-hidden="true">→</span></Link> : <p className="text-sm text-[var(--muted)]">选择设计后进入 DIY</p>}
+      {selectedDesign ? (
+        <div className="sticky bottom-4 z-40 mt-5 grid gap-4 rounded-[1.4rem] border border-[var(--border)] bg-white/94 p-4 shadow-[0_20px_60px_rgb(57_45_67/0.16)] backdrop-blur lg:grid-cols-[minmax(13rem,0.7fr)_minmax(18rem,1fr)_minmax(16rem,0.8fr)] lg:items-center" data-results-action-bar="true">
+          <div>
+            <p className="text-xs text-[var(--muted)]">当前选择</p>
+            <div className="mt-1 flex items-baseline justify-between gap-3 lg:block">
+              <strong className="block font-serif text-xl">{selectedDesign.designName}</strong>
+              <span className="block text-sm text-[var(--success)]">{formatMinorAmount({ amountMinor: selectedDesign.pricing.totalPriceMinor, currency: selectedDesign.currency, locale: selectedDesign.locale })}</span>
+            </div>
+          </div>
+          <div className="hidden xl:block">
+            <ComplianceNotice design={selectedDesign} />
+          </div>
+          <Link className="inline-flex min-h-14 items-center justify-center rounded-xl bg-[var(--accent-deep)] px-7 text-center text-base font-medium text-white shadow-[0_12px_28px_rgb(73_53_95/0.24)] transition hover:-translate-y-0.5 hover:bg-[var(--accent)]" href={`/diy/${encodeURIComponent(selectedDesign.designId)}`}>进入 DIY 调整</Link>
         </div>
       ) : null}
     </main>

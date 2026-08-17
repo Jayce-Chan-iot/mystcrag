@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { GenerateDesignRequestSchema, PublicDesignV1Schema } from "@mystcrag/design-contract";
+import { GenerateDesignRequestSchema, PublicDesignV1Schema, type PublicDesignV1 } from "@mystcrag/design-contract";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -9,8 +10,11 @@ import { FlowNotice } from "../../components/flow-notice";
 import { FRONTEND_ERROR_CODES, FrontendApiError } from "../../lib/api/frontend-api-error";
 import { MOCK_MATERIALS, mockGetDesignOptions, mockReplaceBead } from "../../lib/api/mock-design-api";
 import { BraceletPreview } from "./components/bracelet-preview";
+import { BraceletSequenceEditor } from "./components/bracelet-sequence-editor";
 import { DIY_LAYOUT_CLASS } from "./components/diy-editor";
+import { connectedRingRadiusPercent, FlatBraceletEditor } from "./components/flat-bracelet-editor";
 import { mockDesignOptions } from "./fixtures/mock-design-options";
+import { calculateBraceletCircumferenceMm, evaluateBraceletFit } from "./model/bracelet-fit";
 import { resolveSelectedDesign } from "./model/design-selection";
 import {
   getNextStepIndex,
@@ -72,6 +76,11 @@ test("renders three schema-valid design choices and selects each by public desig
     assert.equal(resolveSelectedDesign(mockDesignOptions, design.designId)?.designName, design.designName);
   }
   assert.equal(resolveSelectedDesign(mockDesignOptions, "missing"), null);
+  const source = readFileSync(new URL("./components/design-results.tsx", import.meta.url), "utf8");
+  assert.match(source, /data-results-layout="comparison-grid"/);
+  assert.match(source, /data-results-action-bar="true"/);
+  assert.match(source, /进入 DIY 调整/);
+  assert.match(source, /results\[0\]\?\.designId/);
 });
 
 test("Public DTO fixtures and rendered result data never expose commercial cost", () => {
@@ -128,6 +137,99 @@ test("mock result API exposes AI failure, network error and empty state paths", 
   await assert.rejects(mockGetDesignOptions("network-error"), (error: unknown) => error instanceof FrontendApiError && error.code === "NETWORK_ERROR");
 });
 
-test("DIY editor emits mobile-first ordering and desktop three-column layout", () => {
-  assert.match(DIY_LAYOUT_CLASS, /lg:grid-cols-\[18rem_minmax\(28rem,1fr\)_21rem\]/);
+test("DIY editor keeps the focused mobile column and adds the desktop workbench", () => {
+  assert.match(DIY_LAYOUT_CLASS, /max-w-\[70rem\]/);
+  const source = readFileSync(new URL("./components/diy-editor.tsx", import.meta.url), "utf8");
+  assert.match(source, /data-desktop-diy-workspace="true"/);
+  assert.match(source, /导出设计图/);
+  assert.match(source, /完成设计/);
+  assert.match(source, /设计已完成，订单快照已生成/);
+  assert.match(source, /清空设计/);
+  assert.match(source, /收缩成串/);
+  assert.match(source, /散开查看/);
+  assert.match(source, /h-\[calc\(100dvh-4\.75rem\)\]/);
+  assert.match(source, /grid-rows-\[minmax\(0,1fr\)_clamp/);
+  assert.match(source, /fitDesktopViewport/);
+});
+
+test("flat bracelet editor exposes the touch-first 2D ring", () => {
+  const design = mockDesignOptions[0]!;
+  const markup = renderToStaticMarkup(
+    <FlatBraceletEditor
+      busy={false}
+      design={design}
+      fitDesktopViewport
+      onMove={() => undefined}
+      onRemove={() => undefined}
+      onSelect={() => undefined}
+      selectedComponentId={design.beads[0]!.componentId}
+    />
+  );
+  assert.match(markup, /data-flat-bracelet-editor="true"/);
+  assert.match(markup, /data-bracelet-layout="spread"/);
+  assert.match(markup, /2D 手串编辑预览/);
+  assert.match(markup, /aria-pressed="true"/);
+  assert.match(markup, /100dvh-20\.5rem/);
+  assert.equal(connectedRingRadiusPercent(140) < 39, true);
+  assert.equal(connectedRingRadiusPercent(200), 39);
+  const source = readFileSync(new URL("./components/flat-bracelet-editor.tsx", import.meta.url), "utf8");
+  assert.match(source, /data-remove-drop-zone-active=/);
+  assert.match(source, /拖到这里删除/);
+  assert.match(source, /overDeleteZone && canRemove/);
+  assert.match(source, /calculateSizeAwareRingLayout/);
+  assert.match(source, /transition-none/);
+  assert.doesNotMatch(source, /dragging \? "z-30 scale-110 opacity-90 drop-shadow-xl"/);
+  assert.doesNotMatch(source, /outsideRing/);
+  const beadImageSource = readFileSync(new URL("./components/crystal-bead-image.tsx", import.meta.url), "utf8");
+  assert.match(beadImageSource, /data-photo-real-bead="true"/);
+  assert.match(beadImageSource, /drop-shadow-\[0_7px_6px/);
+  assert.match(beadImageSource, /scale-\[1\.34\]/);
+});
+
+test("bracelet circumference follows component sizes and gates the 13–20cm completion range", () => {
+  const base = mockDesignOptions[0]!;
+  const withLength = (diameterMm: number): PublicDesignV1 => ({
+    ...base,
+    accessories: [],
+    beads: [{ ...base.beads[0]!, diameterMm }]
+  });
+
+  assert.equal(calculateBraceletCircumferenceMm(withLength(129)), 129);
+  assert.deepEqual(evaluateBraceletFit(withLength(129)).status, "TOO_SMALL");
+  assert.equal(evaluateBraceletFit(withLength(130)).canComplete, true);
+  assert.equal(evaluateBraceletFit(withLength(200)).canComplete, true);
+  assert.deepEqual(evaluateBraceletFit(withLength(201)).status, "TOO_LARGE");
+
+  const editorSource = readFileSync(new URL("./components/diy-editor.tsx", import.meta.url), "utf8");
+  assert.match(editorSource, /!braceletFit\.canComplete/);
+  assert.match(editorSource, /调整到 13\.0–20\.0cm 后即可完成/);
+});
+
+test("DIY entry bypasses the AI questionnaire and the mobile questionnaire uses direct touch buttons", () => {
+  const diyRoute = readFileSync(new URL("../../../app/diy/page.tsx", import.meta.url), "utf8");
+  const questionnaire = readFileSync(new URL("../questionnaire/components/questionnaire-wizard.tsx", import.meta.url), "utf8");
+  assert.match(diyRoute, /redirect\("\/diy\/design-diy-private"\)/);
+  assert.doesNotMatch(diyRoute, /redirect\("\/ai-design"\)/);
+  assert.match(questionnaire, /touch-manipulation/);
+  assert.match(questionnaire, /role="radio"/);
+  assert.match(questionnaire, /aria-checked=/);
+});
+
+test("bracelet sequence editor exposes drag ordering, removal drop zone and touch-safe controls", () => {
+  const design = mockDesignOptions[0]!;
+  const markup = renderToStaticMarkup(
+    <BraceletSequenceEditor
+      busy={false}
+      design={design}
+      onMove={() => undefined}
+      onRemove={() => undefined}
+      onSelect={() => undefined}
+      selectedComponentId={design.beads.at(-1)!.componentId}
+    />
+  );
+  assert.match(markup, /data-sequence-editor="true"/);
+  assert.match(markup, /draggable="true"/);
+  assert.match(markup, /data-remove-drop-zone="true"/);
+  assert.match(markup, /拖动珠子调整顺序/);
+  assert.match(markup, /把珠子拖到这里移除/);
 });

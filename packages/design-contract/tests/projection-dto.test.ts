@@ -6,6 +6,8 @@ import {
   CreateOrderFromDesignResponseSchema,
   GenerateDesignRequestSchema,
   GenerateDesignResponseSchema,
+  ListCatalogMaterialsQuerySchema,
+  ListCatalogMaterialsResponseSchema,
   PriceDesignRequestSchema,
   PriceDesignResponseSchema,
   PublishDesignRequestSchema,
@@ -167,6 +169,30 @@ test("update DTO rejects arbitrary JSON Patch operations", () => {
     }).success,
     false
   );
+});
+
+test("material catalog exposes sellable bead fields without internal cost data", () => {
+  assert.equal(ListCatalogMaterialsQuerySchema.parse({}).currency, "CNY");
+  const response = ListCatalogMaterialsResponseSchema.parse({
+    materials: [{
+      beadProductId: "product-amethyst-faceted-8",
+      sku: "AM-CNY-8",
+      displayName: "紫水晶切面珠 8mm",
+      crystalId: "crystal-amethyst",
+      crystalNameCn: "紫水晶",
+      crystalNameEn: "Amethyst",
+      colorTags: ["purple", "cool"],
+      materialKey: "crystal-amethyst-material-v1",
+      shape: "FACETED",
+      diameterMm: 8,
+      modelAssetKey: "sphere-faceted-8mm-v1",
+      textureAssetKey: "crystal-amethyst-texture-v1",
+      currency: "CNY",
+      unitPriceMinor: 680
+    }]
+  });
+  assert.equal(response.materials[0]?.crystalNameCn, "紫水晶");
+  assert.equal(JSON.stringify(response).includes("unitCostMinor"), false);
 });
 
 test("REJECTED designs cannot publish or create orders", () => {

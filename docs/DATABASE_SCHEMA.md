@@ -19,4 +19,8 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 - Publication requires consent, non-private visibility, PASSED compliance, and no review requirement. Order creation rejects rejected or review-required flagged designs, then validates server price and latest inventory.
 - Every foreign key declares `Restrict`; lifecycle data is never removed by user deletion. Designs use `deletedAt`, publications use `UNPUBLISHED`, and products use `active=false`.
 
+## Demo catalog baseline
+
+The local seed synchronizes 18 compliant crystal knowledge entries into 36 active material products: one independent CNY and one TWD SKU per crystal. The public material catalog reads bilingual names and color tags from `Crystal`, while price, render keys, sellable status, and currency remain product-specific. Cultural references remain design inspiration only and do not introduce medical or guaranteed-effect claims.
+
 See `PERSISTENCE_MODEL_V1.md` for the ERD, full lifecycle, constraints, and JSON boundaries.

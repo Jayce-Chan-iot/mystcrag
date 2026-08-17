@@ -12,6 +12,7 @@ export * from "./schemas/accessory.schema";
 export * from "./schemas/api-dto.schema";
 export * from "./schemas/bead.schema";
 export * from "./schemas/bracelet.schema";
+export * from "./schemas/catalog.schema";
 export * from "./schemas/community.schema";
 export * from "./schemas/compliance.schema";
 export * from "./schemas/component.schema";

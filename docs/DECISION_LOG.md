@@ -20,6 +20,22 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 
 ## Decisions
 
+### DEC-MVP-2P5D-001 — Adopt the 2.5D editor as the MVP interaction target
+
+- Date: 2026-08-17
+- Proposed by Agent: Product and QA planning
+- Affected modules: `apps/frontend`, `packages/three-engine`, product requirements, MVP acceptance, desktop/mobile interaction QA
+- Decision: The primary MVP DIY route uses a front-facing, image-based 2.5D bracelet editor. The release gate covers direct bead selection, addition, reorder, removal, connected/spread presentation, size-aware circumference, server-authoritative price/revision, save/reload, and single order-snapshot completion on desktop and mobile. Three.js remains available as an optional visualization capability but is not required on the primary DIY route and WebGL availability is not an MVP acceptance condition.
+- Rationale: The project owner explicitly selected 2.5D as the final target and prioritized interaction correctness across computer and mobile surfaces. A direct-manipulation surface is more predictable for touch insertion, reordering, and deletion while preserving the shared design, pricing, persistence, and order contracts.
+- Rejected alternatives: Requiring an orbit-controlled 3D editor for MVP; treating a CSS-sized browser screenshot as proof of interaction correctness; accepting clickability without verifying Backend and persisted state.
+- Contract impact: None. `DesignV1`, stable `componentId`, finite update operations, pricing, production order, and public projections remain canonical.
+- Database impact: None. Existing immutable revision and order-snapshot invariants remain required.
+- API impact: None. Existing Generate, Update, Price, Save, Get, Catalog, and Order routes remain authoritative.
+- Approval status: `APPROVED`
+- Approved by: Project owner
+- Approval date: 2026-08-17
+- Implementation branch or commit: Current local MVP worktree; exact commit pending interaction QA closeout.
+
 ### P3-001 — Establish Phase 3 parallel-development governance
 
 - Date: 2026-07-21

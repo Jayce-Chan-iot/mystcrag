@@ -7,6 +7,7 @@ import {
   BeadShapeSchema,
   CulturalInspirationSchema,
   DesignV1Schema,
+  type CatalogMaterialProduct,
   toOrderSnapshot,
   toPublicDesign,
   type AccessoryV1,
@@ -17,6 +18,7 @@ import {
   type DesignV1,
   type GenerateDesignRequest,
   type GenerateDesignResponse,
+  type ListCatalogMaterialsResponse,
   type PriceDesignRequest,
   type PriceDesignResponse,
   type PublishDesignRequest,
@@ -40,6 +42,9 @@ export type CatalogProduct = {
   unitPriceMinor: number;
   active: boolean;
   crystalId?: string;
+  crystalNameCn?: string;
+  crystalNameEn?: string;
+  colorTags?: string[];
   shape?: string;
   diameterMm?: number;
   materialKey?: string;
@@ -196,6 +201,7 @@ export interface DesignApiService {
   price(actorId: string, request: PriceDesignRequest): Promise<PriceDesignResponse>;
   save(actorId: string, request: SaveDesignRequest): Promise<SaveDesignResponse>;
   get(actorId: string, designId: string): Promise<ReturnType<typeof toPublicDesign>>;
+  materials(actorId: string, currency: "CNY" | "TWD"): Promise<ListCatalogMaterialsResponse>;
   revisions(actorId: string, designId: string): Promise<RevisionListResponse>;
   publish(actorId: string, request: PublishDesignRequest): Promise<PublishDesignResponse>;
   createOrder(
@@ -251,6 +257,24 @@ function rebuildDerived(input: DesignV1): DesignV1 {
   );
   const accessories: AccessoryV1[] = [...inlineAccessories, ...anchoredAccessories];
   const allComponents = [...beads, ...accessories];
+  const materialSubtotalMinor = beads.reduce(
+    (total, bead) => total + bead.unitPriceMinor,
+    0
+  );
+  const accessorySubtotalMinor = accessories.reduce(
+    (total, accessory) => total + accessory.unitPriceMinor,
+    0
+  );
+  const totalPriceMinor =
+    materialSubtotalMinor +
+    accessorySubtotalMinor +
+    input.pricing.laborFeeMinor +
+    input.pricing.designFeeMinor +
+    input.pricing.packagingFeeMinor +
+    input.pricing.platformFeeEstimateMinor +
+    input.pricing.logisticsFeeEstimateMinor -
+    input.pricing.discountMinor +
+    input.pricing.adjustments.reduce((total, adjustment) => total + adjustment.amountMinor, 0);
   const billOfMaterials = allComponents.map((component) => {
     if ("beadProductId" in component) {
       return {
@@ -275,6 +299,12 @@ function rebuildDerived(input: DesignV1): DesignV1 {
     bracelet: { ...input.bracelet, totalBeadCount: beads.length },
     beads,
     accessories,
+    pricing: {
+      ...input.pricing,
+      materialSubtotalMinor,
+      accessorySubtotalMinor,
+      totalPriceMinor
+    },
     production: {
       ...input.production,
       wristCircumferenceMm: input.bracelet.wristCircumferenceMm,
@@ -726,6 +756,44 @@ export class DesignApplicationService implements DesignApiService {
 
   async get(actorId: string, designId: string): Promise<ReturnType<typeof toPublicDesign>> {
     return toPublicDesign((await this.dependencies.designs.getDesign(actorId, designId)).snapshot);
+  }
+
+  async materials(
+    actorId: string,
+    currency: "CNY" | "TWD"
+  ): Promise<ListCatalogMaterialsResponse> {
+    void actorId;
+    const catalog = await this.dependencies.catalog.listActiveCatalogProducts(currency);
+    const materials: CatalogMaterialProduct[] = catalog.flatMap((product) => {
+      if (
+        product.productType !== "MATERIAL" ||
+        !product.crystalId ||
+        !product.shape ||
+        product.diameterMm === undefined ||
+        !product.materialKey ||
+        !product.modelAssetKey ||
+        !product.textureAssetKey
+      ) {
+        return [];
+      }
+      return [{
+        beadProductId: product.id,
+        sku: product.sku,
+        displayName: product.name,
+        crystalId: product.crystalId,
+        crystalNameCn: product.crystalNameCn ?? product.name,
+        crystalNameEn: product.crystalNameEn ?? product.name,
+        colorTags: product.colorTags ?? [],
+        materialKey: product.materialKey,
+        shape: BeadShapeSchema.parse(product.shape),
+        diameterMm: product.diameterMm,
+        modelAssetKey: product.modelAssetKey,
+        textureAssetKey: product.textureAssetKey,
+        currency: product.currency,
+        unitPriceMinor: product.unitPriceMinor
+      }];
+    });
+    return { materials };
   }
 
   async revisions(actorId: string, designId: string): Promise<RevisionListResponse> {

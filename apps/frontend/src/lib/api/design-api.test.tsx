@@ -8,7 +8,13 @@ import { getBudgetStatus } from "../../features/design/components/design-results
 import { responseNotice } from "../../features/design/components/diy-editor";
 import { toGenerateDesignRequest } from "../../features/questionnaire/model/questionnaire";
 import { resolveAccessToken, resolveMockMode } from "./api-runtime";
-import { createDesignApiClient, createReplaceRequest } from "./design-api";
+import {
+  createAddRequest,
+  createDesignApiClient,
+  createMoveRequest,
+  createRemoveRequest,
+  createReplaceRequest
+} from "./design-api";
 import { FrontendApiError } from "./frontend-api-error";
 
 const design = mockDesignOptions[0]!;
@@ -52,6 +58,34 @@ test("refresh loads the persisted design through GET instead of fixed Mock optio
   assert.equal(calls[0]?.init?.method, "GET");
 });
 
+test("material library loads the complete currency catalog through the protected Backend route", async () => {
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  const material = design.beads[0]!;
+  const payload = {
+    materials: [{
+      beadProductId: material.beadProductId,
+      sku: "AQ-CNY-8",
+      displayName: "海蓝宝圆珠 8mm",
+      crystalId: material.crystalId,
+      crystalNameCn: "海蓝宝",
+      crystalNameEn: "Aquamarine",
+      colorTags: ["blue", "cool"],
+      materialKey: material.materialKey,
+      shape: material.shape,
+      diameterMm: material.diameterMm,
+      modelAssetKey: material.modelAssetKey,
+      textureAssetKey: material.textureAssetKey,
+      currency: design.currency,
+      unitPriceMinor: material.unitPriceMinor
+    }]
+  };
+  const client = createDesignApiClient({ accessToken: "verified-test-token", useMock: false, fetcher: successFetch(payload, calls) });
+  const response = await client.materials("CNY");
+  assert.equal(response.materials[0]?.crystalNameCn, "海蓝宝");
+  assert.equal(calls[0]?.input, "/api/catalog/materials?currency=CNY");
+  assert.equal(calls[0]?.init?.method, "GET");
+});
+
 test("REPLACE_COMPONENT sends expectedRevision and accepts only server revision and price", async () => {
   const serverDesign = structuredClone(design);
   serverDesign.revision = design.revision + 4;
@@ -68,7 +102,34 @@ test("REPLACE_COMPONENT sends expectedRevision and accepts only server revision 
   assert.equal(sent.operations[0]?.operation, "REPLACE_COMPONENT");
   assert.equal(response.design.revision, serverDesign.revision);
   assert.equal(response.design.pricing.totalPriceMinor, serverDesign.pricing.totalPriceMinor);
-  assert.equal(responseNotice(design, response.design, response.warnings.map((warning) => warning.code)), "PRICE_CHANGED");
+  assert.equal(responseNotice(response.warnings.map((warning) => warning.code)), null);
+});
+
+test("DIY add, move and remove requests use the finite shared operations", () => {
+  const source = design.beads[0]!;
+  const added = createAddRequest(design, source, 1, "component-added-by-diy");
+  const moved = createMoveRequest(design, source.componentId, 1);
+  const removed = createRemoveRequest(design, source.componentId);
+
+  assert.equal(added.expectedRevision, design.revision);
+  assert.deepEqual(added.operations[0], {
+    operation: "ADD_COMPONENT",
+    component: {
+      ...source,
+      componentId: "component-added-by-diy",
+      positionIndex: 1,
+      role: "MAIN"
+    }
+  });
+  assert.deepEqual(moved.operations[0], {
+    operation: "MOVE_COMPONENT",
+    componentId: source.componentId,
+    targetPositionIndex: 1
+  });
+  assert.deepEqual(removed.operations[0], {
+    operation: "REMOVE_COMPONENT",
+    componentId: source.componentId
+  });
 });
 
 test("save uses the real SaveDesign DTO and keeps Backend savedAt", async () => {

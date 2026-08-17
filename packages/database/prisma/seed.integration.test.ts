@@ -25,11 +25,11 @@ test("repeated seed preserves the expected PostgreSQL fixture set", { skip: !dat
     };
     assert.deepEqual(counts, {
       users: 1,
-      crystals: 3,
-      materialProducts: 6,
+      crystals: 18,
+      materialProducts: 36,
       accessoryProducts: 2,
       pricingRules: 2,
-      inventorySnapshots: 8,
+      inventorySnapshots: 38,
       designs: 3,
       designRevisions: 4,
       publications: 1,
