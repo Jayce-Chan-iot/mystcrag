@@ -31,7 +31,7 @@ export const ERROR_PRESENTATION: Record<FrontendErrorCode, { title: string; mess
   NOT_FOUND: { title: "没有找到这份设计", message: "设计可能不存在，或当前身份无权查看。", action: "重新生成", tone: "neutral" },
   CONFLICT: { title: "设计已在其他位置更新", message: "我们保留了你当前的操作。请同步最新版本后再尝试。", action: "同步最新设计", tone: "warning" },
   PRICE_CHANGED: { title: "价格已更新", message: "材料或工艺价格发生变化，请确认新价格后继续。", action: "查看新价格", tone: "warning" },
-  INVENTORY_CHANGED: { title: "材料库存有变化", message: "这颗材料刚刚不可用，请从替代材料中重新选择。", action: "选择替代材料", tone: "warning" },
+  INVENTORY_CHANGED: { title: "材料库存有变化", message: "部分材料刚刚不可用，系统会在重试时重新匹配当前可用材料。", action: "重新生成方案", tone: "warning" },
   COMPLIANCE_BLOCKED: { title: "内容需要调整", message: "当前设计说明含有不适合展示的表达，已停止生成。", action: "调整偏好", tone: "danger" },
   CONSENT_REQUIRED: { title: "需要发布授权", message: "发布前请明确同意公开展示；设计仍保持私密。", action: "确认授权", tone: "warning" },
   INTERNAL_ERROR: { title: "服务暂时无法完成操作", message: "设计数据未被更改，请稍后重试。", action: "重试", tone: "danger" },

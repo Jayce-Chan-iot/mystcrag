@@ -63,12 +63,17 @@ export function DesignResults({ designId }: { designId: string }) {
   }, [attempt, designId]);
 
   const selectedDesign = designs.find((design) => design.designId === selectedDesignId) ?? designs[0];
+  const optionCountLabel = designs.length === 0
+    ? "正在加载"
+    : designs.length === 1
+      ? "单个方案"
+      : `${designs.length} 个方案`;
 
   return (
     <main className="mx-auto min-h-[calc(100vh-5rem)] max-w-[90rem] px-5 pb-28 pt-7 sm:px-8 sm:pt-9" data-results-layout="comparison-grid">
       <header className="flex flex-wrap items-end justify-between gap-5">
         <div>
-          <p className="text-[0.68rem] uppercase tracking-[0.3em] text-[var(--accent)]">AI Design · 3 个方案</p>
+          <p className="text-[0.68rem] uppercase tracking-[0.3em] text-[var(--accent)]">AI Design · {optionCountLabel}</p>
           <h1 className="mt-2 font-serif text-3xl sm:text-5xl">你的设计已经生成</h1>
           <p className="mt-2 text-sm leading-6 text-[var(--muted)]">选择喜欢的方案，下一步可以继续换珠、调整顺序和尺寸。</p>
         </div>
@@ -86,13 +91,13 @@ export function DesignResults({ designId }: { designId: string }) {
       ) : null}
 
       {designs.length > 0 ? (
-        <section className="mt-7 grid gap-4 lg:grid-cols-3" aria-label="三套设计结果">
+        <section className="mt-7 grid min-w-0 gap-4 lg:grid-cols-3" aria-label={`${designs.length} 套设计结果`}>
           {designs.map((design, index) => {
             const selected = selectedDesignId === design.designId;
             const budgetStatus = getBudgetStatus(design.pricing.totalPriceMinor, budget);
             const acceptedOverBudget = acceptedOverBudgetIds.includes(design.designId);
             const materialList = [...new Set(design.beads.map((bead) => materialNames[bead.materialKey] ?? bead.crystalId))].join(" · ");
-            return <article className={`design-result-card flex min-h-0 flex-col rounded-[1.5rem] border bg-[var(--surface)] p-4 transition ${selected ? "border-[var(--accent-deep)] shadow-[0_18px_45px_rgb(76_56_93/0.13)] ring-1 ring-[var(--accent)]/20" : "border-[var(--border)]"}`} data-design-selected={selected} data-option-index={index + 1} key={design.designId}>
+            return <article className={`design-result-card flex min-h-0 min-w-0 flex-col rounded-[1.5rem] border bg-[var(--surface)] p-4 transition ${selected ? "border-[var(--accent-deep)] shadow-[0_18px_45px_rgb(76_56_93/0.13)] ring-1 ring-[var(--accent)]/20" : "border-[var(--border)]"}`} data-design-selected={selected} data-option-index={index + 1} key={design.designId}>
               <div className="flex items-center justify-between">
                 <span className={`rounded-full px-3 py-1 text-xs ${selected ? "bg-[var(--accent-deep)] text-white" : "bg-[var(--surface-soft)] text-[var(--muted)]"}`}>方案 {String(index + 1).padStart(2, "0")}</span>
                 <button
@@ -150,7 +155,7 @@ export function DesignResults({ designId }: { designId: string }) {
               <span className="block text-sm text-[var(--success)]">{formatMinorAmount({ amountMinor: selectedDesign.pricing.totalPriceMinor, currency: selectedDesign.currency, locale: selectedDesign.locale })}</span>
             </div>
           </div>
-          <div className="hidden xl:block">
+          <div className="min-w-0">
             <ComplianceNotice design={selectedDesign} />
           </div>
           <Link className="inline-flex min-h-14 items-center justify-center rounded-xl bg-[var(--accent-deep)] px-7 text-center text-base font-medium text-white shadow-[0_12px_28px_rgb(73_53_95/0.24)] transition hover:-translate-y-0.5 hover:bg-[var(--accent)]" href={`/diy/${encodeURIComponent(selectedDesign.designId)}`}>进入 DIY 调整</Link>

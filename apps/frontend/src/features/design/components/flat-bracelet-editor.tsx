@@ -297,8 +297,9 @@ export function FlatBraceletEditor({
               <Image
                 alt=""
                 className="h-full w-full object-contain drop-shadow-[0_8px_8px_rgb(57_45_67/0.2)]"
+                fetchPriority={index < 4 ? "high" : "auto"}
                 height={512}
-                priority={index < 4}
+                loading="eager"
                 sizes="(max-width: 640px) 24vw, 125px"
                 src="/accessories/silver-star-ring-charm.png"
                 width={512}

@@ -48,7 +48,8 @@ export function CrystalBeadImage({
         alt={alt}
         className="h-full w-full scale-[1.34] object-cover"
         height={512}
-        priority={priority}
+        fetchPriority={priority ? "high" : "auto"}
+        loading="eager"
         sizes={sizes}
         src="/beads/crystal-bead-base.png"
         style={{ clipPath: "circle(36.5% at 50% 49.5%)", filter: crystalFilter(materialKey) }}

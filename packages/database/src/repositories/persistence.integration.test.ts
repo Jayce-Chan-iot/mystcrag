@@ -12,7 +12,10 @@ import { ProductRepository } from "./product.repository.js";
 import { PublicationRepository } from "./publication.repository.js";
 
 const databaseUrl = process.env.DATABASE_URL;
-const migrationName = "20260721140000_init_mystcrag_persistence_v1";
+const migrationNames = [
+  "20260721140000_init_mystcrag_persistence_v1",
+  "20260818120000_add_order_idempotency"
+];
 
 function nextRevision(
   input: DesignV1,
@@ -49,11 +52,11 @@ test("live PostgreSQL 17 persistence verification matrix", { skip: !databaseUrl 
       >(
         'SELECT migration_name, finished_at, rolled_back_at FROM "_prisma_migrations" ORDER BY started_at'
       );
-      assert.deepEqual(migrations.map(({ migration_name }) => migration_name), [migrationName]);
-      assert.ok(migrations[0]?.finished_at);
-      assert.equal(migrations[0]?.rolled_back_at, null);
+      assert.deepEqual(migrations.map(({ migration_name }) => migration_name), migrationNames);
+      assert.equal(migrations.every(({ finished_at }) => Boolean(finished_at)), true);
+      assert.equal(migrations.every(({ rolled_back_at }) => rolled_back_at === null), true);
       console.log(
-        `POSTGRES_VERIFICATION_ENV version=${serverVersion} migration=${migrationName}`
+        `POSTGRES_VERIFICATION_ENV version=${serverVersion} migrations=${migrationNames.join(",")}`
       );
     });
 
@@ -287,9 +290,50 @@ test("live PostgreSQL 17 persistence verification matrix", { skip: !databaseUrl 
       assert.equal(order.totalAmountMinor, 5_500);
       assert.equal(order.designSnapshot.revision, 4);
       assert.equal(order.pricingSnapshot.totalPriceMinor, 5_500);
+      const retry = await orders.createOrderFromDesign(
+        actorId,
+        revision1.designId,
+        4,
+        5_500,
+        "cny-retail-2026-07-v1"
+      );
+      assert.equal(retry.id, order.id);
+      assert.equal(
+        await prisma.order.count({ where: { designRevisionId: order.designRevisionId } }),
+        1
+      );
     });
 
-    await t.test("8. order snapshots reject update/delete and orders reject physical delete", async () => {
+    await t.test("8. concurrent order retries resolve to one idempotent order", async () => {
+      const concurrentDesign = DesignV1Schema.parse({
+        ...structuredClone(revision1),
+        designId: "postgres-concurrent-order-design"
+      });
+      await designs.createDesign(actorId, concurrentDesign);
+      const [first, second] = await Promise.all([
+        orders.createOrderFromDesign(
+          actorId,
+          concurrentDesign.designId,
+          1,
+          5_500,
+          "cny-retail-2026-07-v1"
+        ),
+        orders.createOrderFromDesign(
+          actorId,
+          concurrentDesign.designId,
+          1,
+          5_500,
+          "cny-retail-2026-07-v1"
+        )
+      ]);
+      assert.equal(second.id, first.id);
+      assert.equal(
+        await prisma.order.count({ where: { designRevisionId: first.designRevisionId } }),
+        1
+      );
+    });
+
+    await t.test("9. order snapshots reject update/delete and orders reject physical delete", async () => {
       const snapshot = await prisma.orderDesignSnapshot.findUniqueOrThrow({
         where: { orderId }
       });
@@ -305,7 +349,7 @@ test("live PostgreSQL 17 persistence verification matrix", { skip: !databaseUrl 
       await assert.rejects(() => prisma.order.delete({ where: { id: orderId } }));
     });
 
-    await t.test("9. failed order validation leaves order and snapshot counts unchanged", async () => {
+    await t.test("10. failed order validation leaves order and snapshot counts unchanged", async () => {
       await prisma.inventorySnapshot.create({
         data: {
           productType: "MATERIAL",
@@ -318,12 +362,17 @@ test("live PostgreSQL 17 persistence verification matrix", { skip: !databaseUrl 
         orders: await prisma.order.count(),
         snapshots: await prisma.orderDesignSnapshot.count()
       };
+      const outOfStockDesign = DesignV1Schema.parse({
+        ...structuredClone(revision1),
+        designId: "postgres-out-of-stock-design"
+      });
+      await designs.createDesign(actorId, outOfStockDesign);
       await assert.rejects(
         () =>
           orders.createOrderFromDesign(
             actorId,
-            revision1.designId,
-            4,
+            outOfStockDesign.designId,
+            1,
             5_500,
             "cny-retail-2026-07-v1"
           ),
@@ -339,7 +388,7 @@ test("live PostgreSQL 17 persistence verification matrix", { skip: !databaseUrl 
       );
     });
 
-    await t.test("10. BIGINT minor-unit values round-trip and unsafe values are rejected", async () => {
+    await t.test("11. BIGINT minor-unit values round-trip and unsafe values are rejected", async () => {
       const safeMaximum = BigInt(Number.MAX_SAFE_INTEGER);
       await prisma.materialProduct.update({
         where: { id: "product-aquamarine-round-8" },
@@ -358,7 +407,7 @@ test("live PostgreSQL 17 persistence verification matrix", { skip: !databaseUrl 
       );
     });
 
-    await t.test("11. persisted JSON is schema-validated on write and read", async () => {
+    await t.test("12. persisted JSON is schema-validated on write and read", async () => {
       await assert.rejects(
         () => designs.createDesign(actorId, { ...structuredClone(revision1), ownerId: "forged" }),
         (error: unknown) =>
@@ -376,7 +425,7 @@ test("live PostgreSQL 17 persistence verification matrix", { skip: !databaseUrl 
       );
     });
 
-    await t.test("12. foreign-key delete policies are RESTRICT in live PostgreSQL", async () => {
+    await t.test("13. foreign-key delete policies are RESTRICT in live PostgreSQL", async () => {
       await assert.rejects(() => prisma.user.delete({ where: { id: actorId } }));
       await assert.rejects(() =>
         prisma.design.delete({ where: { id: revision1.designId } })

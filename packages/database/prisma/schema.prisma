@@ -198,6 +198,7 @@ model DesignPublication {
 
 model Order {
   id               String               @id @default(cuid())
+  idempotencyKey   String?              @unique @map("idempotency_key")
   userId           String               @map("user_id")
   status           OrderStatus          @default(PENDING)
   currency         Currency

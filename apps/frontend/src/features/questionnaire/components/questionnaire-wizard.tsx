@@ -59,7 +59,18 @@ export function QuestionnaireWizard() {
     setApiError(null);
     try {
       const request = toGenerateDesignRequest(answers);
-      const responses = await Promise.all(toGenerateDesignRequests(answers).map((option) => designApi.generate(option)));
+      const settledResponses = await Promise.allSettled(
+        toGenerateDesignRequests(answers).map((option) => designApi.generate(option))
+      );
+      const responses = settledResponses.flatMap((response) =>
+        response.status === "fulfilled" ? [response.value] : []
+      );
+      if (responses.length === 0) {
+        const firstFailure = settledResponses.find((response) => response.status === "rejected");
+        throw firstFailure?.status === "rejected"
+          ? firstFailure.reason
+          : new Error("Backend did not return a design option.");
+      }
       const designIds = responses.map((response) => response.design.designId);
       const routeDesignId = designIds[0];
       if (!routeDesignId) throw new Error("Backend did not return a design option.");

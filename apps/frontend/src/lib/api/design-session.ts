@@ -1,8 +1,13 @@
-import type { GenerateDesignRequest } from "@mystcrag/design-contract";
+import {
+  CreateOrderFromDesignResponseSchema,
+  type CreateOrderFromDesignResponse,
+  type GenerateDesignRequest
+} from "@mystcrag/design-contract";
 
 const STORAGE_PREFIX = "mystcrag:generation:";
 const OPTIONS_PREFIX = "mystcrag:options:";
 const OVER_BUDGET_ACCEPTANCE_PREFIX = "mystcrag:over-budget-accepted:";
+const ORDER_PREFIX = "mystcrag:order:";
 
 export type DesignBudgetContext = Pick<
   GenerateDesignRequest,
@@ -70,6 +75,35 @@ export function loadDesignBudgetContext(designId: string): DesignBudgetContext |
     if (context.maxBudgetMinor !== undefined && !Number.isSafeInteger(context.maxBudgetMinor)) return null;
     return context as DesignBudgetContext;
   } catch {
+    return null;
+  }
+}
+
+function orderStorageKey(designId: string, revision: number): string {
+  return `${ORDER_PREFIX}${designId}:${revision}`;
+}
+
+export function saveCompletedOrder(response: CreateOrderFromDesignResponse): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    orderStorageKey(response.design.designId, response.design.revision),
+    JSON.stringify(response)
+  );
+}
+
+export function loadCompletedOrder(
+  designId: string,
+  revision: number
+): CreateOrderFromDesignResponse | null {
+  if (typeof window === "undefined") return null;
+  const value = window.localStorage.getItem(orderStorageKey(designId, revision));
+  if (!value) return null;
+  try {
+    const response = CreateOrderFromDesignResponseSchema.parse(JSON.parse(value));
+    if (response.design.designId !== designId || response.design.revision !== revision) return null;
+    return response;
+  } catch {
+    window.localStorage.removeItem(orderStorageKey(designId, revision));
     return null;
   }
 }

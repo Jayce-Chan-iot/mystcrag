@@ -16,7 +16,12 @@ import {
   createRemoveRequest,
   designApi
 } from "../../../lib/api/design-api";
-import { hasOverBudgetAcceptance, loadDesignBudgetContext } from "../../../lib/api/design-session";
+import {
+  hasOverBudgetAcceptance,
+  loadCompletedOrder,
+  loadDesignBudgetContext,
+  saveCompletedOrder
+} from "../../../lib/api/design-session";
 import { toFrontendApiError, type FrontendErrorCode } from "../../../lib/api/frontend-api-error";
 import { toDesignComponentViewModels } from "../model/design-component-view-model";
 import { evaluateBraceletFit } from "../model/bracelet-fit";
@@ -85,6 +90,7 @@ export function DiyEditor({ designId }: { designId: string }) {
     try {
       const response = await designApi.get(designId);
       setDesign(response);
+      setOrder(loadCompletedOrder(response.designId, response.revision));
       const catalog = await designApi.materials(response.currency);
       setCatalogMaterials(catalog.materials);
       setSelectedComponentId((current) => response.beads.some((bead) => bead.componentId === current) ? current : response.beads[0]?.componentId ?? "");
@@ -101,6 +107,7 @@ export function DiyEditor({ designId }: { designId: string }) {
     void designApi.get(designId).then(async (response) => {
       if (!active) return;
       setDesign(response);
+      setOrder(loadCompletedOrder(response.designId, response.revision));
       const catalog = await designApi.materials(response.currency);
       if (!active) return;
       setCatalogMaterials(catalog.materials);
@@ -391,6 +398,7 @@ export function DiyEditor({ designId }: { designId: string }) {
       const response = await designApi.createOrder(design);
       setDesign(response.design);
       setOrder(response);
+      saveCompletedOrder(response);
     } catch (error) {
       setNotice(toFrontendApiError(error).code);
     } finally {
@@ -688,7 +696,7 @@ export function DiyEditor({ designId }: { designId: string }) {
           </div>
 
           <div className="grid min-h-16 grid-cols-3 items-center border-y border-[var(--border)]/70 bg-white/55 px-3 text-sm sm:px-6">
-            <button className="min-h-11 justify-self-start px-2 text-[var(--muted)] disabled:opacity-35" disabled={!selectedBead || isUpdating || selectedBead.positionIndex === 0} onClick={() => moveSelectedBy(-1)} type="button">↶ 撤销</button>
+            <button className="min-h-11 justify-self-start px-2 text-[var(--muted)] disabled:opacity-35" disabled={!selectedBead || isUpdating || selectedBead.positionIndex === 0} onClick={() => moveSelectedBy(-1)} type="button">← 左移</button>
             <button className="min-h-11 justify-self-center px-2 text-[var(--muted)] disabled:opacity-55" disabled={isSaving} onClick={() => void save()} type="button">{isSaving ? "保存中…" : savedAt ? "✓ 已保存" : "保存"}</button>
             <button aria-describedby={braceletFit.canComplete ? undefined : "mobile-bracelet-fit-help"} className="min-h-11 justify-self-end rounded-full bg-[var(--accent-deep)] px-4 text-white disabled:opacity-40 sm:px-7" disabled={isOrdering || Boolean(order) || !braceletFit.canComplete} onClick={() => void createOrder()} type="button">{isOrdering ? "生成中…" : order ? "设计已完成" : "完成设计"}</button>
           </div>

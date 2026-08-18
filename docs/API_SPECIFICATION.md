@@ -88,7 +88,7 @@ Requires verified authentication and owner access. Uses `PublishDesignRequestSch
 
 POST /api/orders/from-design
 
-Requires verified authentication and owner access. Uses `CreateOrderFromDesignRequestSchema` and `CreateOrderFromDesignResponseSchema`, with a compliance guard before service execution.
+Requires verified authentication and owner access. Uses `CreateOrderFromDesignRequestSchema` and `CreateOrderFromDesignResponseSchema`, with a compliance guard before service execution. The operation is idempotent for one authenticated user and one design revision: retries, refreshes, and concurrent submissions return the existing immutable order snapshot instead of creating another order.
 
 ## Phase 2C service status
 

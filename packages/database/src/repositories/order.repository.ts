@@ -43,6 +43,7 @@ export class OrderRepository {
     expectedTotalPriceMinor: number,
     expectedPricingVersion: string
   ): Promise<PersistedOrder> {
+    const idempotencyKey = `${actorId}:${designId}:${revisionNumber}`;
     return this.prisma.$transaction(async (tx) => {
       const revision = await tx.designRevision.findUnique({
         where: { designId_revisionNumber: { designId, revisionNumber } },
@@ -51,6 +52,15 @@ export class OrderRepository {
       if (!revision || revision.design.ownerId !== actorId || revision.design.deletedAt) {
         throw new PersistenceError("NOT_FOUND", "Design revision not found");
       }
+      const existingOrder = await tx.order.findFirst({
+        where: {
+          userId: actorId,
+          designRevisionId: revision.id
+        },
+        orderBy: { createdAt: "asc" },
+        include: { designSnapshot: true }
+      });
+      if (existingOrder) return this.mapOrder(existingOrder);
       if (revision.design.currentRevision !== revisionNumber) {
         throw new PersistenceError("CONFLICT", "Design revision is no longer current");
       }
@@ -78,8 +88,10 @@ export class OrderRepository {
           throw new PersistenceError("INVENTORY_CHANGED", `Inventory changed for ${productId}`);
         }
       }
-      const row = await tx.order.create({
-        data: {
+      const row = await tx.order.upsert({
+        where: { idempotencyKey },
+        create: {
+          idempotencyKey,
           userId: actorId,
           currency: pricedDesign.currency,
           totalAmountMinor: minorToBigInt(
@@ -98,10 +110,23 @@ export class OrderRepository {
             }
           }
         },
+        update: {},
         include: { designSnapshot: true }
       });
       return this.mapOrder(row);
-    }).catch(rethrowPersistenceError);
+    }).catch(async (error: unknown) => {
+      const code = typeof error === "object" && error !== null && "code" in error
+        ? String(error.code)
+        : undefined;
+      if (code === "P2002") {
+        const existingOrder = await this.prisma.order.findUnique({
+          where: { idempotencyKey },
+          include: { designSnapshot: true }
+        });
+        if (existingOrder) return this.mapOrder(existingOrder);
+      }
+      return rethrowPersistenceError(error);
+    });
   }
 
   async getOrder(actorId: string, orderId: string): Promise<PersistedOrder> {

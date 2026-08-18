@@ -69,6 +69,14 @@ test("questionnaire derives three legal differentiated Backend generation reques
   }
 });
 
+test("questionnaire keeps successful AI candidates when another candidate fails", () => {
+  const source = readFileSync(new URL("../questionnaire/components/questionnaire-wizard.tsx", import.meta.url), "utf8");
+  assert.match(source, /Promise\.allSettled/);
+  assert.match(source, /response\.status === "fulfilled"/);
+  assert.match(source, /responses\.length === 0/);
+  assert.doesNotMatch(source, /await Promise\.all\(toGenerateDesignRequests/);
+});
+
 test("renders three schema-valid design choices and selects each by public designId", () => {
   assert.equal(mockDesignOptions.length, 3);
   for (const design of mockDesignOptions) {
@@ -81,6 +89,9 @@ test("renders three schema-valid design choices and selects each by public desig
   assert.match(source, /data-results-action-bar="true"/);
   assert.match(source, /进入 DIY 调整/);
   assert.match(source, /results\[0\]\?\.designId/);
+  assert.match(source, /designs\.length === 1/);
+  assert.match(source, /min-w-0 flex-col/);
+  assert.doesNotMatch(source, /<div className="hidden xl:block">\s*<ComplianceNotice/);
 });
 
 test("Public DTO fixtures and rendered result data never expose commercial cost", () => {
@@ -129,6 +140,9 @@ test("all required exceptional states have explicit accessible UI", () => {
   assert.match(markup, /role="alert"/);
   assert.match(markup, /价格已更新/);
   assert.match(markup, /库存有变化/);
+  const forbiddenMarkup = renderToStaticMarkup(<FlowNotice code="FORBIDDEN" />);
+  assert.match(forbiddenMarkup, /href="\/ai-design"/);
+  assert.match(forbiddenMarkup, /重新生成/);
 });
 
 test("mock result API exposes AI failure, network error and empty state paths", async () => {
@@ -184,6 +198,9 @@ test("flat bracelet editor exposes the touch-first 2D ring", () => {
   assert.match(beadImageSource, /data-photo-real-bead="true"/);
   assert.match(beadImageSource, /drop-shadow-\[0_7px_6px/);
   assert.match(beadImageSource, /scale-\[1\.34\]/);
+  assert.match(beadImageSource, /loading="eager"/);
+  assert.match(source, /silver-star-ring-charm\.png/);
+  assert.match(source, /loading="eager"/);
 });
 
 test("bracelet circumference follows component sizes and gates the 13–20cm completion range", () => {
@@ -232,4 +249,22 @@ test("bracelet sequence editor exposes drag ordering, removal drop zone and touc
   assert.match(markup, /data-remove-drop-zone="true"/);
   assert.match(markup, /拖动珠子调整顺序/);
   assert.match(markup, /把珠子拖到这里移除/);
+});
+
+test("mobile move-left control describes its actual behavior instead of claiming undo", () => {
+  const editorSource = readFileSync(new URL("./components/diy-editor.tsx", import.meta.url), "utf8");
+  assert.match(editorSource, /onClick=\{\(\) => moveSelectedBy\(-1\)\} type="button">← 左移<\/button>/);
+  assert.doesNotMatch(editorSource, /↶ 撤销/);
+});
+
+test("completed order state survives a refresh and the 404 page is localized", () => {
+  const sessionSource = readFileSync(new URL("../../lib/api/design-session.ts", import.meta.url), "utf8");
+  const editorSource = readFileSync(new URL("./components/diy-editor.tsx", import.meta.url), "utf8");
+  const notFoundSource = readFileSync(new URL("../../../app/not-found.tsx", import.meta.url), "utf8");
+  assert.match(sessionSource, /window\.localStorage\.setItem/);
+  assert.match(sessionSource, /CreateOrderFromDesignResponseSchema\.parse/);
+  assert.match(editorSource, /setOrder\(loadCompletedOrder\(response\.designId, response\.revision\)\)/);
+  assert.match(editorSource, /saveCompletedOrder\(response\)/);
+  assert.match(notFoundSource, /没有找到这个页面/);
+  assert.match(notFoundSource, /返回首页/);
 });

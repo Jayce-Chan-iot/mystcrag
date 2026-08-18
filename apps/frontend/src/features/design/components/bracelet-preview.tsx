@@ -47,7 +47,7 @@ export function BraceletPreview({
             {isBead ? (
               <CrystalBeadImage alt="" materialKey={component.materialKey} priority={index < 6} sizes={compact ? "48px" : "76px"} />
             ) : (
-              <Image alt="" className="h-full w-full object-contain drop-shadow-md" height={256} src="/accessories/silver-star-ring-charm.png" width={256} />
+              <Image alt="" className="h-full w-full object-contain drop-shadow-md" height={256} loading="eager" src="/accessories/silver-star-ring-charm.png" width={256} />
             )}
           </button>
         );

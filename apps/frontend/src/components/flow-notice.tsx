@@ -11,7 +11,7 @@ export function FlowNotice({ code, onAction, compact = false }: { code: Frontend
       ? "border-[var(--warning)]/25 bg-[#f8f2e8] text-[var(--warning)]"
       : "border-[var(--border)] bg-[var(--surface-soft)] text-[var(--foreground)]";
 
-  const actionHref = code === "EMPTY_STATE" || code === "NOT_FOUND" || code === "COMPLIANCE_BLOCKED" || code === "VALIDATION_ERROR" ? "/ai-design" : undefined;
+  const actionHref = code === "EMPTY_STATE" || code === "NOT_FOUND" || code === "FORBIDDEN" || code === "COMPLIANCE_BLOCKED" || code === "VALIDATION_ERROR" ? "/ai-design" : undefined;
 
   return (
     <div className={`rounded-2xl border ${tone} ${compact ? "p-4" : "p-6 sm:p-7"}`} role={content.tone === "danger" ? "alert" : "status"} data-error-code={code}>

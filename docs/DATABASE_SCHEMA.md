@@ -7,7 +7,7 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 - `Design` is the owner-scoped, soft-deletable current aggregate. `currentSnapshot` is a validated `DesignV1` and `currentRevision` starts at one.
 - `DesignRevision` is append-only and unique by `(designId, revisionNumber)`. PostgreSQL triggers reject updates and deletes.
 - `DesignPublication` fixes community visibility and consent to a specific revision; unpublishing changes status/timestamp without deleting history.
-- `Order` stores a BIGINT minor-unit total and references a revision. Its required `OrderDesignSnapshot` stores immutable design, pricing, and production JSON plus currency and pricing-rule version. Triggers reject snapshot updates/deletes and order deletes.
+- `Order` stores a BIGINT minor-unit total and references a revision. Its nullable, unique `idempotencyKey` is populated for new order intents so concurrent retries for the same user and design revision resolve to one order; legacy rows remain readable. Its required `OrderDesignSnapshot` stores immutable design, pricing, and production JSON plus currency and pricing-rule version. Triggers reject snapshot updates/deletes and order deletes.
 - `MaterialProduct` and `AccessoryProduct` are sellable catalog records; `Crystal` remains knowledge data. Cost fields are server-only.
 - `InventorySnapshot` and `PricingRule` are versioned inputs to order validation and price recalculation.
 
@@ -16,7 +16,7 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 - All money uses non-negative PostgreSQL `BIGINT`; repositories convert only to/from JavaScript safe-integer `number` values. CNY uses fen and TWD uses whole-dollar minor units. Price catalogs are independent and no exchange rate is stored.
 - Design, pricing, and production JSON is validated on every repository read and write. Unknown schema majors and invalid persisted JSON become structured persistence errors.
 - Design writes conditionally match owner, current revision, and `deletedAt: null`; the current row update and revision insert share one transaction.
-- Publication requires consent, non-private visibility, PASSED compliance, and no review requirement. Order creation rejects rejected or review-required flagged designs, then validates server price and latest inventory.
+- Publication requires consent, non-private visibility, PASSED compliance, and no review requirement. Order creation first returns an existing order for the same owner and revision, otherwise rejects rejected or review-required flagged designs, validates server price and latest inventory, and creates the order under a unique idempotency key.
 - Every foreign key declares `Restrict`; lifecycle data is never removed by user deletion. Designs use `deletedAt`, publications use `UNPUBLISHED`, and products use `active=false`.
 
 ## Demo catalog baseline
