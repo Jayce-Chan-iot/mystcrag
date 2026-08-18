@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@mystcrag/bracelet-engine": "workspace:*",
     "@mystcrag/design-contract": "workspace:*",
     "@mystcrag/three-engine": "workspace:*",
     "@mystcrag/ui": "workspace:*",

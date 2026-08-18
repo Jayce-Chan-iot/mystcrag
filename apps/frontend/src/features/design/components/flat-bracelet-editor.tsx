@@ -1,5 +1,6 @@
 "use client";
 
+import { createBraceletLayout, resolveSlotAtAngle, type BraceletLayoutResult } from "@mystcrag/bracelet-engine";
 import type { PublicDesignV1 } from "@mystcrag/design-contract";
 import Image from "next/image";
 import * as React from "react";
@@ -47,23 +48,50 @@ export function calculateSizeAwareRingLayout(components: RingComponent[], connec
   const radiusPercent = connected ? connectedRingRadiusPercent(totalLengthMm) : 39;
   const availableCircumferencePercent = Math.PI * 2 * radiusPercent * 0.92;
   const percentPerMm = Math.min(1.55, availableCircumferencePercent / Math.max(1, totalLengthMm));
-  let traversedLengthMm = 0;
+  const engineLayout = createBraceletLayout(
+    components.map((component, index) => ({ componentId: component.componentId, widthMm: lengths[index] ?? 1 })),
+    { center: { x: 50, y: 50 }, gapMm: connected ? 0 : 0.8, rotationRad: -Math.PI / 2 }
+  );
 
   return components.map((component, index) => {
     const lengthMm = lengths[index] ?? 1;
-    const centerFraction = (traversedLengthMm + lengthMm / 2) / Math.max(1, totalLengthMm);
-    const angle = centerFraction * Math.PI * 2 - Math.PI / 2;
-    traversedLengthMm += lengthMm;
+    const slot = engineLayout.slots[index];
+    const angle = slot?.angle ?? -Math.PI / 2;
     return {
       angle,
       component,
+      endAngle: slot?.endAngle ?? Math.PI * 2,
       heightPercent: lengthMm * percentPerMm,
       leftPercent: 50 + Math.cos(angle) * radiusPercent,
       radiusPercent,
+      startAngle: slot?.startAngle ?? 0,
       topPercent: 50 + Math.sin(angle) * radiusPercent,
       widthPercent: lengthMm * percentPerMm
     };
   });
+}
+
+function targetPositionForAngle(layout: ReturnType<typeof calculateSizeAwareRingLayout>, angle: number, fallback: number) {
+  const engineLayout: BraceletLayoutResult = {
+    center: { x: 0, y: 0 },
+    circumference: 0,
+    gapMm: 0,
+    radius: 1,
+    slots: layout.map((item, index) => ({
+      angle: item.angle,
+      componentId: item.component.componentId,
+      endAngle: item.endAngle,
+      height: 1,
+      index,
+      rotation: 0,
+      startAngle: item.startAngle,
+      width: 1,
+      x: 0,
+      y: 0
+    }))
+  };
+  const slot = resolveSlotAtAngle(engineLayout, angle);
+  return layout.find((item) => item.component.componentId === slot?.componentId)?.component.positionIndex ?? fallback;
 }
 
 export function FlatBraceletEditor({
@@ -127,7 +155,6 @@ export function FlatBraceletEditor({
     const ringRadius = rect.width * (ringRadiusPercent / 100);
     const distance = Math.hypot(x - centerX, y - centerY);
     const angle = (Math.atan2(y - centerY, x - centerX) + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2);
-    const targetIndex = Math.round((angle / (Math.PI * 2)) * components.length) % components.length;
     const moved = currentDrag.moved || Math.hypot(event.clientX - currentDrag.startX, event.clientY - currentDrag.startY) > 5;
     commitDrag({
       ...currentDrag,
@@ -136,7 +163,7 @@ export function FlatBraceletEditor({
       moved,
       nearRing: Math.abs(distance - ringRadius) <= rect.width * 0.16,
       overDeleteZone: distance <= rect.width * 0.16,
-      targetPositionIndex: components[targetIndex]?.positionIndex ?? currentDrag.targetPositionIndex
+      targetPositionIndex: targetPositionForAngle(componentLayouts, angle, currentDrag.targetPositionIndex)
     });
   };
 
@@ -155,10 +182,9 @@ export function FlatBraceletEditor({
       const ringRadius = rect.width * (ringRadiusPercent / 100);
       const distance = Math.hypot(x - centerX, y - centerY);
       const angle = (Math.atan2(y - centerY, x - centerX) + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2);
-      const targetIndex = Math.round((angle / (Math.PI * 2)) * components.length) % components.length;
       nearRing = Math.abs(distance - ringRadius) <= rect.width * 0.16;
       overDeleteZone = distance <= rect.width * 0.16;
-      targetPositionIndex = components[targetIndex]?.positionIndex ?? targetPositionIndex;
+      targetPositionIndex = targetPositionForAngle(componentLayouts, angle, targetPositionIndex);
     }
     if (currentDrag.moved) {
       if (overDeleteZone && canRemove(currentDrag.componentId)) onRemove(currentDrag.componentId);
@@ -195,10 +221,9 @@ export function FlatBraceletEditor({
         const distance = Math.hypot(x - centerX, y - centerY);
         const ringRadius = rect.width * (ringRadiusPercent / 100);
         const angle = (Math.atan2(y - centerY, x - centerX) + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2);
-        const targetIndex = Math.round((angle / (Math.PI * 2)) * components.length) % components.length;
         if (distance <= rect.width * 0.16 && canRemove(componentId)) onRemove(componentId);
         else if (Math.abs(distance - ringRadius) <= rect.width * 0.16) {
-          onMove(componentId, components[targetIndex]?.positionIndex ?? 0);
+          onMove(componentId, targetPositionForAngle(componentLayouts, angle, 0));
         }
         clearNativeDrag();
       }}
