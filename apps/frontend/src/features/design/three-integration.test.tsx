@@ -146,9 +146,10 @@ test("revision key and Three Engine cleanup preserve scene lifecycle", () => {
   assert.match(canvasSource, /width: "100%", height: "100%"/);
 });
 
-test("DIY uses the flat editor and keeps save, price verification, budget acceptance, and order paths", () => {
+test("DIY uses the flat editor and keeps authoritative update, save, budget, and order paths", () => {
   const source = readFileSync(new URL("diy-editor.tsx", componentDirectory), "utf8");
-  assert.match(source, /designApi\.price\(updateResponse\.design\)/);
+  assert.match(source, /designApi\.update\(request\)/);
+  assert.doesNotMatch(source, /designApi\.price\(updateResponse\.design\)/);
   assert.match(source, /designApi\.save\(design\)/);
   assert.match(source, /hasOverBudgetAcceptance\(design\.designId\)/);
   assert.match(source, /designApi\.createOrder\(design\)/);

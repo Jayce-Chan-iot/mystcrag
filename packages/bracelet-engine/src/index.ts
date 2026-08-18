@@ -1,4 +1,4 @@
-export * from "./fit.js";
-export * from "./geometry.js";
-export * from "./layout.js";
-export type * from "./types.js";
+export * from "./fit";
+export * from "./geometry";
+export * from "./layout";
+export type * from "./types";

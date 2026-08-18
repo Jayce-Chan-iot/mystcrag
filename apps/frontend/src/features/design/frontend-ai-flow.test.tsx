@@ -251,10 +251,12 @@ test("bracelet sequence editor exposes drag ordering, removal drop zone and touc
   assert.match(markup, /把珠子拖到这里移除/);
 });
 
-test("mobile move-left control describes its actual behavior instead of claiming undo", () => {
+test("mobile toolbar exposes real undo and redo instead of relabeling movement", () => {
   const editorSource = readFileSync(new URL("./components/diy-editor.tsx", import.meta.url), "utf8");
-  assert.match(editorSource, /onClick=\{\(\) => moveSelectedBy\(-1\)\} type="button">← 左移<\/button>/);
-  assert.doesNotMatch(editorSource, /↶ 撤销/);
+  assert.match(editorSource, /runHistory\("undo"\)/);
+  assert.match(editorSource, /↶ 撤销/);
+  assert.match(editorSource, /↷ 重做/);
+  assert.match(editorSource, /moveSelectedBy\(-1\)/);
 });
 
 test("completed order state survives a refresh and the 404 page is localized", () => {

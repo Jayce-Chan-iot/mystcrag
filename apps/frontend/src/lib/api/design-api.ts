@@ -261,15 +261,15 @@ export function createReplaceRequest(
   });
 }
 
-function createUpdateRequest(
+export function createOperationsRequest(
   design: PublicDesignV1,
-  operation: UpdateDesignOperation
+  operations: UpdateDesignOperation[]
 ): UpdateDesignRequest {
   return UpdateDesignRequestSchema.parse({
     requestId: requestId("update"),
     designId: design.designId,
     expectedRevision: design.revision,
-    operations: [operation]
+    operations
   });
 }
 
@@ -285,11 +285,11 @@ export function createMoveRequest(
   if (!Number.isInteger(targetPositionIndex) || targetPositionIndex < 0 || targetPositionIndex >= ringLength) {
     throw new FrontendApiError("VALIDATION_ERROR", "The target bracelet position is invalid.");
   }
-  return createUpdateRequest(design, {
+  return createOperationsRequest(design, [{
     operation: "MOVE_COMPONENT",
     componentId,
     targetPositionIndex
-  });
+  }]);
 }
 
 export function createAddRequest(
@@ -300,7 +300,7 @@ export function createAddRequest(
 ): UpdateDesignRequest {
   const ringLength = design.production.componentSequence.length;
   const safePosition = Math.min(Math.max(0, positionIndex), ringLength);
-  return createUpdateRequest(design, {
+  return createOperationsRequest(design, [{
     operation: "ADD_COMPONENT",
     component: {
       componentId,
@@ -316,7 +316,7 @@ export function createAddRequest(
       textureAssetKey: material.textureAssetKey,
       unitPriceMinor: material.unitPriceMinor
     }
-  });
+  }]);
 }
 
 export function createRemoveRequest(
@@ -329,8 +329,8 @@ export function createRemoveRequest(
   if (design.beads.length <= 1) {
     throw new FrontendApiError("VALIDATION_ERROR", "A bracelet must retain at least one bead.");
   }
-  return createUpdateRequest(design, {
+  return createOperationsRequest(design, [{
     operation: "REMOVE_COMPONENT",
     componentId
-  });
+  }]);
 }

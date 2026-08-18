@@ -4,6 +4,7 @@ import type {
   CatalogMaterialProduct,
   CreateOrderFromDesignResponse,
   PublicDesignV1,
+  UpdateDesignOperation,
   UpdateDesignRequest
 } from "@mystcrag/design-contract";
 import Link from "next/link";
@@ -13,7 +14,9 @@ import { FlowNotice } from "../../../components/flow-notice";
 import {
   createAddRequest,
   createMoveRequest,
+  createOperationsRequest,
   createRemoveRequest,
+  createReplaceRequest,
   designApi
 } from "../../../lib/api/design-api";
 import {
@@ -28,7 +31,7 @@ import { evaluateBraceletFit } from "../model/bracelet-fit";
 import { formatMinorAmount } from "../model/format-minor-amount";
 import { ComplianceNotice } from "./compliance-notice";
 import { CrystalBeadImage, crystalFilter } from "./crystal-bead-image";
-import { FlatBraceletEditor } from "./flat-bracelet-editor";
+import { calculateSizeAwareRingLayout, FlatBraceletEditor } from "./flat-bracelet-editor";
 
 export const DIY_LAYOUT_CLASS = "mx-auto w-full max-w-[70rem]";
 
@@ -76,6 +79,7 @@ export function DiyEditor({ designId }: { designId: string }) {
   const [catalogDiameter, setCatalogDiameter] = React.useState("ALL");
   const [selectedComponentId, setSelectedComponentId] = React.useState("");
   const [braceletConnected, setBraceletConnected] = React.useState(false);
+  const [catalogSheetState, setCatalogSheetState] = React.useState<"collapsed" | "half" | "expanded">("collapsed");
   const [notice, setNotice] = React.useState<FrontendErrorCode | null>(null);
   const [editMessage, setEditMessage] = React.useState("");
   const [isLoading, setIsLoading] = React.useState(true);
@@ -85,6 +89,8 @@ export function DiyEditor({ designId }: { designId: string }) {
   const [isExporting, setIsExporting] = React.useState(false);
   const [savedAt, setSavedAt] = React.useState<string | null>(null);
   const [order, setOrder] = React.useState<CreateOrderFromDesignResponse | null>(null);
+  const [undoStack, setUndoStack] = React.useState<Array<{ undo: UpdateDesignOperation[]; redo: UpdateDesignOperation[] }>>([]);
+  const [redoStack, setRedoStack] = React.useState<Array<{ undo: UpdateDesignOperation[]; redo: UpdateDesignOperation[] }>>([]);
 
   const loadDesign = React.useCallback(async () => {
     try {
@@ -185,7 +191,8 @@ export function DiyEditor({ designId }: { designId: string }) {
   const applyUpdate = async (
     request: UpdateDesignRequest,
     successMessage: string,
-    resolveSelection: (next: PublicDesignV1) => string = () => selectedComponentId
+    resolveSelection: (next: PublicDesignV1) => string = () => selectedComponentId,
+    history?: { undo: UpdateDesignOperation[]; redo: UpdateDesignOperation[] }
   ) => {
     setIsUpdating(true);
     setNotice(null);
@@ -194,15 +201,15 @@ export function DiyEditor({ designId }: { designId: string }) {
     setOrder(null);
     try {
       const updateResponse = await designApi.update(request);
-      const priceResponse = await designApi.price(updateResponse.design);
-      const warnings = [...updateResponse.warnings, ...priceResponse.warnings];
-      // Price is an authoritative commercial check, but /price does not persist a
-      // revision. Keep the persisted /update design so a subsequent save cannot
-      // submit an unpersisted priceCalculatedAt value.
+      const warnings = updateResponse.warnings;
       setDesign(updateResponse.design);
       setSelectedComponentId(resolveSelection(updateResponse.design));
       setEditMessage(successMessage);
       setNotice(responseNotice(warnings.map((warning) => warning.code)));
+      if (history) {
+        setUndoStack((current) => [...current.slice(-49), history]);
+        setRedoStack([]);
+      }
     } catch (error) {
       setNotice(toFrontendApiError(error).code);
     } finally {
@@ -216,7 +223,11 @@ export function DiyEditor({ designId }: { designId: string }) {
     await applyUpdate(
       createAddRequest(design, material, insertAt, componentId),
       "珠子已加入手串。",
-      () => componentId
+      () => componentId,
+      {
+        redo: createAddRequest(design, material, insertAt, componentId).operations,
+        undo: [{ operation: "REMOVE_COMPONENT", componentId }]
+      }
     );
   };
 
@@ -226,7 +237,11 @@ export function DiyEditor({ designId }: { designId: string }) {
     await applyUpdate(
       createMoveRequest(design, componentId, targetPositionIndex),
       "珠子顺序已更新。",
-      () => componentId
+      () => componentId,
+      {
+        redo: [{ operation: "MOVE_COMPONENT", componentId, targetPositionIndex }],
+        undo: [{ operation: "MOVE_COMPONENT", componentId, targetPositionIndex: current.positionIndex }]
+      }
     );
   };
 
@@ -247,8 +262,45 @@ export function DiyEditor({ designId }: { designId: string }) {
     await applyUpdate(
       createRemoveRequest(design, componentId),
       "珠子已从手串移除。",
-      (next) => next.beads[Math.min(current.positionIndex, next.beads.length - 1)]?.componentId ?? ""
+      (next) => next.beads[Math.min(current.positionIndex, next.beads.length - 1)]?.componentId ?? "",
+      {
+        redo: [{ operation: "REMOVE_COMPONENT", componentId }],
+        undo: [{ operation: "ADD_COMPONENT", component: current }]
+      }
     );
+  };
+
+  const replaceSelected = async (material: CatalogMaterialProduct) => {
+    if (!selectedBead || selectedBead.beadProductId === material.beadProductId) return;
+    const replacement = {
+      ...selectedBead,
+      beadProductId: material.beadProductId,
+      crystalId: material.crystalId,
+      materialKey: material.materialKey,
+      shape: material.shape,
+      diameterMm: material.diameterMm,
+      modelAssetKey: material.modelAssetKey,
+      textureAssetKey: material.textureAssetKey,
+      unitPriceMinor: material.unitPriceMinor
+    };
+    await applyUpdate(createReplaceRequest(design, selectedBead.componentId, replacement), "已替换选中珠子。", () => selectedBead.componentId, {
+      redo: [{ operation: "REPLACE_COMPONENT", componentId: selectedBead.componentId, replacement }],
+      undo: [{ operation: "REPLACE_COMPONENT", componentId: selectedBead.componentId, replacement: selectedBead }]
+    });
+  };
+
+  const runHistory = async (direction: "undo" | "redo") => {
+    const source = direction === "undo" ? undoStack : redoStack;
+    const entry = source[source.length - 1];
+    if (!entry) return;
+    await applyUpdate(createOperationsRequest(design, entry[direction]), direction === "undo" ? "已撤销上一步。" : "已重做上一步。");
+    if (direction === "undo") {
+      setUndoStack((current) => current.slice(0, -1));
+      setRedoStack((current) => [...current.slice(-49), entry]);
+    } else {
+      setRedoStack((current) => current.slice(0, -1));
+      setUndoStack((current) => [...current.slice(-49), entry]);
+    }
   };
 
   const moveSelectedBy = (offset: -1 | 1) => {
@@ -292,19 +344,18 @@ export function DiyEditor({ designId }: { designId: string }) {
     setSavedAt(null);
     setOrder(null);
     try {
-      let nextDesign = design;
-      const warnings: string[] = [];
-      for (const bead of removableBeads) {
-        const response = await designApi.update(createRemoveRequest(nextDesign, bead.componentId));
-        nextDesign = response.design;
-        warnings.push(...response.warnings.map((warning) => warning.code));
-      }
-      const priceResponse = await designApi.price(nextDesign);
-      warnings.push(...priceResponse.warnings.map((warning) => warning.code));
+      const response = await designApi.update(createOperationsRequest(design, removableBeads.map((bead) => ({ operation: "REMOVE_COMPONENT", componentId: bead.componentId }))));
+      const nextDesign = response.design;
+      const warnings = response.warnings.map((warning) => warning.code);
       setDesign(nextDesign);
       setSelectedComponentId(nextDesign.beads[0]?.componentId ?? "");
       setEditMessage("设计已清空，可重新从珠子库开始搭配。");
       setNotice(responseNotice(warnings));
+      setUndoStack((current) => [...current.slice(-49), {
+        redo: removableBeads.map((bead) => ({ operation: "REMOVE_COMPONENT" as const, componentId: bead.componentId })),
+        undo: [...removableBeads].reverse().map((bead) => ({ operation: "ADD_COMPONENT" as const, component: bead }))
+      }]);
+      setRedoStack([]);
     } catch (error) {
       setNotice(toFrontendApiError(error).code);
     } finally {
@@ -347,20 +398,22 @@ export function DiyEditor({ designId }: { designId: string }) {
           .filter((accessory) => accessory.placementMode === "INLINE")
           .map((accessory) => ({ ...accessory, kind: "ACCESSORY" as const }))
       ].sort((left, right) => left.positionIndex - right.positionIndex);
-      const radius = 360;
+      const exportLayout = calculateSizeAwareRingLayout(exportComponents, false);
       for (const [index, component] of exportComponents.entries()) {
-        const angle = (index / exportComponents.length) * Math.PI * 2 - Math.PI / 2;
+        const layout = exportLayout[index];
+        if (!layout) continue;
+        const angle = layout.angle;
         if (component.kind === "BEAD") {
-          const size = 148;
-          const x = 600 + Math.cos(angle) * radius - size / 2;
-          const y = 620 + Math.sin(angle) * radius - size / 2;
+          const size = component.diameterMm * 12;
+          const x = 600 + Math.cos(angle) * 360 - size / 2;
+          const y = 620 + Math.sin(angle) * 360 - size / 2;
           context.filter = crystalFilter(component.materialKey);
           context.drawImage(image, x, y, size, size);
         } else {
           const width = 220;
           const height = 138;
-          const x = 600 + Math.cos(angle) * radius - width / 2;
-          const y = 620 + Math.sin(angle) * radius - height / 2;
+          const x = 600 + Math.cos(angle) * 360 - width / 2;
+          const y = 620 + Math.sin(angle) * 360 - height / 2;
           context.filter = "none";
           context.drawImage(accessoryImage, x, y, width, height);
         }
@@ -409,7 +462,11 @@ export function DiyEditor({ designId }: { designId: string }) {
   const noticeAction = notice === "CONFLICT" ? () => { setIsLoading(true); void loadDesign(); } : () => setNotice(null);
 
   return (
-    <main className="min-h-screen" data-diy-editor-page="true">
+    <main className="min-h-screen" data-diy-editor-page="true" onKeyDown={(event) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "z" || isUpdating) return;
+      event.preventDefault();
+      void runHistory(event.shiftKey ? "redo" : "undo");
+    }}>
       <div className="hidden h-screen overflow-hidden bg-[var(--surface)] lg:block" data-desktop-diy-workspace="true">
         <header className="grid h-[4.75rem] grid-cols-[clamp(13rem,19vw,18rem)_minmax(0,1fr)_clamp(13rem,19vw,18rem)] items-center border-b border-[var(--border)]/70 bg-white/85">
           <div className="flex h-full items-center gap-3 border-r border-[var(--border)]/70 px-5 xl:gap-5 xl:px-7">
@@ -419,7 +476,7 @@ export function DiyEditor({ designId }: { designId: string }) {
           </div>
           <div className="flex items-center justify-center gap-3">
             <span className="rounded-full border border-[var(--border)] px-4 py-2 text-sm text-[var(--muted)]">
-              当前手围 {braceletFit.circumferenceCmLabel}cm
+              当前设计 {braceletFit.circumferenceCmLabel}cm
             </span>
             <strong className="rounded-full bg-[var(--accent-deep)] px-4 py-2 text-sm font-medium text-white">
               {formatMinorAmount({ amountMinor: design.pricing.totalPriceMinor, currency: design.currency, locale: design.locale })}
@@ -560,6 +617,15 @@ export function DiyEditor({ designId }: { designId: string }) {
                   </div>
                 </div>
               ) : <p className="mt-4 text-sm text-[var(--muted)]">请选择一颗珠子。</p>}
+              {selectedBead ? (
+                <select aria-label="替换选中珠子" className="mt-4 min-h-11 w-full rounded-xl border border-[var(--border)] bg-white px-3 text-sm" disabled={isUpdating} onChange={(event) => { const material = catalogMaterials.find((item) => item.beadProductId === event.target.value); if (material) void replaceSelected(material); }} value={selectedBead.beadProductId}>
+                  {catalogMaterials.map((material) => <option key={material.beadProductId} value={material.beadProductId}>替换为 {material.crystalNameCn} · {material.diameterMm}mm</option>)}
+                </select>
+              ) : null}
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button className="min-h-11 rounded-xl border border-[var(--border)] text-sm disabled:opacity-35" disabled={isUpdating || undoStack.length === 0} onClick={() => void runHistory("undo")} type="button">↶ 撤销</button>
+                <button className="min-h-11 rounded-xl border border-[var(--border)] text-sm disabled:opacity-35" disabled={isUpdating || redoStack.length === 0} onClick={() => void runHistory("redo")} type="button">↷ 重做</button>
+              </div>
             </section>
 
             <section className="mt-6 min-h-0 flex-1 border-t border-[var(--border)]/70 pt-5" aria-labelledby="desktop-design-summary-title">
@@ -662,7 +728,7 @@ export function DiyEditor({ designId }: { designId: string }) {
             <Link className="inline-flex min-h-11 items-center text-sm text-[var(--muted)] hover:text-[var(--accent)]" href={`/design/${encodeURIComponent(design.designId)}`}>← 返回</Link>
             <h1 className="font-serif text-xl sm:text-2xl" id="bracelet-preview-title">DIY 手串</h1>
             <div className="flex items-center justify-end gap-2 text-xs sm:text-sm">
-              <span className="hidden rounded-full border border-[var(--border)] px-3 py-2 text-[var(--muted)] min-[390px]:inline">当前手围 {braceletFit.circumferenceCmLabel}cm</span>
+              <span className="hidden rounded-full border border-[var(--border)] px-3 py-2 text-[var(--muted)] min-[390px]:inline">设计 {braceletFit.circumferenceCmLabel}cm</span>
               <strong className="rounded-full bg-[var(--accent-deep)] px-3 py-2 font-medium text-white">{formatMinorAmount({ amountMinor: design.pricing.totalPriceMinor, currency: design.currency, locale: design.locale })}</strong>
             </div>
           </header>
@@ -695,20 +761,26 @@ export function DiyEditor({ designId }: { designId: string }) {
             <p className="-mt-2 pb-3 text-center text-xs tracking-[0.08em] text-[var(--muted)] sm:text-sm">点击加入 · 拖动换位 · 拖到中间删除</p>
           </div>
 
-          <div className="grid min-h-16 grid-cols-3 items-center border-y border-[var(--border)]/70 bg-white/55 px-3 text-sm sm:px-6">
-            <button className="min-h-11 justify-self-start px-2 text-[var(--muted)] disabled:opacity-35" disabled={!selectedBead || isUpdating || selectedBead.positionIndex === 0} onClick={() => moveSelectedBy(-1)} type="button">← 左移</button>
+          <div className="grid min-h-16 grid-cols-4 items-center border-y border-[var(--border)]/70 bg-white/55 px-3 text-sm sm:px-6">
+            <button className="min-h-11 justify-self-start px-2 text-[var(--muted)] disabled:opacity-35" disabled={isUpdating || undoStack.length === 0} onClick={() => void runHistory("undo")} type="button">↶ 撤销</button>
+            <button className="min-h-11 justify-self-center px-2 text-[var(--muted)] disabled:opacity-35" disabled={isUpdating || redoStack.length === 0} onClick={() => void runHistory("redo")} type="button">↷ 重做</button>
             <button className="min-h-11 justify-self-center px-2 text-[var(--muted)] disabled:opacity-55" disabled={isSaving} onClick={() => void save()} type="button">{isSaving ? "保存中…" : savedAt ? "✓ 已保存" : "保存"}</button>
             <button aria-describedby={braceletFit.canComplete ? undefined : "mobile-bracelet-fit-help"} className="min-h-11 justify-self-end rounded-full bg-[var(--accent-deep)] px-4 text-white disabled:opacity-40 sm:px-7" disabled={isOrdering || Boolean(order) || !braceletFit.canComplete} onClick={() => void createOrder()} type="button">{isOrdering ? "生成中…" : order ? "设计已完成" : "完成设计"}</button>
           </div>
           {!braceletFit.canComplete ? <p className="border-b border-[var(--border)]/70 bg-white/55 px-4 pb-3 text-right text-xs text-[var(--muted)]" id="mobile-bracelet-fit-help">调整到 13.0–20.0cm 后即可完成</p> : null}
 
-          <section className="bg-[var(--surface)] px-3 pb-5 pt-4 sm:px-6" aria-labelledby="material-library-title">
+          <section className={`sticky bottom-0 z-40 overflow-hidden border-t border-[var(--border)] bg-[var(--surface)] px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 shadow-[0_-18px_50px_rgb(57_45_67/0.12)] transition-[max-height] duration-300 sm:px-6 ${catalogSheetState === "collapsed" ? "max-h-[12rem]" : catalogSheetState === "half" ? "max-h-[48dvh]" : "max-h-[82dvh]"}`} aria-labelledby="material-library-title" data-catalog-sheet-state={catalogSheetState}>
             <div className="flex items-end justify-between gap-3">
-              <h2 className="font-serif text-xl sm:text-2xl" id="material-library-title">完整珠子库</h2>
-              <span className="text-xs text-[var(--muted)]">{materialOptions.length}/{catalogMaterials.length} 款</span>
+              <div>
+                <h2 className="font-serif text-xl sm:text-2xl" id="material-library-title">商品库</h2>
+                <span className="text-xs text-[var(--muted)]">{materialOptions.length}/{catalogMaterials.length} 款</span>
+              </div>
+              <div className="flex gap-1" aria-label="调整商品库高度">
+                {(["collapsed", "half", "expanded"] as const).map((state) => <button aria-label={state === "collapsed" ? "收起商品库" : state === "half" ? "半屏商品库" : "展开商品库"} aria-pressed={catalogSheetState === state} className="min-h-11 rounded-full border border-[var(--border)] px-3 text-xs" key={state} onClick={() => setCatalogSheetState(state)} type="button">{state === "collapsed" ? "一行" : state === "half" ? "半屏" : "全部"}</button>)}
+              </div>
             </div>
 
-            <div className="mt-3 flex gap-2 overflow-x-auto pb-1" aria-label="珠子分类">
+            <div className={`${catalogSheetState === "collapsed" ? "hidden" : "mt-3 flex"} gap-2 overflow-x-auto pb-1`} aria-label="珠子分类">
               {CATALOG_CATEGORIES.map((category) => (
                 <button
                   aria-pressed={catalogCategory === category.id}
@@ -722,7 +794,7 @@ export function DiyEditor({ designId }: { designId: string }) {
               ))}
             </div>
 
-            <div className="mt-3 grid grid-cols-[minmax(0,1fr)_5.7rem_5.7rem] gap-2">
+            <div className={`${catalogSheetState === "collapsed" ? "hidden" : "mt-3 grid"} grid-cols-[minmax(0,1fr)_5.7rem_5.7rem] gap-2`}>
               <label className="sr-only" htmlFor="catalog-search">搜索珠子</label>
               <input className="min-h-11 min-w-0 rounded-full border border-[var(--border)] bg-white/80 px-4 text-sm outline-none focus:border-[var(--accent)]" id="catalog-search" onChange={(event) => setCatalogQuery(event.target.value)} placeholder="搜索名称" type="search" value={catalogQuery} />
               <label className="sr-only" htmlFor="catalog-color">颜色</label>
@@ -737,11 +809,11 @@ export function DiyEditor({ designId }: { designId: string }) {
               </select>
             </div>
 
-            <div className="mt-3 grid max-h-[36rem] grid-cols-3 gap-2 overflow-y-auto pr-0.5 sm:gap-3" aria-label="可加入的珠子">
+            <div className={`${catalogSheetState === "collapsed" ? "mt-3 flex overflow-x-auto" : "mt-3 grid grid-cols-3 overflow-y-auto"} max-h-[60dvh] gap-2 pr-0.5 sm:gap-3`} aria-label="可加入的珠子">
               {materialOptions.map((material, index) => (
                 <button
                   aria-label={`加入 ${material.crystalNameCn}`}
-                  className="group min-h-40 min-w-0 rounded-2xl border border-[var(--border)] bg-white/58 p-2 text-center transition hover:border-[var(--accent)] hover:bg-white disabled:cursor-wait disabled:opacity-55 sm:p-3"
+                  className={`group min-h-36 rounded-2xl border border-[var(--border)] bg-white/58 p-2 text-center transition hover:border-[var(--accent)] hover:bg-white disabled:cursor-wait disabled:opacity-55 sm:p-3 ${catalogSheetState === "collapsed" ? "w-[7.25rem] shrink-0" : "min-w-0"}`}
                   disabled={isUpdating}
                   key={material.beadProductId}
                   onClick={() => void addMaterial(material)}
@@ -776,6 +848,9 @@ export function DiyEditor({ designId }: { designId: string }) {
               {selectedBead ? (
                 <div className="mt-3">
                   <p className="text-sm">第 {selectedBead.positionIndex + 1} 颗 · {selectedBead.diameterMm}mm {selectedBead.shape}</p>
+                  <select aria-label="替换选中珠子" className="mt-3 min-h-11 w-full rounded-xl border border-[var(--border)] bg-white px-3 text-sm" disabled={isUpdating} onChange={(event) => { const material = catalogMaterials.find((item) => item.beadProductId === event.target.value); if (material) void replaceSelected(material); }} value={selectedBead.beadProductId}>
+                    {catalogMaterials.map((material) => <option key={material.beadProductId} value={material.beadProductId}>替换为 {material.crystalNameCn} · {material.diameterMm}mm</option>)}
+                  </select>
                   <div className="mt-3 grid grid-cols-3 gap-2">
                     <button className="min-h-11 rounded-xl border border-[var(--border)] text-sm disabled:opacity-35" disabled={isUpdating || selectedBead.positionIndex === 0} onClick={() => moveSelectedBy(-1)} type="button">左移</button>
                     <button className="min-h-11 rounded-xl border border-[var(--border)] text-sm disabled:opacity-35" disabled={isUpdating || selectedBead.positionIndex >= ringLength - 1} onClick={() => moveSelectedBy(1)} type="button">右移</button>

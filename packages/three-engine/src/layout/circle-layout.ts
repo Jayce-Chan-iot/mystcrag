@@ -1,6 +1,10 @@
+import { createBraceletLayout } from "@mystcrag/bracelet-engine";
 import type { NumericTransform, RenderItem } from "../runtime/scene-descriptor";
 
-const round = (value: number) => Number(value.toFixed(6));
+const round = (value: number) => {
+  const rounded = Number(value.toFixed(6));
+  return Object.is(rounded, -0) ? 0 : rounded;
+};
 
 export function getRenderItemDiameterMm(item: Pick<RenderItem, "geometry">): number {
   if (item.geometry.kind === "SPHERE" || item.geometry.kind === "CYLINDER") {
@@ -17,13 +21,12 @@ export function createCircleTransforms(
   if (items.length === 0) {
     return [];
   }
-  const footprints = items.map((item) => getRenderItemDiameterMm(item) + gapMm);
-  const totalFootprint = footprints.reduce((sum, footprint) => sum + footprint, 0);
-  let consumed = 0;
+  const layout = createBraceletLayout(
+    items.map((item, index) => ({ componentId: `render-${index}`, widthMm: getRenderItemDiameterMm(item) })),
+    { gapMm, rotationRad: -Math.PI / 2 }
+  );
   return items.map((item, index) => {
-    const footprint = footprints[index] ?? 0;
-    const angle = -Math.PI / 2 + ((consumed + footprint / 2) / totalFootprint) * Math.PI * 2;
-    consumed += footprint;
+    const angle = layout.slots[index]?.angle ?? -Math.PI / 2;
     const radialOffsetMm = getRenderItemDiameterMm(item) / 2;
     const radius = braceletRadiusMm + radialOffsetMm;
     return {

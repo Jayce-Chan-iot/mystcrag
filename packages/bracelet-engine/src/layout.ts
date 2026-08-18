@@ -1,5 +1,5 @@
-import { isAngleInRange, normalizeAngle, positiveAngleDistance, TAU } from "./geometry.js";
-import type { BraceletComponentInput, BraceletLayoutOptions, BraceletLayoutResult } from "./types.js";
+import { isAngleInRange, normalizeAngle, positiveAngleDistance, TAU } from "./geometry";
+import type { BraceletComponentInput, BraceletLayoutOptions, BraceletLayoutResult } from "./types";
 
 const EPSILON = 1e-9;
 

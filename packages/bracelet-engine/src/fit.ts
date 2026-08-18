@@ -1,4 +1,4 @@
-import type { BraceletFitInput, BraceletFitResult } from "./types.js";
+import type { BraceletFitInput, BraceletFitResult } from "./types";
 
 export function evaluateBraceletFit(input: BraceletFitInput): BraceletFitResult {
   const min = input.minCircumferenceMm ?? 130;

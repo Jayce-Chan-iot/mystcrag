@@ -51,6 +51,8 @@ The `packages/three-engine` package exposes three rendering responsibilities:
 - `material-system`: resolves reusable crystal material presets.
 - `bead-system`: resolves bead geometry and optional asset references.
 
+Ring transforms consume the size-aware angles from `@mystcrag/bracelet-engine`. Three Engine may add scene-specific radial offsets and Z transforms, but it must not maintain a second equal-angle or footprint-angle solver.
+
 No production geometry, material shader, GLTF loading, interaction state, or renderer is implemented in Phase 2B. React Three Fiber and Three.js are package peers so the frontend owns the React renderer lifecycle.
 
 ## Design Contract V1 boundary
