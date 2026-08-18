@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mystcrag Bracelet Engine"
+  short_description: "Build and verify Mystcrag bracelet layout changes"
+  default_prompt: "Use $mystcrag-bracelet-engine to implement and verify a bracelet editor change."
