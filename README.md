@@ -10,6 +10,7 @@ AI 驱动的个性化水晶手串设计平台。当前仓库已达到本地 MVP 
 - `packages/database`: Prisma 数据模型与 PostgreSQL 持久化
 - `packages/ai-agent`: 可解释的规则型推荐 Agent
 - `packages/three-engine`: Three.js / React Three Fiber 引擎
+- `packages/bracelet-engine`: 与 UI/DOM/Three.js 解耦的手串几何、命中与适配内核
 - `docs`: 产品、架构、验收与交付文档
 - `tests`: 跨工作区架构与生命周期测试
 
@@ -25,7 +26,7 @@ pnpm db:migrate
 pnpm db:seed
 ```
 
-开发身份生成、Backend/Frontend 启动和验收步骤见 [`docs/LOCAL_DEMO_GUIDE.md`](docs/LOCAL_DEMO_GUIDE.md)。完整工程约定见 [`docs/ENGINEERING_GUIDE.md`](docs/ENGINEERING_GUIDE.md)。
+开发身份生成、Backend/Frontend 启动和验收步骤见 [`docs/LOCAL_DEMO_GUIDE.md`](docs/LOCAL_DEMO_GUIDE.md)。所有规范与历史报告的按模块入口见 [`docs/INDEX.md`](docs/INDEX.md)。
 
 ## Release status
 
