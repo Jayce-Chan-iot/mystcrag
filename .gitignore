@@ -5,6 +5,7 @@ coverage/
 output/playwright/diy-v2-before/
 output/playwright/diy-v2-after/
 .playwright-cli/
+.worktrees/
 .turbo/
 .env
 .env.*
