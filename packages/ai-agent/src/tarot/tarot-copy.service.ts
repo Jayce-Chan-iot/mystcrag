@@ -48,11 +48,12 @@ const RISK_LEXICON = {
 } as const;
 
 const HIDDEN_CONTENT_DESCRIPTORS = [
-  "private", "hidden", "internal", "confidential", "system", "developer",
-  "私密", "私有", "隐藏", "内部", "保密", "系统", "开发者"
+  "private", "hidden", "internal", "confidential", "system", "developer", "initial", "initialized",
+  "私密", "私有", "隐藏", "内部", "保密", "系统", "开发者", "初始", "初始化"
 ] as const;
 const HIDDEN_CONTENT_OBJECTS = [
-  "instruction", "prompt", "reasoning", "message", "thought", "指令", "提示词", "推理", "消息", "思维"
+  "instruction", "directive", "rule", "prompt", "reasoning", "message", "thought",
+  "指令", "规则", "提示词", "推理", "消息", "思维"
 ] as const;
 const HIDDEN_CONTENT_DIRECT = ["chain of thought", "思维链"] as const;
 
@@ -166,17 +167,114 @@ function containsRestrictedCopy(interpretation: TarotInterpretation): boolean {
     ...interpretation.cardReflections.map(({ reflection }) => reflection),
     interpretation.designRationale
   ].join("\n");
-  return hasUnsafeCategoryCombination(classifyRisk(copy));
+  return hasUnsafeCategoryCombination(classifyRisk(copy)) || hasRestrictedOutputStructure(copy);
+}
+
+const DESIGN_REQUEST_TERMS = [
+  "design", "color", "palette", "style", "material", "bracelet", "outfit", "bead",
+  "placement", "place", "arrange", "wear", "visual", "focal point", "tone",
+  "设计", "颜色", "色彩", "配色", "风格", "材质", "手串", "穿搭", "服装", "珠子",
+  "搭配", "排列", "位置", "佩戴", "视觉", "造型"
+] as const;
+const REFLECTION_REQUEST_TERMS = [
+  "reflect", "reflection", "perspective", "contemplate", "journal", "explore my feelings",
+  "self reflection", "self-reflection", "反思", "自我反思", "觉察", "看待", "感受"
+] as const;
+const HEALTH_CONDITION_TERMS = [
+  "headache", "migraine", "chest pain", "heart attack", "insomnia", "sleep", "anxiety", "depression",
+  "cancer", "diabetes", "blood pressure", "glucose", "disease", "illness", "condition", "symptom",
+  "头痛", "偏头痛", "胸痛", "心脏病", "心肌梗塞", "失眠", "睡眠", "焦虑", "抑郁", "癌症", "糖尿病", "血压", "血糖", "疾病", "症状"
+] as const;
+const MATERIAL_NAMES = [
+  "crystal", "gemstone", "quartz", "amethyst", "citrine", "jade", "moonstone", "obsidian",
+  "水晶", "宝石", "石英", "紫水晶", "黄水晶", "玉", "月光石", "黑曜石"
+] as const;
+const FINANCE_OUTCOME_TERMS = [
+  "stock", "investment", "return", "profit", "wealth", "money", "windfall", "financial",
+  "股票", "投资", "回报", "收益", "财富", "金钱", "横财", "发财"
+] as const;
+const LIFE_OUTCOME_TERMS = [
+  "promotion", "visa", "approval", "application", "job", "career", "relationship", "marriage",
+  "pregnant", "pregnancy", "soulmate", "reconcile", "windfall",
+  "升职", "签证", "批准", "申请", "工作", "职业", "感情", "婚姻", "怀孕", "灵魂伴侣", "复合", "横财"
+] as const;
+
+const hasAnyTerm = (source: ReturnType<typeof normalizeRiskText>, terms: readonly string[]): boolean =>
+  hasLexiconSignal(source, terms);
+
+function containsHiddenContentReference(value: string): boolean {
+  const source = normalizeRiskText(value);
+  return hasAnyTerm(source, HIDDEN_CONTENT_DIRECT) ||
+    (hasAnyTerm(source, HIDDEN_CONTENT_DESCRIPTORS) && hasAnyTerm(source, HIDDEN_CONTENT_OBJECTS));
+}
+
+function containsLifespanLanguage(value: string): boolean {
+  const normalized = normalizeRiskText(value).normalized;
+  return /\bhow long (?:will|do|can) (?:i|you|they) live\b/u.test(normalized) ||
+    /\b(?:will|can|may) (?:i|you|they) live (?:through|for|until)\b/u.test(normalized) ||
+    /\b(?:i|you|they) (?:will|can|may) live (?:through|for|until)\b/u.test(normalized) ||
+    /\b(?:will|can|may) (?:i|you|they) survive\b/u.test(normalized) ||
+    /\b(?:i|you|they) will survive\b/u.test(normalized) ||
+    /\b(?:i|you|they) (?:are )?going to live\b/u.test(normalized) ||
+    /\b(?:lifespan|life expectancy)\b/u.test(normalized) ||
+    /(?:还能活多久|能活到|寿命|余命|会长寿|将长寿)/u.test(normalized);
+}
+
+function questionIsProviderEligible(question: string): boolean {
+  const source = normalizeRiskText(question);
+  return hasAnyTerm(source, DESIGN_REQUEST_TERMS) || hasAnyTerm(source, REFLECTION_REQUEST_TERMS);
+}
+
+function hasRestrictedOutputStructure(value: string): boolean {
+  if (containsHiddenContentReference(value) || containsLifespanLanguage(value)) return true;
+
+  const source = normalizeRiskText(value);
+  const health = hasAnyTerm(source, HEALTH_CONDITION_TERMS);
+  const material = hasAnyTerm(source, MATERIAL_NAMES);
+  const finance = hasAnyTerm(source, FINANCE_OUTCOME_TERMS);
+  const lifeOutcome = hasAnyTerm(source, LIFE_OUTCOME_TERMS);
+  const efficacy = hasAnyTerm(source, [
+    ...RISK_LEXICON.efficacy,
+    "support", "improve", "soothe", "calm", "aid", "boost", "protect", "promote healthy",
+    "支持", "促进", "帮助", "助眠", "提升", "保护", "镇静", "舒缓"
+  ]);
+  const definiteFuture = hasAnyTerm(source, [
+    "will", "going to", "coming", "getting", "approved", "expect", "awaits", "shall", "destined",
+    "double", "receive",
+    "会", "将", "即将", "注定", "翻倍"
+  ]);
+  const diagnosticAssertion = hasAnyTerm(source, [
+    "you have", "you are", "your", "means", "indicates", "is a", "are",
+    "你有", "你是", "你的", "意味着", "说明", "表明", "就是"
+  ]);
+
+  return (health && diagnosticAssertion) ||
+    (material && health && efficacy) ||
+    (definiteFuture && (lifeOutcome || finance)) ||
+    (finance && (efficacy || hasAnyTerm(source, ["double", "windfall", "guarantee", "翻倍", "横财", "保证"])));
 }
 
 const questionIsBlocked = (question: string): boolean => {
   const signals = classifyRisk(question);
-  return signals.hidden ||
+  return containsHiddenContentReference(question) || containsLifespanLanguage(question) ||
     (signals.death && (signals.predictive || signals.temporal || signals.outcomeAction));
 };
 
-const questionRequiresFallback = (question: string): boolean =>
-  hasUnsafeCategoryCombination(classifyRisk(question));
+const questionRequiresFallback = (question: string): boolean => {
+  if (!questionIsProviderEligible(question)) return true;
+  const signals = classifyRisk(question);
+  const source = normalizeRiskText(question);
+  const safeEmotionalDesignContext = hasAnyTerm(source, DESIGN_REQUEST_TERMS) &&
+    signals.health && signals.diagnostic && !signals.efficacy && !signals.predictive &&
+    !signals.certain && !signals.death && !signals.finance && !signals.lifeOutcome;
+  const health = hasAnyTerm(source, HEALTH_CONDITION_TERMS);
+  const finance = hasAnyTerm(source, FINANCE_OUTCOME_TERMS);
+  const lifeOutcome = hasAnyTerm(source, LIFE_OUTCOME_TERMS);
+  const unsafeOutcomeRequest = (health && (signals.efficacy || signals.predictive)) ||
+    ((finance || lifeOutcome) && (signals.efficacy || signals.predictive || signals.outcomeAction));
+  return unsafeOutcomeRequest ||
+    (!safeEmotionalDesignContext && hasUnsafeCategoryCombination(signals));
+};
 
 function fallbackResult(input: TarotCopyInput): TarotCopyResult {
   return TarotCopyResultSchema.parse({
