@@ -301,3 +301,57 @@ test("risk-category classifier keeps realistic unsafe question paraphrases away 
     assert.equal(provider.calls.length, 0, question);
   }
 });
+
+test("bounded risk categories route deterministic prediction and medical questions away from providers", async () => {
+  const questions = [
+    "Will I get the job tomorrow?",
+    "What disease do I have?",
+    "How will my relationship end?",
+    "Will my application be accepted next week?",
+    "What illness explains these symptoms?",
+    "When will this relationship end?"
+  ] as const;
+
+  for (const question of questions) {
+    const provider = new FixtureProvider(validInterpretation);
+    const result = await new TarotCopyService({ provider }).createInterpretation({
+      ...input,
+      question
+    });
+    assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK", question);
+    assert.equal(provider.calls.length, 0, question);
+  }
+});
+
+test("plain deterministic provider outcomes never reach users while reflective and design prose remains allowed", async () => {
+  const unsafeSummaries = [
+    "You will get the job tomorrow.",
+    "You will become wealthy next year.",
+    "The relationship will end next month.",
+    "Your application will be accepted next week.",
+    "You have diabetes.",
+    "These symptoms mean you have an illness."
+  ] as const;
+
+  for (const summary of unsafeSummaries) {
+    const result = await new TarotCopyService({
+      provider: new FixtureProvider({ ...validInterpretation, summary })
+    }).createInterpretation(input);
+    assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK", summary);
+    assert.equal(JSON.stringify(result).includes(summary), false, summary);
+  }
+
+  const safeSummaries = [
+    "You will see amber and ivory alternate across this bracelet design.",
+    "The violet focal bead will sit between two clear quartz beads.",
+    "Consider how your relationship with change feels today.",
+    "Reflect on what a fulfilling role could look like without predicting the result."
+  ] as const;
+  for (const summary of safeSummaries) {
+    const result = await new TarotCopyService({
+      provider: new FixtureProvider({ ...validInterpretation, summary })
+    }).createInterpretation(input);
+    assert.equal(result.source.mode, "PROVIDER", summary);
+    assert.equal(result.interpretation.summary, summary);
+  }
+});

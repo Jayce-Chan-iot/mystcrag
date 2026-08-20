@@ -767,8 +767,10 @@ export class TarotService implements TarotApiService {
       if (
         concurrent.status !== "RECOMMENDED" ||
         concurrent.stateRevision !== input.expectedRevision + 1 ||
-        !isDeepStrictEqual(concurrent.recommendationSnapshot, snapshot) ||
+        concurrent.ruleVersion !== current.ruleVersion ||
+        concurrent.recommendationSnapshot === null ||
         !isDeepStrictEqual(concurrentLinks, recommendationLinks) ||
+        concurrent.questionSavedAt === null ||
         !sameQuestion
       ) {
         throw new DomainApiError(

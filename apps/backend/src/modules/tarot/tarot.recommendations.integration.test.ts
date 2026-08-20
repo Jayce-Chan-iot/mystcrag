@@ -8,7 +8,14 @@ import {
   type GenerateDesignResponse
 } from "@mystcrag/design-contract";
 import { standardAiDesignFixture } from "@mystcrag/design-contract/fixtures";
-import type { CatalogMaterialProduct } from "@mystcrag/database";
+import {
+  PersistenceError,
+  type CatalogMaterialProduct
+} from "@mystcrag/database";
+import {
+  TarotCopyService,
+  type TarotCopyProvider
+} from "@mystcrag/ai-agent/tarot";
 
 import { DomainApiError } from "../../contracts/api-error.js";
 import {
@@ -16,9 +23,15 @@ import {
   type CatalogProduct,
   type DesignApplicationDependencies
 } from "../design/design-api.service.js";
-import { TarotService } from "./tarot.service.js";
+import {
+  TarotAiRecommendationCopyPort,
+  TarotService
+} from "./tarot.service.js";
 import { AesGcmTarotQuestionEncryption } from "./tarot-question-encryption.js";
-import type { TarotQuestionEncryptionPort } from "./tarot.types.js";
+import type {
+  TarotQuestionEncryptionPort,
+  TarotRecommendationCopyPort
+} from "./tarot.types.js";
 import {
   InMemoryTarotRepository,
   ZeroRandomSource,
@@ -65,8 +78,27 @@ function createRealRecommendationHarness(options: {
   };
   authoritativeMetadata?: boolean;
   questionEncryption?: TarotQuestionEncryptionPort;
+  copy?: TarotRecommendationCopyPort;
+  concurrentWinnerDesignId?: string;
 } = {}) {
   const tarotRepository = new InMemoryTarotRepository();
+  if (options.concurrentWinnerDesignId !== undefined) {
+    const saveRecommendations = tarotRepository.saveRecommendations.bind(tarotRepository);
+    let injectWinner = true;
+    tarotRepository.saveRecommendations = async (input) => {
+      if (!injectWinner) return saveRecommendations(input);
+      injectWinner = false;
+      await saveRecommendations({
+        ...input,
+        recommendations: input.recommendations.map((link) =>
+          link.rank === 1
+            ? { ...link, designId: options.concurrentWinnerDesignId! }
+            : link
+        )
+      });
+      throw new PersistenceError("CONFLICT", "Simulated concurrent recommendation winner");
+    };
+  }
   const catalog = realCatalog();
   if (options.authoritativeMetadata === false) {
     for (const product of catalog) {
@@ -282,6 +314,7 @@ function createRealRecommendationHarness(options: {
       }
     },
     questionEncryption: options.questionEncryption,
+    copy: options.copy,
     now: () => tarotTestNow
   });
 
@@ -496,6 +529,84 @@ test("concurrent identical opt-in recommendations both reuse one persisted encry
       harness.tarotRepository.readPrivate(revealed.session.sessionId).questionCiphertext ?? ""
     ),
     true
+  );
+});
+
+test("concurrent same-question retries converge on persisted copy when provider prose differs", async () => {
+  let providerCalls = 0;
+  let releaseBoth: (() => void) | undefined;
+  const bothStarted = new Promise<void>((resolve) => {
+    releaseBoth = resolve;
+  });
+  const provider: TarotCopyProvider = {
+    providerId: "nondeterministic-fixture",
+    providerVersion: "1",
+    async generate(request) {
+      providerCalls += 1;
+      const call = providerCalls;
+      if (providerCalls === 2) releaseBoth?.();
+      await bothStarted;
+      return {
+        headline: `Reflective direction ${call}`,
+        summary: `A nonpredictive reflection variant ${call} for comparing visual directions.`,
+        cardReflections: request.cards.map((card) => ({
+          slot: card.slot,
+          reflection: `Notice the color and form of ${card.nameEn} in variant ${call}.`
+        })),
+        designRationale: `Amber, ivory, and ink form visual composition ${call}.`,
+        disclaimer: "Reflection only."
+      };
+    }
+  };
+  const encryption = new AesGcmTarotQuestionEncryption(Buffer.alloc(32, 12));
+  const harness = createRealRecommendationHarness({
+    questionEncryption: encryption,
+    copy: new TarotAiRecommendationCopyPort(new TarotCopyService({ provider }))
+  });
+  const revealed = await revealRealRecommendationSession(harness.tarotService);
+  const request = {
+    ...recommendationRequest(revealed.session.revision),
+    question: "Which visual direction supports my reflection?",
+    saveQuestion: true
+  };
+
+  const [first, second] = await Promise.all([
+    harness.tarotService.recommendations(actorId, revealed.session.sessionId, request),
+    harness.tarotService.recommendations(actorId, revealed.session.sessionId, request)
+  ]);
+
+  assert.equal(providerCalls, 2);
+  assert.deepEqual(second.session, first.session);
+  const stored = harness.tarotRepository.readPrivate(revealed.session.sessionId);
+  assert.ok(
+    stored.recommendationSnapshot?.interpretation.headline === "Reflective direction 1" ||
+      stored.recommendationSnapshot?.interpretation.headline === "Reflective direction 2"
+  );
+  assert.equal(
+    await encryption.matchesIdentity(request.question, stored.questionCiphertext ?? ""),
+    true
+  );
+});
+
+test("same-question conflict does not reuse a concurrent winner with different design links", async () => {
+  const encryption = new AesGcmTarotQuestionEncryption(Buffer.alloc(32, 13));
+  const harness = createRealRecommendationHarness({
+    questionEncryption: encryption,
+    concurrentWinnerDesignId: "different-concurrent-design"
+  });
+  const revealed = await revealRealRecommendationSession(harness.tarotService);
+
+  await assert.rejects(
+    () => harness.tarotService.recommendations(actorId, revealed.session.sessionId, {
+      ...recommendationRequest(revealed.session.revision),
+      question: "Keep the design identity exact",
+      saveQuestion: true
+    }),
+    (error: unknown) => error instanceof DomainApiError && error.code === "CONFLICT"
+  );
+  assert.equal(
+    harness.tarotRepository.readPrivate(revealed.session.sessionId).recommendations[0]?.designId,
+    "different-concurrent-design"
   );
 });
 

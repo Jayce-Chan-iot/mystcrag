@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createDecipheriv } from "node:crypto";
 import test from "node:test";
 
 import {
@@ -10,7 +9,7 @@ import {
 const key = Buffer.alloc(32, 7);
 const encodedKey = key.toString("base64");
 
-test("AES-256-GCM question encryption uses a random nonce and contains no plaintext", async () => {
+test("AES-256-GCM question encryption uses a strict randomized authenticated envelope", async () => {
   const encryption = new AesGcmTarotQuestionEncryption(key);
   const question = "A private Tarot question 私密问题";
   const first = await encryption.encrypt(question);
@@ -41,18 +40,8 @@ test("AES-256-GCM question encryption uses a random nonce and contains no plaint
   assert.equal(Buffer.from(envelope.questionId, "base64url").length, 32);
   assert.equal(envelope.questionId, JSON.parse(second).questionId);
   assert.equal(envelope.questionId.includes(question), false);
-
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    key,
-    Buffer.from(envelope.nonce, "base64url")
-  );
-  decipher.setAuthTag(Buffer.from(envelope.tag, "base64url"));
-  const plaintext = Buffer.concat([
-    decipher.update(Buffer.from(envelope.ciphertext, "base64url")),
-    decipher.final()
-  ]).toString("utf8");
-  assert.equal(plaintext, question);
+  assert.ok(Buffer.from(envelope.ciphertext, "base64url").length > 0);
+  assert.equal(await encryption.matchesIdentity(question, first), true);
 });
 
 test("question encryption environment factory is absent by default and rejects every invalid key", () => {
@@ -82,4 +71,45 @@ test("question identity matches the same plaintext without exposing a decrypt AP
     questionId: `${JSON.parse(envelope).questionId}!`
   });
   assert.equal(await encryption.matchesIdentity("Should I change careers?", nonCanonical), false);
+});
+
+test("identity matching authenticates the complete strict envelope and fails closed", async () => {
+  const encryption = new AesGcmTarotQuestionEncryption(key);
+  const wrongKeyEncryption = new AesGcmTarotQuestionEncryption(Buffer.alloc(32, 11));
+  const question = "Should I change careers?";
+  const alternateQuestion = "Should I move cities?";
+  type EnvelopeFixture = {
+    version: string;
+    algorithm: string;
+    questionId: string;
+    nonce: string;
+    tag: string;
+    ciphertext: string;
+  };
+  const first = JSON.parse(await encryption.encrypt(question)) as EnvelopeFixture;
+  const second = JSON.parse(await encryption.encrypt(alternateQuestion)) as EnvelopeFixture;
+  const encode = (envelope: object): string => JSON.stringify(envelope);
+
+  const malformedOrTampered = [
+    { ...first, nonce: Buffer.alloc(11).toString("base64url") },
+    { ...first, nonce: `${first.nonce}!` },
+    { ...first, tag: Buffer.alloc(15).toString("base64url") },
+    { ...first, tag: `${first.tag}!` },
+    { ...first, ciphertext: "" },
+    { ...first, ciphertext: `${first.ciphertext}!` },
+    { ...first, ciphertext: second.ciphertext },
+    { ...first, questionId: second.questionId },
+    { ...first, extra: "not-allowed" },
+    { ...first, version: "tarot-question-v1" },
+    { ...first, algorithm: "AES-256-CBC" }
+  ];
+
+  for (const envelope of malformedOrTampered) {
+    assert.equal(
+      await encryption.matchesIdentity(question, encode(envelope)),
+      false,
+      JSON.stringify(envelope)
+    );
+  }
+  assert.equal(await wrongKeyEncryption.matchesIdentity(question, encode(first)), false);
 });

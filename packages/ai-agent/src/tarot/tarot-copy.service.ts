@@ -56,6 +56,14 @@ const MEDICAL_QUESTION_RULES = [
   /(?:水晶|手串|紫水晶|石英).{0,32}(?:治愈|治疗|缓解|改善|帮助).{0,24}(?:焦虑|抑郁|恐慌|失眠|疼痛|症状)/u
 ] as const;
 
+const MEDICAL_DIAGNOSIS_RULES = [
+  /\b(?:what|which)\s+(?:disease|illness|condition|disorder)\b[^?!.]{0,48}\b(?:do i have|explains?|causes?|means?)\b/iu,
+  /\b(?:diagnose|identify)\b[^?!.]{0,48}\b(?:disease|illness|condition|disorder|symptoms?)\b/iu,
+  /\b(?:you|i)\s+have\s+(?:(?:a|an)\s+)?(?:disease|illness|condition|disorder|diabetes|cancer|depression|anxiety)\b/iu,
+  /\b(?:these|your|my)\s+symptoms?\s+(?:mean|show|prove|indicate)\b[^?!.]{0,32}\b(?:you|i)\s+have\s+(?:(?:a|an)\s+)?(?:disease|illness|condition|disorder)\b/iu,
+  /(?:我得了什么病|我有什么病|这些症状.{0,16}(?:说明|意味着|表明).{0,12}(?:疾病|病症|症状))/u
+] as const;
+
 const CERTAIN_FUTURE_QUESTION_RULES = [
   /\b(?:definitely|certain(?:ly)?|guaranteed|inevitable|destined)\b[^?!.]{0,64}\b(?:job|application|relationship|outcome|future|succeed|happen|get|win|lose)\b/iu,
   /\b(?:job|application|relationship|outcome|future|succeed|happen|get|win|lose)\b[^?!.]{0,64}\b(?:definitely|certain(?:ly)?|guaranteed|inevitable|destined)\b/iu,
@@ -67,6 +75,14 @@ const GUARANTEED_FINANCIAL_QUESTION_RULES = [
   /\b(?:guarantee|guaranteed|ensure|promise|risk[- ]free|certain)\b[^?!.]{0,72}\b(?:return|returns|profit|investment|savings|wealth|money|rich)\b/iu,
   /\b(?:return|returns|profit|investment|savings|wealth|money|rich)\b[^?!.]{0,72}\b(?:guarantee|guaranteed|ensure|promise|risk[- ]free|certain)\b/iu,
   /(?:保证|确保|稳赚|保本|必定|一定).{0,28}(?:收益|回报|赚钱|投资|财富|致富)/u
+] as const;
+
+const DETERMINISTIC_LIFE_PREDICTION_RULES = [
+  /\bwill\s+(?:i|you|my|your)\b[^?!.]{0,64}\b(?:get|become|end|succeed|fail|win|lose|happen|accepted|hired|married|divorced|wealthy|rich)\b[^?!.]{0,48}\b(?:tomorrow|next (?:week|month|year)|this (?:week|month|year)|in \d+ (?:days?|weeks?|months?|years?))\b/iu,
+  /\b(?:how|when|what)\s+will\b[^?!.]{0,48}\b(?:relationship|marriage|career|job|application|future|outcome)\b[^?!.]{0,48}\b(?:end|change|turn out|happen|succeed|fail|be accepted)\b/iu,
+  /\b(?:you|(?:your|the) (?:relationship|marriage|application|career))\s+will\b[^?!.]{0,48}\b(?:get|become|end|succeed|fail|win|lose|happen|accepted|hired|married|divorced|wealthy|rich)\b[^?!.]{0,48}\b(?:tomorrow|next (?:week|month|year)|this (?:week|month|year)|in \d+ (?:days?|weeks?|months?|years?))\b/iu,
+  /(?:我|你|我的|你的).{0,12}(?:明天|下周|下个月|明年).{0,24}(?:会不会|会|将).{0,20}(?:得到|成为|结束|成功|失败|录用|结婚|离婚|发财)/u,
+  /(?:感情|婚姻|工作|申请|未来|结果).{0,16}(?:什么时候|如何).{0,16}(?:结束|变化|成功|失败|发生)/u
 ] as const;
 
 const matchesAny = (value: string, rules: readonly RegExp[]): boolean =>
@@ -132,6 +148,8 @@ function containsRestrictedCopy(interpretation: TarotInterpretation): boolean {
     matchesAny(copy, DEATH_QUESTION_RULES) ||
     matchesAny(copy, DEATH_COPY_RULES) ||
     matchesAny(copy, MEDICAL_QUESTION_RULES) ||
+    matchesAny(copy, MEDICAL_DIAGNOSIS_RULES) ||
+    matchesAny(copy, DETERMINISTIC_LIFE_PREDICTION_RULES) ||
     containsCertainFutureClaim(copy) ||
     matchesAny(copy, GUARANTEED_FINANCIAL_QUESTION_RULES);
 }
@@ -142,6 +160,8 @@ const questionIsBlocked = (question: string): boolean =>
 
 const questionRequiresFallback = (question: string): boolean =>
   matchesAny(question, MEDICAL_QUESTION_RULES) ||
+  matchesAny(question, MEDICAL_DIAGNOSIS_RULES) ||
+  matchesAny(question, DETERMINISTIC_LIFE_PREDICTION_RULES) ||
   containsCertainFutureClaim(question) ||
   matchesAny(question, GUARANTEED_FINANCIAL_QUESTION_RULES);
 
