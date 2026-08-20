@@ -4,7 +4,7 @@ import test from "node:test";
 import { standardAiDesignFixture } from "@mystcrag/design-contract/fixtures";
 
 import { isTarotFeatureEnabled } from "./api-runtime";
-import { FrontendApiError } from "./frontend-api-error";
+import { ERROR_PRESENTATION, FrontendApiError } from "./frontend-api-error";
 import { createTarotApiClient } from "./tarot-api";
 
 const createdAt = "2026-08-20T08:00:00.000Z";
@@ -211,6 +211,42 @@ for (const code of ["CONFLICT", "INVENTORY_CHANGED", "PRICE_CHANGED", "COMPLIANC
     );
   });
 }
+
+test("disabled Tarot creation preserves the 501 NOT_IMPLEMENTED state with actionable copy", async () => {
+  const client = createTarotApiClient({
+    accessToken: "verified-test-token",
+    fetcher: (async () =>
+      jsonResponse(
+        {
+          error: {
+            code: "NOT_IMPLEMENTED",
+            message: "Tarot session creation is disabled.",
+            requestId: "route-create"
+          }
+        },
+        501
+      )) as typeof fetch
+  });
+
+  await assert.rejects(
+    client.create({
+      requestId: "route-create",
+      spreadType: "PAST_PRESENT_FUTURE",
+      theme: "SELF_GROWTH"
+    }),
+    (error: unknown) =>
+      error instanceof FrontendApiError &&
+      error.code === "NOT_IMPLEMENTED" &&
+      error.message === "Tarot session creation is disabled." &&
+      error.requestId === "route-create"
+  );
+  assert.deepEqual(ERROR_PRESENTATION.NOT_IMPLEMENTED, {
+    title: "塔罗灵感尚未开放",
+    message: "当前环境暂未开启塔罗灵感设计，请稍后再试或选择其他设计入口。",
+    action: "返回设计入口",
+    tone: "neutral"
+  });
+});
 
 test("recommendation questions are sent ephemerally without browser persistence", async () => {
   let localWrites = 0;
