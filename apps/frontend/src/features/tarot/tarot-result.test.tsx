@@ -129,6 +129,12 @@ function recommendedSession(status: "RECOMMENDED" | "SAVED" = "RECOMMENDED"): Ta
   } as TarotRecommendedSession | TarotSavedSession;
 }
 
+function savedSessionWithoutSelection(): TarotSavedSession {
+  const session = structuredClone(recommendedSession("SAVED"));
+  Reflect.deleteProperty(session, "selectedDesignId");
+  return session;
+}
+
 function fakeClient(overrides: Partial<TarotResultClient> = {}): TarotResultClient {
   return {
     create: async (input) => ({
@@ -246,18 +252,28 @@ test("exactly three real PublicDesign recommendations remain visible without a c
   assert.match(css, /env\(safe-area-inset-bottom\)/);
 });
 
-test("recommendation card uses authoritative design materials, wrist size, and price", () => {
+test("recommendation card uses session-authoritative localized material names, wrist size, and price", () => {
+  const recommendationDesign = design(1);
+  recommendationDesign.beads = recommendationDesign.beads.map((bead, index) => ({
+    ...bead,
+    beadProductId: index % 2 === 0 ? "product-rose-quartz-round-8" : "product-citrine-round-8",
+    crystalId: index % 2 === 0 ? "crystal-unlisted-rose" : "crystal-unlisted-citrine"
+  }));
   const markup = renderToStaticMarkup(
     <TarotRecommendationCard
-      design={design(1)}
+      design={recommendationDesign}
+      materialNamesByProductId={new Map([
+        ["product-rose-quartz-round-8", "粉晶"],
+        ["product-citrine-round-8", "黄水晶"]
+      ])}
       onSelect={() => undefined}
       rank={1}
       selected={false}
     />
   );
-  assert.match(markup, /海蓝宝/);
-  assert.match(markup, /月光石/);
-  assert.match(markup, /白水晶/);
+  assert.match(markup, /粉晶/);
+  assert.match(markup, /黄水晶/);
+  assert.doesNotMatch(markup, /unlisted rose|unlisted citrine/);
   assert.match(markup, /手围 15.0 cm/);
   assert.match(markup, /¥114.00/);
 });
@@ -298,6 +314,7 @@ test("DRAWN restore generates recommendations once from the ephemeral draft", as
     currency: "CNY"
   });
   assert.equal(result.getState().session?.status, "RECOMMENDED");
+  assert.equal(draftStore.get("session/with space"), undefined);
 });
 
 test("refresh without a draft asks inline for an optional re-entry and supports skip", async () => {
@@ -409,6 +426,33 @@ test("a rejected recommendation keeps an inline retry path instead of stranding 
   assert.equal(result.getState().session?.status, "RECOMMENDED");
 });
 
+test("recommendation and reconciliation failures preserve the draft and restore inline retry", async () => {
+  let getCalls = 0;
+  const draftStore = createTarotQuestionDraftStore();
+  const draft = { question: "还需要再试一次", saveQuestion: false } as const;
+  draftStore.set("session/with space", draft);
+  const result = coordinator({
+    draftStore,
+    client: fakeClient({
+      get: async () => {
+        getCalls += 1;
+        if (getCalls === 1) return { requestId: "restore", session: drawnSession() };
+        throw new FrontendApiError("NETWORK_ERROR", "reconcile unavailable");
+      },
+      recommendations: async () => {
+        throw new FrontendApiError("NETWORK_ERROR", "recommendation unknown");
+      }
+    })
+  });
+
+  await result.restore();
+
+  assert.equal(result.getState().session?.status, "DRAWN");
+  assert.equal(result.getState().generating, false);
+  assert.equal(result.getState().needsQuestionRecovery, true);
+  assert.deepEqual(draftStore.get("session/with space"), draft);
+});
+
 test("persisted RECOMMENDED and SAVED sessions render immediately without regeneration", async () => {
   for (const status of ["RECOMMENDED", "SAVED"] as const) {
     let recommendationCalls = 0;
@@ -422,6 +466,21 @@ test("persisted RECOMMENDED and SAVED sessions render immediately without regene
     assert.equal(recommendationCalls, 0);
     assert.equal(result.getState().session?.status, status);
     assert.equal(result.getState().selectedDesignId, status === "SAVED" ? design(2).designId : design(1).designId);
+  }
+});
+
+test("authoritative recommended or saved restore clears the raw question draft", async () => {
+  for (const session of [recommendedSession(), recommendedSession("SAVED")]) {
+    const draftStore = createTarotQuestionDraftStore();
+    draftStore.set("session/with space", { question: "服务器已经有结果", saveQuestion: true });
+    const result = coordinator({
+      draftStore,
+      client: fakeClient({ get: async () => ({ requestId: "restore", session }) })
+    });
+
+    await result.restore();
+
+    assert.equal(draftStore.get("session/with space"), undefined);
   }
 });
 
@@ -499,7 +558,101 @@ test("save conflict restores the authoritative session and does not navigate to 
   await result.saveAndEnterDiy();
   assert.deepEqual(navigation, []);
   assert.equal(result.getState().selectedDesignId, design(2).designId);
-  assert.match(result.getState().error ?? "", /服务器已保存/);
+  assert.match(result.getState().error ?? "", /其他方案/);
+});
+
+test("ambiguous save restored as RECOMMENDED remains retryable with the user's selection", async () => {
+  let getCalls = 0;
+  let saveCalls = 0;
+  const navigation: string[] = [];
+  const result = coordinator({
+    client: fakeClient({
+      get: async () => ({ requestId: `get-${++getCalls}`, session: recommendedSession() }),
+      save: async (_sessionId, input) => {
+        saveCalls += 1;
+        if (saveCalls === 1) throw new FrontendApiError("NETWORK_ERROR", "unknown");
+        return {
+          requestId: input.requestId,
+          session: { ...recommendedSession("SAVED"), selectedDesignId: input.selectedDesignId }
+        };
+      }
+    }),
+    navigate: (path) => navigation.push(path)
+  });
+  await result.restore();
+  result.selectDesign(design(3).designId);
+
+  await result.saveAndEnterDiy();
+
+  assert.equal(result.getState().session?.status, "RECOMMENDED");
+  assert.equal(result.getState().selectedDesignId, design(3).designId);
+  assert.match(result.getState().error ?? "", /未确认保存.*重试/);
+  assert.deepEqual(navigation, []);
+
+  await result.saveAndEnterDiy();
+  assert.equal(saveCalls, 2);
+  assert.deepEqual(navigation, ["/diy/tarot-design-3"]);
+});
+
+test("ambiguous save restored as SAVED with the same selection enters DIY", async () => {
+  let getCalls = 0;
+  const navigation: string[] = [];
+  const result = coordinator({
+    client: fakeClient({
+      get: async () => ({
+        requestId: `get-${++getCalls}`,
+        session: getCalls === 1
+          ? recommendedSession()
+          : { ...recommendedSession("SAVED"), selectedDesignId: design(3).designId }
+      }),
+      save: async () => { throw new FrontendApiError("NETWORK_ERROR", "unknown"); }
+    }),
+    navigate: (path) => navigation.push(path)
+  });
+  await result.restore();
+  result.selectDesign(design(3).designId);
+
+  await result.saveAndEnterDiy();
+
+  assert.deepEqual(navigation, ["/diy/tarot-design-3"]);
+  assert.match(result.getState().error ?? "", /已保存这个方案/);
+});
+
+test("saved session without a server selection requires an explicit local choice before DIY", async () => {
+  const navigation: string[] = [];
+  let saveCalls = 0;
+  const result = coordinator({
+    client: fakeClient({
+      get: async () => ({ requestId: "restore", session: savedSessionWithoutSelection() }),
+      save: async (_sessionId, input) => {
+        saveCalls += 1;
+        return { requestId: input.requestId, session: savedSessionWithoutSelection() };
+      }
+    }),
+    navigate: (path) => navigation.push(path)
+  });
+
+  await result.restore();
+  assert.equal(result.getState().selectedDesignId, "");
+  await result.saveAndEnterDiy();
+  assert.deepEqual(navigation, []);
+  assert.match(result.getState().error ?? "", /请先选择/);
+
+  result.selectDesign(design(3).designId);
+  await result.saveAndEnterDiy();
+  assert.equal(saveCalls, 0);
+  assert.deepEqual(navigation, ["/diy/tarot-design-3"]);
+
+  const markup = renderToStaticMarkup(
+    <TarotResultView
+      error={null} generating={false} onRedraw={() => undefined}
+      onSave={() => undefined} onSelect={() => undefined}
+      onSelectAndEnterDiy={() => undefined} redrawing={false} saving={false}
+      selectedDesignId="" session={savedSessionWithoutSelection()}
+    />
+  );
+  assert.match(markup, /尚未记录方案选择/);
+  assert.doesNotMatch(markup, /data-design-selected="true"/);
 });
 
 test("redraw creates a child session and transfers the in-memory draft", async () => {
@@ -510,6 +663,10 @@ test("redraw creates a child session and transfers the in-memory draft", async (
   const result = coordinator({
     draftStore,
     client: fakeClient({
+      get: async () => ({ requestId: "restore", session: drawnSession() }),
+      recommendations: async () => {
+        throw new FrontendApiError("VALIDATION_ERROR", "keep draft for redraw");
+      },
       create: async (input) => {
         calls.push(input);
         return fakeClient().create(input);
@@ -520,11 +677,34 @@ test("redraw creates a child session and transfers the in-memory draft", async (
   await result.restore();
   await result.redraw();
   assert.deepEqual(calls, [{
-    requestId: "request-1", spreadType: "PAST_PRESENT_FUTURE",
+    requestId: "request-2", spreadType: "PAST_PRESENT_FUTURE",
     theme: "SELF_GROWTH", parentSessionId: "session/with space"
   }]);
   assert.deepEqual(draftStore.get("child/session"), { question: "保留这次的问题", saveQuestion: false });
+  assert.equal(draftStore.get("session/with space"), undefined);
   assert.deepEqual(navigation, ["/tarot/draw/child%2Fsession"]);
+});
+
+test("failed redraw leaves the question draft on its parent session", async () => {
+  const draftStore = createTarotQuestionDraftStore();
+  const draft = { question: "子牌阵创建失败时保留", saveQuestion: false } as const;
+  draftStore.set("session/with space", draft);
+  const result = coordinator({
+    draftStore,
+    client: fakeClient({
+      get: async () => ({ requestId: "restore", session: drawnSession() }),
+      recommendations: async () => {
+        throw new FrontendApiError("VALIDATION_ERROR", "keep draft for redraw");
+      },
+      create: async () => { throw new FrontendApiError("NETWORK_ERROR", "create failed"); }
+    })
+  });
+  await result.restore();
+
+  await result.redraw();
+
+  assert.deepEqual(draftStore.get("session/with space"), draft);
+  assert.equal(draftStore.get("child/session"), undefined);
 });
 
 test("disposed coordinators suppress stale recommendation, save, and redraw effects", async () => {

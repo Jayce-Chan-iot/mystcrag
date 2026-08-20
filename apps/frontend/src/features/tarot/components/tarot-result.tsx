@@ -48,6 +48,7 @@ function errorMessage(error: unknown): string {
 }
 
 function initialSelectedDesignId(session: TarotPublicSession): string {
+  if (session.status === "SAVED") return session.selectedDesignId ?? "";
   return session.selectedDesignId ?? session.recommendations?.[0]?.design.designId ?? "";
 }
 
@@ -77,6 +78,9 @@ export function createTarotResultCoordinator(dependencies: TarotResultCoordinato
     for (const listener of listeners) listener(state);
   };
   const applySession = (session: TarotPublicSession, patch: Partial<TarotResultState> = {}) => {
+    if (session.status === "RECOMMENDED" || session.status === "SAVED") {
+      dependencies.draftStore.clear(dependencies.sessionId);
+    }
     publish({
       session,
       selectedDesignId: initialSelectedDesignId(session),
@@ -84,10 +88,21 @@ export function createTarotResultCoordinator(dependencies: TarotResultCoordinato
       ...patch
     });
   };
-  const restoreForReconciliation = async (token: number): Promise<GetTarotSessionResponse | undefined> => {
+  const restoreForReconciliation = async (
+    token: number,
+    preferredDesignId?: string
+  ): Promise<GetTarotSessionResponse | undefined> => {
     const response = await dependencies.client.get(dependencies.sessionId);
     if (!current(token)) return undefined;
-    applySession(response.session);
+    const canPreserveSelection = preferredDesignId !== undefined &&
+      response.session.recommendations?.some(
+        ({ design }) => design.designId === preferredDesignId
+      ) === true &&
+      (response.session.status === "RECOMMENDED" ||
+        (response.session.status === "SAVED" && response.session.selectedDesignId === undefined));
+    applySession(response.session, canPreserveSelection
+      ? { selectedDesignId: preferredDesignId }
+      : {});
     return response;
   };
 
@@ -129,7 +144,11 @@ export function createTarotResultCoordinator(dependencies: TarotResultCoordinato
               });
             }
           } catch (restoreError) {
-            if (current(token)) publish({ generating: false, error: errorMessage(restoreError) });
+            if (current(token)) publish({
+              generating: false,
+              needsQuestionRecovery: true,
+              error: `${errorMessage(restoreError)} 可重新输入问题或直接跳过后重试。`
+            });
           }
         } else {
           publish({ generating: false, needsQuestionRecovery: true, error: errorMessage(error) });
@@ -146,11 +165,21 @@ export function createTarotResultCoordinator(dependencies: TarotResultCoordinato
     if (saveInFlight !== null) return saveInFlight;
     const session = state.session;
     const selectedDesignId = state.selectedDesignId;
-    if (!session || !selectedDesignId || state.generating || state.redrawing) return Promise.resolve();
+    if (!session || state.generating || state.redrawing) return Promise.resolve();
     if (session.status === "SAVED") {
-      if (enterDiy && session.selectedDesignId) {
-        dependencies.navigate(`/diy/${encodeURIComponent(session.selectedDesignId)}`);
+      navigateAfterSave = false;
+      if (!selectedDesignId) {
+        publish({ error: "请先选择一个手串方案。" });
+      } else if (enterDiy) {
+        dependencies.navigate(`/diy/${encodeURIComponent(selectedDesignId)}`);
+      } else if (session.selectedDesignId === undefined) {
+        publish({ error: "本次解读已保存，但服务器未记录方案选择；可使用当前选择进入 DIY。" });
       }
+      return Promise.resolve();
+    }
+    if (!selectedDesignId) {
+      navigateAfterSave = false;
+      publish({ error: "请先选择一个手串方案。" });
       return Promise.resolve();
     }
     if (session.status !== "RECOMMENDED") return Promise.resolve();
@@ -168,24 +197,42 @@ export function createTarotResultCoordinator(dependencies: TarotResultCoordinato
           }
         );
         if (!current(token)) return;
-        applySession(response.session, { saving: false });
-        if (navigateAfterSave) {
-          dependencies.navigate(`/diy/${encodeURIComponent(response.session.selectedDesignId ?? selectedDesignId)}`);
+        const committed = response.session.selectedDesignId === selectedDesignId;
+        applySession(response.session, {
+          saving: false,
+          ...(response.session.selectedDesignId === undefined ? { selectedDesignId } : {})
+        });
+        if (navigateAfterSave && committed) {
+          dependencies.navigate(`/diy/${encodeURIComponent(selectedDesignId)}`);
+        } else if (!committed) {
+          publish({
+            error: response.session.selectedDesignId === undefined
+              ? "本次解读已保存，但尚未记录方案选择。请确认当前选择后进入 DIY。"
+              : "服务器已保存其他方案，已为你同步。"
+          });
         }
       } catch (error) {
         if (!current(token)) return;
         const code = toFrontendApiError(error).code;
         if (code === "CONFLICT" || code === "NETWORK_ERROR" || code === "INTERNAL_ERROR") {
           try {
-            const restored = await restoreForReconciliation(token);
+            const restored = await restoreForReconciliation(token, selectedDesignId);
             if (!restored || !current(token)) return;
             const committed = restored.session.status === "SAVED" &&
               restored.session.selectedDesignId === selectedDesignId;
             if (committed) {
               publish({ saving: false, error: "服务器已保存这个方案，已同步最新状态。" });
               if (navigateAfterSave) dependencies.navigate(`/diy/${encodeURIComponent(selectedDesignId)}`);
+            } else if (restored.session.status === "RECOMMENDED") {
+              publish({ saving: false, error: "服务器尚未确认保存，已保留当前选择，请重试。" });
+            } else if (restored.session.status === "SAVED" &&
+              restored.session.selectedDesignId === undefined) {
+              publish({
+                saving: false,
+                error: "服务器已保存本次解读，但尚未记录方案选择。请确认当前选择后进入 DIY。"
+              });
             } else {
-              publish({ saving: false, error: "服务器已保存其他选择，已为你同步。" });
+              publish({ saving: false, error: "服务器已保存其他方案，已为你同步。" });
             }
           } catch (restoreError) {
             if (current(token)) publish({ saving: false, error: errorMessage(restoreError) });
@@ -254,7 +301,7 @@ export function createTarotResultCoordinator(dependencies: TarotResultCoordinato
     },
     selectDesign(designId: string) {
       const session = state.session;
-      if (!session || session.status === "SAVED" || state.saving ||
+      if (!session || (session.status === "SAVED" && session.selectedDesignId !== undefined) || state.saving ||
         !session.recommendations?.some((item) => item.design.designId === designId)) return;
       publish({ selectedDesignId: designId, error: null });
     },
@@ -280,7 +327,10 @@ export function createTarotResultCoordinator(dependencies: TarotResultCoordinato
           });
           if (!current(token)) return;
           const draft = dependencies.draftStore.get(session.sessionId);
-          if (draft !== undefined) dependencies.draftStore.set(response.session.sessionId, draft);
+          if (draft !== undefined) {
+            dependencies.draftStore.set(response.session.sessionId, draft);
+            dependencies.draftStore.clear(session.sessionId);
+          }
           dependencies.navigate(`/tarot/draw/${encodeURIComponent(response.session.sessionId)}`);
         } catch (error) {
           if (current(token)) publish({ redrawing: false, error: errorMessage(error) });
@@ -339,6 +389,13 @@ export function TarotResultView({
   const recommendations = session.recommendations ?? [];
   const busy = generating || saving || redrawing;
   const selectedDesign = recommendations.find((item) => item.design.designId === selectedDesignId)?.design;
+  const materialNamesByProductId = new Map(
+    session.materialRecommendations?.map((material) => [
+      material.beadProductId,
+      material.crystalName
+    ]) ?? []
+  );
+  const savedWithoutSelection = session.status === "SAVED" && session.selectedDesignId === undefined;
 
   return (
     <main className={styles.resultPage} data-results-layout="three-visible-no-carousel">
@@ -424,12 +481,18 @@ export function TarotResultView({
             <div><p>本次主题 · {THEME_LABELS[session.theme]}</p><h2 id="tarot-recommendations-title">选择一个手串方案</h2></div>
             <span>三个方案均可进入 DIY 继续调整。</span>
           </div>
+          {savedWithoutSelection ? (
+            <p className={styles.resultStatus} role="status">
+              本次解读已保存，但尚未记录方案选择。请选择一个方案进入 DIY；该选择不会改写已保存记录。
+            </p>
+          ) : null}
           <div className={styles.recommendationGrid}>
             {recommendations.map(({ rank, design }) => (
               <TarotRecommendationCard
                 design={design}
-                disabled={busy || session.status === "SAVED"}
+                disabled={busy || (session.status === "SAVED" && session.selectedDesignId !== undefined)}
                 key={design.designId}
+                materialNamesByProductId={materialNamesByProductId}
                 onSelect={onSelect}
                 rank={rank}
                 selected={selectedDesignId === design.designId}
@@ -441,11 +504,13 @@ export function TarotResultView({
 
       {selectedDesign ? (
         <footer className={styles.resultActions}>
-          <button className={styles.secondaryAction} disabled={busy || session.status === "SAVED"} onClick={onSave} type="button">
-            {session.status === "SAVED" ? "已保存本次设计" : saving ? "正在保存…" : "保存本次设计"}
-          </button>
+          {savedWithoutSelection ? null : (
+            <button className={styles.secondaryAction} disabled={busy || session.status === "SAVED"} onClick={onSave} type="button">
+              {session.status === "SAVED" ? "已保存本次设计" : saving ? "正在保存…" : "保存本次设计"}
+            </button>
+          )}
           <button className={styles.primaryAction} disabled={busy} onClick={onSelectAndEnterDiy} type="button">
-            {saving ? "正在保存选择…" : "选择方案并进入 DIY"} <span aria-hidden="true">→</span>
+            {saving ? "正在保存选择…" : savedWithoutSelection ? "使用所选方案进入 DIY" : "选择方案并进入 DIY"} <span aria-hidden="true">→</span>
           </button>
           <button className={styles.secondaryAction} disabled={busy} onClick={onRedraw} type="button">
             {redrawing ? "正在准备新牌阵…" : "重新抽牌"}

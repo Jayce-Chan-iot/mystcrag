@@ -4,18 +4,12 @@ import { BraceletPreview } from "../../design/components/bracelet-preview";
 import { formatMinorAmount } from "../../design/model/format-minor-amount";
 import { tarotStyles as styles } from "../tarot-styles";
 
-const CRYSTAL_NAMES: Readonly<Record<string, string>> = {
-  "crystal-aquamarine": "海蓝宝",
-  "crystal-moonstone": "月光石",
-  "crystal-clear-quartz": "白水晶",
-  "crystal-amethyst": "紫水晶",
-  "crystal-kunzite": "紫锂辉石",
-  "crystal-blue-lace-agate": "蓝纹玛瑙"
-};
-
-export function getDesignMaterialNames(design: PublicDesignV1): readonly string[] {
+export function getDesignMaterialNames(
+  design: PublicDesignV1,
+  materialNamesByProductId: ReadonlyMap<string, string>
+): readonly string[] {
   return [...new Set(design.beads.map((bead) =>
-    CRYSTAL_NAMES[bead.crystalId] ?? bead.crystalId.replace(/^crystal-/, "").replaceAll("-", " ")
+    materialNamesByProductId.get(bead.beadProductId) ?? bead.materialKey
   ))];
 }
 
@@ -24,15 +18,17 @@ export function TarotRecommendationCard({
   rank,
   selected,
   disabled = false,
+  materialNamesByProductId,
   onSelect
 }: Readonly<{
   design: PublicDesignV1;
   rank: number;
   selected: boolean;
   disabled?: boolean;
+  materialNamesByProductId: ReadonlyMap<string, string>;
   onSelect(designId: string): void;
 }>) {
-  const materials = getDesignMaterialNames(design);
+  const materials = getDesignMaterialNames(design, materialNamesByProductId);
   const price = formatMinorAmount({
     amountMinor: design.pricing.totalPriceMinor,
     currency: design.currency,
