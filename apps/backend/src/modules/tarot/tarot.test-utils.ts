@@ -157,11 +157,12 @@ export class InMemoryTarotRepository implements TarotSessionRepository {
       ) === JSON.stringify(input.recommendations);
       const sameSnapshot = JSON.stringify(current.recommendationSnapshot) ===
         JSON.stringify(input.recommendationSnapshot);
-      const currentHasQuestion = current.questionCiphertext !== null &&
-        current.questionSavedAt !== null;
-      const inputHasQuestion = input.questionCiphertext !== undefined &&
-        input.questionSavedAt !== undefined;
-      if (sameRecommendations && sameSnapshot && currentHasQuestion === inputHasQuestion) {
+      const sameQuestion = current.questionCiphertext === (input.questionCiphertext ?? null) &&
+        (current.questionSavedAt === null
+          ? input.questionSavedAt === undefined
+          : input.questionSavedAt !== undefined &&
+            current.questionSavedAt.getTime() === input.questionSavedAt.getTime());
+      if (sameRecommendations && sameSnapshot && sameQuestion) {
         return cloneTestValue(current);
       }
       throw new PersistenceError("CONFLICT", "Tarot recommendations already exist");

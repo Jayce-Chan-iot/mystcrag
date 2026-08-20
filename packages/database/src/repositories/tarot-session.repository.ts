@@ -140,14 +140,11 @@ const sameQuestionPersistenceIntent = (
   current: Pick<TarotSessionRecord, "questionCiphertext" | "questionSavedAt">,
   requested: { questionCiphertext: string | null; questionSavedAt: Date | null }
 ): boolean =>
-  (current.questionCiphertext === null &&
-    current.questionSavedAt === null &&
-    requested.questionCiphertext === null &&
-    requested.questionSavedAt === null) ||
-  (current.questionCiphertext !== null &&
-    current.questionSavedAt !== null &&
-    requested.questionCiphertext !== null &&
-    requested.questionSavedAt !== null);
+  current.questionCiphertext === requested.questionCiphertext &&
+  (current.questionSavedAt === null
+    ? requested.questionSavedAt === null
+    : requested.questionSavedAt !== null &&
+      current.questionSavedAt.getTime() === requested.questionSavedAt.getTime());
 
 const sameRecommendationWrite = (
   current: TarotSessionRecord,

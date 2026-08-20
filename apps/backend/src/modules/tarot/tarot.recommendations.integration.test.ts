@@ -17,6 +17,7 @@ import {
   type DesignApplicationDependencies
 } from "../design/design-api.service.js";
 import { TarotService } from "./tarot.service.js";
+import { AesGcmTarotQuestionEncryption } from "./tarot-question-encryption.js";
 import type { TarotQuestionEncryptionPort } from "./tarot.types.js";
 import {
   InMemoryTarotRepository,
@@ -398,13 +399,16 @@ test("real Design application service persists the exact three Tarot candidates 
 
 test("real TarotService stores only opt-in ciphertext and savedAt in the recommendation transaction", async () => {
   const rawQuestion = "Keep this opt-in question private";
-  const encrypted = "{\"version\":\"tarot-question-v1\",\"ciphertext\":\"opaque\"}";
+  const encrypted = "{\"version\":\"tarot-question-v2\",\"ciphertext\":\"opaque\"}";
   const encryptionCalls: string[] = [];
   const harness = createRealRecommendationHarness({
     questionEncryption: {
       async encrypt(question) {
         encryptionCalls.push(question);
         return encrypted;
+      },
+      async matchesIdentity(_question, ciphertext) {
+        return ciphertext === encrypted;
       }
     }
   });
@@ -436,6 +440,9 @@ test("saveQuestion false never invokes encryption and omits question fields from
       async encrypt() {
         encryptionCalls += 1;
         return "must-not-be-used";
+      },
+      async matchesIdentity() {
+        throw new Error("must not be used");
       }
     }
   });
@@ -453,13 +460,17 @@ test("saveQuestion false never invokes encryption and omits question fields from
 });
 
 test("concurrent identical opt-in recommendations both reuse one persisted encrypted question", async () => {
+  const realEncryption = new AesGcmTarotQuestionEncryption(Buffer.alloc(32, 8));
   let encryptionSequence = 0;
   const harness = createRealRecommendationHarness({
     questionEncryption: {
-      async encrypt() {
+      async encrypt(question) {
         encryptionSequence += 1;
         await Promise.resolve();
-        return `random-envelope-${encryptionSequence}`;
+        return realEncryption.encrypt(question);
+      },
+      async matchesIdentity(question, ciphertext) {
+        return realEncryption.matchesIdentity(question, ciphertext);
       }
     }
   });
@@ -479,9 +490,85 @@ test("concurrent identical opt-in recommendations both reuse one persisted encry
   assert.deepEqual(second.session, first.session);
   assert.equal(harness.designs.size, 3);
   assert.equal(encryptionSequence, 2);
-  assert.match(
-    harness.tarotRepository.readPrivate(revealed.session.sessionId).questionCiphertext ?? "",
-    /^random-envelope-[12]$/
+  assert.equal(
+    await realEncryption.matchesIdentity(
+      request.question,
+      harness.tarotRepository.readPrivate(revealed.session.sessionId).questionCiphertext ?? ""
+    ),
+    true
+  );
+});
+
+test("a different question cannot reuse an existing opt-in recommendation", async () => {
+  const encryption = new AesGcmTarotQuestionEncryption(Buffer.alloc(32, 9));
+  const harness = createRealRecommendationHarness({ questionEncryption: encryption });
+  const revealed = await revealRealRecommendationSession(harness.tarotService);
+  const generated = await harness.tarotService.recommendations(
+    actorId,
+    revealed.session.sessionId,
+    {
+      ...recommendationRequest(revealed.session.revision),
+      question: "Should I change careers?",
+      saveQuestion: true
+    }
+  );
+
+  await assert.rejects(
+    () => harness.tarotService.recommendations(actorId, revealed.session.sessionId, {
+      ...recommendationRequest(generated.session.revision),
+      question: "Should I move cities?",
+      saveQuestion: true
+    }),
+    (error: unknown) => error instanceof DomainApiError && error.code === "CONFLICT"
+  );
+  const stored = harness.tarotRepository.readPrivate(revealed.session.sessionId);
+  assert.equal(
+    await encryption.matchesIdentity("Should I change careers?", stored.questionCiphertext ?? ""),
+    true
+  );
+  assert.equal(
+    await encryption.matchesIdentity("Should I move cities?", stored.questionCiphertext ?? ""),
+    false
+  );
+});
+
+test("concurrent different opt-in questions allow only the persisted winner", async () => {
+  const encryption = new AesGcmTarotQuestionEncryption(Buffer.alloc(32, 10));
+  const harness = createRealRecommendationHarness({ questionEncryption: encryption });
+  const revealed = await revealRealRecommendationSession(harness.tarotService);
+  const questions = ["Should I change careers?", "Should I move cities?"] as const;
+
+  const outcomes = await Promise.all(questions.map(async (question) => {
+    try {
+      const response = await harness.tarotService.recommendations(
+        actorId,
+        revealed.session.sessionId,
+        {
+          ...recommendationRequest(revealed.session.revision),
+          question,
+          saveQuestion: true
+        }
+      );
+      return { question, status: "FULFILLED" as const, response };
+    } catch (error) {
+      return { question, status: "REJECTED" as const, error };
+    }
+  }));
+
+  const winner = outcomes.find((outcome) => outcome.status === "FULFILLED");
+  const loser = outcomes.find((outcome) => outcome.status === "REJECTED");
+  assert.ok(winner);
+  assert.ok(loser);
+  assert.ok(loser.error instanceof DomainApiError);
+  assert.equal(loser.error.code, "CONFLICT");
+  const stored = harness.tarotRepository.readPrivate(revealed.session.sessionId);
+  assert.equal(
+    await encryption.matchesIdentity(winner.question, stored.questionCiphertext ?? ""),
+    true
+  );
+  assert.equal(
+    await encryption.matchesIdentity(loser.question, stored.questionCiphertext ?? ""),
+    false
   );
 });
 
@@ -490,6 +577,9 @@ test("a later opt-in cannot claim to save a question after no-save recommendatio
     questionEncryption: {
       async encrypt() {
         return "late-encrypted-question";
+      },
+      async matchesIdentity() {
+        return false;
       }
     }
   });

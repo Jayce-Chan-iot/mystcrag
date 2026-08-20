@@ -69,6 +69,7 @@ export interface TarotRecommendationCopyPort {
 
 export interface TarotQuestionEncryptionPort {
   encrypt(question: string): Promise<string>;
+  matchesIdentity(question: string, ciphertext: string): Promise<boolean>;
 }
 
 export interface TarotApiService {

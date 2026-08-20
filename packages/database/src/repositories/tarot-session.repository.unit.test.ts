@@ -348,7 +348,7 @@ test("an exact recommendation no-op accepts only its immediate window or refresh
   assert.equal(refreshed.stateRevision, 5);
 });
 
-test("an identical concurrent opt-in recommendation reuses the persisted randomized ciphertext", async () => {
+test("a recommendation retry with different ciphertext is not an exact repository no-op", async () => {
   const { revealed } = singleDrawStates();
   const persistedAt = new Date("2026-08-20T10:02:00.000Z");
   const recommended = rowFor({
@@ -361,22 +361,33 @@ test("an identical concurrent opt-in recommendation reuses the persisted randomi
     questionSavedAt: persistedAt
   });
 
-  const result = await repositoryWith(recommended).saveRecommendations({
+  const exact = await repositoryWith(recommended).saveRecommendations({
     ownerId: "owner-1",
     sessionId: "session-1",
     expectedRevision: 3,
     recommendationSnapshot,
     recommendations: recommendationLinks.map(({ rank, designId }) => ({ rank, designId })),
-    questionCiphertext: "different-random-envelope-from-cas-loser",
-    questionSavedAt: new Date("2026-08-20T10:02:00.001Z")
+    questionCiphertext: "random-envelope-from-winner",
+    questionSavedAt: persistedAt
   });
+  assert.equal(exact.questionCiphertext, "random-envelope-from-winner");
+  assert.deepEqual(exact.questionSavedAt, persistedAt);
 
-  assert.equal(result.questionCiphertext, "random-envelope-from-winner");
-  assert.deepEqual(result.questionSavedAt, persistedAt);
-  assert.equal(result.stateRevision, 4);
+  await assert.rejects(
+    () => repositoryWith(recommended).saveRecommendations({
+      ownerId: "owner-1",
+      sessionId: "session-1",
+      expectedRevision: 3,
+      recommendationSnapshot,
+      recommendations: recommendationLinks.map(({ rank, designId }) => ({ rank, designId })),
+      questionCiphertext: "different-random-envelope-from-cas-loser",
+      questionSavedAt: new Date("2026-08-20T10:02:00.001Z")
+    }),
+    (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT"
+  );
 });
 
-test("a recommendation CAS loser rereads and reuses the concurrent opt-in winner", async () => {
+test("a recommendation CAS loser rejects a different ciphertext and timestamp", async () => {
   const { revealed } = singleDrawStates();
   const drawn = rowFor({
     state: revealed.state,
@@ -396,18 +407,18 @@ test("a recommendation CAS loser rereads and reuses the concurrent opt-in winner
   const transaction = new TransactionDouble([drawn, recommended], 0).initialize();
   const repository = new TarotSessionRepositoryImpl(transaction as unknown as PrismaClient);
 
-  const result = await repository.saveRecommendations({
-    ownerId: "owner-1",
-    sessionId: "session-1",
-    expectedRevision: 3,
-    recommendationSnapshot,
-    recommendations: recommendationLinks.map(({ rank, designId }) => ({ rank, designId })),
-    questionCiphertext: "different-random-envelope-from-cas-loser",
-    questionSavedAt: new Date("2026-08-20T10:02:00.001Z")
-  });
-
-  assert.equal(result.questionCiphertext, "random-envelope-from-winner");
-  assert.equal(result.stateRevision, 4);
+  await assert.rejects(
+    () => repository.saveRecommendations({
+      ownerId: "owner-1",
+      sessionId: "session-1",
+      expectedRevision: 3,
+      recommendationSnapshot,
+      recommendations: recommendationLinks.map(({ rank, designId }) => ({ rank, designId })),
+      questionCiphertext: "different-random-envelope-from-cas-loser",
+      questionSavedAt: new Date("2026-08-20T10:02:00.001Z")
+    }),
+    (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT"
+  );
 });
 
 test("an exact save no-op rejects revisions outside the current-or-consumed window", async () => {

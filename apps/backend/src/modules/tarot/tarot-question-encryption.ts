@@ -1,10 +1,22 @@
-import { createCipheriv, randomBytes } from "node:crypto";
+import {
+  createCipheriv,
+  createHmac,
+  randomBytes,
+  timingSafeEqual
+} from "node:crypto";
 
 import type { TarotQuestionEncryptionPort } from "./tarot.types.js";
 
 const KEY_ENV_NAME = "MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY";
 const KEY_LENGTH = 32;
 const NONCE_LENGTH = 12;
+const QUESTION_ID_DOMAIN = "mystcrag:tarot-question-identity:v1\0";
+
+const keyedQuestionId = (key: Buffer, question: string): Buffer =>
+  createHmac("sha256", key)
+    .update(QUESTION_ID_DOMAIN, "utf8")
+    .update(question, "utf8")
+    .digest();
 
 function decodeKey(value: string): Buffer {
   const encoded = value.trim();
@@ -43,13 +55,41 @@ export class AesGcmTarotQuestionEncryption implements TarotQuestionEncryptionPor
       cipher.final()
     ]);
     const tag = cipher.getAuthTag();
+    const questionId = keyedQuestionId(this.key, question).toString("base64url");
     return JSON.stringify({
-      version: "tarot-question-v1",
+      version: "tarot-question-v2",
       algorithm: "AES-256-GCM",
+      questionId,
       nonce: nonce.toString("base64url"),
       tag: tag.toString("base64url"),
       ciphertext: ciphertext.toString("base64url")
     });
+  }
+
+  async matchesIdentity(question: string, ciphertext: string): Promise<boolean> {
+    if (question.length === 0) return false;
+    try {
+      const envelope = JSON.parse(ciphertext) as unknown;
+      if (
+        typeof envelope !== "object" ||
+        envelope === null ||
+        !("version" in envelope) ||
+        envelope.version !== "tarot-question-v2" ||
+        !("algorithm" in envelope) ||
+        envelope.algorithm !== "AES-256-GCM" ||
+        !("questionId" in envelope) ||
+        typeof envelope.questionId !== "string"
+      ) {
+        return false;
+      }
+      const stored = Buffer.from(envelope.questionId, "base64url");
+      const expected = keyedQuestionId(this.key, question);
+      return stored.toString("base64url") === envelope.questionId &&
+        stored.length === expected.length &&
+        timingSafeEqual(stored, expected);
+    } catch {
+      return false;
+    }
   }
 }
 

@@ -16,18 +16,11 @@ const EN_DISCLAIMER =
 const ZH_DISCLAIMER =
   "仅供自我反思与设计灵感，不构成确定性建议，也不声称水晶具有任何功效。";
 
-const BLOCKED_QUESTION_RULES = [
-  /(?:chain[ -]of[ -]thought|hidden reasoning|system prompt|developer message|internal prompt)/iu,
-  /(?:思维链|隐藏推理|系统提示词|开发者消息)/u,
-  /\b(?:when (?:will|am) i die|will i die(?:\s+[^?.,;!]*)?|you (?:will|shall|are going to) die|death is certain)\b/iu,
-  /(?:我(?:什么时候)?会死|你(?:会|将)死|死亡已确定)/u
-] as const;
-
 const UNSAFE_COPY_RULES = [
   /\b(?:cure|heal(?:ing)?|treat(?:ment)?|prevent disease|medical efficacy|diagnos(?:e|is))\b/iu,
   /(?:治愈|治疗|疗效|治病|诊断|医学功效)/u,
   /(?:you (?:are|have) (?:depressed|depression|anxious|anxiety)|你有抑郁|你有焦虑)/iu,
-  /(?:crystal|bracelet|amethyst|quartz|gemstone).{0,48}(?:will|can|guarantees?|proven|efficacy|cures?|heals?|relieves?|reduces?|treats?|prevents?|eases?)/iu,
+  /(?:crystal|bracelet|amethyst|quartz|gemstone).{0,48}(?:cures?|heals?|relieves?|reduces?|treats?|prevents?|eases?|has proven (?:healing )?efficacy).{0,32}(?:anxiety|depression|panic|pain|insomnia|disease|illness|symptoms?)/iu,
   /\b(?:does|can|could|will)\s+[^?.,;!]{1,48}\s+(?:cure|heal|treat|prevent|relieve|reduce|ease)s?\s+(?:anxiety|depression|pain|insomnia|disease|illness|symptoms?)\b/iu,
   /(?:水晶|手串).{0,32}(?:会|能|可以|保证|必定).{0,24}(?:疗效|治愈|改运|招财|能量|功效)/u,
   /(?:will definitely|is destined to|are destined to|certain destiny|future is certain|cards? (?:prove|guarantee).{0,36}\bwill\b|(?:tomorrow|next (?:week|month|year)|in the future)[^.!?]{0,28}\b(?:you|your (?:job|relationship|future)|the outcome)\s+(?:are|is|will be)\s+(?:guaranteed|certain|inevitable)\b)/iu,
@@ -39,6 +32,52 @@ const UNSAFE_COPY_RULES = [
   /(?:chain[ -]of[ -]thought|hidden reasoning|system prompt|developer message|internal prompt)/iu,
   /(?:思维链|隐藏推理|系统提示词|开发者消息)/u
 ] as const;
+
+const HIDDEN_REASONING_RULES = [
+  /(?:chain[ -]of[ -]thought|hidden reasoning|private reasoning|reasoning (?:you used|behind)|system prompt|developer message|internal prompt)/iu,
+  /(?:思维链|隐藏推理|私有推理|系统提示词|开发者消息)/u
+] as const;
+
+const DEATH_QUESTION_RULES = [
+  /\b(?:(?:am|will) i|whether i(?: will)?|when (?:will )?i)\b[^?!.]{0,64}\b(?:die|death)\b/iu,
+  /\b(?:tell|show|predict)\b[^?!.]{0,48}\b(?:my death|when i (?:will )?die)\b/iu,
+  /(?:我(?:是否|会|将|什么时候).{0,16}(?:死|死亡)|预测.{0,12}我的死期)/u
+] as const;
+
+const DEATH_COPY_RULES = [
+  /\b(?:i (?:will|am going to)|you (?:will|shall|are going to))\s+die\b/iu,
+  /\b(?:death|dying)\s+(?:is|will be)\s+(?:certain|inevitable|guaranteed)\b/iu,
+  /(?:我|你)(?:会|将|一定|必定).{0,8}(?:死|死亡)|(?:死亡|死期).{0,8}(?:已确定|无法避免)/u
+] as const;
+
+const MEDICAL_QUESTION_RULES = [
+  /\b(?:crystal|bracelet|amethyst|quartz|gemstone)\b[^?!.]{0,64}\b(?:cure|heal|treat|prevent|relieve|reduce|ease|help with)\b[^?!.]{0,40}\b(?:anxiety|depression|panic|pain|insomnia|disease|illness|symptoms?)\b/iu,
+  /\b(?:cure|heal|treat|prevent|relieve|reduce|ease|help with)\b[^?!.]{0,40}\b(?:anxiety|depression|panic|pain|insomnia|disease|illness|symptoms?)\b[^?!.]{0,64}\b(?:crystal|bracelet|amethyst|quartz|gemstone)\b/iu,
+  /(?:水晶|手串|紫水晶|石英).{0,32}(?:治愈|治疗|缓解|改善|帮助).{0,24}(?:焦虑|抑郁|恐慌|失眠|疼痛|症状)/u
+] as const;
+
+const CERTAIN_FUTURE_QUESTION_RULES = [
+  /\b(?:definitely|certain(?:ly)?|guaranteed|inevitable|destined)\b[^?!.]{0,64}\b(?:job|application|relationship|outcome|future|succeed|happen|get|win|lose)\b/iu,
+  /\b(?:job|application|relationship|outcome|future|succeed|happen|get|win|lose)\b[^?!.]{0,64}\b(?:definitely|certain(?:ly)?|guaranteed|inevitable|destined)\b/iu,
+  /\bcards?\b[^?!.]{0,40}\b(?:certain|guarantee|prove|promise)\b[^?!.]{0,64}\b(?:tomorrow|next (?:week|month|year)|future|outcome|succeed|get|win|lose)\b/iu,
+  /(?:一定|必定|注定|肯定).{0,32}(?:明天|下周|下个月|工作|申请|感情|结果|未来)/u
+] as const;
+
+const GUARANTEED_FINANCIAL_QUESTION_RULES = [
+  /\b(?:guarantee|guaranteed|ensure|promise|risk[- ]free|certain)\b[^?!.]{0,72}\b(?:return|returns|profit|investment|savings|wealth|money|rich)\b/iu,
+  /\b(?:return|returns|profit|investment|savings|wealth|money|rich)\b[^?!.]{0,72}\b(?:guarantee|guaranteed|ensure|promise|risk[- ]free|certain)\b/iu,
+  /(?:保证|确保|稳赚|保本|必定|一定).{0,28}(?:收益|回报|赚钱|投资|财富|致富)/u
+] as const;
+
+const matchesAny = (value: string, rules: readonly RegExp[]): boolean =>
+  rules.some((rule) => rule.test(value));
+
+const containsCertainFutureClaim = (value: string): boolean => {
+  const withoutExplicitNegation = value
+    .replace(/\b(?:no|not|never)\s+[^.!?;]{0,32}\b(?:guaranteed|certain|inevitable|destined)\b/giu, "")
+    .replace(/(?:不|并非|无法).{0,16}(?:一定|必定|注定|肯定)/gu, "");
+  return matchesAny(withoutExplicitNegation, CERTAIN_FUTURE_QUESTION_RULES);
+};
 
 export interface TarotCopyProvider {
   readonly providerId: string;
@@ -88,14 +127,23 @@ function containsRestrictedCopy(interpretation: TarotInterpretation): boolean {
     ...interpretation.cardReflections.map(({ reflection }) => reflection),
     interpretation.designRationale
   ].join("\n");
-  return UNSAFE_COPY_RULES.some((rule) => rule.test(copy));
+  return matchesAny(copy, UNSAFE_COPY_RULES) ||
+    matchesAny(copy, HIDDEN_REASONING_RULES) ||
+    matchesAny(copy, DEATH_QUESTION_RULES) ||
+    matchesAny(copy, DEATH_COPY_RULES) ||
+    matchesAny(copy, MEDICAL_QUESTION_RULES) ||
+    containsCertainFutureClaim(copy) ||
+    matchesAny(copy, GUARANTEED_FINANCIAL_QUESTION_RULES);
 }
 
 const questionIsBlocked = (question: string): boolean =>
-  BLOCKED_QUESTION_RULES.some((rule) => rule.test(question));
+  matchesAny(question, HIDDEN_REASONING_RULES) ||
+  matchesAny(question, DEATH_QUESTION_RULES);
 
 const questionRequiresFallback = (question: string): boolean =>
-  UNSAFE_COPY_RULES.some((rule) => rule.test(question));
+  matchesAny(question, MEDICAL_QUESTION_RULES) ||
+  containsCertainFutureClaim(question) ||
+  matchesAny(question, GUARANTEED_FINANCIAL_QUESTION_RULES);
 
 function fallbackResult(input: TarotCopyInput): TarotCopyResult {
   return TarotCopyResultSchema.parse({

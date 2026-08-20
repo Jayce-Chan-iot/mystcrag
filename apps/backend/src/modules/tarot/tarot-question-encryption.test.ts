@@ -21,6 +21,7 @@ test("AES-256-GCM question encryption uses a random nonce and contains no plaint
   const envelope = JSON.parse(first) as {
     version: string;
     algorithm: string;
+    questionId: string;
     nonce: string;
     tag: string;
     ciphertext: string;
@@ -29,13 +30,17 @@ test("AES-256-GCM question encryption uses a random nonce and contains no plaint
     "algorithm",
     "ciphertext",
     "nonce",
+    "questionId",
     "tag",
     "version"
   ]);
-  assert.equal(envelope.version, "tarot-question-v1");
+  assert.equal(envelope.version, "tarot-question-v2");
   assert.equal(envelope.algorithm, "AES-256-GCM");
   assert.equal(Buffer.from(envelope.nonce, "base64url").length, 12);
   assert.equal(Buffer.from(envelope.tag, "base64url").length, 16);
+  assert.equal(Buffer.from(envelope.questionId, "base64url").length, 32);
+  assert.equal(envelope.questionId, JSON.parse(second).questionId);
+  assert.equal(envelope.questionId.includes(question), false);
 
   const decipher = createDecipheriv(
     "aes-256-gcm",
@@ -63,4 +68,18 @@ test("question encryption environment factory is absent by default and rejects e
   assert.ok(createTarotQuestionEncryptionFromEnvironment({
     MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY: encodedKey
   }));
+});
+
+test("question identity matches the same plaintext without exposing a decrypt API", async () => {
+  const encryption = new AesGcmTarotQuestionEncryption(key);
+  const envelope = await encryption.encrypt("Should I change careers?");
+
+  assert.equal(await encryption.matchesIdentity("Should I change careers?", envelope), true);
+  assert.equal(await encryption.matchesIdentity("Should I move cities?", envelope), false);
+  assert.equal(await encryption.matchesIdentity("Should I change careers?", "not-json"), false);
+  const nonCanonical = JSON.stringify({
+    ...JSON.parse(envelope),
+    questionId: `${JSON.parse(envelope).questionId}!`
+  });
+  assert.equal(await encryption.matchesIdentity("Should I change careers?", nonCanonical), false);
 });
