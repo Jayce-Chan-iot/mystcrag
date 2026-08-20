@@ -153,12 +153,9 @@ export function mapSelectTarotResponse(
   requestId: string,
   record: TarotSessionRecord
 ): SelectTarotCardResponse {
-  const complete =
-    record.drawSnapshot.acceptedSelections.length ===
-    requiredSlotsForSpread(record.spreadType).length;
   return SelectTarotCardResponseSchema.parse({
     requestId,
-    session: coreFromRecord(record, complete ? "DRAWN" : "DRAWING")
+    session: coreFromRecord(record, "DRAWING")
   });
 }
 

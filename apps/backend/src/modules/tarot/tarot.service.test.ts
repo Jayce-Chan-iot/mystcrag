@@ -13,64 +13,26 @@ import {
 import { standardAiDesignFixture } from "@mystcrag/design-contract/fixtures";
 import {
   PersistenceError,
-  type CreateTarotSessionRecord,
-  type MarkTarotSessionSavedRecord,
-  type SaveTarotRecommendationsRecord,
-  type TarotDrawSnapshot,
-  type TarotRecommendationSnapshot,
-  type TarotSessionRecord,
-  type TarotSessionRepository,
-  type UpdateTarotDrawRecord
+  type TarotRecommendationSnapshot
 } from "@mystcrag/database";
 import {
   createPrivateDrawState,
   revealDraw,
-  selectPosition,
-  type RandomSource,
-  type RevealedTarotCard
+  selectPosition
 } from "@mystcrag/tarot-engine";
 
 import { DomainApiError } from "../../contracts/api-error.js";
 import { TarotService } from "./tarot.service.js";
+import {
+  InMemoryTarotRepository,
+  ZeroRandomSource,
+  cloneTestValue,
+  tarotTestNow,
+  toTestDrawSnapshot
+} from "./tarot.test-utils.js";
 
 const actorId = "tarot-owner";
 const otherActorId = "tarot-other-owner";
-const fixedNow = new Date("2026-08-20T12:00:00.000Z");
-
-class ZeroRandomSource implements RandomSource {
-  nextInt(maxExclusive: number): number {
-    assert.ok(maxExclusive > 0);
-    return 0;
-  }
-}
-
-const clone = <T>(value: T): T => structuredClone(value);
-
-const toDrawSnapshot = (
-  state: TarotSessionRecord["privateDeckState"],
-  cards?: readonly RevealedTarotCard[]
-): TarotDrawSnapshot => ({
-  acceptedSelections: state.selections.map((selection) => ({ ...selection })),
-  ...(cards
-    ? {
-        revealedCards: cards.map((card) => ({
-          slot: card.slot,
-          displayedPosition: card.displayedPosition,
-          cardId: card.id,
-          number: card.number,
-          nameZh: card.nameZh,
-          nameEn: card.nameEn,
-          assetFile: card.assetFile,
-          orientation: card.orientation,
-          keywords: [
-            ...(card.orientation === "UPRIGHT"
-              ? card.uprightKeywords
-              : card.reversedKeywords)
-          ]
-        }))
-      }
-    : {})
-});
 
 const recommendationSnapshot: TarotRecommendationSnapshot = {
   interpretation: {
@@ -99,156 +61,6 @@ const recommendationSnapshot: TarotRecommendationSnapshot = {
   ]
 };
 
-class InMemoryTarotRepository implements TarotSessionRepository {
-  private readonly records = new Map<string, TarotSessionRecord>();
-  private sequence = 0;
-
-  seed(record: TarotSessionRecord): void {
-    this.records.set(record.id, clone(record));
-  }
-
-  readPrivate(sessionId: string): TarotSessionRecord {
-    const record = this.records.get(sessionId);
-    assert.ok(record);
-    return clone(record);
-  }
-
-  async create(input: CreateTarotSessionRecord): Promise<TarotSessionRecord> {
-    if (input.parentSessionId !== undefined) {
-      this.requireOwned(input.ownerId, input.parentSessionId);
-    }
-    const createdAt = new Date(fixedNow.getTime() + this.sequence * 1_000);
-    const record: TarotSessionRecord = {
-      id: `tarot-session-${++this.sequence}`,
-      ownerId: input.ownerId,
-      spreadType: input.spreadType,
-      theme: input.theme,
-      status: "DRAWING",
-      stateRevision: 1,
-      deckVersion: input.deckVersion,
-      ruleVersion: input.ruleVersion,
-      privateDeckState: clone(input.privateDeckState),
-      drawSnapshot: clone(input.drawSnapshot),
-      recommendationSnapshot: null,
-      questionCiphertext: null,
-      questionSavedAt: null,
-      selectedDesignId: null,
-      parentSessionId: input.parentSessionId ?? null,
-      recommendations: [],
-      createdAt,
-      updatedAt: createdAt
-    };
-    this.records.set(record.id, record);
-    return clone(record);
-  }
-
-  async getOwned(ownerId: string, sessionId: string): Promise<TarotSessionRecord> {
-    return clone(this.requireOwned(ownerId, sessionId));
-  }
-
-  async updateDraw(input: UpdateTarotDrawRecord): Promise<TarotSessionRecord> {
-    const current = this.requireOwned(input.ownerId, input.sessionId);
-    const existing = input.operationId
-      ? current.privateDeckState.selections.find(
-          (selection) => selection.operationId === input.operationId
-        )
-      : undefined;
-    if (existing) {
-      const retry = input.privateDeckState.selections.find(
-        (selection) => selection.operationId === input.operationId
-      );
-      if (
-        retry?.slot !== existing.slot ||
-        retry.displayedPosition !== existing.displayedPosition
-      ) {
-        throw new PersistenceError(
-          "CONFLICT",
-          "Tarot operation ID was reused with different input"
-        );
-      }
-      return clone(current);
-    }
-    const exactRevealRetry =
-      input.operationId === undefined &&
-      current.status === "DRAWN" &&
-      JSON.stringify(current.privateDeckState) === JSON.stringify(input.privateDeckState) &&
-      JSON.stringify(current.drawSnapshot) === JSON.stringify(input.drawSnapshot) &&
-      (input.expectedRevision === current.stateRevision ||
-        input.expectedRevision === current.stateRevision - 1);
-    if (exactRevealRetry) return clone(current);
-    if (current.stateRevision !== input.expectedRevision) {
-      throw new PersistenceError("CONFLICT", "Tarot session revision conflict");
-    }
-    if (current.status !== "DRAWING") {
-      throw new PersistenceError("CONFLICT", "Tarot draw is immutable");
-    }
-    const updated: TarotSessionRecord = {
-      ...current,
-      status: input.status,
-      stateRevision: current.stateRevision + 1,
-      privateDeckState: clone(input.privateDeckState),
-      drawSnapshot: clone(input.drawSnapshot),
-      updatedAt: new Date(current.updatedAt.getTime() + 1_000)
-    };
-    this.records.set(updated.id, updated);
-    return clone(updated);
-  }
-
-  async saveRecommendations(
-    _input: SaveTarotRecommendationsRecord
-  ): Promise<TarotSessionRecord> {
-    throw new Error("Recommendation generation belongs to Task 5");
-  }
-
-  async markSaved(input: MarkTarotSessionSavedRecord): Promise<TarotSessionRecord> {
-    const current = this.requireOwned(input.ownerId, input.sessionId);
-    if (current.status === "SAVED") {
-      if (
-        current.selectedDesignId === (input.selectedDesignId ?? null) &&
-        (input.expectedRevision === current.stateRevision ||
-          input.expectedRevision === current.stateRevision - 1)
-      ) {
-        return clone(current);
-      }
-      throw new PersistenceError("CONFLICT", "Tarot session was already saved");
-    }
-    if (current.status !== "RECOMMENDED") {
-      throw new PersistenceError("CONFLICT", "Tarot session is not ready to save");
-    }
-    if (current.stateRevision !== input.expectedRevision) {
-      throw new PersistenceError("CONFLICT", "Tarot session revision conflict");
-    }
-    if (
-      input.selectedDesignId !== undefined &&
-      !current.recommendations.some(
-        (recommendation) => recommendation.designId === input.selectedDesignId
-      )
-    ) {
-      throw new PersistenceError(
-        "VALIDATION_ERROR",
-        "Selected design must be a session recommendation"
-      );
-    }
-    const updated: TarotSessionRecord = {
-      ...current,
-      status: "SAVED",
-      stateRevision: current.stateRevision + 1,
-      selectedDesignId: input.selectedDesignId ?? null,
-      updatedAt: new Date(current.updatedAt.getTime() + 1_000)
-    };
-    this.records.set(updated.id, updated);
-    return clone(updated);
-  }
-
-  private requireOwned(ownerId: string, sessionId: string): TarotSessionRecord {
-    const record = this.records.get(sessionId);
-    if (!record || record.ownerId !== ownerId) {
-      throw new PersistenceError("NOT_FOUND", "Tarot session not found");
-    }
-    return record;
-  }
-}
-
 const tarotDesign = (rank: number): DesignV1 =>
   DesignV1Schema.parse({
     ...structuredClone(standardAiDesignFixture),
@@ -270,7 +82,7 @@ function createHarness() {
         }
         const design = designs.find((candidate) => candidate.designId === designId);
         if (!design) throw new PersistenceError("NOT_FOUND", "Design not found");
-        return clone(design);
+        return cloneTestValue(design);
       }
     }
   });
@@ -402,7 +214,7 @@ test("select rejects stale revisions and returns an identical operation retry wi
     requestId: "select-guidance-retry"
   });
   assert.deepEqual(SelectTarotCardResponseSchema.parse(accepted), accepted);
-  assert.equal(accepted.session.status, "DRAWN");
+  assert.equal(accepted.session.status, "DRAWING");
   assert.equal(accepted.session.revision, 2);
   assert.equal(retry.session.revision, 2);
   assert.deepEqual(retry.session.acceptedSelections, accepted.session.acceptedSelections);
@@ -530,20 +342,20 @@ test("save records only a recommendation selection and returns full public desig
     deckVersion: "rws-major-minor-v1",
     ruleVersion: "tarot-design-rules-v1",
     privateDeckState: revealed.state,
-    drawSnapshot: toDrawSnapshot(revealed.state, revealed.cards),
+    drawSnapshot: toTestDrawSnapshot(revealed.state, revealed.cards),
     recommendationSnapshot,
     questionCiphertext: "encrypted-private-value",
-    questionSavedAt: fixedNow,
+    questionSavedAt: tarotTestNow,
     selectedDesignId: null,
     parentSessionId: null,
     recommendations: designs.map((design, index) => ({
       id: `recommendation-${index + 1}`,
       designId: design.designId,
       rank: index + 1,
-      createdAt: fixedNow
+      createdAt: tarotTestNow
     })),
-    createdAt: fixedNow,
-    updatedAt: fixedNow
+    createdAt: tarotTestNow,
+    updatedAt: tarotTestNow
   });
 
   const response = await service.save(actorId, "recommended-session", {
