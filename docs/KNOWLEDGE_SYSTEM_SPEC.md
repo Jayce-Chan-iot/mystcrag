@@ -311,12 +311,12 @@ pg-boss 自管 `pgboss` schema（其内置迁移机制），**不纳入 prisma m
 
 | 指标 | 预算 | Baseline（EPIC 0 采集，实施前） | After（各 Epic 完成复测） |
 | --- | --- | --- | --- |
-| DIY initial bundle（gzipped） | 增长 ≤10% | `.next/static` JS 产物总量：raw 1,384,553 B / **gzip 377,761 B**（2026-08-20，`pnpm validate` 8/8 全绿） | EPIC 10 后复测 |
+| DIY initial bundle（gzipped） | 增长 ≤10% | `.next/static` JS 产物总量（干净单次构建）：raw 1,063,701 B / **gzip 301,587 B**（2026-08-20，基线提交 `8cf5af4`，`pnpm validate` 8/8 全绿） | EPIC 1 后：raw 1,082,665 B / gzip 307,235 B（**+1.87%**，预算内）；EPIC 10 后复测 |
 | Design evaluate p95 | <200ms | 现有规则推荐管线 proxy（`generateRecommendations`，空知识库，100 次）：p50=0.14ms / p95=0.43ms / max=3.44ms；API 级 generate 耗时受 DB I/O 主导，EPIC 9 benchmark 脚本补齐 | EPIC 9/10 后 |
 | Hybrid retrieval p95 @10k records | <300ms（不含首次模型加载） | 暂无（EPIC 4 建 10k 合成数据集时采集空载基线） | EPIC 4 后 |
 | 交互同步链 | 禁止 crawler/embedding/ingestion | 架构测试保证 | 架构测试保证 |
 
-Baseline 采集方式：bundle 数字来自 `pnpm validate`（FULL TURBO 全绿）后对 `apps/frontend/.next/static/**/*.js` 的 raw 与 gzip 总量统计（Turbopack 构建输出不含每路由尺寸列，以产物总量作为可比指标）；管线数字来自包内临时 `node:test` 基准探针（100 次迭代取分位，已删除）。
+Baseline 采集方式：bundle 数字来自干净单次构建（`rm -rf .next && next build`）后对 `apps/frontend/.next/static/**/*.js` 的 raw 与 gzip 总量统计（Turbopack 构建输出不含每路由尺寸列，以产物总量作为可比指标；主检出的 `.next` 含历史 dev 残留 chunk，不可比，故以 worktree 干净重建为准）；管线数字来自包内临时 `node:test` 基准探针（100 次迭代取分位，已删除）。EPIC 1 引入 taxonomy 数据（99 词项）随 design-contract 入口进入前端 bundle，增加约 5.6KB gzip；若后续逼近预算，可将知识系统 schema 拆分为子路径导出（如 `@mystcrag/design-contract/knowledge`）。
 
 ## 15. ADR List（批准后登记 DECISION_LOG.md）
 
