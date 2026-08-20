@@ -202,6 +202,77 @@ test("Tarot API requests and all six endpoint responses accept public-safe paylo
   );
 });
 
+test("Tarot responses expose only the lifecycle projection allowed by their operation", () => {
+  const { revealedCards: _revealedCards, ...completedSelectionSession } = drawnSession;
+  const savedSession = {
+    ...recommendedSession,
+    status: "SAVED",
+    selectedDesignId: "tarot-design-balanced"
+  };
+
+  assert.equal(
+    CreateTarotSessionResponseSchema.safeParse({
+      requestId: "request-create-leak",
+      session: drawnSession,
+      cardBack: { assetFile: "tarot-card-back.webp", altText: "Tarot card back" }
+    }).success,
+    false
+  );
+  assert.equal(
+    CreateTarotSessionResponseSchema.safeParse({
+      requestId: "request-create-recommendation-leak",
+      session: recommendedSession,
+      cardBack: { assetFile: "tarot-card-back.webp", altText: "Tarot card back" }
+    }).success,
+    false
+  );
+  assert.equal(
+    SelectTarotCardResponseSchema.safeParse({
+      requestId: "request-select-complete",
+      session: completedSelectionSession
+    }).success,
+    true
+  );
+  assert.equal(
+    SelectTarotCardResponseSchema.safeParse({ requestId: "request-select-leak", session: drawnSession })
+      .success,
+    false
+  );
+  assert.equal(
+    RevealTarotSessionResponseSchema.safeParse({ requestId: "request-reveal-early", session: drawingSession })
+      .success,
+    false
+  );
+  assert.equal(
+    RevealTarotSessionResponseSchema.safeParse({ requestId: "request-reveal-retry", session: recommendedSession })
+      .success,
+    true
+  );
+  assert.equal(
+    GenerateTarotRecommendationsResponseSchema.safeParse({
+      requestId: "request-recommend-early",
+      session: drawnSession
+    }).success,
+    false
+  );
+  assert.equal(
+    GenerateTarotRecommendationsResponseSchema.safeParse({
+      requestId: "request-recommend-saved",
+      session: savedSession
+    }).success,
+    true
+  );
+  assert.equal(
+    SaveTarotSessionResponseSchema.safeParse({ requestId: "request-save-early", session: recommendedSession })
+      .success,
+    false
+  );
+  assert.equal(
+    SaveTarotSessionResponseSchema.safeParse({ requestId: "request-save-1", session: savedSession }).success,
+    true
+  );
+});
+
 test("Tarot public schemas reject private state and unknown fields", () => {
   assert.equal(
     TarotPublicSessionSchema.safeParse({ ...drawingSession, privateDeckState: { deckOrder: ["the-fool"] } })

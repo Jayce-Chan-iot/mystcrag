@@ -92,136 +92,188 @@ export const TarotRankedRecommendationSchema = z.strictObject({
 const requiredSlotsFor = (spreadType: z.infer<typeof TarotSpreadTypeSchema>) =>
   spreadType === "SINGLE" ? ["GUIDANCE"] : ["PAST", "PRESENT", "FUTURE"];
 
+const TarotSessionCoreShape = {
+  sessionId: IdentifierSchema,
+  spreadType: TarotSpreadTypeSchema,
+  theme: TarotThemeSchema,
+  status: TarotSessionStatusSchema,
+  revision: PositiveSafeIntegerSchema,
+  slots: z.array(TarotSlotSchema).min(1).max(3),
+  acceptedSelections: z.array(TarotAcceptedSelectionSchema).max(3),
+  selectedDesignId: IdentifierSchema.optional(),
+  parentSessionId: IdentifierSchema.optional(),
+  createdAt: IsoDateTimeSchema,
+  updatedAt: IsoDateTimeSchema
+} as const;
+
+const TarotSessionCoreSchema = z.strictObject(TarotSessionCoreShape);
+type TarotSessionCore = z.infer<typeof TarotSessionCoreSchema>;
+
+const validateTarotSessionCore = (session: TarotSessionCore, context: z.RefinementCtx) => {
+  const addIssue = (path: PropertyKey[], message: string) => {
+    context.addIssue({ code: "custom", path, message });
+  };
+  const requiredSlots = requiredSlotsFor(session.spreadType);
+
+  if (
+    session.slots.length !== requiredSlots.length ||
+    session.slots.some((slot, index) => slot !== requiredSlots[index])
+  ) {
+    addIssue(["slots"], "slots must match the canonical order for spreadType");
+  }
+
+  if (session.acceptedSelections.length > requiredSlots.length) {
+    addIssue(["acceptedSelections"], "selection count exceeds the spread slots");
+  }
+  for (const [index, selection] of session.acceptedSelections.entries()) {
+    if (selection.slot !== requiredSlots[index]) {
+      addIssue(["acceptedSelections", index, "slot"], "selections must follow canonical slot order");
+    }
+  }
+  if (
+    new Set(session.acceptedSelections.map((selection) => selection.displayedPosition)).size !==
+    session.acceptedSelections.length
+  ) {
+    addIssue(["acceptedSelections"], "displayed positions must be unique");
+  }
+  if (
+    new Set(session.acceptedSelections.map((selection) => selection.operationId)).size !==
+    session.acceptedSelections.length
+  ) {
+    addIssue(["acceptedSelections"], "operation IDs must be unique");
+  }
+  if (session.parentSessionId === session.sessionId) {
+    addIssue(["parentSessionId"], "a session cannot be its own parent");
+  }
+  if (Date.parse(session.updatedAt) < Date.parse(session.createdAt)) {
+    addIssue(["updatedAt"], "updatedAt cannot be earlier than createdAt");
+  }
+};
+
+const TarotPublicSessionShape = {
+  ...TarotSessionCoreShape,
+  revealedCards: z.array(TarotRevealedCardSchema).min(1).max(3).optional(),
+  interpretation: TarotInterpretationSchema.optional(),
+  colorStory: TarotColorStorySchema.optional(),
+  materialRecommendations: z.array(TarotMaterialDisplayRecommendationSchema).min(1).max(12).optional(),
+  recommendations: z.array(TarotRankedRecommendationSchema).length(3).optional()
+} as const;
+
+const TarotPublicSessionBaseSchema = z.strictObject(TarotPublicSessionShape);
+type TarotPublicSessionBase = z.infer<typeof TarotPublicSessionBaseSchema>;
+
+const validateTarotPublicSession = (session: TarotPublicSessionBase, context: z.RefinementCtx) => {
+  const addIssue = (path: PropertyKey[], message: string) => {
+    context.addIssue({ code: "custom", path, message });
+  };
+  const requiredSlots = requiredSlotsFor(session.spreadType);
+
+  validateTarotSessionCore(session, context);
+
+  if (session.revealedCards !== undefined) {
+    if (session.acceptedSelections.length !== requiredSlots.length) {
+      addIssue(["revealedCards"], "revealed cards require every slot to be selected");
+    }
+    if (session.revealedCards.length !== requiredSlots.length) {
+      addIssue(["revealedCards"], "revealed cards must cover every spread slot");
+    }
+    for (const [index, card] of session.revealedCards.entries()) {
+      const selection = session.acceptedSelections[index];
+      if (card.slot !== requiredSlots[index]) {
+        addIssue(["revealedCards", index, "slot"], "revealed cards must follow canonical slot order");
+      }
+      if (selection !== undefined && card.displayedPosition !== selection.displayedPosition) {
+        addIssue(
+          ["revealedCards", index, "displayedPosition"],
+          "revealed card position must match its accepted selection"
+        );
+      }
+    }
+  }
+
+  const requiresReveal = session.status === "DRAWN" || session.status === "RECOMMENDED" || session.status === "SAVED";
+  if (requiresReveal && session.revealedCards === undefined) {
+    addIssue(["revealedCards"], "this session status requires revealed cards");
+  }
+  if (session.status === "DRAWING" && session.revealedCards !== undefined) {
+    addIssue(["status"], "DRAWING sessions cannot expose card identities");
+  }
+
+  const requiresRecommendations = session.status === "RECOMMENDED" || session.status === "SAVED";
+  if (requiresRecommendations && session.recommendations === undefined) {
+    addIssue(["recommendations"], "this session status requires three recommendations");
+  }
+  if (!requiresRecommendations && session.recommendations !== undefined) {
+    addIssue(["recommendations"], "recommendations are unavailable before recommendation state");
+  }
+  if (session.recommendations !== undefined) {
+    const ranks = session.recommendations.map((recommendation) => recommendation.rank).sort();
+    if (ranks.length !== 3 || ranks[0] !== 1 || ranks[1] !== 2 || ranks[2] !== 3) {
+      addIssue(["recommendations"], "recommendation ranks must be exactly 1, 2, and 3");
+    }
+    if (
+      new Set(session.recommendations.map((recommendation) => recommendation.design.designId)).size !==
+      session.recommendations.length
+    ) {
+      addIssue(["recommendations"], "recommendations must contain distinct designs");
+    }
+  }
+
+  const recommendationDetails = [
+    session.interpretation,
+    session.colorStory,
+    session.materialRecommendations
+  ];
+  if (requiresRecommendations && recommendationDetails.some((value) => value === undefined)) {
+    addIssue(["interpretation"], "recommended sessions require public recommendation details");
+  }
+  if (!requiresRecommendations && recommendationDetails.some((value) => value !== undefined)) {
+    addIssue(["interpretation"], "recommendation details are unavailable before recommendation state");
+  }
+
+  if (
+    session.selectedDesignId !== undefined &&
+    (session.recommendations === undefined ||
+      !session.recommendations.some(
+        (recommendation) => recommendation.design.designId === session.selectedDesignId
+      ))
+  ) {
+    addIssue(["selectedDesignId"], "selectedDesignId must reference a session recommendation");
+  }
+};
+
+const validateTarotPreRevealSession = (session: TarotSessionCore, context: z.RefinementCtx) => {
+  validateTarotSessionCore(session, context);
+  if (
+    session.status === "DRAWN" &&
+    session.acceptedSelections.length !== requiredSlotsFor(session.spreadType).length
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["acceptedSelections"],
+      message: "DRAWN selection responses require every slot to be selected"
+    });
+  }
+};
+
 export const TarotPublicSessionSchema = z
-  .strictObject({
-    sessionId: IdentifierSchema,
-    spreadType: TarotSpreadTypeSchema,
-    theme: TarotThemeSchema,
-    status: TarotSessionStatusSchema,
-    revision: PositiveSafeIntegerSchema,
-    slots: z.array(TarotSlotSchema).min(1).max(3),
-    acceptedSelections: z.array(TarotAcceptedSelectionSchema).max(3),
-    revealedCards: z.array(TarotRevealedCardSchema).min(1).max(3).optional(),
-    interpretation: TarotInterpretationSchema.optional(),
-    colorStory: TarotColorStorySchema.optional(),
-    materialRecommendations: z.array(TarotMaterialDisplayRecommendationSchema).min(1).max(12).optional(),
-    recommendations: z.array(TarotRankedRecommendationSchema).length(3).optional(),
-    selectedDesignId: IdentifierSchema.optional(),
-    parentSessionId: IdentifierSchema.optional(),
-    createdAt: IsoDateTimeSchema,
-    updatedAt: IsoDateTimeSchema
-  })
-  .superRefine((session, context) => {
-    const addIssue = (path: PropertyKey[], message: string) => {
-      context.addIssue({ code: "custom", path, message });
-    };
-    const requiredSlots = requiredSlotsFor(session.spreadType);
-
-    if (
-      session.slots.length !== requiredSlots.length ||
-      session.slots.some((slot, index) => slot !== requiredSlots[index])
-    ) {
-      addIssue(["slots"], "slots must match the canonical order for spreadType");
-    }
-
-    if (session.acceptedSelections.length > requiredSlots.length) {
-      addIssue(["acceptedSelections"], "selection count exceeds the spread slots");
-    }
-    for (const [index, selection] of session.acceptedSelections.entries()) {
-      if (selection.slot !== requiredSlots[index]) {
-        addIssue(["acceptedSelections", index, "slot"], "selections must follow canonical slot order");
-      }
-    }
-    if (
-      new Set(session.acceptedSelections.map((selection) => selection.displayedPosition)).size !==
-      session.acceptedSelections.length
-    ) {
-      addIssue(["acceptedSelections"], "displayed positions must be unique");
-    }
-    if (
-      new Set(session.acceptedSelections.map((selection) => selection.operationId)).size !==
-      session.acceptedSelections.length
-    ) {
-      addIssue(["acceptedSelections"], "operation IDs must be unique");
-    }
-
-    if (session.revealedCards !== undefined) {
-      if (session.acceptedSelections.length !== requiredSlots.length) {
-        addIssue(["revealedCards"], "revealed cards require every slot to be selected");
-      }
-      if (session.revealedCards.length !== requiredSlots.length) {
-        addIssue(["revealedCards"], "revealed cards must cover every spread slot");
-      }
-      for (const [index, card] of session.revealedCards.entries()) {
-        const selection = session.acceptedSelections[index];
-        if (card.slot !== requiredSlots[index]) {
-          addIssue(["revealedCards", index, "slot"], "revealed cards must follow canonical slot order");
-        }
-        if (selection !== undefined && card.displayedPosition !== selection.displayedPosition) {
-          addIssue(
-            ["revealedCards", index, "displayedPosition"],
-            "revealed card position must match its accepted selection"
-          );
-        }
-      }
-    }
-
-    const requiresReveal = session.status === "DRAWN" || session.status === "RECOMMENDED" || session.status === "SAVED";
-    if (requiresReveal && session.revealedCards === undefined) {
-      addIssue(["revealedCards"], "this session status requires revealed cards");
-    }
-    if (session.status === "DRAWING" && session.revealedCards !== undefined) {
-      addIssue(["status"], "DRAWING sessions cannot expose card identities");
-    }
-
-    const requiresRecommendations = session.status === "RECOMMENDED" || session.status === "SAVED";
-    if (requiresRecommendations && session.recommendations === undefined) {
-      addIssue(["recommendations"], "this session status requires three recommendations");
-    }
-    if (!requiresRecommendations && session.recommendations !== undefined) {
-      addIssue(["recommendations"], "recommendations are unavailable before recommendation state");
-    }
-    if (session.recommendations !== undefined) {
-      const ranks = session.recommendations.map((recommendation) => recommendation.rank).sort();
-      if (ranks.length !== 3 || ranks[0] !== 1 || ranks[1] !== 2 || ranks[2] !== 3) {
-        addIssue(["recommendations"], "recommendation ranks must be exactly 1, 2, and 3");
-      }
-      if (
-        new Set(session.recommendations.map((recommendation) => recommendation.design.designId)).size !==
-        session.recommendations.length
-      ) {
-        addIssue(["recommendations"], "recommendations must contain distinct designs");
-      }
-    }
-
-    const recommendationDetails = [
-      session.interpretation,
-      session.colorStory,
-      session.materialRecommendations
-    ];
-    if (requiresRecommendations && recommendationDetails.some((value) => value === undefined)) {
-      addIssue(["interpretation"], "recommended sessions require public recommendation details");
-    }
-    if (!requiresRecommendations && recommendationDetails.some((value) => value !== undefined)) {
-      addIssue(["interpretation"], "recommendation details are unavailable before recommendation state");
-    }
-
-    if (
-      session.selectedDesignId !== undefined &&
-      (session.recommendations === undefined ||
-        !session.recommendations.some(
-          (recommendation) => recommendation.design.designId === session.selectedDesignId
-        ))
-    ) {
-      addIssue(["selectedDesignId"], "selectedDesignId must reference a session recommendation");
-    }
-    if (session.parentSessionId === session.sessionId) {
-      addIssue(["parentSessionId"], "a session cannot be its own parent");
-    }
-    if (Date.parse(session.updatedAt) < Date.parse(session.createdAt)) {
-      addIssue(["updatedAt"], "updatedAt cannot be earlier than createdAt");
-    }
-  });
+  .strictObject({ ...TarotPublicSessionShape, status: TarotSessionStatusSchema })
+  .superRefine(validateTarotPublicSession);
+export const TarotDrawingSessionSchema = z
+  .strictObject({ ...TarotSessionCoreShape, status: z.literal("DRAWING") })
+  .superRefine(validateTarotPreRevealSession);
+export const TarotSelectSessionSchema = z
+  .strictObject({ ...TarotSessionCoreShape, status: z.enum(["DRAWING", "DRAWN"]) })
+  .superRefine(validateTarotPreRevealSession);
+export const TarotRevealSessionSchema = z
+  .strictObject({ ...TarotPublicSessionShape, status: z.enum(["DRAWN", "RECOMMENDED", "SAVED"]) })
+  .superRefine(validateTarotPublicSession);
+export const TarotRecommendedSessionSchema = z
+  .strictObject({ ...TarotPublicSessionShape, status: z.enum(["RECOMMENDED", "SAVED"]) })
+  .superRefine(validateTarotPublicSession);
+export const TarotSavedSessionSchema = z
+  .strictObject({ ...TarotPublicSessionShape, status: z.literal("SAVED") })
+  .superRefine(validateTarotPublicSession);
 
 export const TarotCardBackMetadataSchema = z.strictObject({
   assetFile: TarotAssetFileSchema,
@@ -269,14 +321,27 @@ const TarotPublicSessionResponseShape = {
 } as const;
 
 export const CreateTarotSessionResponseSchema = z.strictObject({
-  ...TarotPublicSessionResponseShape,
+  requestId: IdentifierSchema,
+  session: TarotDrawingSessionSchema,
   cardBack: TarotCardBackMetadataSchema
 });
-export const SelectTarotCardResponseSchema = z.strictObject(TarotPublicSessionResponseShape);
-export const RevealTarotSessionResponseSchema = z.strictObject(TarotPublicSessionResponseShape);
-export const GenerateTarotRecommendationsResponseSchema = z.strictObject(TarotPublicSessionResponseShape);
+export const SelectTarotCardResponseSchema = z.strictObject({
+  requestId: IdentifierSchema,
+  session: TarotSelectSessionSchema
+});
+export const RevealTarotSessionResponseSchema = z.strictObject({
+  requestId: IdentifierSchema,
+  session: TarotRevealSessionSchema
+});
+export const GenerateTarotRecommendationsResponseSchema = z.strictObject({
+  requestId: IdentifierSchema,
+  session: TarotRecommendedSessionSchema
+});
 export const GetTarotSessionResponseSchema = z.strictObject(TarotPublicSessionResponseShape);
-export const SaveTarotSessionResponseSchema = z.strictObject(TarotPublicSessionResponseShape);
+export const SaveTarotSessionResponseSchema = z.strictObject({
+  requestId: IdentifierSchema,
+  session: TarotSavedSessionSchema
+});
 
 export type TarotTheme = z.infer<typeof TarotThemeSchema>;
 export type TarotSpreadType = z.infer<typeof TarotSpreadTypeSchema>;
@@ -290,6 +355,11 @@ export type TarotColorStory = z.infer<typeof TarotColorStorySchema>;
 export type TarotMaterialDisplayRecommendation = z.infer<typeof TarotMaterialDisplayRecommendationSchema>;
 export type TarotRankedRecommendation = z.infer<typeof TarotRankedRecommendationSchema>;
 export type TarotPublicSession = z.infer<typeof TarotPublicSessionSchema>;
+export type TarotDrawingSession = z.infer<typeof TarotDrawingSessionSchema>;
+export type TarotSelectSession = z.infer<typeof TarotSelectSessionSchema>;
+export type TarotRevealSession = z.infer<typeof TarotRevealSessionSchema>;
+export type TarotRecommendedSession = z.infer<typeof TarotRecommendedSessionSchema>;
+export type TarotSavedSession = z.infer<typeof TarotSavedSessionSchema>;
 export type TarotCardBackMetadata = z.infer<typeof TarotCardBackMetadataSchema>;
 export type CreateTarotSessionRequest = z.infer<typeof CreateTarotSessionRequestSchema>;
 export type CreateTarotSessionResponse = z.infer<typeof CreateTarotSessionResponseSchema>;
