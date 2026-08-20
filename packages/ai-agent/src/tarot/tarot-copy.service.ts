@@ -16,83 +16,106 @@ const EN_DISCLAIMER =
 const ZH_DISCLAIMER =
   "仅供自我反思与设计灵感，不构成确定性建议，也不声称水晶具有任何功效。";
 
-const UNSAFE_COPY_RULES = [
-  /\b(?:cure|heal(?:ing)?|treat(?:ment)?|prevent disease|medical efficacy|diagnos(?:e|is))\b/iu,
-  /(?:治愈|治疗|疗效|治病|诊断|医学功效)/u,
-  /(?:you (?:are|have) (?:depressed|depression|anxious|anxiety)|你有抑郁|你有焦虑)/iu,
-  /(?:crystal|bracelet|amethyst|quartz|gemstone).{0,48}(?:cures?|heals?|relieves?|reduces?|treats?|prevents?|eases?|has proven (?:healing )?efficacy).{0,32}(?:anxiety|depression|panic|pain|insomnia|disease|illness|symptoms?)/iu,
-  /\b(?:does|can|could|will)\s+[^?.,;!]{1,48}\s+(?:cure|heal|treat|prevent|relieve|reduce|ease)s?\s+(?:anxiety|depression|pain|insomnia|disease|illness|symptoms?)\b/iu,
-  /(?:水晶|手串).{0,32}(?:会|能|可以|保证|必定).{0,24}(?:疗效|治愈|改运|招财|能量|功效)/u,
-  /(?:will definitely|is destined to|are destined to|certain destiny|future is certain|cards? (?:prove|guarantee).{0,36}\bwill\b|(?:tomorrow|next (?:week|month|year)|in the future)[^.!?]{0,28}\b(?:you|your (?:job|relationship|future)|the outcome)\s+(?:are|is|will be)\s+(?:guaranteed|certain|inevitable)\b)/iu,
-  /(?:必定|一定会|命中注定|未来已确定|确定性命运)/u,
-  /(?:you (?:will|shall|are going to) die|death is certain|when you will die)/iu,
-  /(?:你会死|死亡已确定|死期)/u,
-  /(?:(?:guarantee|ensure|promise)(?:d|s)? .{0,40}(?:financial|investment|\d+(?:\.\d+)?%)[^.!?]{0,20}(?:returns?|profit|wealth)|risk[- ]free profit|get rich for certain)/iu,
-  /(?:保证|确保|必定|一定).{0,24}(?:收益|赚钱|招财|致富)|(?:稳赚|保本收益)/u,
-  /(?:chain[ -]of[ -]thought|hidden reasoning|system prompt|developer message|internal prompt)/iu,
-  /(?:思维链|隐藏推理|系统提示词|开发者消息)/u
+type RiskSignals = Readonly<{
+  hidden: boolean;
+  death: boolean;
+  health: boolean;
+  finance: boolean;
+  relationship: boolean;
+  lifeOutcome: boolean;
+  material: boolean;
+  efficacy: boolean;
+  predictive: boolean;
+  temporal: boolean;
+  certain: boolean;
+  diagnostic: boolean;
+  outcomeAction: boolean;
+}>;
+
+const RISK_LEXICON = {
+  death: ["die", "death", "dying", "pass away", "dead", "死亡", "死期", "去世", "会死"],
+  health: ["cancer", "blood pressure", "glucose", "diabetes", "pregnant", "pregnancy", "disease", "illness", "condition", "disorder", "symptom", "anxiety", "anxious", "depression", "depressed", "panic", "pain", "insomnia", "medical", "癌症", "血压", "血糖", "糖尿病", "怀孕", "疾病", "病症", "症状", "焦虑", "抑郁", "恐慌", "疼痛", "失眠", "医学"],
+  finance: ["wealth", "wealthy", "money", "rich", "financial", "investment", "savings", "profit", "return", "gain", "fortune", "财富", "金钱", "发财", "致富", "投资", "收益", "回报", "赚钱", "招财"],
+  relationship: ["soulmate", "relationship", "marriage", "married", "divorce", "partner", "reconcile", "romance", "灵魂伴侣", "感情", "关系", "婚姻", "结婚", "离婚", "伴侣", "复合"],
+  lifeOutcome: ["job", "career", "application", "accepted", "hired", "success", "succeed", "fail", "future", "outcome", "工作", "职业", "申请", "录用", "成功", "失败", "未来", "结果"],
+  material: ["crystal", "bracelet", "gemstone", "quartz", "amethyst", "citrine", "jade", "bead", "水晶", "手串", "石英", "紫水晶", "黄水晶", "珠子", "宝石"],
+  efficacy: ["cure", "heal", "treat", "prevent", "relieve", "reduce", "lower", "ease", "normalize", "attract", "bring", "ensure", "guarantee", "promise", "help with", "proven efficacy", "治愈", "治疗", "预防", "缓解", "降低", "改善", "正常化", "吸引", "招来", "保证", "确保", "功效", "疗效"],
+  predictive: ["will", "shall", "going to", "when am", "when will", "whether", "destined", "predict", "会不会", "会", "将", "什么时候", "是否", "注定", "预测"],
+  temporal: ["tomorrow", "next week", "next month", "next year", "this week", "this month", "this year", "soon", "in the future", "明天", "下周", "下个月", "明年", "今年", "未来", "很快"],
+  certain: ["definitely", "certain", "certainly", "guaranteed", "inevitable", "destined", "prove", "risk free", "必定", "一定", "肯定", "无法避免", "注定", "稳赚", "保本"],
+  diagnostic: ["diagnose", "identify", "do i have", "am i", "you have", "you are", "i have", "i am", "what disease", "what illness", "symptoms mean", "symptoms show", "诊断", "我得了什么病", "我有什么病", "你有", "你是", "我是", "症状说明", "症状意味着", "症状表明"],
+  outcomeAction: ["get", "become", "meet", "end", "happen", "accepted", "hired", "married", "divorced", "reconcile", "succeed", "fail", "win", "lose", "pass away", "pregnant", "得到", "成为", "遇到", "结束", "发生", "录用", "结婚", "离婚", "复合", "成功", "失败", "去世", "怀孕"]
+} as const;
+
+const HIDDEN_CONTENT_DESCRIPTORS = [
+  "private", "hidden", "internal", "confidential", "system", "developer",
+  "私密", "私有", "隐藏", "内部", "保密", "系统", "开发者"
 ] as const;
-
-const HIDDEN_REASONING_RULES = [
-  /(?:chain[ -]of[ -]thought|hidden reasoning|private reasoning|reasoning (?:you used|behind)|system prompt|developer message|internal prompt)/iu,
-  /(?:思维链|隐藏推理|私有推理|系统提示词|开发者消息)/u
+const HIDDEN_CONTENT_OBJECTS = [
+  "instruction", "prompt", "reasoning", "message", "thought", "指令", "提示词", "推理", "消息", "思维"
 ] as const;
+const HIDDEN_CONTENT_DIRECT = ["chain of thought", "思维链"] as const;
 
-const DEATH_QUESTION_RULES = [
-  /\b(?:(?:am|will) i|whether i(?: will)?|when (?:will )?i)\b[^?!.]{0,64}\b(?:die|death)\b/iu,
-  /\b(?:tell|show|predict)\b[^?!.]{0,48}\b(?:my death|when i (?:will )?die)\b/iu,
-  /(?:我(?:是否|会|将|什么时候).{0,16}(?:死|死亡)|预测.{0,12}我的死期)/u
-] as const;
+function normalizeRiskText(value: string): { normalized: string; tokens: ReadonlySet<string> } {
+  const normalized = value.normalize("NFKC").toLowerCase().replace(/[\u2018\u2019]/gu, "'")
+    .replace(/[^\p{Letter}\p{Number}%]+/gu, " ").trim().replace(/\s+/gu, " ");
+  const tokens = new Set<string>();
+  for (const token of normalized.match(/[a-z0-9]+/gu) ?? []) {
+    tokens.add(token);
+    if (token.endsWith("ies") && token.length > 4) tokens.add(`${token.slice(0, -3)}y`);
+    if (token.endsWith("ing") && token.length > 5) tokens.add(token.slice(0, -3));
+    if (token.endsWith("ed") && token.length > 4) tokens.add(token.slice(0, -2));
+    if (token.endsWith("s") && token.length > 3) tokens.add(token.slice(0, -1));
+  }
+  return { normalized, tokens };
+}
 
-const DEATH_COPY_RULES = [
-  /\b(?:i (?:will|am going to)|you (?:will|shall|are going to))\s+die\b/iu,
-  /\b(?:death|dying)\s+(?:is|will be)\s+(?:certain|inevitable|guaranteed)\b/iu,
-  /(?:我|你)(?:会|将|一定|必定).{0,8}(?:死|死亡)|(?:死亡|死期).{0,8}(?:已确定|无法避免)/u
-] as const;
+function hasLexiconSignal(
+  source: ReturnType<typeof normalizeRiskText>,
+  lexicon: readonly string[]
+): boolean {
+  return lexicon.some((entry) => {
+    const normalizedEntry = entry.normalize("NFKC").toLowerCase();
+    return /^[a-z0-9]+$/u.test(normalizedEntry)
+      ? source.tokens.has(normalizedEntry)
+      : source.normalized.includes(normalizedEntry);
+  });
+}
 
-const MEDICAL_QUESTION_RULES = [
-  /\b(?:crystal|bracelet|amethyst|quartz|gemstone)\b[^?!.]{0,64}\b(?:cure|heal|treat|prevent|relieve|reduce|ease|help with)\b[^?!.]{0,40}\b(?:anxiety|depression|panic|pain|insomnia|disease|illness|symptoms?)\b/iu,
-  /\b(?:cure|heal|treat|prevent|relieve|reduce|ease|help with)\b[^?!.]{0,40}\b(?:anxiety|depression|panic|pain|insomnia|disease|illness|symptoms?)\b[^?!.]{0,64}\b(?:crystal|bracelet|amethyst|quartz|gemstone)\b/iu,
-  /(?:水晶|手串|紫水晶|石英).{0,32}(?:治愈|治疗|缓解|改善|帮助).{0,24}(?:焦虑|抑郁|恐慌|失眠|疼痛|症状)/u
-] as const;
+function classifyRisk(value: string): RiskSignals {
+  const source = normalizeRiskText(value
+    .replace(/\b(?:no|not|never)\b[^.!?;]{0,40}\b(?:guaranteed|certain|inevitable|destined|predetermined)\b/giu, "")
+    .replace(/\bwithout\s+(?:predicting|guaranteeing)\b/giu, "")
+    .replace(/(?:不|并非|无法).{0,16}(?:一定|必定|注定|肯定)/gu, ""));
+  return {
+    hidden: hasLexiconSignal(source, HIDDEN_CONTENT_DIRECT) ||
+      (hasLexiconSignal(source, HIDDEN_CONTENT_DESCRIPTORS) &&
+        hasLexiconSignal(source, HIDDEN_CONTENT_OBJECTS)),
+    death: hasLexiconSignal(source, RISK_LEXICON.death),
+    health: hasLexiconSignal(source, RISK_LEXICON.health),
+    finance: hasLexiconSignal(source, RISK_LEXICON.finance),
+    relationship: hasLexiconSignal(source, RISK_LEXICON.relationship),
+    lifeOutcome: hasLexiconSignal(source, RISK_LEXICON.lifeOutcome),
+    material: hasLexiconSignal(source, RISK_LEXICON.material),
+    efficacy: hasLexiconSignal(source, RISK_LEXICON.efficacy),
+    predictive: hasLexiconSignal(source, RISK_LEXICON.predictive),
+    temporal: hasLexiconSignal(source, RISK_LEXICON.temporal),
+    certain: hasLexiconSignal(source, RISK_LEXICON.certain),
+    diagnostic: hasLexiconSignal(source, RISK_LEXICON.diagnostic),
+    outcomeAction: hasLexiconSignal(source, RISK_LEXICON.outcomeAction)
+  };
+}
 
-const MEDICAL_DIAGNOSIS_RULES = [
-  /\b(?:what|which)\s+(?:disease|illness|condition|disorder)\b[^?!.]{0,48}\b(?:do i have|explains?|causes?|means?)\b/iu,
-  /\b(?:diagnose|identify)\b[^?!.]{0,48}\b(?:disease|illness|condition|disorder|symptoms?)\b/iu,
-  /\b(?:you|i)\s+have\s+(?:(?:a|an)\s+)?(?:disease|illness|condition|disorder|diabetes|cancer|depression|anxiety)\b/iu,
-  /\b(?:these|your|my)\s+symptoms?\s+(?:mean|show|prove|indicate)\b[^?!.]{0,32}\b(?:you|i)\s+have\s+(?:(?:a|an)\s+)?(?:disease|illness|condition|disorder)\b/iu,
-  /(?:我得了什么病|我有什么病|这些症状.{0,16}(?:说明|意味着|表明).{0,12}(?:疾病|病症|症状))/u
-] as const;
-
-const CERTAIN_FUTURE_QUESTION_RULES = [
-  /\b(?:definitely|certain(?:ly)?|guaranteed|inevitable|destined)\b[^?!.]{0,64}\b(?:job|application|relationship|outcome|future|succeed|happen|get|win|lose)\b/iu,
-  /\b(?:job|application|relationship|outcome|future|succeed|happen|get|win|lose)\b[^?!.]{0,64}\b(?:definitely|certain(?:ly)?|guaranteed|inevitable|destined)\b/iu,
-  /\bcards?\b[^?!.]{0,40}\b(?:certain|guarantee|prove|promise)\b[^?!.]{0,64}\b(?:tomorrow|next (?:week|month|year)|future|outcome|succeed|get|win|lose)\b/iu,
-  /(?:一定|必定|注定|肯定).{0,32}(?:明天|下周|下个月|工作|申请|感情|结果|未来)/u
-] as const;
-
-const GUARANTEED_FINANCIAL_QUESTION_RULES = [
-  /\b(?:guarantee|guaranteed|ensure|promise|risk[- ]free|certain)\b[^?!.]{0,72}\b(?:return|returns|profit|investment|savings|wealth|money|rich)\b/iu,
-  /\b(?:return|returns|profit|investment|savings|wealth|money|rich)\b[^?!.]{0,72}\b(?:guarantee|guaranteed|ensure|promise|risk[- ]free|certain)\b/iu,
-  /(?:保证|确保|稳赚|保本|必定|一定).{0,28}(?:收益|回报|赚钱|投资|财富|致富)/u
-] as const;
-
-const DETERMINISTIC_LIFE_PREDICTION_RULES = [
-  /\bwill\s+(?:i|you|my|your)\b[^?!.]{0,64}\b(?:get|become|end|succeed|fail|win|lose|happen|accepted|hired|married|divorced|wealthy|rich)\b[^?!.]{0,48}\b(?:tomorrow|next (?:week|month|year)|this (?:week|month|year)|in \d+ (?:days?|weeks?|months?|years?))\b/iu,
-  /\b(?:how|when|what)\s+will\b[^?!.]{0,48}\b(?:relationship|marriage|career|job|application|future|outcome)\b[^?!.]{0,48}\b(?:end|change|turn out|happen|succeed|fail|be accepted)\b/iu,
-  /\b(?:you|(?:your|the) (?:relationship|marriage|application|career))\s+will\b[^?!.]{0,48}\b(?:get|become|end|succeed|fail|win|lose|happen|accepted|hired|married|divorced|wealthy|rich)\b[^?!.]{0,48}\b(?:tomorrow|next (?:week|month|year)|this (?:week|month|year)|in \d+ (?:days?|weeks?|months?|years?))\b/iu,
-  /(?:我|你|我的|你的).{0,12}(?:明天|下周|下个月|明年).{0,24}(?:会不会|会|将).{0,20}(?:得到|成为|结束|成功|失败|录用|结婚|离婚|发财)/u,
-  /(?:感情|婚姻|工作|申请|未来|结果).{0,16}(?:什么时候|如何).{0,16}(?:结束|变化|成功|失败|发生)/u
-] as const;
-
-const matchesAny = (value: string, rules: readonly RegExp[]): boolean =>
-  rules.some((rule) => rule.test(value));
-
-const containsCertainFutureClaim = (value: string): boolean => {
-  const withoutExplicitNegation = value
-    .replace(/\b(?:no|not|never)\s+[^.!?;]{0,32}\b(?:guaranteed|certain|inevitable|destined)\b/giu, "")
-    .replace(/(?:不|并非|无法).{0,16}(?:一定|必定|注定|肯定)/gu, "");
-  return matchesAny(withoutExplicitNegation, CERTAIN_FUTURE_QUESTION_RULES);
+const hasUnsafeCategoryCombination = (signals: RiskSignals): boolean => {
+  const sensitiveOutcome = signals.death || signals.health || signals.finance ||
+    signals.relationship || signals.lifeOutcome;
+  return signals.hidden ||
+    (signals.material && signals.efficacy && (signals.health || signals.finance)) ||
+    (signals.health && signals.diagnostic) ||
+    (signals.death && (signals.predictive || signals.certain || signals.temporal)) ||
+    (signals.predictive && sensitiveOutcome && (signals.temporal || signals.outcomeAction)) ||
+    (signals.certain && sensitiveOutcome) ||
+    (signals.finance && signals.efficacy);
 };
 
 export interface TarotCopyProvider {
@@ -143,27 +166,17 @@ function containsRestrictedCopy(interpretation: TarotInterpretation): boolean {
     ...interpretation.cardReflections.map(({ reflection }) => reflection),
     interpretation.designRationale
   ].join("\n");
-  return matchesAny(copy, UNSAFE_COPY_RULES) ||
-    matchesAny(copy, HIDDEN_REASONING_RULES) ||
-    matchesAny(copy, DEATH_QUESTION_RULES) ||
-    matchesAny(copy, DEATH_COPY_RULES) ||
-    matchesAny(copy, MEDICAL_QUESTION_RULES) ||
-    matchesAny(copy, MEDICAL_DIAGNOSIS_RULES) ||
-    matchesAny(copy, DETERMINISTIC_LIFE_PREDICTION_RULES) ||
-    containsCertainFutureClaim(copy) ||
-    matchesAny(copy, GUARANTEED_FINANCIAL_QUESTION_RULES);
+  return hasUnsafeCategoryCombination(classifyRisk(copy));
 }
 
-const questionIsBlocked = (question: string): boolean =>
-  matchesAny(question, HIDDEN_REASONING_RULES) ||
-  matchesAny(question, DEATH_QUESTION_RULES);
+const questionIsBlocked = (question: string): boolean => {
+  const signals = classifyRisk(question);
+  return signals.hidden ||
+    (signals.death && (signals.predictive || signals.temporal || signals.outcomeAction));
+};
 
 const questionRequiresFallback = (question: string): boolean =>
-  matchesAny(question, MEDICAL_QUESTION_RULES) ||
-  matchesAny(question, MEDICAL_DIAGNOSIS_RULES) ||
-  matchesAny(question, DETERMINISTIC_LIFE_PREDICTION_RULES) ||
-  containsCertainFutureClaim(question) ||
-  matchesAny(question, GUARANTEED_FINANCIAL_QUESTION_RULES);
+  hasUnsafeCategoryCombination(classifyRisk(question));
 
 function fallbackResult(input: TarotCopyInput): TarotCopyResult {
   return TarotCopyResultSchema.parse({
