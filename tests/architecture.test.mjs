@@ -1,4 +1,5 @@
 import { access, readFile, readdir } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import test from "node:test";
 
@@ -128,6 +129,41 @@ test("shared contract dependency direction stays application-independent", async
     (name) => name.startsWith("@mystcrag/") || ["fastify", "next", "react", "three", "@prisma/client"].includes(name)
   );
   assertNoMatches(forbidden);
+});
+
+test("pnpm dev forwards the documented real-backend environment to Backend", () => {
+  const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+  const result = spawnSync(pnpmCommand, ["exec", "turbo", "run", "dev", "--dry=json"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      MYSTCRAG_AUTH_PROVIDER: "signed-test"
+    }
+  });
+
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout || "turbo dry run failed");
+  }
+
+  const dryRun = JSON.parse(result.stdout);
+  const backend = dryRun.tasks.find((task) => task.taskId === "@mystcrag/backend#dev");
+  const forwarded = new Set(
+    backend?.environmentVariables?.specified?.passThroughEnv ?? []
+  );
+  const required = [
+    "BACKEND_PORT",
+    "DATABASE_URL",
+    "MYSTCRAG_AUTH_AUDIENCE",
+    "MYSTCRAG_AUTH_ISSUER",
+    "MYSTCRAG_AUTH_PROVIDER",
+    "MYSTCRAG_AUTH_SIGNING_SECRET",
+    "MYSTCRAG_ENABLE_SIGNED_TEST_AUTH",
+    "MYSTCRAG_TAROT_ENABLED",
+    "MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY",
+    "NODE_ENV"
+  ];
+
+  assertNoMatches(required.filter((name) => !forwarded.has(name)));
 });
 
 function assertNoMatches(matches) {
