@@ -3,13 +3,9 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { DevelopmentModeBadge } from "../src/components/development-mode-badge";
+import { isTarotFeatureEnabled } from "../src/lib/api/api-runtime";
 import "./globals.css";
-
-const navigation = [
-  { href: "/ai-design", label: "AI 设计" },
-  { href: "/diy", label: "DIY 创作" },
-  { href: "/#inspiration", label: "设计灵感" }
-];
+import { getMainNavigation } from "./navigation";
 
 export const metadata: Metadata = {
   title: {
@@ -23,6 +19,8 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  const navigation = getMainNavigation(isTarotFeatureEnabled());
+
   return (
     <html data-scroll-behavior="smooth" lang="zh-CN">
       <body>
