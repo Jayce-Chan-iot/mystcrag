@@ -206,6 +206,40 @@ test("Tarot session repository persists validated owner-scoped lifecycle state",
       );
     });
 
+    await t.test("concurrent identical selections reconcile to one accepted revision", async () => {
+      const created = await repository.create(createInput(ownerId));
+      const selectedState = selectPosition(created.privateDeckState, {
+        slot: "GUIDANCE",
+        displayedPosition: 18,
+        expectedRevision: 0,
+        operationId: "select-guidance-concurrently"
+      });
+      const command = {
+        ownerId,
+        sessionId: created.id,
+        expectedRevision: created.stateRevision,
+        operationId: "select-guidance-concurrently",
+        status: "DRAWING" as const,
+        privateDeckState: selectedState,
+        drawSnapshot: toDrawSnapshot(selectedState)
+      };
+
+      const [first, second] = await Promise.all([
+        repository.updateDraw(command),
+        repository.updateDraw(command)
+      ]);
+
+      assert.equal(first.stateRevision, 2);
+      assert.equal(second.stateRevision, 2);
+      assert.deepEqual(first.privateDeckState.selections, second.privateDeckState.selections);
+      assert.equal(
+        await prisma.tarotSession.count({
+          where: { id: created.id, stateRevision: 2 }
+        }),
+        1
+      );
+    });
+
     await t.test("recommendations require exactly three distinct ranks and owned designs", async () => {
       const designIds = [1, 2, 3].map((rank) => `tarot-recommendation-design-${rank}`);
       for (const designId of designIds) {

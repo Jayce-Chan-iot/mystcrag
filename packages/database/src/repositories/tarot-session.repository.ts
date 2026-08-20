@@ -338,6 +338,39 @@ function drawTransitionIsValid(
   );
 }
 
+function operationMatchesAcceptedSelection(
+  current: TarotSessionRecord,
+  next: PrivateDrawState,
+  operationId: string
+): boolean {
+  const existing = current.privateDeckState.selections.find(
+    (selection) => selection.operationId === operationId
+  );
+  if (existing === undefined) return false;
+
+  const retrySelection = next.selections.find(
+    (selection) => selection.operationId === operationId
+  );
+  if (
+    retrySelection?.slot !== existing.slot ||
+    retrySelection.displayedPosition !== existing.displayedPosition
+  ) {
+    throw new PersistenceError("CONFLICT", "Tarot operation ID was reused with different input");
+  }
+  return true;
+}
+
+function allowsExactNoOp(
+  expectedRevision: number,
+  currentRevision: number,
+  operationWasImmediatelyPreceding: boolean
+): boolean {
+  return (
+    expectedRevision === currentRevision ||
+    (operationWasImmediatelyPreceding && expectedRevision === currentRevision - 1)
+  );
+}
+
 export class TarotSessionRepositoryImpl implements TarotSessionRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -397,19 +430,7 @@ export class TarotSessionRepositoryImpl implements TarotSessionRepository {
     return this.prisma.$transaction(async (tx) => {
       const current = mapTarotSession(await getOwnedRow(tx, input.ownerId, input.sessionId));
       if (input.operationId !== undefined) {
-        const existing = current.privateDeckState.selections.find(
-          ({ operationId }) => operationId === input.operationId
-        );
-        if (existing !== undefined) {
-          const retrySelection = next.privateDeckState.selections.find(
-            ({ operationId }) => operationId === input.operationId
-          );
-          if (
-            retrySelection?.slot !== existing.slot ||
-            retrySelection.displayedPosition !== existing.displayedPosition
-          ) {
-            throw new PersistenceError("CONFLICT", "Tarot operation ID was reused with different input");
-          }
+        if (operationMatchesAcceptedSelection(current, next.privateDeckState, input.operationId)) {
           return current;
         }
       } else if (
@@ -417,6 +438,9 @@ export class TarotSessionRepositoryImpl implements TarotSessionRepository {
         sameValue(current.privateDeckState, next.privateDeckState) &&
         sameValue(current.drawSnapshot, next.drawSnapshot)
       ) {
+        if (!allowsExactNoOp(input.expectedRevision, current.stateRevision, current.status === "DRAWN")) {
+          throw new PersistenceError("CONFLICT", "Tarot session revision conflict");
+        }
         return current;
       }
 
@@ -440,13 +464,14 @@ export class TarotSessionRepositoryImpl implements TarotSessionRepository {
         }
       });
       if (update.count !== 1) {
-        const stillOwned = await tx.tarotSession.count({
-          where: { id: input.sessionId, ownerId: input.ownerId }
-        });
-        throw new PersistenceError(
-          stillOwned === 0 ? "NOT_FOUND" : "CONFLICT",
-          stillOwned === 0 ? "Tarot session not found" : "Tarot session revision conflict"
-        );
+        const latest = mapTarotSession(await getOwnedRow(tx, input.ownerId, input.sessionId));
+        if (
+          input.operationId !== undefined &&
+          operationMatchesAcceptedSelection(latest, next.privateDeckState, input.operationId)
+        ) {
+          return latest;
+        }
+        throw new PersistenceError("CONFLICT", "Tarot session revision conflict");
       }
       return mapTarotSession(await getOwnedRow(tx, input.ownerId, input.sessionId));
     }).catch(rethrowPersistenceError);
@@ -474,6 +499,15 @@ export class TarotSessionRepositoryImpl implements TarotSessionRepository {
             normalizedRecommendations
           )
         ) {
+          if (
+            !allowsExactNoOp(
+              input.expectedRevision,
+              current.stateRevision,
+              current.status === "RECOMMENDED"
+            )
+          ) {
+            throw new PersistenceError("CONFLICT", "Tarot session revision conflict");
+          }
           return current;
         }
         throw new PersistenceError("CONFLICT", "Tarot recommendations already exist");
@@ -526,7 +560,12 @@ export class TarotSessionRepositoryImpl implements TarotSessionRepository {
       const current = mapTarotSession(await getOwnedRow(tx, input.ownerId, input.sessionId));
       const selectedDesignId = input.selectedDesignId ?? null;
       if (current.status === "SAVED") {
-        if (current.selectedDesignId === selectedDesignId) return current;
+        if (current.selectedDesignId === selectedDesignId) {
+          if (!allowsExactNoOp(input.expectedRevision, current.stateRevision, true)) {
+            throw new PersistenceError("CONFLICT", "Tarot session revision conflict");
+          }
+          return current;
+        }
         throw new PersistenceError("CONFLICT", "Tarot session was saved with another design");
       }
       if (current.status !== "RECOMMENDED") {
