@@ -108,10 +108,9 @@ const normalizeApprovedCopy = (value: string): string =>
 
 function approvedTemplateMatch(
   interpretation: TarotInterpretation,
-  input: TarotCopyInput
+  approved: TarotInterpretation
 ): TarotInterpretation | undefined {
-  const approvedTemplates = [deterministicFallback(input)] as const;
-  return approvedTemplates.find((approved) =>
+  const matches =
     normalizeApprovedCopy(interpretation.headline) === normalizeApprovedCopy(approved.headline) &&
     normalizeApprovedCopy(interpretation.summary) === normalizeApprovedCopy(approved.summary) &&
     normalizeApprovedCopy(interpretation.designRationale) ===
@@ -123,8 +122,8 @@ function approvedTemplateMatch(
         reflection.slot === approvedReflection.slot &&
         normalizeApprovedCopy(reflection.reflection) ===
           normalizeApprovedCopy(approvedReflection.reflection);
-    })
-  );
+    });
+  return matches ? approved : undefined;
 }
 
 function containsHiddenContentReference(value: string): boolean {
@@ -155,9 +154,9 @@ const questionIsBlocked = (question: string): boolean => {
     (death && (predictive || temporal || outcomeAction));
 };
 
-function fallbackResult(input: TarotCopyInput): TarotCopyResult {
+function fallbackResult(interpretation: TarotInterpretation): TarotCopyResult {
   return TarotCopyResultSchema.parse({
-    interpretation: deterministicFallback(input),
+    interpretation,
     source: {
       mode: "DETERMINISTIC_FALLBACK",
       providerId: TAROT_FALLBACK_PROVIDER_ID,
@@ -167,39 +166,55 @@ function fallbackResult(input: TarotCopyInput): TarotCopyResult {
   });
 }
 
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (typeof value !== "object" || value === null || seen.has(value)) return value;
+  seen.add(value);
+  for (const property of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, property);
+    if (descriptor && "value" in descriptor) deepFreeze(descriptor.value, seen);
+  }
+  return Object.freeze(value);
+}
+
 export class TarotCopyService {
   constructor(private readonly dependencies: { readonly provider?: TarotCopyProvider } = {}) {}
 
   async createInterpretation(inputValue: TarotCopyInput): Promise<TarotCopyResult> {
-    const input = TarotCopyInputSchema.parse(inputValue);
-    if (input.question && questionIsBlocked(input.question)) {
+    const authoritativeInput = TarotCopyInputSchema.parse(inputValue);
+    const approvedInterpretation = deterministicFallback(authoritativeInput);
+    if (authoritativeInput.question && questionIsBlocked(authoritativeInput.question)) {
       throw new TarotCopyComplianceError();
     }
-    if (input.question) {
-      return fallbackResult(input);
+    if (authoritativeInput.question) {
+      return fallbackResult(approvedInterpretation);
     }
 
     const provider = this.dependencies.provider;
-    if (!provider) return fallbackResult(input);
+    if (!provider) return fallbackResult(approvedInterpretation);
+
+    const providerInput = deepFreeze(TarotCopyInputSchema.parse(authoritativeInput));
 
     let providerOutput: unknown;
     try {
-      providerOutput = await provider.generate(input);
+      providerOutput = await provider.generate(providerInput);
     } catch {
-      return fallbackResult(input);
+      return fallbackResult(approvedInterpretation);
     }
     try {
       const parsed = TarotInterpretationSchema.safeParse(providerOutput);
-      if (!parsed.success) return fallbackResult(input);
-      const approvedInterpretation = approvedTemplateMatch(parsed.data, input);
+      if (!parsed.success) return fallbackResult(approvedInterpretation);
+      const approvedProviderInterpretation = approvedTemplateMatch(
+        parsed.data,
+        approvedInterpretation
+      );
       if (
-        parsed.data.cardReflections.length !== input.cards.length ||
+        parsed.data.cardReflections.length !== authoritativeInput.cards.length ||
         parsed.data.cardReflections.some(
-          (reflection, index) => reflection.slot !== input.cards[index]?.slot
+          (reflection, index) => reflection.slot !== authoritativeInput.cards[index]?.slot
         ) ||
-        !approvedInterpretation
+        !approvedProviderInterpretation
       ) {
-        return fallbackResult(input);
+        return fallbackResult(approvedInterpretation);
       }
       const providerId = provider.providerId;
       const providerVersion = provider.providerVersion;
@@ -210,11 +225,11 @@ export class TarotCopyService {
         providerVersion.trim().length === 0 ||
         providerVersion.length > 80
       ) {
-        return fallbackResult(input);
+        return fallbackResult(approvedInterpretation);
       }
 
       return TarotCopyResultSchema.parse({
-        interpretation: approvedInterpretation,
+        interpretation: approvedProviderInterpretation,
         source: {
           mode: "PROVIDER",
           providerId,
@@ -223,7 +238,7 @@ export class TarotCopyService {
         }
       });
     } catch {
-      return fallbackResult(input);
+      return fallbackResult(approvedInterpretation);
     }
   }
 }

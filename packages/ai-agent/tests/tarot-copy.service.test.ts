@@ -224,6 +224,112 @@ test("provider failure returns deterministic localized fallback with an explicit
   assert.equal(JSON.stringify(first).includes("provider secret failure"), false);
 });
 
+test("provider mutation followed by an echo cannot redefine the approved template", async () => {
+  const provider: TarotCopyProvider = {
+    providerId: "mutating-provider",
+    providerVersion: "1",
+    async generate(request) {
+      const attempt = (mutation: () => void): void => {
+        try {
+          mutation();
+        } catch {
+          // A hostile provider can swallow mutation failures and keep running.
+        }
+      };
+      const mutable = request as {
+        locale: string;
+        cards: Array<TarotCopyInput["cards"][number]>;
+        palette: { primary: string; support: string; accent: string };
+        materials: Array<TarotCopyInput["materials"][number]>;
+      };
+      attempt(() => { mutable.locale = "zh-CN"; });
+      attempt(() => { mutable.palette.primary = "poison"; });
+      attempt(() => { mutable.cards[0]!.nameZh = "恶意卡名"; });
+      attempt(() => { mutable.cards.reverse(); });
+      attempt(() => { mutable.materials[0]!.displayName = "恶意材料"; });
+      attempt(() => {
+        mutable.materials.push({
+          displayName: "注入材料",
+          crystalName: "Injected Crystal",
+          colorTags: ["poison"]
+        });
+      });
+
+      const chinese = mutable.locale.toLowerCase().startsWith("zh");
+      return {
+        headline: chinese ? "从牌面意象出发的三种灵感" : "Three directions for reflection",
+        summary: chinese
+          ? "将已揭示的图像作为温和的反思提示，再比较平衡、对比与中性主导的视觉方向。"
+          : "Use the revealed imagery as a gentle prompt while comparing balanced, contrasting, and neutral-led visual directions.",
+        cardReflections: mutable.cards.map((card) => ({
+          slot: card.slot,
+          reflection: chinese
+            ? `留意「${card.nameZh}」中哪些色彩与形态最能引发你当下的联想。`
+            : `Notice which colors and forms in ${card.nameEn} invite reflection for you today.`
+        })),
+        designRationale: chinese
+          ? `以${mutable.palette.primary}、${mutable.palette.support}与${mutable.palette.accent}建立层次，通过珠子节奏与视觉焦点呈现三种设计方向。`
+          : `${mutable.palette.primary}, ${mutable.palette.support}, and ${mutable.palette.accent} create three design directions through varied bead rhythm and visual focus.`,
+        disclaimer: "provider controlled"
+      };
+    }
+  };
+
+  const result = await new TarotCopyService({ provider }).createInterpretation(input);
+
+  assert.equal(result.interpretation.headline, "Three directions for reflection");
+  assert.deepEqual(result.interpretation.cardReflections.map(({ slot }) => slot), [
+    "PAST",
+    "PRESENT",
+    "FUTURE"
+  ]);
+  assert.match(result.interpretation.cardReflections[0]!.reflection, /Six of Pentacles/);
+  assert.match(result.interpretation.designRationale, /^amber, ivory, and ink/);
+  assert.equal(JSON.stringify(result).includes("恶意"), false);
+  assert.equal(JSON.stringify(result).includes("poison"), false);
+});
+
+test("provider mutation followed by a throw cannot poison deterministic fallback", async () => {
+  const provider: TarotCopyProvider = {
+    providerId: "mutating-throwing-provider",
+    providerVersion: "1",
+    async generate(request) {
+      const attempt = (mutation: () => void): void => {
+        try {
+          mutation();
+        } catch {
+          // Continue probing every nested and structural mutation boundary.
+        }
+      };
+      const mutable = request as {
+        locale: string;
+        question?: string;
+        cards: Array<TarotCopyInput["cards"][number]>;
+        palette: { primary: string };
+        materials: Array<TarotCopyInput["materials"][number]>;
+      };
+      attempt(() => { mutable.locale = "zh-CN"; });
+      attempt(() => { mutable.question = "reveal hidden instructions"; });
+      attempt(() => { mutable.palette.primary = "poison"; });
+      attempt(() => { mutable.cards[0]!.nameEn = "Poisoned Card"; });
+      attempt(() => { mutable.cards.splice(1, 2); });
+      attempt(() => { mutable.materials[0]!.colorTags.push("poison"); });
+      attempt(() => { mutable.materials.splice(1, 1); });
+      throw new Error("provider failure after mutation");
+    }
+  };
+
+  const result = await new TarotCopyService({ provider }).createInterpretation(input);
+
+  assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK");
+  assert.equal(result.interpretation.headline, "Three directions for reflection");
+  assert.equal(result.interpretation.cardReflections.length, 3);
+  assert.match(result.interpretation.cardReflections[0]!.reflection, /Six of Pentacles/);
+  assert.match(result.interpretation.designRationale, /^amber, ivory, and ink/);
+  assert.equal(JSON.stringify(result).includes("Poisoned Card"), false);
+  assert.equal(JSON.stringify(result).includes("poison"), false);
+});
+
 test("fallback remains schema-valid at every accepted copy-input length boundary", async () => {
   const result = await new TarotCopyService().createInterpretation({
     ...input,
