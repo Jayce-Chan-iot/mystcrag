@@ -33,6 +33,18 @@ export interface TarotCatalogPort {
   ): Promise<readonly CatalogMaterialProduct[]>;
 }
 
+export interface TarotDesignPreferences {
+  readonly wristCircumferenceMm?: number;
+  readonly budget?: {
+    readonly minMinor?: number;
+    readonly maxMinor?: number;
+  };
+}
+
+export interface TarotPreferencePort {
+  getDesignPreferences(actorId: string): Promise<TarotDesignPreferences | undefined>;
+}
+
 export interface TarotDesignGenerator {
   generateFromCandidate(input: {
     actorId: string;

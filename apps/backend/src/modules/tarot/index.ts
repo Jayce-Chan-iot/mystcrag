@@ -10,7 +10,9 @@ export { TarotService } from "./tarot.service.js";
 export type {
   TarotApiService,
   TarotCatalogPort,
+  TarotDesignPreferences,
   TarotDesignGenerator,
   TarotDesignReader,
+  TarotPreferencePort,
   TarotRecommendationCopyPort
 } from "./tarot.types.js";

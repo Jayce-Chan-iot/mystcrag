@@ -37,7 +37,12 @@ const app = createApp({
         );
       }
     },
-    designGenerator: designApplicationService
+    designGenerator: designApplicationService,
+    preferences: {
+      async getDesignPreferences() {
+        return undefined;
+      }
+    }
   }),
   authProvider
 });

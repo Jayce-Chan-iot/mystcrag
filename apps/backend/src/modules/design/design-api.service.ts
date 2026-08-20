@@ -45,6 +45,10 @@ export type CatalogProduct = {
   crystalNameCn?: string;
   crystalNameEn?: string;
   colorTags?: string[];
+  visualTags?: string[];
+  styleTags?: string[];
+  emotionTags?: string[];
+  cultureTags?: string[];
   shape?: string;
   diameterMm?: number;
   materialKey?: string;
@@ -148,7 +152,13 @@ const AiDesignCandidateSchema = z.strictObject({
     modelName: z.string().trim().min(1),
     promptVersion: z.string().trim().min(1),
     knowledgeBaseVersion: z.string().trim().min(1),
-    designTemplateVersion: z.string().trim().min(1).nullable()
+    designTemplateVersion: z.string().trim().min(1).nullable(),
+    tarotCandidate: z.strictObject({
+      sessionId: z.string().trim().min(1).max(160),
+      ruleVersion: z.string().trim().min(1).max(160),
+      rank: z.number().int().min(1).max(3),
+      direction: z.enum(["BALANCED", "CONTRAST", "NEUTRAL_LED"])
+    }).optional()
   })
 });
 
@@ -335,6 +345,39 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
+function hasSameCandidateIdentity(existing: DesignV1, intended: DesignV1): boolean {
+  const provenanceIdentity = ({
+    generatedBy,
+    modelProvider,
+    modelName,
+    promptVersion,
+    knowledgeBaseVersion,
+    designTemplateVersion,
+    sourceDesignId,
+    tarotCandidate
+  }: DesignV1["provenance"]) => ({
+    generatedBy,
+    modelProvider,
+    modelName,
+    promptVersion,
+    knowledgeBaseVersion,
+    designTemplateVersion,
+    sourceDesignId,
+    tarotCandidate
+  });
+  return (
+    existing.designMode === intended.designMode &&
+    isDeepStrictEqual(
+      existing.beads.map(({ beadProductId }) => beadProductId),
+      intended.beads.map(({ beadProductId }) => beadProductId)
+    ) &&
+    isDeepStrictEqual(
+      provenanceIdentity(existing.provenance),
+      provenanceIdentity(intended.provenance)
+    )
+  );
+}
+
 function buildGeneratedDesign(
   request: GenerateDesignRequest,
   candidateInput: unknown,
@@ -345,6 +388,15 @@ function buildGeneratedDesign(
   designMode: "AI_GENERATED" | "TAROT_GUIDED"
 ): DesignV1 {
   const candidate = AiDesignCandidateSchema.parse(candidateInput);
+  if (
+    (designMode === "TAROT_GUIDED") !==
+    (candidate.providerMetadata.tarotCandidate !== undefined)
+  ) {
+    throw new DomainApiError(
+      "VALIDATION_ERROR",
+      "Tarot candidate provenance must be present only for TAROT_GUIDED generation."
+    );
+  }
   const byId = new Map(catalog.map((product) => [product.id, product]));
   const materials = candidate.materialProductIds.map((productId) => {
     const product = byId.get(productId);
@@ -484,7 +536,10 @@ function buildGeneratedDesign(
       knowledgeBaseVersion: candidate.providerMetadata.knowledgeBaseVersion,
       designTemplateVersion: candidate.providerMetadata.designTemplateVersion,
       pricingRuleVersion: "catalog-pending",
-      sourceDesignId: null
+      sourceDesignId: null,
+      ...(candidate.providerMetadata.tarotCandidate === undefined
+        ? {}
+        : { tarotCandidate: candidate.providerMetadata.tarotCandidate })
     },
     community: {
       visibility: "PRIVATE" as const,
@@ -714,7 +769,12 @@ export class DesignApplicationService implements DesignApiService {
     } catch (error) {
       if (input.designId === undefined || errorCode(error) !== "CONFLICT") throw error;
       const existing = await this.dependencies.designs.getDesign(input.actorId, input.designId);
-      if (existing.snapshot.designMode !== input.designMode) throw error;
+      if (!hasSameCandidateIdentity(existing.snapshot, priced)) {
+        throw new DomainApiError(
+          "CONFLICT",
+          "Existing deterministic design does not match the requested candidate."
+        );
+      }
       return {
         requestId: input.request.requestId,
         design: toPublicDesign(existing.snapshot),
@@ -836,6 +896,10 @@ export class DesignApplicationService implements DesignApiService {
         crystalNameCn: product.crystalNameCn ?? product.name,
         crystalNameEn: product.crystalNameEn ?? product.name,
         colorTags: product.colorTags ?? [],
+        visualTags: product.visualTags ?? [],
+        styleTags: product.styleTags ?? [],
+        emotionTags: product.emotionTags ?? [],
+        cultureTags: product.cultureTags ?? [],
         materialKey: product.materialKey,
         shape: BeadShapeSchema.parse(product.shape),
         diameterMm: product.diameterMm,

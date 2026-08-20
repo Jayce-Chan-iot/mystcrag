@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import type {
   CreateTarotSessionRequest,
@@ -49,8 +50,10 @@ import {
 import type {
   TarotApiService,
   TarotCatalogPort,
+  TarotDesignPreferences,
   TarotDesignGenerator,
   TarotDesignReader,
+  TarotPreferencePort,
   TarotRecommendationCopyPort
 } from "./tarot.types.js";
 
@@ -124,6 +127,35 @@ function sequenceAroundWrist(
   return sequence;
 }
 
+function validateDesignPreferences(
+  preferences: TarotDesignPreferences | undefined
+): {
+  wristCircumferenceMm: number;
+  budget?: { minMinor?: number; maxMinor?: number };
+} {
+  const wristCircumferenceMm =
+    preferences?.wristCircumferenceMm ?? DEFAULT_WRIST_CIRCUMFERENCE_MM;
+  const budget = preferences?.budget;
+  const validMinor = (value: number | undefined): boolean =>
+    value === undefined || (Number.isSafeInteger(value) && value >= 0);
+  if (
+    !Number.isFinite(wristCircumferenceMm) ||
+    wristCircumferenceMm < MIN_COMPLETION_MM ||
+    wristCircumferenceMm > MAX_COMPLETION_MM ||
+    !validMinor(budget?.minMinor) ||
+    !validMinor(budget?.maxMinor) ||
+    (budget?.minMinor !== undefined &&
+      budget.maxMinor !== undefined &&
+      budget.minMinor > budget.maxMinor)
+  ) {
+    throw new DomainApiError("INTERNAL_ERROR", "Saved Tarot design preferences are invalid.");
+  }
+  return {
+    wristCircumferenceMm,
+    ...(budget === undefined ? {} : { budget: { ...budget } })
+  };
+}
+
 function directionPatterns(
   materials: readonly CatalogMaterialProduct[]
 ): Readonly<Record<TarotDirection, readonly CatalogMaterialProduct[]>> {
@@ -149,11 +181,14 @@ function directionPatterns(
 }
 
 function candidateForDirection(input: {
+  sessionId: string;
+  rank: number;
   direction: TarotDirection;
   materialProductIds: readonly string[];
   ruleVersion: string;
 }) {
   const directionName = input.direction.toLowerCase().replaceAll("_", " ");
+  const directionId = input.direction.toLowerCase().replaceAll("_", "-");
   return {
     designName: `Tarot ${directionName} direction`,
     materialProductIds: [...input.materialProductIds],
@@ -169,7 +204,13 @@ function candidateForDirection(input: {
       modelName: "mystcrag-tarot-candidate-builder",
       promptVersion: "tarot-fallback-copy-v1",
       knowledgeBaseVersion: input.ruleVersion,
-      designTemplateVersion: null
+      designTemplateVersion: `tarot-${directionId}-rank-${input.rank}`,
+      tarotCandidate: {
+        sessionId: input.sessionId,
+        ruleVersion: input.ruleVersion,
+        rank: input.rank,
+        direction: input.direction
+      }
     }
   };
 }
@@ -182,12 +223,13 @@ function requestForDirection(input: {
   currency: "CNY" | "TWD";
   theme: string;
   signals: TarotDesignSignals;
+  wristCircumferenceMm: number;
 }): GenerateDesignRequest {
   return GenerateDesignRequestSchema.parse({
     requestId: `${input.sessionId}:${input.rank}`,
     locale: input.locale,
     currency: input.currency,
-    wristCircumferenceMm: DEFAULT_WRIST_CIRCUMFERENCE_MM,
+    wristCircumferenceMm: input.wristCircumferenceMm,
     emotionTags: [input.theme.toLowerCase().replaceAll("_", "-")],
     styleTags: [...input.signals.styleTags, directionTag(input.direction)].slice(0, 30),
     colorTags: [
@@ -245,6 +287,12 @@ function validateGeneratedDesign(
   responseInput: GenerateDesignResponse,
   input: {
     expectedDesignId: string;
+    expectedSequence: readonly string[];
+    expectedSourceDesignId: string;
+    expectedRuleVersion: string;
+    expectedDirection: TarotDirection;
+    expectedRank: number;
+    expectedWristCircumferenceMm: number;
     currency: "CNY" | "TWD";
     productsById: ReadonlyMap<string, CatalogMaterialProduct>;
   }
@@ -255,7 +303,24 @@ function validateGeneratedDesign(
     design.designId !== input.expectedDesignId ||
     design.designMode !== "TAROT_GUIDED" ||
     design.currency !== input.currency ||
-    design.bracelet.wristCircumferenceMm !== DEFAULT_WRIST_CIRCUMFERENCE_MM
+    design.bracelet.wristCircumferenceMm !== input.expectedWristCircumferenceMm ||
+    design.provenance.knowledgeBaseVersion !== input.expectedRuleVersion ||
+    design.provenance.designTemplateVersion !==
+      `tarot-${input.expectedDirection.toLowerCase().replaceAll("_", "-")}-rank-${input.expectedRank}` ||
+    design.provenance.modelProvider !== "deterministic" ||
+    design.provenance.modelName !== "mystcrag-tarot-candidate-builder" ||
+    design.provenance.promptVersion !== "tarot-fallback-copy-v1" ||
+    design.provenance.sourceDesignId !== null ||
+    !isDeepStrictEqual(design.provenance.tarotCandidate, {
+      sessionId: input.expectedSourceDesignId,
+      ruleVersion: input.expectedRuleVersion,
+      rank: input.expectedRank,
+      direction: input.expectedDirection
+    }) ||
+    !isDeepStrictEqual(
+      design.beads.map(({ beadProductId }) => beadProductId),
+      input.expectedSequence
+    )
   ) {
     throw new DomainApiError("INTERNAL_ERROR", "Generated Tarot design metadata is invalid.");
   }
@@ -325,6 +390,7 @@ export class TarotService implements TarotApiService {
       readonly catalog?: TarotCatalogPort;
       readonly designGenerator?: TarotDesignGenerator;
       readonly copy?: TarotRecommendationCopyPort;
+      readonly preferences?: TarotPreferencePort;
     }
   ) {}
 
@@ -493,6 +559,9 @@ export class TarotService implements TarotApiService {
       cards: revealed.cards,
       theme: current.theme
     });
+    const preferences = validateDesignPreferences(
+      await this.dependencies.preferences?.getDesignPreferences(actorId)
+    );
     const catalog = await this.dependencies.catalog.listActiveCatalogProducts(input.currency);
     const sellable = catalog.filter(isSellableMaterial);
     const byId = new Map(sellable.map((product) => [product.id, product]));
@@ -501,11 +570,12 @@ export class TarotService implements TarotApiService {
       products: sellable.map((product) => ({
         productId: product.id,
         colorTags: product.colorTags,
-        visualStyleTags: [...product.colorTags, product.shape.toLowerCase()],
-        themeTags: [],
+        visualStyleTags: [...product.visualTags, ...product.styleTags],
+        themeTags: [...product.emotionTags, ...product.cultureTags],
         active: product.active,
         unitPriceMinor: product.unitPriceMinor
-      }))
+      })),
+      ...(preferences.budget === undefined ? {} : { budget: preferences.budget })
     });
     const rankedMaterials = scored.flatMap(({ productId }) => {
       const product = byId.get(productId);
@@ -514,7 +584,10 @@ export class TarotService implements TarotApiService {
     const patterns = directionPatterns(rankedMaterials);
     const candidates = signals.directions.map((direction) => ({
       direction,
-      sequence: sequenceAroundWrist(patterns[direction])
+      sequence: sequenceAroundWrist(
+        patterns[direction],
+        preferences.wristCircumferenceMm
+      )
     }));
     if (new Set(candidates.map(({ sequence }) => sequence.join("|"))).size !== 3) {
       throw new DomainApiError(
@@ -541,13 +614,16 @@ export class TarotService implements TarotApiService {
         locale: input.locale,
         currency: input.currency,
         theme: current.theme,
-        signals
+        signals,
+        wristCircumferenceMm: preferences.wristCircumferenceMm
       });
       const response = validateGeneratedDesign(
         await this.dependencies.designGenerator.generateFromCandidate({
           actorId,
           request,
           candidate: candidateForDirection({
+            sessionId: current.id,
+            rank,
             direction,
             materialProductIds: sequence,
             ruleVersion: current.ruleVersion
@@ -555,7 +631,17 @@ export class TarotService implements TarotApiService {
           designMode: "TAROT_GUIDED",
           designId
         }),
-        { expectedDesignId: designId, currency: input.currency, productsById: byId }
+        {
+          expectedDesignId: designId,
+          expectedSequence: sequence,
+          expectedSourceDesignId: current.id,
+          expectedRuleVersion: current.ruleVersion,
+          expectedDirection: direction,
+          expectedRank: rank,
+          expectedWristCircumferenceMm: preferences.wristCircumferenceMm,
+          currency: input.currency,
+          productsById: byId
+        }
       );
       generated.push({ rank, response });
     }

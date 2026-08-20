@@ -68,6 +68,10 @@ function catalogFromFixture(): CatalogProduct[] {
       crystalNameCn: `测试水晶 ${index + 1}`,
       crystalNameEn: bead.crystalId,
       colorTags: index === 0 ? ["blue", "cool"] : ["neutral"],
+      visualTags: ["translucent"],
+      styleTags: ["minimal"],
+      emotionTags: ["calm-aesthetic"],
+      cultureTags: ["design-inspiration-only"],
       shape: bead.shape,
       diameterMm: bead.diameterMm,
       materialKey: bead.materialKey,
@@ -412,6 +416,43 @@ const generateBody = {
   personalizationConsent: false
 };
 
+function tarotCandidateInput(harness: ReturnType<typeof createHarness>) {
+  const materialIds = harness.catalog
+    .filter((product) => product.productType === "MATERIAL")
+    .map(({ id }) => id);
+  return {
+    actorId,
+    request: { ...generateBody, requestId: "tarot-session-1:1" },
+    candidate: {
+      designName: "Tarot balanced direction",
+      materialProductIds: Array.from(
+        { length: 20 },
+        (_, index) => materialIds[index % materialIds.length]!
+      ),
+      accessoryProductIds: [],
+      designStory: "A reflective color rhythm built from the selected cards.",
+      recommendationReasons: ["Uses a balanced visual rhythm."],
+      culturalInspiration: [],
+      sourceTemplateIds: [],
+      providerMetadata: {
+        modelProvider: "deterministic",
+        modelName: "tarot-candidate-builder",
+        promptVersion: "tarot-balanced-rank-1",
+        knowledgeBaseVersion: "tarot-design-rules-v1",
+        designTemplateVersion: "tarot-balanced-rank-1",
+        tarotCandidate: {
+          sessionId: "tarot-session-1",
+          ruleVersion: "tarot-design-rules-v1",
+          rank: 1,
+          direction: "BALANCED" as const
+        }
+      }
+    },
+    designMode: "TAROT_GUIDED" as const,
+    designId: "tarot-design-session-1-rules-v1-rank-1"
+  };
+}
+
 function requestHeaders(
   owner = actorId,
   overrides: { audience?: string; expiresAtEpochSeconds?: number; issuer?: string } = {}
@@ -444,45 +485,67 @@ test("generate creates a server-owned design and immutable revision 1", async ()
 
 test("internal candidate generation persists TAROT_GUIDED mode and reuses its deterministic design ID", async () => {
   const harness = createHarness();
-  const materialIds = harness.catalog
-    .filter((product) => product.productType === "MATERIAL")
-    .map(({ id }) => id);
-  const candidate = {
-    designName: "Tarot balanced direction",
-    materialProductIds: Array.from(
-      { length: 20 },
-      (_, index) => materialIds[index % materialIds.length]!
-    ),
-    accessoryProductIds: [],
-    designStory: "A reflective color rhythm built from the selected cards.",
-    recommendationReasons: ["Uses a balanced visual rhythm."],
-    culturalInspiration: [],
-    sourceTemplateIds: [],
-    providerMetadata: {
-      modelProvider: "deterministic",
-      modelName: "tarot-candidate-builder",
-      promptVersion: "tarot-copy-v1",
-      knowledgeBaseVersion: "tarot-design-rules-v1",
-      designTemplateVersion: null
-    }
-  };
-  const input = {
-    actorId,
-    request: { ...generateBody, requestId: "tarot-session-1:1" },
-    candidate,
-    designMode: "TAROT_GUIDED" as const,
-    designId: "tarot-design-session-1-rules-v1-rank-1"
-  };
+  const input = tarotCandidateInput(harness);
 
   const first = await harness.service.generateFromCandidate(input);
   const retry = await harness.service.generateFromCandidate(input);
 
   assert.equal(first.design.designId, input.designId);
   assert.equal(first.design.designMode, "TAROT_GUIDED");
+  assert.deepEqual(first.design.provenance.tarotCandidate, {
+    sessionId: "tarot-session-1",
+    ruleVersion: "tarot-design-rules-v1",
+    rank: 1,
+    direction: "BALANCED"
+  });
   assert.equal(first.design.pricing.pricingVersion, "cny-retail-2026-07-v1");
   assert.deepEqual(retry, first);
   assert.equal(harness.current.size, 1);
   assert.equal(harness.getCreateAttempts(), 2);
+});
+
+test("internal TAROT_GUIDED generation rejects a candidate without immutable Tarot provenance", async () => {
+  const harness = createHarness();
+  const input = tarotCandidateInput(harness);
+  const candidate = structuredClone(input.candidate);
+  delete (candidate.providerMetadata as { tarotCandidate?: unknown }).tarotCandidate;
+
+  await assert.rejects(
+    () => harness.service.generateFromCandidate({ ...input, candidate }),
+    (error: unknown) =>
+      error instanceof DomainApiError && error.code === "VALIDATION_ERROR"
+  );
+  assert.equal(harness.current.size, 0);
+});
+
+test("deterministic candidate conflict rejects an existing design with a different product sequence", async () => {
+  const harness = createHarness();
+  const input = tarotCandidateInput(harness);
+  await harness.service.generateFromCandidate(input);
+  const stored = harness.current.get(input.designId)!;
+  const collidingSnapshot = structuredClone(stored.snapshot);
+  collidingSnapshot.beads[0]!.beadProductId = collidingSnapshot.beads[1]!.beadProductId;
+  stored.snapshot = DesignV1Schema.parse(collidingSnapshot);
+
+  await assert.rejects(
+    () => harness.service.generateFromCandidate(input),
+    (error: unknown) => error instanceof DomainApiError && error.code === "CONFLICT"
+  );
+});
+
+test("deterministic candidate conflict rejects an existing design with different provenance", async () => {
+  const harness = createHarness();
+  const input = tarotCandidateInput(harness);
+  await harness.service.generateFromCandidate(input);
+  const stored = harness.current.get(input.designId)!;
+  const collidingSnapshot = structuredClone(stored.snapshot);
+  collidingSnapshot.provenance.knowledgeBaseVersion = "different-tarot-rules";
+  stored.snapshot = DesignV1Schema.parse(collidingSnapshot);
+
+  await assert.rejects(
+    () => harness.service.generateFromCandidate(input),
+    (error: unknown) => error instanceof DomainApiError && error.code === "CONFLICT"
+  );
 });
 
 test("public generate rejects a client-supplied design mode", async () => {
@@ -888,6 +951,10 @@ test("GET material catalog returns active public products without commercial cos
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().materials.length, 3);
   assert.equal(response.json().materials[0].crystalNameCn, "测试水晶 1");
+  assert.deepEqual(response.json().materials[0].visualTags, ["translucent"]);
+  assert.deepEqual(response.json().materials[0].styleTags, ["minimal"]);
+  assert.deepEqual(response.json().materials[0].emotionTags, ["calm-aesthetic"]);
+  assert.deepEqual(response.json().materials[0].cultureTags, ["design-inspiration-only"]);
   assert.equal(response.body.includes("unitCostMinor"), false);
 
   const invalidCurrency = await app.inject({

@@ -33,6 +33,6 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 
 ## Demo catalog baseline
 
-The local seed synchronizes 18 compliant crystal knowledge entries into 36 active material products: one independent CNY and one TWD SKU per crystal. The public material catalog reads bilingual names and color tags from `Crystal`, while price, render keys, sellable status, and currency remain product-specific. Cultural references remain design inspiration only and do not introduce medical or guaranteed-effect claims.
+The local seed synchronizes 18 compliant crystal knowledge entries into 36 active material products: one independent CNY and one TWD SKU per crystal. The public material catalog reads bilingual names plus color, visual, style, emotion, and compliance-safe culture tags from `Crystal`, while price, render keys, sellable status, and currency remain product-specific. These Crystal arrays are authoritative deterministic-scoring metadata; cultural references remain design inspiration only and do not introduce medical or guaranteed-effect claims.
 
 See `PERSISTENCE_MODEL_V1.md` for the ERD, full lifecycle, constraints, and JSON boundaries.

@@ -6,6 +6,13 @@ const NullableIdentifierSchema = IdentifierSchema.nullable();
 
 export const GeneratedBySchema = z.enum(["USER", "AI", "AI_AND_USER", "TEMPLATE"]);
 
+export const TarotCandidateProvenanceSchema = z.strictObject({
+  sessionId: IdentifierSchema,
+  ruleVersion: IdentifierSchema,
+  rank: z.number().int().min(1).max(3),
+  direction: z.enum(["BALANCED", "CONTRAST", "NEUTRAL_LED"])
+});
+
 export const ProvenanceV1Schema = z.strictObject({
   generatedBy: GeneratedBySchema,
   modelProvider: NullableIdentifierSchema,
@@ -14,7 +21,8 @@ export const ProvenanceV1Schema = z.strictObject({
   knowledgeBaseVersion: NullableIdentifierSchema,
   designTemplateVersion: NullableIdentifierSchema,
   pricingRuleVersion: IdentifierSchema,
-  sourceDesignId: NullableIdentifierSchema
+  sourceDesignId: NullableIdentifierSchema,
+  tarotCandidate: TarotCandidateProvenanceSchema.optional()
 });
 
 export type ProvenanceV1 = z.infer<typeof ProvenanceV1Schema>;

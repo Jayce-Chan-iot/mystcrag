@@ -126,6 +126,12 @@ Visibility supports `PRIVATE`, `UNLISTED`, and `PUBLIC`. Public or unlisted visi
 
 Each BOM item includes `productId`, `specification`, positive `quantity`, and one or more `sourceComponentIds`. Every source must exist in the design. Substitution rules contain a source product, candidate product IDs, and whether user confirmation is required. They do not mutate or automatically replace design components.
 
+Designs created through the internal `TAROT_GUIDED` generation boundary must include a strict public-safe `provenance.tarotCandidate` object containing only `sessionId`, `ruleVersion`, rank 1–3, and `BALANCED`, `CONTRAST`, or `NEUTRAL_LED` direction. This identity binds deterministic retry reuse to the intended Tarot candidate. `sourceDesignId` remains reserved for actual Design lineage and is not used for a Tarot session.
+
+## Material catalog projection
+
+`CatalogMaterialProduct` exposes sellable product identity, bilingual Crystal names, color tags, Crystal-authored `visualTags`, `styleTags`, `emotionTags`, and compliance-safe `cultureTags`, bead geometry, render assets, currency, and authoritative unit price. It never exposes unit cost, supplier data, or inventory quantity. The four additive Crystal tag arrays are public-safe design metadata and are the authoritative inputs for deterministic recommendation scoring.
+
 ## Public and order projections
 
 `PublicDesignV1` is the safe design view used by every Phase 2A response DTO. It excludes commercial cost and supplier data.

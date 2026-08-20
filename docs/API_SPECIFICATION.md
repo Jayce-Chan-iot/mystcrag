@@ -70,7 +70,7 @@ Requires verified authentication and returns the actor-owned immutable revision 
 
 GET /api/catalog/materials?currency=CNY
 
-Requires verified authentication. Returns every active, addable material product for the requested supported currency using `ListCatalogMaterialsResponseSchema`. Public fields include product identity, bilingual crystal names, color tags, shape, diameter, render asset keys, and authoritative unit price. Unit costs, supplier data, and raw inventory quantities are never returned. DIY updates still revalidate current inventory and pricing before a new design revision is persisted.
+Requires verified authentication. Returns every active, addable material product for the requested supported currency using `ListCatalogMaterialsResponseSchema`. Public fields include product identity, bilingual crystal names, color, visual, style, emotion, and compliance-safe culture tags, shape, diameter, render asset keys, and authoritative unit price. Unit costs, supplier data, and raw inventory quantities are never returned. DIY updates still revalidate current inventory and pricing before a new design revision is persisted.
 
 ## Design Save API
 
@@ -96,7 +96,7 @@ Reveals a complete selection through `RevealTarotSessionRequestSchema`. Bounded 
 
 POST /api/tarot/sessions/:id/recommendations
 
-Generates exactly three catalog-backed `TAROT_GUIDED` designs through `GenerateTarotRecommendationsRequestSchema`. Retries reuse deterministic owner-scoped designs and return the existing linked recommendations. Raw questions are ephemeral when `saveQuestion` is false; `saveQuestion: true` fails validation until encrypted question storage is available.
+Generates exactly three catalog-backed `TAROT_GUIDED` designs through `GenerateTarotRecommendationsRequestSchema`. Deterministic reuse requires the exact bead-product sequence and public-safe session/rule/rank/direction provenance to match before a design is accepted or linked. Saved wrist and budget values are consumed through the Backend preference port when available; the current no-store production adapter returns no preference, so wrist defaults to 155 mm and budget remains a score rather than a hard filter. Raw questions are ephemeral when `saveQuestion` is false; `saveQuestion: true` fails validation until encrypted question storage is available.
 
 GET /api/tarot/sessions/:id
 

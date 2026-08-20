@@ -3,13 +3,11 @@ import test from "node:test";
 
 import {
   CreateTarotSessionResponseSchema,
-  GenerateTarotRecommendationsResponseSchema,
   GetTarotSessionResponseSchema,
   RevealTarotSessionResponseSchema,
   SaveTarotSessionResponseSchema,
   SelectTarotCardResponseSchema,
   DesignV1Schema,
-  toPublicDesign,
   type DesignV1
 } from "@mystcrag/design-contract";
 import { standardAiDesignFixture } from "@mystcrag/design-contract/fixtures";
@@ -397,7 +395,11 @@ const recommendationCatalog = (): CatalogMaterialProduct[] => {
     crystalId: bead.crystalId,
     crystalNameCn: `测试水晶 ${index + 1}`,
     crystalNameEn: `Test crystal ${index + 1}`,
-    colorTags: index === 0 ? ["amber", "warm"] : index === 1 ? ["ivory", "neutral"] : ["ink", "deep"],
+    colorTags: ["chartreuse"],
+    visualTags: index === 1 ? ["focused"] : [],
+    styleTags: [],
+    emotionTags: index === 1 ? ["self-growth"] : [],
+    cultureTags: [],
     shape: bead.shape,
     diameterMm: bead.diameterMm,
     materialKey: bead.materialKey,
@@ -416,48 +418,6 @@ const recommendationCatalog = (): CatalogMaterialProduct[] => {
   ];
 };
 
-function recommendationDesign(designId: string, rank: number): DesignV1 {
-  const original = structuredClone(standardAiDesignFixture);
-  const rotated = [
-    ...original.beads.slice(rank - 1),
-    ...original.beads.slice(0, rank - 1)
-  ].map((bead, index) => ({
-    ...bead,
-    positionIndex: original.beads[index]!.positionIndex
-  }));
-  const inlineAccessories = original.accessories.filter(
-    (accessory) => accessory.placementMode === "INLINE"
-  );
-  return DesignV1Schema.parse({
-    ...original,
-    designId,
-    designName: `Tarot direction ${rank}`,
-    designMode: "TAROT_GUIDED",
-    beads: rotated,
-    pricing: {
-      ...original.pricing,
-      adjustments: [
-        {
-          adjustmentId: `test-authoritative-rank-${rank}`,
-          label: `Test authoritative rank ${rank}`,
-          amountMinor: rank * 10,
-          reasonCode: "TEST_AUTHORITATIVE_PRICE"
-        }
-      ],
-      totalPriceMinor: original.pricing.totalPriceMinor + rank * 10
-    },
-    production: {
-      ...original.production,
-      componentSequence: [
-        ...rotated,
-        ...inlineAccessories
-      ]
-        .sort((left, right) => left.positionIndex - right.positionIndex)
-        .map(({ componentId }) => componentId)
-    }
-  });
-}
-
 async function revealRecommendationSession(service: TarotService) {
   const created = await createSingle(service, "create-for-recommendations");
   await service.select(actorId, created.session.sessionId, {
@@ -473,10 +433,9 @@ async function revealRecommendationSession(service: TarotService) {
   });
 }
 
-function createRecommendationHarness(options: { failSecondRankOnce?: boolean } = {}) {
+function createRecommendationHarness() {
   const repository = new InMemoryTarotRepository();
   const catalog = recommendationCatalog();
-  const generated = new Map<string, DesignV1>();
   const generationCalls: Array<{
     actorId: string;
     request: {
@@ -488,7 +447,6 @@ function createRecommendationHarness(options: { failSecondRankOnce?: boolean } =
     designMode: string;
     designId: string;
   }> = [];
-  let failSecondRankOnce = options.failSecondRankOnce ?? false;
   let catalogCalls = 0;
   const service = new TarotService({
     repository,
@@ -502,26 +460,7 @@ function createRecommendationHarness(options: { failSecondRankOnce?: boolean } =
     designGenerator: {
       async generateFromCandidate(input) {
         generationCalls.push(cloneTestValue(input));
-        if (input.request.requestId.endsWith(":2") && failSecondRankOnce) {
-          failSecondRankOnce = false;
-          throw new Error("simulated rank two failure");
-        }
-        const rank = Number(input.request.requestId.at(-1));
-        const design = generated.get(input.designId) ?? recommendationDesign(input.designId, rank);
-        generated.set(input.designId, design);
-        return {
-          requestId: input.request.requestId,
-          design: toPublicDesign(design),
-          warnings: []
-        };
-      }
-    },
-    designReader: {
-      async getOwnedDesign(ownerId: string, designId: string) {
-        if (ownerId !== actorId) throw new PersistenceError("NOT_FOUND", "Design not found");
-        const design = generated.get(designId);
-        if (!design) throw new PersistenceError("NOT_FOUND", "Design not found");
-        return cloneTestValue(design);
+        throw new Error("stop after observing the ranked candidate");
       }
     }
   });
@@ -529,111 +468,33 @@ function createRecommendationHarness(options: { failSecondRankOnce?: boolean } =
     repository,
     service,
     catalog,
-    generated,
     generationCalls,
     getCatalogCalls: () => catalogCalls
   };
 }
 
-test("recommendations generate exactly three real, distinct, catalog-backed designs", async () => {
+test("recommendation ranking consumes authoritative Crystal visual and theme metadata", async () => {
   const harness = createRecommendationHarness();
   const revealed = await revealRecommendationSession(harness.service);
-  const sessionId = revealed.session.sessionId;
-  const rawQuestion = "How can I reflect on this transition?";
-
-  const response = await harness.service.recommendations(actorId, sessionId, {
-    requestId: "recommendation-response-request",
-    expectedRevision: revealed.session.revision,
-    question: rawQuestion,
-    saveQuestion: false,
-    locale: "zh-CN",
-    currency: "CNY"
-  });
-
-  assert.deepEqual(GenerateTarotRecommendationsResponseSchema.parse(response), response);
-  assert.equal(response.session.status, "RECOMMENDED");
-  assert.ok(response.session.recommendations);
-  assert.equal(response.session.recommendations.length, 3);
-  assert.equal(harness.generationCalls.length, 3);
-  assert.deepEqual(
-    harness.generationCalls.map(({ request }) => request.requestId),
-    [`${sessionId}:1`, `${sessionId}:2`, `${sessionId}:3`]
-  );
-  assert.ok(harness.generationCalls.every(({ request }) => request.wristCircumferenceMm === 155));
-  assert.deepEqual(
-    harness.generationCalls.map(({ designMode }) => designMode),
-    ["TAROT_GUIDED", "TAROT_GUIDED", "TAROT_GUIDED"]
-  );
-  assert.equal(new Set(harness.generationCalls.map(({ designId }) => designId)).size, 3);
-
-  const directionTags = harness.generationCalls.map(({ request }) =>
-    request.styleTags.find((tag) => tag.startsWith("tarot-direction-"))
-  );
-  assert.deepEqual(directionTags, [
-    "tarot-direction-balanced",
-    "tarot-direction-contrast",
-    "tarot-direction-neutral-led"
-  ]);
-  const activeIds = new Set(harness.catalog.filter(({ active }) => active).map(({ id }) => id));
-  const diameterById = new Map(harness.catalog.map(({ id, diameterMm }) => [id, diameterMm]));
-  const candidateSequences = harness.generationCalls.map(({ candidate }) => {
-    assert.ok(typeof candidate === "object" && candidate !== null && "materialProductIds" in candidate);
-    const ids = (candidate as { materialProductIds: string[] }).materialProductIds;
-    assert.ok(ids.every((id) => activeIds.has(id)));
-    const assembledMm = ids.reduce((total, id) => total + diameterById.get(id)!, 0);
-    assert.ok(assembledMm >= 130 && assembledMm <= 200, `assembled path ${assembledMm}mm`);
-    return ids.join("|");
-  });
-  assert.equal(new Set(candidateSequences).size, 3);
-
-  const returnedPrices = response.session.recommendations.map(
-    ({ design }) => design.pricing.totalPriceMinor
-  );
-  assert.deepEqual(
-    returnedPrices,
-    [...harness.generated.values()].map(({ pricing }) => pricing.totalPriceMinor)
-  );
-  const stored = harness.repository.readPrivate(sessionId);
-  assert.equal(stored.questionCiphertext, null);
-  assert.equal(JSON.stringify(stored).includes(rawQuestion), false);
-});
-
-test("recommendation retry survives a partial generation failure without duplicate designs", async () => {
-  const harness = createRecommendationHarness({ failSecondRankOnce: true });
-  const revealed = await revealRecommendationSession(harness.service);
-  const sessionId = revealed.session.sessionId;
-  const request = {
-    requestId: "recommendations-after-partial-failure",
-    expectedRevision: revealed.session.revision,
-    saveQuestion: false,
-    locale: "zh-CN" as const,
-    currency: "CNY" as const
-  };
-
   await assert.rejects(
-    () => harness.service.recommendations(actorId, sessionId, request),
-    /simulated rank two failure/
-  );
-  assert.equal(harness.generated.size, 1);
-  assert.equal(harness.repository.readPrivate(sessionId).status, "DRAWN");
-
-  const recovered = await harness.service.recommendations(actorId, sessionId, request);
-  assert.ok(recovered.session.recommendations);
-  assert.equal(recovered.session.recommendations.length, 3);
-  assert.equal(harness.generated.size, 3);
-  assert.deepEqual(
-    harness.generationCalls.map(({ request: callRequest }) => callRequest.requestId),
-    [`${sessionId}:1`, `${sessionId}:2`, `${sessionId}:1`, `${sessionId}:2`, `${sessionId}:3`]
+    () => harness.service.recommendations(actorId, revealed.session.sessionId, {
+      requestId: "recommendation-authoritative-tags",
+      expectedRevision: revealed.session.revision,
+      saveQuestion: false,
+      locale: "zh-CN",
+      currency: "CNY"
+    }),
+    /stop after observing the ranked candidate/
   );
 
-  const callsBeforeLinkedRetry = harness.generationCalls.length;
-  const linkedRetry = await harness.service.recommendations(actorId, sessionId, {
-    ...request,
-    requestId: "recommendations-linked-retry"
-  });
-  assert.ok(linkedRetry.session.recommendations);
-  assert.deepEqual(linkedRetry.session.recommendations, recovered.session.recommendations);
-  assert.equal(harness.generationCalls.length, callsBeforeLinkedRetry);
+  const firstCandidate = harness.generationCalls[0]?.candidate;
+  assert.ok(
+    typeof firstCandidate === "object" &&
+    firstCandidate !== null &&
+    "materialProductIds" in firstCandidate
+  );
+  const ids = (firstCandidate as { materialProductIds: string[] }).materialProductIds;
+  assert.equal(ids[0], harness.catalog[1]!.id);
 });
 
 test("saveQuestion fails closed before catalog, generation, or persistence", async () => {

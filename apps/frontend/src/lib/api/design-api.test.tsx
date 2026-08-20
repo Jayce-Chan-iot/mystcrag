@@ -70,6 +70,10 @@ test("material library loads the complete currency catalog through the protected
       crystalNameCn: "海蓝宝",
       crystalNameEn: "Aquamarine",
       colorTags: ["blue", "cool"],
+      visualTags: ["translucent"],
+      styleTags: ["minimal"],
+      emotionTags: ["calm-aesthetic"],
+      cultureTags: ["design-inspiration-only"],
       materialKey: material.materialKey,
       shape: material.shape,
       diameterMm: material.diameterMm,
@@ -82,6 +86,10 @@ test("material library loads the complete currency catalog through the protected
   const client = createDesignApiClient({ accessToken: "verified-test-token", useMock: false, fetcher: successFetch(payload, calls) });
   const response = await client.materials("CNY");
   assert.equal(response.materials[0]?.crystalNameCn, "海蓝宝");
+  assert.deepEqual(response.materials[0]?.visualTags, ["translucent"]);
+  assert.deepEqual(response.materials[0]?.styleTags, ["minimal"]);
+  assert.deepEqual(response.materials[0]?.emotionTags, ["calm-aesthetic"]);
+  assert.deepEqual(response.materials[0]?.cultureTags, ["design-inspiration-only"]);
   assert.equal(calls[0]?.input, "/api/catalog/materials?currency=CNY");
   assert.equal(calls[0]?.init?.method, "GET");
 });
