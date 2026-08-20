@@ -1,5 +1,6 @@
 import { access, readFile, readdir } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 
@@ -131,7 +132,7 @@ test("shared contract dependency direction stays application-independent", async
   assertNoMatches(forbidden);
 });
 
-test("pnpm dev forwards the documented real-backend environment to Backend", () => {
+test("pnpm dev isolates each app's documented environment", () => {
   const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   const result = spawnSync(pnpmCommand, ["exec", "turbo", "run", "dev", "--dry=json"], {
     encoding: "utf8",
@@ -147,10 +148,11 @@ test("pnpm dev forwards the documented real-backend environment to Backend", () 
 
   const dryRun = JSON.parse(result.stdout);
   const backend = dryRun.tasks.find((task) => task.taskId === "@mystcrag/backend#dev");
-  const forwarded = new Set(
-    backend?.environmentVariables?.specified?.passThroughEnv ?? []
-  );
-  const required = [
+  const frontend = dryRun.tasks.find((task) => task.taskId === "@mystcrag/frontend#dev");
+  const backendEnvironment = backend?.environmentVariables?.specified?.passThroughEnv ?? [];
+  const frontendEnvironment = frontend?.environmentVariables?.specified?.passThroughEnv ?? [];
+
+  assert.deepEqual(backendEnvironment, [
     "BACKEND_PORT",
     "DATABASE_URL",
     "MYSTCRAG_AUTH_AUDIENCE",
@@ -161,9 +163,18 @@ test("pnpm dev forwards the documented real-backend environment to Backend", () 
     "MYSTCRAG_TAROT_ENABLED",
     "MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY",
     "NODE_ENV"
-  ];
-
-  assertNoMatches(required.filter((name) => !forwarded.has(name)));
+  ]);
+  assert.deepEqual(frontendEnvironment, [
+    "MYSTCRAG_BACKEND_ORIGIN",
+    "MYSTCRAG_TAROT_ENABLED",
+    "NEXT_PUBLIC_API_BASE_URL",
+    "NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN",
+    "NEXT_PUBLIC_MYSTCRAG_MOCK_API",
+    "NODE_ENV"
+  ]);
+  assert.equal(frontendEnvironment.includes("DATABASE_URL"), false);
+  assert.equal(frontendEnvironment.includes("MYSTCRAG_AUTH_SIGNING_SECRET"), false);
+  assert.equal(frontendEnvironment.includes("MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY"), false);
 });
 
 function assertNoMatches(matches) {

@@ -15,7 +15,9 @@
     },
     "dev": {
       "cache": false,
-      "persistent": true,
+      "persistent": true
+    },
+    "@mystcrag/backend#dev": {
       "passThroughEnv": [
         "BACKEND_PORT",
         "DATABASE_URL",
@@ -23,10 +25,16 @@
         "MYSTCRAG_AUTH_ISSUER",
         "MYSTCRAG_AUTH_PROVIDER",
         "MYSTCRAG_AUTH_SIGNING_SECRET",
-        "MYSTCRAG_BACKEND_ORIGIN",
         "MYSTCRAG_ENABLE_SIGNED_TEST_AUTH",
         "MYSTCRAG_TAROT_ENABLED",
         "MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY",
+        "NODE_ENV"
+      ]
+    },
+    "@mystcrag/frontend#dev": {
+      "passThroughEnv": [
+        "MYSTCRAG_BACKEND_ORIGIN",
+        "MYSTCRAG_TAROT_ENABLED",
         "NEXT_PUBLIC_API_BASE_URL",
         "NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN",
         "NEXT_PUBLIC_MYSTCRAG_MOCK_API",
