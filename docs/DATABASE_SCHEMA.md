@@ -1,6 +1,6 @@
 # Database Schema
 
-The executable source is `packages/database/prisma/schema.prisma`; the reviewed baseline is `20260721140000_init_mystcrag_persistence_v1`. PostgreSQL tables use snake_case and Prisma fields use camelCase.
+The executable source is `packages/database/prisma/schema.prisma`; the reviewed baseline is `20260721140000_init_mystcrag_persistence_v1`, with additive order-idempotency and Tarot-session migrations applied afterward. PostgreSQL tables use snake_case and Prisma fields use camelCase.
 
 ## Transactional model
 
@@ -10,6 +10,7 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 - `Order` stores a BIGINT minor-unit total and references a revision. Its nullable, unique `idempotencyKey` is populated for new order intents so concurrent retries for the same user and design revision resolve to one order; legacy rows remain readable. Its required `OrderDesignSnapshot` stores immutable design, pricing, and production JSON plus currency and pricing-rule version. Triggers reject snapshot updates/deletes and order deletes.
 - `MaterialProduct` and `AccessoryProduct` are sellable catalog records; `Crystal` remains knowledge data. Cost fields are server-only.
 - `InventorySnapshot` and `PricingRule` are versioned inputs to order validation and price recalculation.
+- `TarotSession` is an owner-scoped, revisioned draw aggregate. It stores canonical private engine state separately from strict contract-safe draw and recommendation snapshots. `TarotDesignRecommendation` links exactly three ranked, distinct designs without duplicating design snapshots.
 
 ## Guardrails
 
@@ -18,6 +19,17 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 - Design writes conditionally match owner, current revision, and `deletedAt: null`; the current row update and revision insert share one transaction.
 - Publication requires consent, non-private visibility, PASSED compliance, and no review requirement. Order creation first returns an existing order for the same owner and revision, otherwise rejects rejected or review-required flagged designs, validates server price and latest inventory, and creates the order under a unique idempotency key.
 - Every foreign key declares `Restrict`; lifecycle data is never removed by user deletion. Designs use `deletedAt`, publications use `UNPUBLISHED`, and products use `active=false`.
+- Tarot transitions conditionally match session ID, owner ID, and state revision inside a transaction. Accepted selection operation IDs remain in the validated private engine state, making identical retries idempotent while stale or conflicting commands fail.
+- Recommendation ranks must be exactly 1, 2, and 3 with three distinct, owner-scoped designs. `selectedDesignId` is nullable metadata validated against those links by the repository; it is intentionally not a cascading foreign key.
+- Tarot question text has no database field. The default path stores neither question text nor ciphertext; explicit opt-in may populate only the paired nullable `questionCiphertext` and `questionSavedAt` fields, and public DTO mapping must omit ciphertext.
+
+## Tarot lifecycle persistence
+
+- `TarotSpreadType` supports `SINGLE` and `PAST_PRESENT_FUTURE`; `TarotSessionStatus` supports `DRAWING`, `DRAWN`, `RECOMMENDED`, `SAVED`, and `ABANDONED`. `DesignMode.TAROT_GUIDED` is additive to existing modes.
+- New sessions start at state revision 1 with an unselected, unrevealed canonical private draw state. Selection and reveal transitions update private state and its contract-safe draw snapshot together.
+- Recommendation persistence validates interpretation, color story, and material-display data before write and after read, then transactionally creates unique `(sessionId, rank)` and `(sessionId, designId)` links.
+- Saving a session may record a selected design only when it belongs to the session's recommendation links. A nullable restrictive self-relation records redraw lineage through `parentSessionId`.
+- User, parent-session, session-recommendation, and design-recommendation foreign keys use `RESTRICT`. Deleting a referenced design or a parent/recommended session cannot erase Tarot lifecycle evidence.
 
 ## Demo catalog baseline
 

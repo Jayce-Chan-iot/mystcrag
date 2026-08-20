@@ -137,6 +137,9 @@ importers:
       '@mystcrag/design-contract':
         specifier: workspace:*
         version: link:../design-contract
+      '@mystcrag/tarot-engine':
+        specifier: workspace:*
+        version: link:../tarot-engine
       '@prisma/adapter-pg':
         specifier: ^7.9.0
         version: 7.9.0

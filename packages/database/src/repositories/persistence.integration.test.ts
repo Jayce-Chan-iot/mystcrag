@@ -14,7 +14,8 @@ import { PublicationRepository } from "./publication.repository.js";
 const databaseUrl = process.env.DATABASE_URL;
 const migrationNames = [
   "20260721140000_init_mystcrag_persistence_v1",
-  "20260818120000_add_order_idempotency"
+  "20260818120000_add_order_idempotency",
+  "20260820100000_add_tarot_sessions"
 ];
 
 function nextRevision(
