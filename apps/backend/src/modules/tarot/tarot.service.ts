@@ -551,6 +551,12 @@ export class TarotService implements TarotApiService {
     }
     const current = await this.dependencies.repository.getOwned(actorId, sessionId);
     if (current.status === "RECOMMENDED" || current.status === "SAVED") {
+      if (input.saveQuestion && current.questionCiphertext === null) {
+        throw new DomainApiError(
+          "CONFLICT",
+          "A Tarot question cannot be added after recommendations are generated."
+        );
+      }
       return mapRecommendationsTarotResponse(
         actorId,
         input.requestId,

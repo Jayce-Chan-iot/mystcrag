@@ -452,6 +452,70 @@ test("saveQuestion false never invokes encryption and omits question fields from
   assert.equal(stored.questionSavedAt, null);
 });
 
+test("concurrent identical opt-in recommendations both reuse one persisted encrypted question", async () => {
+  let encryptionSequence = 0;
+  const harness = createRealRecommendationHarness({
+    questionEncryption: {
+      async encrypt() {
+        encryptionSequence += 1;
+        await Promise.resolve();
+        return `random-envelope-${encryptionSequence}`;
+      }
+    }
+  });
+  const revealed = await revealRealRecommendationSession(harness.tarotService);
+  const request = {
+    ...recommendationRequest(revealed.session.revision),
+    question: "Persist this private question once",
+    saveQuestion: true
+  };
+
+  const [first, second] = await Promise.all([
+    harness.tarotService.recommendations(actorId, revealed.session.sessionId, request),
+    harness.tarotService.recommendations(actorId, revealed.session.sessionId, request)
+  ]);
+
+  assert.equal(first.session.status, "RECOMMENDED");
+  assert.deepEqual(second.session, first.session);
+  assert.equal(harness.designs.size, 3);
+  assert.equal(encryptionSequence, 2);
+  assert.match(
+    harness.tarotRepository.readPrivate(revealed.session.sessionId).questionCiphertext ?? "",
+    /^random-envelope-[12]$/
+  );
+});
+
+test("a later opt-in cannot claim to save a question after no-save recommendations exist", async () => {
+  const harness = createRealRecommendationHarness({
+    questionEncryption: {
+      async encrypt() {
+        return "late-encrypted-question";
+      }
+    }
+  });
+  const revealed = await revealRealRecommendationSession(harness.tarotService);
+  const generated = await harness.tarotService.recommendations(
+    actorId,
+    revealed.session.sessionId,
+    recommendationRequest(revealed.session.revision)
+  );
+
+  await assert.rejects(
+    () => harness.tarotService.recommendations(actorId, revealed.session.sessionId, {
+      ...recommendationRequest(generated.session.revision),
+      question: "Save this after generation",
+      saveQuestion: true
+    }),
+    (error: unknown) =>
+      error instanceof DomainApiError &&
+      error.code === "CONFLICT" &&
+      /question.*recommendation/i.test(error.message)
+  );
+  const stored = harness.tarotRepository.readPrivate(revealed.session.sessionId);
+  assert.equal(stored.questionCiphertext, null);
+  assert.equal(stored.questionSavedAt, null);
+});
+
 test("hidden-reasoning questions are compliance-blocked before any Design generation", async () => {
   const harness = createRealRecommendationHarness();
   const revealed = await revealRealRecommendationSession(harness.tarotService);

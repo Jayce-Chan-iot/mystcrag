@@ -19,22 +19,25 @@ const ZH_DISCLAIMER =
 const BLOCKED_QUESTION_RULES = [
   /(?:chain[ -]of[ -]thought|hidden reasoning|system prompt|developer message|internal prompt)/iu,
   /(?:思维链|隐藏推理|系统提示词|开发者消息)/u,
-  /(?:when (?:will|am) i die|you (?:will|are going to) die|death is certain)/iu,
-  /(?:我什么时候会死|你会死|死亡已确定)/u
+  /\b(?:when (?:will|am) i die|will i die(?:\s+[^?.,;!]*)?|you (?:will|shall|are going to) die|death is certain)\b/iu,
+  /(?:我(?:什么时候)?会死|你(?:会|将)死|死亡已确定)/u
 ] as const;
 
 const UNSAFE_COPY_RULES = [
   /\b(?:cure|heal(?:ing)?|treat(?:ment)?|prevent disease|medical efficacy|diagnos(?:e|is))\b/iu,
   /(?:治愈|治疗|疗效|治病|诊断|医学功效)/u,
   /(?:you (?:are|have) (?:depressed|depression|anxious|anxiety)|你有抑郁|你有焦虑)/iu,
-  /(?:crystal|bracelet).{0,48}(?:will|can|guarantees?|proven|efficacy|cures?|heals?)/iu,
+  /(?:crystal|bracelet|amethyst|quartz|gemstone).{0,48}(?:will|can|guarantees?|proven|efficacy|cures?|heals?|relieves?|reduces?|treats?|prevents?|eases?)/iu,
+  /\b(?:does|can|could|will)\s+[^?.,;!]{1,48}\s+(?:cure|heal|treat|prevent|relieve|reduce|ease)s?\s+(?:anxiety|depression|pain|insomnia|disease|illness|symptoms?)\b/iu,
   /(?:水晶|手串).{0,32}(?:会|能|可以|保证|必定).{0,24}(?:疗效|治愈|改运|招财|能量|功效)/u,
-  /(?:will definitely|is destined to|are destined to|certain destiny|future is certain|cards? (?:prove|guarantee).{0,36}\bwill\b)/iu,
+  /(?:will definitely|is destined to|are destined to|certain destiny|future is certain|cards? (?:prove|guarantee).{0,36}\bwill\b|(?:tomorrow|next (?:week|month|year)|in the future)[^.!?]{0,28}\b(?:you|your (?:job|relationship|future)|the outcome)\s+(?:are|is|will be)\s+(?:guaranteed|certain|inevitable)\b)/iu,
   /(?:必定|一定会|命中注定|未来已确定|确定性命运)/u,
-  /(?:you (?:will|are going to) die|death is certain|when you will die)/iu,
+  /(?:you (?:will|shall|are going to) die|death is certain|when you will die)/iu,
   /(?:你会死|死亡已确定|死期)/u,
-  /(?:guarantee(?:d|s)? .{0,24}(?:financial returns?|profit|wealth)|risk[- ]free profit|get rich for certain)/iu,
-  /(?:保证|必定|一定).{0,24}(?:收益|赚钱|招财|致富)|(?:稳赚|保本收益)/u
+  /(?:(?:guarantee|ensure|promise)(?:d|s)? .{0,40}(?:financial|investment|\d+(?:\.\d+)?%)[^.!?]{0,20}(?:returns?|profit|wealth)|risk[- ]free profit|get rich for certain)/iu,
+  /(?:保证|确保|必定|一定).{0,24}(?:收益|赚钱|招财|致富)|(?:稳赚|保本收益)/u,
+  /(?:chain[ -]of[ -]thought|hidden reasoning|system prompt|developer message|internal prompt)/iu,
+  /(?:思维链|隐藏推理|系统提示词|开发者消息)/u
 ] as const;
 
 export interface TarotCopyProvider {

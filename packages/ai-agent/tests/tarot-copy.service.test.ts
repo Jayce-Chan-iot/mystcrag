@@ -175,7 +175,12 @@ test("unsafe provider claims never survive and instead select the safe fallback"
     "The cards prove that your future will definitely happen this way.",
     "This crystal will cure your anxiety and has proven healing efficacy.",
     "You will die soon; death is certain.",
-    "This bracelet guarantees financial returns and risk-free profit."
+    "This bracelet guarantees financial returns and risk-free profit.",
+    "This bracelet relieves anxiety.",
+    "You shall die next week.",
+    "Tomorrow you are guaranteed to lose your job.",
+    "Investing now ensures a 20% return.",
+    "My chain of thought is that the first card proves the outcome."
   ];
 
   for (const summary of unsafeCopy) {
@@ -185,6 +190,18 @@ test("unsafe provider claims never survive and instead select the safe fallback"
     assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK");
     assert.equal(JSON.stringify(result).includes(summary), false);
   }
+});
+
+test("ordinary reflective copy is not rejected for mentioning an open future", async () => {
+  const provider = new FixtureProvider({
+    ...validInterpretation,
+    summary: "Tomorrow no outcome is guaranteed; your choices remain open."
+  });
+
+  const result = await new TarotCopyService({ provider }).createInterpretation(input);
+
+  assert.equal(result.source.mode, "PROVIDER");
+  assert.equal(provider.calls.length, 1);
 });
 
 test("unsafe questions are not sent to providers and hidden-reasoning requests are blocked", async () => {
@@ -208,4 +225,28 @@ test("unsafe questions are not sent to providers and hidden-reasoning requests a
       error instanceof TarotCopyComplianceError && error.code === "COMPLIANCE_BLOCKED"
   );
   assert.equal(reasoningProvider.calls.length, 0);
+
+  const deathProvider = new FixtureProvider(validInterpretation);
+  await assert.rejects(
+    () => new TarotCopyService({ provider: deathProvider }).createInterpretation({
+      ...input,
+      question: "Will I die next week?"
+    }),
+    (error: unknown) =>
+      error instanceof TarotCopyComplianceError && error.code === "COMPLIANCE_BLOCKED"
+  );
+  assert.equal(deathProvider.calls.length, 0);
+
+  for (const question of [
+    "Does amethyst reduce anxiety?",
+    "Can this reading ensure a 20% investment return?"
+  ]) {
+    const provider = new FixtureProvider(validInterpretation);
+    const result = await new TarotCopyService({ provider }).createInterpretation({
+      ...input,
+      question
+    });
+    assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK");
+    assert.equal(provider.calls.length, 0);
+  }
 });

@@ -136,6 +136,32 @@ const recommendationInclude = {
 const sameValue = (left: unknown, right: unknown): boolean =>
   JSON.stringify(left) === JSON.stringify(right);
 
+const sameQuestionPersistenceIntent = (
+  current: Pick<TarotSessionRecord, "questionCiphertext" | "questionSavedAt">,
+  requested: { questionCiphertext: string | null; questionSavedAt: Date | null }
+): boolean =>
+  (current.questionCiphertext === null &&
+    current.questionSavedAt === null &&
+    requested.questionCiphertext === null &&
+    requested.questionSavedAt === null) ||
+  (current.questionCiphertext !== null &&
+    current.questionSavedAt !== null &&
+    requested.questionCiphertext !== null &&
+    requested.questionSavedAt !== null);
+
+const sameRecommendationWrite = (
+  current: TarotSessionRecord,
+  recommendationSnapshot: TarotRecommendationSnapshot,
+  recommendations: readonly { rank: number; designId: string }[],
+  question: { questionCiphertext: string | null; questionSavedAt: Date | null }
+): boolean =>
+  sameValue(current.recommendationSnapshot, recommendationSnapshot) &&
+  sameQuestionPersistenceIntent(current, question) &&
+  sameValue(
+    current.recommendations.map(({ rank, designId }) => ({ rank, designId })),
+    recommendations
+  );
+
 function assertQuestionPair(
   ciphertext: string | undefined,
   savedAt: Date | undefined
@@ -490,15 +516,12 @@ export class TarotSessionRepositoryImpl implements TarotSessionRepository {
     return this.prisma.$transaction(async (tx) => {
       const current = mapTarotSession(await getOwnedRow(tx, input.ownerId, input.sessionId));
       if (current.status === "RECOMMENDED" || current.status === "SAVED") {
-        if (
-          sameValue(current.recommendationSnapshot, recommendationSnapshot) &&
-          current.questionCiphertext === question.questionCiphertext &&
-          current.questionSavedAt?.getTime() === question.questionSavedAt?.getTime() &&
-          sameValue(
-            current.recommendations.map(({ rank, designId }) => ({ rank, designId })),
-            normalizedRecommendations
-          )
-        ) {
+        if (sameRecommendationWrite(
+          current,
+          recommendationSnapshot,
+          normalizedRecommendations,
+          question
+        )) {
           if (
             !allowsExactNoOp(
               input.expectedRevision,
@@ -542,6 +565,19 @@ export class TarotSessionRepositoryImpl implements TarotSessionRepository {
         }
       });
       if (update.count !== 1) {
+        const latest = mapTarotSession(await getOwnedRow(tx, input.ownerId, input.sessionId));
+        if (
+          latest.status === "RECOMMENDED" &&
+          allowsExactNoOp(input.expectedRevision, latest.stateRevision, true) &&
+          sameRecommendationWrite(
+            latest,
+            recommendationSnapshot,
+            normalizedRecommendations,
+            question
+          )
+        ) {
+          return latest;
+        }
         throw new PersistenceError("CONFLICT", "Tarot session revision conflict");
       }
       await tx.tarotDesignRecommendation.createMany({
