@@ -24,6 +24,34 @@ type TarotFanProps = Readonly<{
   onSelect(displayedPosition: number): void;
 }>;
 
+type TarotFanInput = Readonly<{
+  kind: "click" | "keydown" | "pointer";
+  key?: string;
+  button?: number;
+  pointerType?: string;
+  detail?: number;
+  disabled: boolean;
+  pending: boolean;
+  choose(): void;
+  preventDefault(): void;
+}>;
+
+export function activateTarotFanInput(input: TarotFanInput): void {
+  if (input.disabled || input.pending) return;
+  if (input.kind === "keydown") {
+    if (input.key !== "Enter" && input.key !== " ") return;
+    input.preventDefault();
+    input.choose();
+    return;
+  }
+  if (input.kind === "pointer") {
+    if (input.button !== 0) return;
+    input.choose();
+    return;
+  }
+  if (input.detail === 0) input.choose();
+}
+
 export function TarotFan({
   acceptedPositions,
   cardBackAssetFile,
@@ -32,16 +60,23 @@ export function TarotFan({
   onSelect
 }: TarotFanProps) {
   const activateFromKeyboard = (event: KeyboardEvent<HTMLButtonElement>, position: number) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
-    onSelect(position);
+    activateTarotFanInput({
+      kind: "keydown", key: event.key, disabled, pending: pendingPosition !== undefined,
+      choose: () => onSelect(position), preventDefault: () => event.preventDefault()
+    });
   };
   const activateFromPointer = (event: PointerEvent<HTMLButtonElement>, position: number) => {
-    if (event.button !== 0) return;
-    onSelect(position);
+    activateTarotFanInput({
+      kind: "pointer", button: event.button, pointerType: event.pointerType, disabled,
+      pending: pendingPosition !== undefined, choose: () => onSelect(position),
+      preventDefault: () => event.preventDefault()
+    });
   };
   const activateFromClick = (event: MouseEvent<HTMLButtonElement>, position: number) => {
-    if (event.detail === 0) onSelect(position);
+    activateTarotFanInput({
+      kind: "click", detail: event.detail, disabled, pending: pendingPosition !== undefined,
+      choose: () => onSelect(position), preventDefault: () => event.preventDefault()
+    });
   };
 
   return (
@@ -58,16 +93,27 @@ export function TarotFan({
             "--fan-order": position
           } as CSSProperties;
 
+          if (accepted) {
+            return (
+              <span
+                aria-hidden="true"
+                className={styles.fanCard}
+                data-selected-footprint="true"
+                data-tarot-position={position}
+                key={position}
+                style={style}
+              />
+            );
+          }
+
           return (
             <button
               aria-busy={pending || undefined}
               aria-label={`选择第 ${position + 1} 张塔罗牌`}
               className={styles.fanCard}
-              data-inputs="click pointer-mouse pointer-touch Enter Space"
               data-pending={pending || undefined}
-              data-selected={accepted || undefined}
               data-tarot-position={position}
-              disabled={disabled || accepted}
+              disabled={disabled}
               key={position}
               onClick={(event) => activateFromClick(event, position)}
               onKeyDown={(event) => activateFromKeyboard(event, position)}

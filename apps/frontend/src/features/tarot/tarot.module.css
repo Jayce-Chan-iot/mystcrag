@@ -135,9 +135,7 @@
 }
 
 .tarotFanCard:hover:not(:disabled),
-.tarotFanCard:focus-visible,
-.tarotFanCard[data-pending="true"],
-.tarotFanCard[data-selected="true"] {
+.tarotFanCard:focus-visible {
   z-index: 100;
   box-shadow: 0 0.9rem 1.4rem rgb(55 39 68 / 0.28);
   transform: translateX(-50%) translateY(-0.8rem) rotate(var(--fan-rotate));
@@ -145,6 +143,11 @@
 
 .tarotFanCard:disabled {
   cursor: default;
+}
+
+.tarotFanCard[data-selected-footprint="true"] {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .tarotCardArtwork,

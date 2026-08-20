@@ -52,48 +52,90 @@ export function createTarotDrawCoordinator(dependencies: TarotDrawCoordinatorDep
     redrawing: false,
     error: null
   };
+  let generation = 0;
+  let disposed = false;
   const listeners = new Set<(nextState: TarotDrawState) => void>();
   const publish = (patch: Partial<TarotDrawState>) => {
+    if (disposed) return;
     state = { ...state, ...patch };
     for (const listener of listeners) listener(state);
   };
-  const restoreSession = async (): Promise<GetTarotSessionResponse> => {
+  const restoreSession = async (token: number): Promise<GetTarotSessionResponse | undefined> => {
     const response = await dependencies.client.get(dependencies.sessionId);
+    if (disposed || token !== generation) return undefined;
     publish({ session: response.session, loading: false, pendingPosition: undefined });
     return response;
+  };
+  const begin = () => ++generation;
+  const current = (token: number) => !disposed && token === generation;
+  const reconcileAmbiguousSelection = async (
+    token: number,
+    displayedPosition: number,
+    slot: TarotPublicSession["slots"][number]
+  ) => {
+    try {
+      const response = await dependencies.client.get(dependencies.sessionId);
+      if (!current(token)) return;
+      const committed = response.session.acceptedSelections.some(
+        (selection) => selection.slot === slot && selection.displayedPosition === displayedPosition
+      );
+      publish({
+        session: response.session,
+        loading: false,
+        pendingPosition: undefined,
+        error: committed
+          ? "服务器已确认这张牌，已同步最新进度。"
+          : "服务器确认这次选牌未提交，请重试。"
+      });
+    } catch {
+      if (!current(token)) return;
+      publish({
+        error: "连接不稳定，正在确认这张牌是否已提交。恢复连接后请重试。"
+      });
+    }
   };
 
   return {
     getState: () => state,
     subscribe(listener: (nextState: TarotDrawState) => void) {
+      disposed = false;
       listeners.add(listener);
       return () => {
         listeners.delete(listener);
       };
     },
+    dispose() {
+      disposed = true;
+      generation += 1;
+      listeners.clear();
+    },
     async restore() {
+      const token = begin();
       publish({ loading: true, error: null });
       try {
-        const response = await restoreSession();
-        if (response.session.revealedCards !== undefined) {
+        const response = await restoreSession(token);
+        if (response?.session.revealedCards !== undefined && current(token)) {
           dependencies.navigate(`/tarot/result/${encodeURIComponent(dependencies.sessionId)}`);
         }
       } catch (error) {
-        publish({ loading: false, error: errorMessage(error) });
+        if (current(token)) publish({ loading: false, error: errorMessage(error) });
       }
     },
     async select(displayedPosition: number) {
       const session = state.session;
       if (
         session === null ||
+        state.loading ||
         state.pendingPosition !== undefined ||
         state.revealing ||
+        state.redrawing ||
         session.acceptedSelections.length >= session.slots.length ||
         session.acceptedSelections.some((selection) => selection.displayedPosition === displayedPosition)
       ) return;
 
       const slot = session.slots[session.acceptedSelections.length];
       if (slot === undefined) return;
+      const token = begin();
       publish({ pendingPosition: displayedPosition, error: null });
       try {
         const response: SelectTarotCardResponse = await dependencies.client.select(
@@ -106,45 +148,55 @@ export function createTarotDrawCoordinator(dependencies: TarotDrawCoordinatorDep
             operationId: dependencies.requestId()
           }
         );
-        publish({ session: response.session, pendingPosition: undefined });
+        if (current(token)) publish({ session: response.session, pendingPosition: undefined });
       } catch (error) {
-        if (toFrontendApiError(error).code === "CONFLICT") {
+        if (!current(token)) return;
+        const code = toFrontendApiError(error).code;
+        if (code === "CONFLICT") {
           try {
-            await restoreSession();
-            publish({ error: "牌阵已同步到服务器上的最新进度，请继续选牌。" });
+            await restoreSession(token);
+            if (current(token)) publish({ error: "牌阵已同步到服务器上的最新进度，请继续选牌。" });
           } catch (restoreError) {
-            publish({ pendingPosition: undefined, error: errorMessage(restoreError) });
+            if (current(token)) publish({ pendingPosition: undefined, error: errorMessage(restoreError) });
           }
+        } else if (code === "NETWORK_ERROR" || code === "INTERNAL_ERROR") {
+          await reconcileAmbiguousSelection(token, displayedPosition, slot);
         } else {
-          publish({ pendingPosition: undefined, error: errorMessage(error) });
+          if (current(token)) publish({ pendingPosition: undefined, error: errorMessage(error) });
         }
       }
     },
     async reveal() {
       const session = state.session;
-      if (session === null || state.revealing || state.pendingPosition !== undefined) return;
+      if (
+        session === null || state.loading || state.revealing || state.redrawing ||
+        state.pendingPosition !== undefined
+      ) return;
       const remaining = session.slots.length - session.acceptedSelections.length;
       if (remaining > 0) {
         publish({ error: `还需要选择 ${remaining} 张牌，才能查看解读。` });
         return;
       }
 
+      const token = begin();
       publish({ revealing: true, error: null });
       try {
         const response: RevealTarotSessionResponse = await dependencies.client.reveal(
           dependencies.sessionId,
           { requestId: dependencies.requestId(), expectedRevision: session.revision }
         );
+        if (!current(token)) return;
         publish({ session: response.session });
         if (!dependencies.prefersReducedMotion()) await dependencies.wait(1040);
-        dependencies.navigate(`/tarot/result/${encodeURIComponent(dependencies.sessionId)}`);
+        if (current(token)) dependencies.navigate(`/tarot/result/${encodeURIComponent(dependencies.sessionId)}`);
       } catch (error) {
+        if (!current(token)) return;
         if (toFrontendApiError(error).code === "CONFLICT") {
           try {
-            await restoreSession();
-            publish({ revealing: false, error: "牌阵已同步，请再次确认查看解读。" });
+            await restoreSession(token);
+            if (current(token)) publish({ revealing: false, error: "牌阵已同步，请再次确认查看解读。" });
           } catch (restoreError) {
-            publish({ revealing: false, error: errorMessage(restoreError) });
+            if (current(token)) publish({ revealing: false, error: errorMessage(restoreError) });
           }
         } else {
           publish({ revealing: false, error: errorMessage(error) });
@@ -153,7 +205,11 @@ export function createTarotDrawCoordinator(dependencies: TarotDrawCoordinatorDep
     },
     async redraw() {
       const session = state.session;
-      if (session === null || state.redrawing) return;
+      if (
+        session === null || state.loading || state.redrawing || state.revealing ||
+        state.pendingPosition !== undefined
+      ) return;
+      const token = begin();
       publish({ redrawing: true, error: null });
       try {
         const response: CreateTarotSessionResponse = await dependencies.client.create({
@@ -162,10 +218,11 @@ export function createTarotDrawCoordinator(dependencies: TarotDrawCoordinatorDep
           theme: session.theme,
           parentSessionId: session.sessionId
         });
+        if (!current(token)) return;
         dependencies.onRedrawSession?.(session.sessionId, response.session.sessionId);
         dependencies.navigate(`/tarot/draw/${encodeURIComponent(response.session.sessionId)}`);
       } catch (error) {
-        publish({ redrawing: false, error: errorMessage(error) });
+        if (current(token)) publish({ redrawing: false, error: errorMessage(error) });
       }
     }
   };
@@ -206,6 +263,7 @@ export function TarotDrawView({
     session.acceptedSelections.map((selection) => selection.displayedPosition)
   );
   const complete = session.acceptedSelections.length === session.slots.length;
+  const busy = pendingPosition !== undefined || revealing || redrawing;
   const count = session.acceptedSelections.length;
   const cardCountLabel = session.spreadType === "SINGLE" ? "一张牌" : "三张牌";
 
@@ -236,7 +294,7 @@ export function TarotDrawView({
         <TarotFan
           acceptedPositions={acceptedPositions}
           cardBackAssetFile="CardBack.png"
-          disabled={complete || revealing || redrawing}
+          disabled={complete || busy}
           onSelect={onSelect}
           pendingPosition={pendingPosition}
         />
@@ -247,18 +305,18 @@ export function TarotDrawView({
           <span>{complete ? "牌阵已完成，可以查看解读" : `再选择${session.slots.length - count}张牌`}</span>
         </div>
         {error ? <p className={styles.inlineError} role="alert">{error}</p> : null}
-        <button className={styles.redrawLink} disabled={redrawing} onClick={onRedraw} type="button">
+        <button className={styles.redrawLink} disabled={busy} onClick={onRedraw} type="button">
           {redrawing ? "正在重新准备…" : "重新洗牌"}
         </button>
       </section>
 
       <footer className={styles.actionFooter}>
-        <button className={styles.secondaryAction} onClick={onBack} type="button">
+        <button className={styles.secondaryAction} disabled={busy} onClick={onBack} type="button">
           返回修改问题
         </button>
         <button
           className={styles.primaryAction}
-          disabled={!complete || revealing}
+          disabled={!complete || busy}
           onClick={onReveal}
           type="button"
         >
@@ -295,7 +353,10 @@ export function TarotDraw({
   useEffect(() => {
     const unsubscribe = coordinator.subscribe(setState);
     void coordinator.restore();
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      coordinator.dispose();
+    };
   }, [coordinator]);
 
   if (state.loading || state.session === null) {
@@ -310,7 +371,10 @@ export function TarotDraw({
   return (
     <TarotDrawView
       error={state.error}
-      onBack={() => router.push("/tarot/setup")}
+      onBack={() => {
+        coordinator.dispose();
+        router.push("/tarot/setup");
+      }}
       onRedraw={() => void coordinator.redraw()}
       onReveal={() => void coordinator.reveal()}
       onSelect={(position) => void coordinator.select(position)}
