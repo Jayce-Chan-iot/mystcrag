@@ -11,6 +11,7 @@ import { PersistenceError, type TarotRecommendationSnapshot } from "@mystcrag/da
 
 import { createApp } from "../../app.js";
 import type { AuthProvider, VerifiedAuthClaims } from "../../auth/auth-provider.js";
+import { resolveTarotFeatureEnabled } from "../../config/tarot-feature.js";
 import { TarotService } from "./tarot.service.js";
 import {
   InMemoryTarotRepository,
@@ -45,6 +46,55 @@ const validCreatePayload = {
   spreadType: "SINGLE" as const,
   theme: "SELF_GROWTH" as const
 };
+
+test("Backend Tarot rollout accepts only the exact true literal", () => {
+  const cases = [
+    { value: undefined, expected: false },
+    { value: "", expected: false },
+    { value: "false", expected: false },
+    { value: "TRUE", expected: false },
+    { value: " true ", expected: false },
+    { value: "1", expected: false },
+    { value: "true", expected: true }
+  ] as const;
+
+  for (const { value, expected } of cases) {
+    assert.equal(resolveTarotFeatureEnabled(value), expected);
+  }
+});
+
+test("createApp applies the fail-closed environment gate when no override is injected", async () => {
+  const previous = process.env.MYSTCRAG_TAROT_ENABLED;
+  try {
+    for (const [value, expectedStatus] of [
+      [undefined, 501],
+      ["TRUE", 501],
+      ["true", 200]
+    ] as const) {
+      if (value === undefined) delete process.env.MYSTCRAG_TAROT_ENABLED;
+      else process.env.MYSTCRAG_TAROT_ENABLED = value;
+      const app = createApp({
+        tarotService: new TarotService({
+          repository: new InMemoryTarotRepository(),
+          random: new ZeroRandomSource()
+        }),
+        authProvider,
+        logger: false
+      });
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/tarot/sessions",
+        headers: ownerHeaders,
+        payload: { ...validCreatePayload, requestId: `environment-${value ?? "unset"}` }
+      });
+      assert.equal(response.statusCode, expectedStatus);
+      await app.close();
+    }
+  } finally {
+    if (previous === undefined) delete process.env.MYSTCRAG_TAROT_ENABLED;
+    else process.env.MYSTCRAG_TAROT_ENABLED = previous;
+  }
+});
 
 const routeRecommendationSnapshot: TarotRecommendationSnapshot = {
   interpretation: {

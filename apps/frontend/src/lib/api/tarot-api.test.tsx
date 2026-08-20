@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { standardAiDesignFixture } from "@mystcrag/design-contract/fixtures";
 
-import { isTarotFeatureEnabled } from "./api-runtime";
+import { isTarotFeatureEnabled, resolveTarotFeatureEnabled } from "./api-runtime";
 import { ERROR_PRESENTATION, FrontendApiError } from "./frontend-api-error";
 import { createTarotApiClient } from "./tarot-api";
 
@@ -296,5 +296,21 @@ test("Tarot feature flag is server-only and defaults to disabled", () => {
     else process.env.MYSTCRAG_TAROT_ENABLED = originalServerFlag;
     if (originalPublicFlag === undefined) delete process.env.NEXT_PUBLIC_MYSTCRAG_TAROT_ENABLED;
     else process.env.NEXT_PUBLIC_MYSTCRAG_TAROT_ENABLED = originalPublicFlag;
+  }
+});
+
+test("Frontend Tarot rollout uses the same exact true matrix as Backend", () => {
+  const cases = [
+    { value: undefined, expected: false },
+    { value: "", expected: false },
+    { value: "false", expected: false },
+    { value: "TRUE", expected: false },
+    { value: " true ", expected: false },
+    { value: "1", expected: false },
+    { value: "true", expected: true }
+  ] as const;
+
+  for (const { value, expected } of cases) {
+    assert.equal(resolveTarotFeatureEnabled(value), expected);
   }
 });

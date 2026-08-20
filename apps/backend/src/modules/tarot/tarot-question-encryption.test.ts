@@ -44,9 +44,18 @@ test("AES-256-GCM question encryption uses a strict randomized authenticated env
   assert.equal(await encryption.matchesIdentity(question, first), true);
 });
 
-test("question encryption environment factory is absent by default and rejects every invalid key", () => {
+test("question encryption environment factory treats the documented empty value as disabled", () => {
   assert.equal(createTarotQuestionEncryptionFromEnvironment({}), undefined);
-  for (const invalid of ["", "not-base64", Buffer.alloc(31).toString("base64"), Buffer.alloc(33).toString("base64")]) {
+  assert.equal(createTarotQuestionEncryptionFromEnvironment({
+    MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY: ""
+  }), undefined);
+  assert.equal(createTarotQuestionEncryptionFromEnvironment({
+    MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY: "   "
+  }), undefined);
+});
+
+test("question encryption environment factory rejects every non-empty invalid key", () => {
+  for (const invalid of ["not-base64", Buffer.alloc(31).toString("base64"), Buffer.alloc(33).toString("base64")]) {
     assert.throws(
       () => createTarotQuestionEncryptionFromEnvironment({
         MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY: invalid

@@ -1,6 +1,6 @@
 # Database Schema
 
-The executable source is `packages/database/prisma/schema.prisma`; the reviewed baseline is `20260721140000_init_mystcrag_persistence_v1`, with additive order-idempotency and Tarot-session migrations applied afterward. PostgreSQL tables use snake_case and Prisma fields use camelCase.
+The executable source is `packages/database/prisma/schema.prisma`; the reviewed baseline is `20260721140000_init_mystcrag_persistence_v1`, with additive order-idempotency and `20260820100000_add_tarot_sessions` migrations applied afterward. PostgreSQL tables use snake_case and Prisma fields use camelCase.
 
 ## Transactional model
 
@@ -23,6 +23,7 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 - Recommendation ranks must be exactly 1, 2, and 3 with three distinct, owner-scoped designs. `selectedDesignId` is nullable metadata validated against those links by the repository; it is intentionally not a cascading foreign key.
 - Tarot question text has no database field. The default path stores neither question text nor ciphertext; explicit opt-in may populate only the paired nullable `questionCiphertext` and `questionSavedAt` fields, and public DTO mapping must omit ciphertext. At the repository boundary, only the exact ciphertext and timestamp pair is an immutable no-op; a different randomized envelope is a conflict. The Backend resolves a concurrent same-question CAS loss by rereading the winner and verifying its keyed envelope identity, while a different question remains a conflict. A later opt-in cannot mutate a recommendation originally committed without question storage.
 - New recommendation snapshots persist an internal `copySource` marker with provider or deterministic-fallback mode, provider ID/version, and copy-policy version. The marker is optional only so existing persisted snapshots remain readable; every newly generated recommendation supplies it.
+- An empty or absent `MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY` means no encryption port is installed. In that mode `saveQuestion: true` fails before repository access and the nullable question columns remain null. A non-empty malformed key fails Backend startup; it never downgrades to plaintext storage.
 
 ## Tarot lifecycle persistence
 

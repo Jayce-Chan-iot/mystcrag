@@ -171,6 +171,6 @@ export function createTarotQuestionEncryptionFromEnvironment(
   environment: Readonly<Record<string, string | undefined>>
 ): TarotQuestionEncryptionPort | undefined {
   const configured = environment[KEY_ENV_NAME];
-  if (configured === undefined) return undefined;
+  if (configured === undefined || configured.trim().length === 0) return undefined;
   return new AesGcmTarotQuestionEncryption(decodeKey(configured));
 }

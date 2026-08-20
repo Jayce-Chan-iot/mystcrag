@@ -10,7 +10,7 @@ Define communication between frontend, backend, AI and 3D engine.
 
 The package exports request and response schemas for Generate Design, Update Design, Price Design, Save Design, Publish Design, and Create Order From Design. Every response uses `PublicDesignV1`; commercial costs and supplier references are not public API fields. Update requests use the finite operation union rather than arbitrary JSON Patch.
 
-Phase 2B registers development-level HTTP boundaries for all six design operations. Every request is parsed with its shared request schema and every successful service value is parsed with its shared response schema. Business orchestration remains a stub, so a valid request currently returns the stable `NOT_IMPLEMENTED` domain error instead of fabricated product data.
+The Backend registers validated HTTP boundaries for all six design/order operations. Every request is parsed with its shared request schema and every successful service value is parsed with its shared response schema. Local startup wires the repository-backed Design application service, catalog, pricing, publication, and order boundaries; it does not fabricate product data.
 
 Errors use `{ error: { code, message, fieldErrors?, requestId } }`. Supported stable codes are `UNAUTHORIZED`, `FORBIDDEN`, `VALIDATION_ERROR`, `NOT_IMPLEMENTED`, `NOT_FOUND`, `CONFLICT`, `COMPLIANCE_BLOCKED`, `CONSENT_REQUIRED`, `INVENTORY_CHANGED`, `PRICE_CHANGED`, and `INTERNAL_ERROR`. Publish rejects public or unlisted requests without consent; order creation rejects a `REJECTED` design before service execution.
 
@@ -80,31 +80,24 @@ Requires verified authentication and owner access. Uses `SaveDesignRequestSchema
 
 ## Tarot Guidance API
 
-All Tarot endpoints require verified bearer authentication and owner-scoped access. Missing and differently owned sessions both map to the generic `FORBIDDEN` response at the HTTP boundary.
+All six endpoints require verified bearer authentication and owner-scoped access. Missing and differently owned sessions both map to the generic `FORBIDDEN` response at the HTTP boundary. Their executable DTOs live in the [strict Tarot contract source](../packages/design-contract/src/schemas/tarot.schema.ts); every request rejects unknown fields and every successful response is parsed before it leaves Backend.
 
-POST /api/tarot/sessions
+| Route | Request DTO | Response DTO | Behavior |
+| --- | --- | --- | --- |
+| `POST /api/tarot/sessions` | `CreateTarotSessionRequestSchema` | `CreateTarotSessionResponseSchema` | Creates revision 1 in `DRAWING`, privately shuffles all 78 cards, and returns only slots plus card-back metadata. This is the only operation gated by `MYSTCRAG_TAROT_ENABLED === "true"`; disabled creation returns `501 NOT_IMPLEMENTED`. |
+| `POST /api/tarot/sessions/:id/select` | `SelectTarotCardRequestSchema` | `SelectTarotCardResponseSchema` | Accepts only the next canonical slot, a unique displayed position, `expectedRevision`, and an idempotency `operationId`. Card identity and orientation remain server-only. |
+| `POST /api/tarot/sessions/:id/reveal` | `RevealTarotSessionRequestSchema` | `RevealTarotSessionResponseSchema` | Requires every slot, changes `DRAWING` to `DRAWN`, and returns all revealed cards in slot order. |
+| `POST /api/tarot/sessions/:id/recommendations` | `GenerateTarotRecommendationsRequestSchema` | `GenerateTarotRecommendationsResponseSchema` | Requires `DRAWN`; writes interpretation, color/material display data, and exactly three catalog-backed, priced `PublicDesignV1` recommendations, then changes to `RECOMMENDED`. |
+| `GET /api/tarot/sessions/:id` | no body | `GetTarotSessionResponseSchema` | Restores the owner-scoped public projection for refresh/recovery. Its response `requestId` is server-derived. |
+| `POST /api/tarot/sessions/:id/save` | `SaveTarotSessionRequestSchema` | `SaveTarotSessionResponseSchema` | Requires `RECOMMENDED`, optionally records one linked `selectedDesignId`, and changes to `SAVED`. Existing Design Save APIs continue to own bracelet revisions. |
 
-Creates and privately shuffles a complete Tarot session using `CreateTarotSessionRequestSchema`. Only this operation is gated by `MYSTCRAG_TAROT_ENABLED === "true"`; when disabled it returns the stable `NOT_IMPLEMENTED` error envelope. Existing sessions remain accessible.
+The public lifecycle is `DRAWING -> DRAWN -> RECOMMENDED -> SAVED`; `ABANDONED` is a reserved persisted status and has no public transition endpoint in this release. A redraw creates a new `DRAWING` session with `parentSessionId`; it does not mutate the completed parent. Every accepted state mutation increments the positive revision once and requires the current `expectedRevision`. Stale revisions, duplicate positions, wrong slot order, and invalid transitions return `CONFLICT`.
 
-POST /api/tarot/sessions/:id/select
+Selection retry identity is `operationId`: the exact accepted operation returns the same result without another revision increment. Reveal accepts the bounded retry revision and returns the existing reveal. Recommendation retries reuse only the exact persisted rule-version candidate identities and Design links; they do not create duplicate Designs. An exact Save retry with the same selected Design accepts the bounded prior/current revision and returns the existing `SAVED` state without incrementing again; clients reconcile an ambiguous save with `GET` instead of assuming success.
 
-Accepts the next canonical slot, displayed position, optimistic revision, and idempotency operation ID through `SelectTarotCardRequestSchema`. The browser never supplies card identity or orientation.
+Recommendation generation uses active catalog SKUs, authoritative prices, and validated `TAROT_GUIDED` Designs. A saved preference port may supply wrist and budget values; the current production adapter has no preference store, so wrist defaults to 155 mm and budget is absent rather than fabricated.
 
-POST /api/tarot/sessions/:id/reveal
-
-Reveals a complete selection through `RevealTarotSessionRequestSchema`. Bounded retries return the existing reveal without incrementing revision.
-
-POST /api/tarot/sessions/:id/recommendations
-
-Generates exactly three catalog-backed `TAROT_GUIDED` designs through `GenerateTarotRecommendationsRequestSchema`. Deterministic reuse requires the exact bead-product sequence and public-safe session/rule/rank/direction provenance to match before a design is accepted or linked. Saved wrist and budget values are consumed through the Backend preference port when available; the current no-store production adapter returns no preference, so wrist defaults to 155 mm and budget remains a score rather than a hard filter. Raw questions are ephemeral when `saveQuestion` is false. `saveQuestion: true` requires both a non-empty question and a configured `MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY`; otherwise it returns `VALIDATION_ERROR` before catalog access, Design generation, or persistence. The key is an exact 32-byte base64 value. Valid opt-in requests store only a randomized AES-256-GCM v2 envelope and `questionSavedAt` in the same repository transaction as the recommendation snapshot and links. The envelope includes a domain-separated keyed HMAC identity, not plaintext or a reversible public hash. Concurrent retries for the exact same question reuse the first committed randomized envelope and the first committed provider/fallback copy, even when a non-deterministic provider produced different safe prose for the losing request. Reuse still requires the exact deterministic Design links, rule, revision lifecycle, and an authenticated same-question identity; a different question or different Design links return `CONFLICT`. Recommendation generation is immutable: after a no-save recommendation succeeds, a later attempt to add a saved question returns `CONFLICT`; changing or newly saving the question requires a new Tarot session. Neither plaintext nor ciphertext is returned by the API.
-
-GET /api/tarot/sessions/:id
-
-Returns the validated public restore projection without private deck state, question ciphertext, or other server-only fields.
-
-POST /api/tarot/sessions/:id/save
-
-Marks a recommended Tarot session saved and may record one of its linked design IDs. Bracelet persistence remains owned by the existing Design APIs.
+Questions are optional and `saveQuestion` defaults to `false`. That default request keeps the raw question in memory for the current request only: it is absent from request logs, provider input, persistence, public DTOs, and browser storage. `saveQuestion: true` requires a non-empty question and a configured exact 32-byte base64 `MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY`. Missing configuration returns the stable inline-compatible `VALIDATION_ERROR` before catalog access, Design generation, or persistence; no plaintext or ad-hoc reversible encoding is written. Valid opt-in writes only a randomized AES-256-GCM v2 envelope and `questionSavedAt`, atomically with the recommendation snapshot and three links. Ciphertext, the keyed identity, private deck order, prompts, costs, and inventory quantities never appear in public responses. Recommendation results are immutable: adding or changing saved-question intent afterward requires a new session.
 
 ## Community API
 
@@ -122,8 +115,8 @@ POST /api/orders/from-design
 
 Requires verified authentication and owner access. Uses `CreateOrderFromDesignRequestSchema` and `CreateOrderFromDesignResponseSchema`, with a compliance guard before service execution. The operation is idempotent for one authenticated user and one design revision: retries, refreshes, and concurrent submissions return the existing immutable order snapshot instead of creating another order.
 
-## Phase 2C service status
+## Current service status
 
-`/health`, `/api/modules`, and the six validated design/order routes remain registered as development stubs. Phase 2C adds repository-backed `DesignService`, `PublicationService`, `OrderService`, `PricingService`, and `InventoryService` with explicit `actorId`, but does not connect them to public HTTP success paths before authentication exists.
+`/health`, `/api/modules`, the Design/catalog/order routes, and the authenticated Tarot lifecycle are registered by the current Backend startup. Repository-backed Design, publication, order, pricing, inventory, Tarot session, and catalog services all receive the verified `actorId`; Tarot copy currently uses the deterministic bounded adapter documented in `AI_AGENT_SPEC.md`.
 
 Persistence conflicts map to the existing stable codes: stale `expectedRevision` becomes `CONFLICT`; server price/version mismatch becomes `PRICE_CHANGED`; latest stock mismatch becomes `INVENTORY_CHANGED`; consent and compliance failures retain `CONSENT_REQUIRED` and `COMPLIANCE_BLOCKED`. Clients never submit `ownerId`, unit costs, trusted totals, or trusted inventory. Order intent is limited to design/revision identity plus `expectedTotalPriceMinor` and `expectedPricingVersion`.

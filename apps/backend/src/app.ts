@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 
 import type { AuthProvider } from "./auth/auth-provider.js";
+import { resolveTarotFeatureEnabled } from "./config/tarot-feature.js";
 import { backendModules, tarotModule } from "./modules/index.js";
 import {
   registerDesignContractRoutes,
@@ -42,7 +43,7 @@ export function createApp(options: CreateAppOptions = {}) {
       app,
       options.tarotService,
       options.authProvider,
-      options.tarotEnabled ?? process.env.MYSTCRAG_TAROT_ENABLED === "true"
+      options.tarotEnabled ?? resolveTarotFeatureEnabled(process.env.MYSTCRAG_TAROT_ENABLED)
     );
   }
 
