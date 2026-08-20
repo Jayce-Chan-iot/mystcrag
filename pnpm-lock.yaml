@@ -26,6 +26,9 @@ importers:
       '@mystcrag/design-contract':
         specifier: workspace:*
         version: link:../../packages/design-contract
+      '@mystcrag/tarot-engine':
+        specifier: workspace:*
+        version: link:../../packages/tarot-engine
       fastify:
         specifier: ^5.10.0
         version: 5.10.0

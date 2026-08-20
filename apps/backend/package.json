@@ -17,6 +17,7 @@
     "@mystcrag/ai-agent": "workspace:*",
     "@mystcrag/database": "workspace:*",
     "@mystcrag/design-contract": "workspace:*",
+    "@mystcrag/tarot-engine": "workspace:*",
     "fastify": "^5.10.0",
     "zod": "^4.4.3"
   },

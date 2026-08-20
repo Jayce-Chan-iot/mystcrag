@@ -1,7 +1,13 @@
 import { createApp } from "./app.js";
-import { createPrismaClient } from "@mystcrag/database";
+import {
+  DesignRepository,
+  TarotSessionRepositoryImpl,
+  createPrismaClient
+} from "@mystcrag/database";
+import { NodeCryptoRandomSource } from "@mystcrag/tarot-engine";
 import { createAuthProviderFromEnvironment } from "./auth/auth-provider.factory.js";
 import { createDesignApplicationService } from "./modules/design/design.service.js";
+import { TarotService } from "./modules/tarot/tarot.service.js";
 
 const defaultPort = 4000;
 const configuredPort = Number(process.env.BACKEND_PORT ?? defaultPort);
@@ -10,8 +16,18 @@ const port = Number.isInteger(configuredPort) && configuredPort > 0 ? configured
 const authProvider = createAuthProviderFromEnvironment();
 const database = createPrismaClient();
 await database.$connect();
+const designRepository = new DesignRepository(database);
 const app = createApp({
   designService: createDesignApplicationService(database),
+  tarotService: new TarotService({
+    repository: new TarotSessionRepositoryImpl(database),
+    random: new NodeCryptoRandomSource(),
+    designReader: {
+      async getOwnedDesign(actorId, designId) {
+        return (await designRepository.getDesign(actorId, designId)).snapshot;
+      }
+    }
+  }),
   authProvider
 });
 app.addHook("onClose", async () => database.$disconnect());

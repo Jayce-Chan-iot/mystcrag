@@ -34,6 +34,8 @@ GET /api/modules
 
 Return registered backend module metadata for initialization diagnostics. This is not a public product API and may be removed after module routing is implemented.
 
+Tarot appears in this response only when its authenticated routes are registered.
+
 ## User API
 
 POST /api/users
@@ -75,6 +77,30 @@ Requires verified authentication. Returns every active, addable material product
 POST /api/design/save
 
 Requires verified authentication and owner access. Uses `SaveDesignRequestSchema` and `SaveDesignResponseSchema`.
+
+## Tarot Guidance API
+
+All Tarot endpoints require verified bearer authentication and owner-scoped access. Missing and differently owned sessions both map to the generic `FORBIDDEN` response at the HTTP boundary.
+
+POST /api/tarot/sessions
+
+Creates and privately shuffles a complete Tarot session using `CreateTarotSessionRequestSchema`. Only this operation is gated by `MYSTCRAG_TAROT_ENABLED === "true"`; when disabled it returns the stable `NOT_IMPLEMENTED` error envelope. Existing sessions remain accessible.
+
+POST /api/tarot/sessions/:id/select
+
+Accepts the next canonical slot, displayed position, optimistic revision, and idempotency operation ID through `SelectTarotCardRequestSchema`. The browser never supplies card identity or orientation.
+
+POST /api/tarot/sessions/:id/reveal
+
+Reveals a complete selection through `RevealTarotSessionRequestSchema`. Bounded retries return the existing reveal without incrementing revision.
+
+GET /api/tarot/sessions/:id
+
+Returns the validated public restore projection without private deck state, question ciphertext, or other server-only fields.
+
+POST /api/tarot/sessions/:id/save
+
+Marks a recommended Tarot session saved and may record one of its linked design IDs. Bracelet persistence remains owned by the existing Design APIs.
 
 ## Community API
 
