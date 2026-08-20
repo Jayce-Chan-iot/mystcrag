@@ -2,6 +2,8 @@ import Link from "next/link";
 
 import { isTarotFeatureEnabled } from "../src/lib/api/api-runtime";
 
+export const dynamic = "force-dynamic";
+
 const cases = [
   { name: "雨霁青", note: "海蓝 · 月光 · 清透银色", tone: "from-[#a8d7df] to-[#eef1eb]" },
   { name: "暮山紫", note: "紫晶 · 烟晶 · 古银", tone: "from-[#b8a4c7] to-[#e8dfd9]" },

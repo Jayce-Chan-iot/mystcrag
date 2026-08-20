@@ -1,6 +1,6 @@
 # Tarot card asset provenance
 
-- Source snapshot: `prototypes/tarot-upstream/public/cards` in the project owner's read-only checkout.
+- Source snapshot: `prototypes/tarot-upstream/public/cards` in the project owner's local, external, read-only checkout. That evidence directory is intentionally absent from a clean clone; this committed file is the repository provenance record.
 - Upstream repository: `renanbotasse/tarot`, recorded source commit `e4d3a20265dd8a8b7e14e9ec980685fe20a79040`.
 - Authorization: the project owner stated that authorization from the upstream author has been obtained for this integration.
 - Imported scope: exactly 78 Rider–Waite face PNGs and `CardBack.png`; no upstream application code, navigation, styles, state store, or runtime dependency is imported here.

@@ -69,6 +69,16 @@ test("enabled mobile header keeps every navigation entry reachable without wrapp
   assert.match(layoutSource, /sm:flex-row/);
 });
 
+test("server-only Tarot flag consumers opt out of static prerendering", () => {
+  const layoutSource = readFileSync(new URL("../../../app/layout.tsx", import.meta.url), "utf8");
+  const landingSource = readFileSync(new URL("../../../app/page.tsx", import.meta.url), "utf8");
+
+  assert.match(layoutSource, /export const dynamic = ["']force-dynamic["']/);
+  assert.match(landingSource, /export const dynamic = ["']force-dynamic["']/);
+  assert.doesNotMatch(layoutSource, /NEXT_PUBLIC_MYSTCRAG_TAROT_ENABLED/);
+  assert.doesNotMatch(landingSource, /NEXT_PUBLIC_MYSTCRAG_TAROT_ENABLED/);
+});
+
 test("main navigation places Tarot beside AI and DIY only when enabled", async () => {
   const navigationModulePath = "../../../app/navigation";
   const navigationModule = await import(navigationModulePath) as {

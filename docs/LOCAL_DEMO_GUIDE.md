@@ -107,19 +107,25 @@ curl --fail http://localhost:4000/health
 5. 选一个方案，保存并进入 `/diy/:designId`，验证载入的是同一个持久化 `TAROT_GUIDED` 设计。
 6. 回到首页再走一次 AI 设计和直接 DIY，确认开启塔罗没有改变原有入口。
 
-## 7. 构建产物与生产模式边界
+## 7. 生产构建验证与启动边界
 
-可验证生产构建和 Backend 产物启动：
+### 仅验证生产构建
+
+第 2 节的 `.env` 为本地演示明确设置了 `NODE_ENV=development`。即使当前 shell 已经 `source .env`，构建时也必须在命令前显式覆盖：
 
 ```bash
-pnpm build
-# 终端 A：启动已构建 Backend 产物
-pnpm --filter @mystcrag/backend start
-# 终端 B：启动已构建 Frontend 产物
-pnpm --filter @mystcrag/frontend exec next start
+NODE_ENV=production pnpm build
 ```
 
-但当前仓库只实现了开发/测试用 `signed-test` 认证，它会在 `NODE_ENV=production` 下 fail closed。因此上述命令是产物/启动验证，不是可公开部署的登录方案。真实生产还必须先接入受支持的生产认证 Provider、托管 PostgreSQL/密钥、完成塔罗素材权利审查，再显式开启 flag。
+这条命令只证明生产优化产物能构建，不等于生产系统可启动或可部署。命令前缀的 `NODE_ENV=production` 会覆盖当前 shell 从 `.env` 加载的开发值。
+
+### 本地开发身份演示
+
+需要可操作的本地演示时，只使用第 4–5 节的 `signed-test` 开发身份与 `pnpm dev`。不要把这些凭据或该 Provider 用于生产启动。
+
+### 生产启动前置条件
+
+当前仓库没有生产 OIDC/认证 Provider，只有会在 `NODE_ENV=production` 下 fail closed 的 `signed-test`。因此，**当前没有可执行的生产模式全栈启动命令**；在接入受支持的生产认证 Provider 前，Backend 应拒绝启动，而不是回退到开发登录。真实生产还必须配置托管 PostgreSQL 与密钥、执行迁移、完成塔罗素材权利审查，再显式开启 flag。
 
 ## 8. 已知限制与排查
 

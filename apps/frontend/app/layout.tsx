@@ -7,6 +7,8 @@ import { isTarotFeatureEnabled } from "../src/lib/api/api-runtime";
 import "./globals.css";
 import { getMainNavigation } from "./navigation";
 
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: {
     default: "玄矶 Mystcrag",
