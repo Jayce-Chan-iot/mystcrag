@@ -5,7 +5,7 @@ import {
   type TarotSpreadType,
   type TarotTheme
 } from "@mystcrag/design-contract";
-import type { PrivateDrawState } from "@mystcrag/tarot-engine";
+import { revealDraw, type PrivateDrawState } from "@mystcrag/tarot-engine";
 
 import type { Prisma, PrismaClient } from "../../generated/client/client.js";
 import { PersistenceError, rethrowPersistenceError } from "../errors/persistence-errors.js";
@@ -191,6 +191,39 @@ function assertSnapshotMatchesPrivateState(
     privateState.revealed !== (snapshot.revealedCards !== undefined)
   ) {
     throw new PersistenceError(errorCode, "Tarot private state and draw snapshot differ");
+  }
+  if (snapshot.revealedCards !== undefined) {
+    let authoritativeCards;
+    try {
+      authoritativeCards = revealDraw(privateState, privateState.revision).cards;
+    } catch (error) {
+      throw new PersistenceError(
+        errorCode,
+        "Tarot private deck cannot reproduce the persisted reveal",
+        error
+      );
+    }
+    const authoritativeSnapshot = authoritativeCards.map((card) => ({
+      slot: card.slot,
+      displayedPosition: card.displayedPosition,
+      cardId: card.id,
+      number: card.number,
+      nameZh: card.nameZh,
+      nameEn: card.nameEn,
+      assetFile: card.assetFile,
+      orientation: card.orientation,
+      keywords: [
+        ...(card.orientation === "UPRIGHT"
+          ? card.uprightKeywords
+          : card.reversedKeywords)
+      ]
+    }));
+    if (!sameValue(snapshot.revealedCards, authoritativeSnapshot)) {
+      throw new PersistenceError(
+        errorCode,
+        "Tarot reveal does not match the authoritative private deck"
+      );
+    }
   }
 }
 

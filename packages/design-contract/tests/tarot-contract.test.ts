@@ -129,7 +129,7 @@ test("Tarot API requests and all six endpoint responses accept public-safe paylo
     CreateTarotSessionResponseSchema.safeParse({
       requestId: "request-create-1",
       session: drawingSession,
-      cardBack: { assetFile: "tarot-card-back.webp", altText: "Tarot card back" }
+      cardBack: { assetFile: "CardBack.png", altText: "Tarot card back" }
     }).success,
     true
   );
@@ -180,7 +180,11 @@ test("Tarot API requests and all six endpoint responses accept public-safe paylo
     true
   );
   assert.equal(
-    GetTarotSessionResponseSchema.safeParse({ requestId: "request-get-1", session: recommendedSession })
+    GetTarotSessionResponseSchema.safeParse({
+      requestId: "request-get-1",
+      session: recommendedSession,
+      cardBack: { assetFile: "CardBack.png", altText: "Tarot card back" }
+    })
       .success,
     true
   );
@@ -202,7 +206,7 @@ test("Tarot API requests and all six endpoint responses accept public-safe paylo
   );
 });
 
-test("Tarot responses expose only the lifecycle projection allowed by their operation", () => {
+test("Tarot responses expose strict lifecycle projections including exact retry state", () => {
   const { revealedCards: _revealedCards, ...completedSelectionSession } = drawnSession;
   const savedSession = {
     ...recommendedSession,
@@ -214,7 +218,7 @@ test("Tarot responses expose only the lifecycle projection allowed by their oper
     CreateTarotSessionResponseSchema.safeParse({
       requestId: "request-create-leak",
       session: drawnSession,
-      cardBack: { assetFile: "tarot-card-back.webp", altText: "Tarot card back" }
+      cardBack: { assetFile: "CardBack.png", altText: "Tarot card back" }
     }).success,
     false
   );
@@ -222,7 +226,7 @@ test("Tarot responses expose only the lifecycle projection allowed by their oper
     CreateTarotSessionResponseSchema.safeParse({
       requestId: "request-create-recommendation-leak",
       session: recommendedSession,
-      cardBack: { assetFile: "tarot-card-back.webp", altText: "Tarot card back" }
+      cardBack: { assetFile: "CardBack.png", altText: "Tarot card back" }
     }).success,
     false
   );
@@ -231,12 +235,26 @@ test("Tarot responses expose only the lifecycle projection allowed by their oper
       requestId: "request-select-complete",
       session: completedSelectionSession
     }).success,
-    true
+    false
   );
   assert.equal(
     SelectTarotCardResponseSchema.safeParse({ requestId: "request-select-leak", session: drawnSession })
       .success,
-    false
+    true
+  );
+  assert.equal(
+    SelectTarotCardResponseSchema.safeParse({
+      requestId: "request-select-recommended-retry",
+      session: recommendedSession
+    }).success,
+    true
+  );
+  assert.equal(
+    SelectTarotCardResponseSchema.safeParse({
+      requestId: "request-select-saved-retry",
+      session: savedSession
+    }).success,
+    true
   );
   assert.equal(
     RevealTarotSessionResponseSchema.safeParse({ requestId: "request-reveal-early", session: drawingSession })
@@ -296,7 +314,7 @@ test("Tarot public schemas reject private state and unknown fields", () => {
     CreateTarotSessionResponseSchema.safeParse({
       requestId: "request-create-extra",
       session: drawingSession,
-      cardBack: { assetFile: "tarot-card-back.webp", altText: "Tarot card back" },
+      cardBack: { assetFile: "CardBack.png", altText: "Tarot card back" },
       inventoryQuantity: 12
     }).success,
     false

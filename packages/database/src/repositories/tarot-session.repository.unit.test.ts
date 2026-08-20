@@ -226,6 +226,32 @@ test("a selection CAS loser returns the concurrently accepted identical operatio
   }]);
 });
 
+test("persisted reveal identity and orientation must match the authoritative private deck", async () => {
+  const { revealed } = singleDrawStates();
+  const canonical = toDrawSnapshot(revealed.state, revealed.cards);
+  const alteredIdentity = structuredClone(canonical);
+  alteredIdentity.revealedCards![0]!.cardId = "schema-valid-but-altered-card";
+  const alteredOrientation = structuredClone(canonical);
+  alteredOrientation.revealedCards![0]!.orientation =
+    alteredOrientation.revealedCards![0]!.orientation === "UPRIGHT"
+      ? "REVERSED"
+      : "UPRIGHT";
+
+  for (const drawSnapshot of [alteredIdentity, alteredOrientation]) {
+    const persisted = rowFor({
+      state: revealed.state,
+      drawSnapshot,
+      stateRevision: 3,
+      status: "DRAWN"
+    });
+    await assert.rejects(
+      () => repositoryWith(persisted).getOwned("owner-1", "session-1"),
+      (error: unknown) =>
+        error instanceof PersistenceError && error.code === "DATA_INTEGRITY_ERROR"
+    );
+  }
+});
+
 test("an exact reveal no-op rejects revisions outside the current-or-consumed window", async () => {
   const { revealed } = singleDrawStates();
   const current = rowFor({

@@ -125,11 +125,11 @@ function jsonResponse(payload: unknown, status = 200): Response {
 test("all Tarot operations send the canonical protected routes and bodies", async () => {
   const calls: Array<{ input: string; init?: RequestInit }> = [];
   const responses = [
-    { requestId: "request-create", session: drawingSession, cardBack: { assetFile: "tarot-card-back.webp", altText: "Tarot card back" } },
+    { requestId: "request-create", session: drawingSession, cardBack: { assetFile: "CardBack.png", altText: "Tarot card back" } },
     { requestId: "request-select", session: selectedSession },
     { requestId: "request-reveal", session: drawnSession },
     { requestId: "request-recommend", session: recommendedSession },
-    { requestId: "request-get", session: recommendedSession },
+    { requestId: "request-get", session: recommendedSession, cardBack: { assetFile: "CardBack.png", altText: "Tarot card back" } },
     { requestId: "request-save", session: { ...recommendedSession, status: "SAVED", selectedDesignId: designs[0]!.designId } }
   ];
   const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -167,6 +167,7 @@ test("all Tarot operations send the canonical protected routes and bodies", asyn
   assert.equal(calls[4]?.init?.body, undefined);
   assert.equal(restored.session.status, "RECOMMENDED");
   assert.equal(restored.session.recommendations?.length, 3);
+  assert.equal(restored.cardBack.assetFile, "CardBack.png");
 });
 
 test("missing verified credential fails before network traffic", async () => {

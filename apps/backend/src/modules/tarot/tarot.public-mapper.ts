@@ -21,7 +21,7 @@ import { DomainApiError } from "../../contracts/api-error.js";
 import type { TarotDesignReader } from "./tarot.types.js";
 
 export const TAROT_CARD_BACK = Object.freeze({
-  assetFile: "mystcrag-tarot-card-back.svg",
+  assetFile: "CardBack.png",
   altText: "Mystcrag Tarot card back"
 });
 
@@ -151,13 +151,15 @@ export function mapCreateTarotResponse(
   });
 }
 
-export function mapSelectTarotResponse(
+export async function mapSelectTarotResponse(
+  actorId: string,
   requestId: string,
-  record: TarotSessionRecord
-): SelectTarotCardResponse {
+  record: TarotSessionRecord,
+  designReader?: TarotDesignReader
+): Promise<SelectTarotCardResponse> {
   return SelectTarotCardResponseSchema.parse({
     requestId,
-    session: coreFromRecord(record, "DRAWING")
+    session: await fullSessionFromRecord(actorId, record, designReader)
   });
 }
 
@@ -181,7 +183,8 @@ export async function mapGetTarotResponse(
 ): Promise<GetTarotSessionResponse> {
   return GetTarotSessionResponseSchema.parse({
     requestId,
-    session: await fullSessionFromRecord(actorId, record, designReader)
+    session: await fullSessionFromRecord(actorId, record, designReader),
+    cardBack: TAROT_CARD_BACK
   });
 }
 

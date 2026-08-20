@@ -42,6 +42,7 @@ import {
 } from "@mystcrag/tarot-engine";
 
 import { DomainApiError } from "../../contracts/api-error.js";
+import { deriveTarotDesignAuthorityId } from "../design/design-api.service.js";
 import {
   mapCreateTarotResponse,
   mapGetTarotResponse,
@@ -309,7 +310,7 @@ const defaultCopyPort = new TarotAiRecommendationCopyPort();
 function validateGeneratedDesign(
   responseInput: GenerateDesignResponse,
   input: {
-    expectedDesignId: string;
+    expectedDesignIdSeed: string;
     expectedSequence: readonly string[];
     expectedSourceDesignId: string;
     expectedRuleVersion: string;
@@ -323,7 +324,7 @@ function validateGeneratedDesign(
   const response = GenerateDesignResponseSchema.parse(responseInput);
   const design = response.design;
   if (
-    design.designId !== input.expectedDesignId ||
+    design.designId !== deriveTarotDesignAuthorityId(input.expectedDesignIdSeed, design) ||
     design.designMode !== "TAROT_GUIDED" ||
     design.currency !== input.currency ||
     design.bracelet.wristCircumferenceMm !== input.expectedWristCircumferenceMm ||
@@ -448,13 +449,30 @@ export class TarotService implements TarotApiService {
     input: SelectTarotCardRequest
   ): Promise<SelectTarotCardResponse> {
     const current = await this.dependencies.repository.getOwned(actorId, sessionId);
+    const acceptedOperation = current.privateDeckState.selections.find(
+      (selection) => selection.operationId === input.operationId
+    );
+    if (acceptedOperation !== undefined) {
+      if (
+        acceptedOperation.slot !== input.slot ||
+        acceptedOperation.displayedPosition !== input.displayedPosition
+      ) {
+        throw new DomainApiError(
+          "CONFLICT",
+          "Tarot operation ID was reused with different input."
+        );
+      }
+      return mapSelectTarotResponse(
+        actorId,
+        input.requestId,
+        current,
+        this.dependencies.designReader
+      );
+    }
     if (current.status !== "DRAWING" || current.privateDeckState.revealed) {
       throw new DomainApiError("CONFLICT", "Completed Tarot draws are immutable.");
     }
-    const existingOperation = current.privateDeckState.selections.some(
-      (selection) => selection.operationId === input.operationId
-    );
-    if (!existingOperation && current.stateRevision !== input.expectedRevision) {
+    if (current.stateRevision !== input.expectedRevision) {
       throw new DomainApiError("CONFLICT", "Tarot session revision conflict.");
     }
 
@@ -478,7 +496,12 @@ export class TarotService implements TarotApiService {
       privateDeckState: nextState,
       drawSnapshot: drawSnapshotFromState(nextState)
     });
-    return mapSelectTarotResponse(input.requestId, record);
+    return mapSelectTarotResponse(
+      actorId,
+      input.requestId,
+      record,
+      this.dependencies.designReader
+    );
   }
 
   async reveal(
@@ -487,20 +510,32 @@ export class TarotService implements TarotApiService {
     input: RevealTarotSessionRequest
   ): Promise<RevealTarotSessionResponse> {
     const current = await this.dependencies.repository.getOwned(actorId, sessionId);
-    if (current.status !== "DRAWING" && current.status !== "DRAWN") {
+    if (
+      current.privateDeckState.revealed &&
+      (current.status === "DRAWN" ||
+        current.status === "RECOMMENDED" ||
+        current.status === "SAVED")
+    ) {
+      const originalRevealRevision = current.privateDeckState.revision;
+      const refreshedDrawRevision =
+        current.status === "DRAWN" && input.expectedRevision === current.stateRevision;
+      if (
+        input.expectedRevision !== originalRevealRevision &&
+        !refreshedDrawRevision
+      ) {
+        throw new DomainApiError("CONFLICT", "Tarot session revision conflict.");
+      }
+      return mapRevealTarotResponse(
+        actorId,
+        input.requestId,
+        current,
+        this.dependencies.designReader
+      );
+    }
+    if (current.status !== "DRAWING") {
       throw new DomainApiError("CONFLICT", "Tarot session cannot be revealed in its current state.");
     }
-    if (
-      current.status === "DRAWING" &&
-      current.stateRevision !== input.expectedRevision
-    ) {
-      throw new DomainApiError("CONFLICT", "Tarot session revision conflict.");
-    }
-    if (
-      current.status === "DRAWN" &&
-      input.expectedRevision !== current.stateRevision &&
-      input.expectedRevision !== current.stateRevision - 1
-    ) {
+    if (current.stateRevision !== input.expectedRevision) {
       throw new DomainApiError("CONFLICT", "Tarot session revision conflict.");
     }
 
@@ -698,7 +733,7 @@ export class TarotService implements TarotApiService {
           designId
         }),
         {
-          expectedDesignId: designId,
+          expectedDesignIdSeed: designId,
           expectedSequence: sequence,
           expectedSourceDesignId: current.id,
           expectedRuleVersion: current.ruleVersion,

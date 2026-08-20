@@ -263,8 +263,11 @@ export const TarotDrawingSessionSchema = z
   .strictObject({ ...TarotSessionCoreShape, status: z.literal("DRAWING") })
   .superRefine(validateTarotPreRevealSession);
 export const TarotSelectSessionSchema = z
-  .strictObject({ ...TarotSessionCoreShape, status: z.enum(["DRAWING", "DRAWN"]) })
-  .superRefine(validateTarotPreRevealSession);
+  .strictObject({
+    ...TarotPublicSessionShape,
+    status: z.enum(["DRAWING", "DRAWN", "RECOMMENDED", "SAVED"])
+  })
+  .superRefine(validateTarotPublicSession);
 export const TarotRevealSessionSchema = z
   .strictObject({ ...TarotPublicSessionShape, status: z.enum(["DRAWN", "RECOMMENDED", "SAVED"]) })
   .superRefine(validateTarotPublicSession);
@@ -337,7 +340,10 @@ export const GenerateTarotRecommendationsResponseSchema = z.strictObject({
   requestId: IdentifierSchema,
   session: TarotRecommendedSessionSchema
 });
-export const GetTarotSessionResponseSchema = z.strictObject(TarotPublicSessionResponseShape);
+export const GetTarotSessionResponseSchema = z.strictObject({
+  ...TarotPublicSessionResponseShape,
+  cardBack: TarotCardBackMetadataSchema
+});
 export const SaveTarotSessionResponseSchema = z.strictObject({
   requestId: IdentifierSchema,
   session: TarotSavedSessionSchema

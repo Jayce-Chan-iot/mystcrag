@@ -71,7 +71,7 @@ function realCatalog(): CatalogMaterialProduct[] {
 
 function createRealRecommendationHarness(options: {
   failSecondRankOnce?: boolean;
-  tamperFirstResponse?: "SEQUENCE" | "PROVENANCE";
+  tamperFirstResponse?: "IDENTITY" | "SEQUENCE" | "PROVENANCE";
   preferences?: {
     wristCircumferenceMm?: number;
     budget?: { minMinor?: number; maxMinor?: number };
@@ -245,10 +245,12 @@ function createRealRecommendationHarness(options: {
 
   const tamperResponse = (
     response: GenerateDesignResponse,
-    kind: "SEQUENCE" | "PROVENANCE"
+    kind: "IDENTITY" | "SEQUENCE" | "PROVENANCE"
   ): GenerateDesignResponse => {
     const altered = cloneTestValue(response);
-    if (kind === "PROVENANCE") {
+    if (kind === "IDENTITY") {
+      altered.design.designId = `tarot-design-${"0".repeat(32)}`;
+    } else if (kind === "PROVENANCE") {
       altered.design.provenance.knowledgeBaseVersion = "wrong-tarot-rule";
     } else {
       const replacement = altered.design.beads[1]!;
@@ -320,6 +322,7 @@ function createRealRecommendationHarness(options: {
 
   return {
     catalog,
+    catalogProducts,
     tarotRepository,
     tarotService,
     designs,
@@ -400,7 +403,9 @@ test("real Design application service persists the exact three Tarot candidates 
     );
     assert.deepEqual(
       persisted.beads.map(({ beadProductId }) => beadProductId),
-      harness.candidateSequences.get(persisted.designId)
+      harness.candidateSequences.get(
+        harness.generationRequests[recommendation.rank - 1]!.designId
+      )
     );
     assert.equal(persisted.provenance.sourceDesignId, null);
     assert.deepEqual(persisted.provenance.tarotCandidate, {
@@ -751,6 +756,37 @@ test("real Design application retry reuses a partial rank without creating dupli
   assert.equal(harness.getCreateAttempts(), 4);
 });
 
+test("real Design application retry replaces a stale partial rank after authoritative prices change", async () => {
+  const harness = createRealRecommendationHarness({ failSecondRankOnce: true });
+  const revealed = await revealRealRecommendationSession(harness.tarotService);
+  const request = recommendationRequest(revealed.session.revision);
+
+  await assert.rejects(
+    () => harness.tarotService.recommendations(actorId, revealed.session.sessionId, request),
+    /simulated real rank two failure/
+  );
+  assert.equal(harness.designs.size, 1);
+
+  for (const product of [...harness.catalog, ...harness.catalogProducts]) {
+    product.unitPriceMinor += 17;
+  }
+
+  const recovered = await harness.tarotService.recommendations(
+    actorId,
+    revealed.session.sessionId,
+    request
+  );
+
+  assert.equal(recovered.session.recommendations?.length, 3);
+  assert.equal(harness.designs.size, 4);
+  for (const { design } of recovered.session.recommendations ?? []) {
+    for (const bead of design.beads) {
+      const currentProduct = harness.catalog.find(({ id }) => id === bead.beadProductId);
+      assert.equal(bead.unitPriceMinor, currentProduct?.unitPriceMinor);
+    }
+  }
+});
+
 test("saved budget reverses a no-budget lexical tie in the persisted real Design sequence", async () => {
   const noBudgetHarness = createRealRecommendationHarness({
     authoritativeMetadata: false
@@ -861,7 +897,7 @@ test("invalid saved wrist or budget preferences fail before design persistence",
   }
 });
 
-for (const tamperFirstResponse of ["SEQUENCE", "PROVENANCE"] as const) {
+for (const tamperFirstResponse of ["IDENTITY", "SEQUENCE", "PROVENANCE"] as const) {
   test(`Tarot linking rejects a real generated response with mismatched ${tamperFirstResponse.toLowerCase()}`, async () => {
     const harness = createRealRecommendationHarness({ tamperFirstResponse });
     const revealed = await revealRealRecommendationSession(harness.tarotService);

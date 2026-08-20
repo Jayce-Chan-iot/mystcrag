@@ -105,7 +105,7 @@ test("create persists one complete private shuffle and returns only a validated 
   assert.equal(response.session.status, "DRAWING");
   assert.equal(response.session.revision, 1);
   assert.deepEqual(response.session.slots, ["GUIDANCE"]);
-  assert.match(response.cardBack.assetFile, /\.(?:png|webp|svg)$/);
+  assert.equal(response.cardBack.assetFile, "CardBack.png");
 
   const stored = repository.readPrivate(response.session.sessionId);
   assert.equal(stored.privateDeckState.deckOrder.length, 78);
@@ -293,8 +293,109 @@ test("a revealed draw is immutable to later selection commands", async () => {
         slot: "GUIDANCE",
         displayedPosition: 4,
         expectedRevision: 3,
-        operationId: "select-final"
+        operationId: "new-selection-after-reveal"
       }),
+    (error: unknown) => error instanceof DomainApiError && error.code === "CONFLICT"
+  );
+});
+
+test("an exact accepted selection retry reconciles after draw, recommendation, and save advance", async () => {
+  const { repository, service, designs } = createHarness();
+  const created = await createSingle(service);
+  const command = {
+    requestId: "select-lifecycle-retry",
+    slot: "GUIDANCE" as const,
+    displayedPosition: 4,
+    expectedRevision: 1,
+    operationId: "select-lifecycle-operation"
+  };
+  await service.select(actorId, created.session.sessionId, command);
+  const revealed = await service.reveal(actorId, created.session.sessionId, {
+    requestId: "reveal-lifecycle",
+    expectedRevision: 2
+  });
+
+  const drawnRetry = await service.select(actorId, created.session.sessionId, command);
+  assert.equal((drawnRetry.session as { status: string }).status, "DRAWN");
+
+  const recommended = await repository.saveRecommendations({
+    ownerId: actorId,
+    sessionId: created.session.sessionId,
+    expectedRevision: revealed.session.revision,
+    recommendationSnapshot,
+    recommendations: designs.map((design, index) => ({
+      rank: index + 1,
+      designId: design.designId
+    }))
+  });
+  const recommendedRetry = await service.select(actorId, created.session.sessionId, command);
+  assert.equal((recommendedRetry.session as { status: string }).status, "RECOMMENDED");
+
+  await repository.markSaved({
+    ownerId: actorId,
+    sessionId: created.session.sessionId,
+    expectedRevision: recommended.stateRevision,
+    selectedDesignId: designs[0]!.designId
+  });
+  const savedRetry = await service.select(actorId, created.session.sessionId, command);
+  assert.equal((savedRetry.session as { status: string }).status, "SAVED");
+
+  await assert.rejects(
+    () => service.select(actorId, created.session.sessionId, {
+      ...command,
+      displayedPosition: 5
+    }),
+    (error: unknown) => error instanceof DomainApiError && error.code === "CONFLICT"
+  );
+});
+
+test("an exact reveal retry reconciles after recommendation and save advance", async () => {
+  const { repository, service, designs } = createHarness();
+  const created = await createSingle(service);
+  await service.select(actorId, created.session.sessionId, {
+    requestId: "select-before-lifecycle-reveal",
+    slot: "GUIDANCE",
+    displayedPosition: 9,
+    expectedRevision: 1,
+    operationId: "select-before-lifecycle-reveal"
+  });
+  const revealCommand = {
+    requestId: "reveal-lifecycle-retry",
+    expectedRevision: 2
+  };
+  const revealed = await service.reveal(actorId, created.session.sessionId, revealCommand);
+  const recommended = await repository.saveRecommendations({
+    ownerId: actorId,
+    sessionId: created.session.sessionId,
+    expectedRevision: revealed.session.revision,
+    recommendationSnapshot,
+    recommendations: designs.map((design, index) => ({
+      rank: index + 1,
+      designId: design.designId
+    }))
+  });
+
+  const recommendedRetry = await service.reveal(
+    actorId,
+    created.session.sessionId,
+    revealCommand
+  );
+  assert.equal(recommendedRetry.session.status, "RECOMMENDED");
+
+  await repository.markSaved({
+    ownerId: actorId,
+    sessionId: created.session.sessionId,
+    expectedRevision: recommended.stateRevision,
+    selectedDesignId: designs[0]!.designId
+  });
+  const savedRetry = await service.reveal(actorId, created.session.sessionId, revealCommand);
+  assert.equal(savedRetry.session.status, "SAVED");
+
+  await assert.rejects(
+    () => service.reveal(actorId, created.session.sessionId, {
+      ...revealCommand,
+      expectedRevision: 1
+    }),
     (error: unknown) => error instanceof DomainApiError && error.code === "CONFLICT"
   );
 });
@@ -312,6 +413,10 @@ test("get restores an owner-scoped public projection without private state", asy
 
   const restored = await service.get(actorId, created.session.sessionId);
   assert.deepEqual(GetTarotSessionResponseSchema.parse(restored), restored);
+  assert.equal(
+    (restored as { cardBack?: { assetFile: string } }).cardBack?.assetFile,
+    "CardBack.png"
+  );
   assert.equal(restored.session.status, "DRAWING");
   assert.equal(restored.session.acceptedSelections.length, 1);
   assert.equal(JSON.stringify(restored).includes("deckOrder"), false);

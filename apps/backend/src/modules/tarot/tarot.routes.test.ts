@@ -13,6 +13,7 @@ import { createApp } from "../../app.js";
 import type { AuthProvider, VerifiedAuthClaims } from "../../auth/auth-provider.js";
 import { resolveTarotFeatureEnabled } from "../../config/tarot-feature.js";
 import { TarotService } from "./tarot.service.js";
+import type { TarotApiService } from "./tarot.types.js";
 import {
   InMemoryTarotRepository,
   ZeroRandomSource
@@ -180,6 +181,39 @@ test("Tarot routes require a valid bearer credential", async () => {
   assert.equal(recommendationResponse.json().error.code, "UNAUTHORIZED");
 
   await app.close();
+});
+
+test("Tarot routes preserve stable inventory and price conflict codes", async () => {
+  for (const code of ["INVENTORY_CHANGED", "PRICE_CHANGED"] as const) {
+    const unavailable = async (): Promise<never> => {
+      throw new PersistenceError(code, `${code} during Tarot generation`);
+    };
+    const tarotService: TarotApiService = {
+      create: unavailable,
+      select: unavailable,
+      reveal: unavailable,
+      recommendations: unavailable,
+      get: unavailable,
+      save: unavailable
+    };
+    const app = createApp({ tarotService, authProvider, tarotEnabled: true, logger: false });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/tarot/sessions/session/recommendations",
+      headers: ownerHeaders,
+      payload: {
+        requestId: `route-${code.toLowerCase()}`,
+        expectedRevision: 3,
+        saveQuestion: false,
+        locale: "zh-CN",
+        currency: "CNY"
+      }
+    });
+
+    assert.equal(response.statusCode, 409);
+    assert.equal(response.json().error.code, code);
+    await app.close();
+  }
 });
 
 test("disabled Tarot creation uses the stable error envelope while existing draw routes remain available", async () => {

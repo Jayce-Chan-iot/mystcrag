@@ -17,8 +17,13 @@ export function getRequiredTarotSlots(spreadType: TarotSpreadType): readonly Tar
 
 export function TarotSlots({
   session,
+  cardBackAssetFile,
   pendingPosition
-}: Readonly<{ session: TarotPublicSession; pendingPosition: number | undefined }>) {
+}: Readonly<{
+  session: TarotPublicSession;
+  cardBackAssetFile: string;
+  pendingPosition: number | undefined;
+}>) {
   const revealedBySlot = new Map(session.revealedCards?.map((card) => [card.slot, card]));
   const acceptedBySlot = new Map(session.acceptedSelections.map((selection) => [selection.slot, selection]));
 
@@ -59,7 +64,7 @@ export function TarotSlots({
                   className={styles.cardArtwork}
                   draggable={false}
                   height={1376}
-                  src="/tarot/cards/CardBack.png"
+                  src={`/tarot/cards/${encodeURIComponent(cardBackAssetFile)}`}
                   unoptimized
                   width={784}
                 />

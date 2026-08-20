@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import {
@@ -345,36 +345,51 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
-function hasSameCandidateIdentity(existing: DesignV1, intended: DesignV1): boolean {
-  const provenanceIdentity = ({
-    generatedBy,
-    modelProvider,
-    modelName,
-    promptVersion,
-    knowledgeBaseVersion,
-    designTemplateVersion,
-    sourceDesignId,
-    tarotCandidate
-  }: DesignV1["provenance"]) => ({
-    generatedBy,
-    modelProvider,
-    modelName,
-    promptVersion,
-    knowledgeBaseVersion,
-    designTemplateVersion,
-    sourceDesignId,
-    tarotCandidate
+const NORMALIZED_AUTHORITY_TIMESTAMP = "1970-01-01T00:00:00.000Z";
+
+function deterministicComponentIdFactory(seed: string): (prefix: string) => string {
+  let index = 0;
+  return (prefix) => {
+    const digest = createHash("sha256")
+      .update(`${seed}\u0000${prefix}\u0000${index++}`)
+      .digest("hex")
+      .slice(0, 24);
+    return `${prefix}-${digest}`;
+  };
+}
+
+function normalizedTarotCandidateAuthority(design: DesignV1, designIdSeed: string): DesignV1 {
+  return DesignV1Schema.parse({
+    ...design,
+    designId: designIdSeed,
+    createdAt: NORMALIZED_AUTHORITY_TIMESTAMP,
+    updatedAt: NORMALIZED_AUTHORITY_TIMESTAMP,
+    pricing: {
+      ...design.pricing,
+      priceCalculatedAt: NORMALIZED_AUTHORITY_TIMESTAMP
+    }
   });
-  return (
-    existing.designMode === intended.designMode &&
-    isDeepStrictEqual(
-      existing.beads.map(({ beadProductId }) => beadProductId),
-      intended.beads.map(({ beadProductId }) => beadProductId)
-    ) &&
-    isDeepStrictEqual(
-      provenanceIdentity(existing.provenance),
-      provenanceIdentity(intended.provenance)
-    )
+}
+
+export function deriveTarotDesignAuthorityId(
+  designIdSeed: string,
+  design: DesignV1
+): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify(normalizedTarotCandidateAuthority(design, designIdSeed)))
+    .digest("hex")
+    .slice(0, 32);
+  return `tarot-design-${digest}`;
+}
+
+function hasSameCandidateAuthority(
+  existing: DesignV1,
+  intended: DesignV1,
+  designIdSeed: string
+): boolean {
+  return isDeepStrictEqual(
+    normalizedTarotCandidateAuthority(existing, designIdSeed),
+    normalizedTarotCandidateAuthority(intended, designIdSeed)
   );
 }
 
@@ -746,18 +761,27 @@ export class DesignApplicationService implements DesignApiService {
       input.request.excludedProductIds
     );
     const timestamp = this.now().toISOString();
+    const designIdSeed = input.designId ?? this.createId("design");
     const draft = buildGeneratedDesign(
       input.request,
       input.candidate,
       catalog,
       timestamp,
-      input.designId ?? this.createId("design"),
-      this.createId,
+      designIdSeed,
+      input.designId === undefined
+        ? this.createId
+        : deterministicComponentIdFactory(designIdSeed),
       input.designMode
     );
-    const priced = DesignV1Schema.parse(
+    const calculated = DesignV1Schema.parse(
       await this.dependencies.pricing.recalculateDesignPrice(draft)
     );
+    const priced = input.designId === undefined
+      ? calculated
+      : DesignV1Schema.parse({
+          ...calculated,
+          designId: deriveTarotDesignAuthorityId(designIdSeed, calculated)
+        });
     await this.dependencies.inventory.validateAvailability(quantitiesByProduct(priced));
     try {
       const persisted = await this.dependencies.designs.createDesign(input.actorId, priced);
@@ -768,8 +792,8 @@ export class DesignApplicationService implements DesignApiService {
       };
     } catch (error) {
       if (input.designId === undefined || errorCode(error) !== "CONFLICT") throw error;
-      const existing = await this.dependencies.designs.getDesign(input.actorId, input.designId);
-      if (!hasSameCandidateIdentity(existing.snapshot, priced)) {
+      const existing = await this.dependencies.designs.getDesign(input.actorId, priced.designId);
+      if (!hasSameCandidateAuthority(existing.snapshot, priced, designIdSeed)) {
         throw new DomainApiError(
           "CONFLICT",
           "Existing deterministic design does not match the requested candidate."

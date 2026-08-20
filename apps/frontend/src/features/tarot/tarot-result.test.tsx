@@ -26,6 +26,7 @@ import { createTarotQuestionDraftStore } from "./components/tarot-question-draft
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
 const createdAt = "2026-08-20T08:00:00.000Z";
+const cardBack = { assetFile: "CardBack.png", altText: "塔罗牌背" } as const;
 
 function design(rank: number): PublicDesignV1 {
   return {
@@ -151,9 +152,9 @@ function fakeClient(overrides: Partial<TarotResultClient> = {}): TarotResultClie
         createdAt,
         updatedAt: createdAt
       },
-      cardBack: { assetFile: "CardBack.png", altText: "塔罗牌背" }
+      cardBack
     }),
-    get: async () => ({ requestId: "restore", session: recommendedSession() }),
+    get: async () => ({ requestId: "restore", session: recommendedSession(), cardBack }),
     recommendations: async (_sessionId, input) => ({
       requestId: input.requestId,
       session: recommendedSession()
@@ -281,7 +282,13 @@ test("recommendation card uses session-authoritative localized material names, w
 test("GET restore returns drawing sessions to the draw route", async () => {
   const navigation: string[] = [];
   const result = coordinator({
-    client: fakeClient({ get: async () => ({ requestId: "restore", session: { ...drawnSession(), status: "DRAWING", revealedCards: undefined } as unknown as TarotPublicSession }) }),
+    client: fakeClient({
+      get: async () => ({
+        requestId: "restore",
+        session: { ...drawnSession(), status: "DRAWING", revealedCards: undefined } as unknown as TarotPublicSession,
+        cardBack
+      })
+    }),
     navigate: (path) => navigation.push(path)
   });
   await result.restore();
@@ -295,7 +302,7 @@ test("DRAWN restore generates recommendations once from the ephemeral draft", as
   const result = coordinator({
     draftStore,
     client: fakeClient({
-      get: async () => ({ requestId: "restore", session: drawnSession() }),
+      get: async () => ({ requestId: "restore", session: drawnSession(), cardBack }),
       recommendations: async (_sessionId, input) => {
         requests.push(input);
         return { requestId: input.requestId, session: recommendedSession() };
@@ -321,7 +328,7 @@ test("refresh without a draft asks inline for an optional re-entry and supports 
   const requests: unknown[] = [];
   const result = coordinator({
     client: fakeClient({
-      get: async () => ({ requestId: "restore", session: drawnSession() }),
+      get: async () => ({ requestId: "restore", session: drawnSession(), cardBack }),
       recommendations: async (_sessionId, input) => {
         requests.push(input);
         return { requestId: input.requestId, session: recommendedSession() };
@@ -359,7 +366,7 @@ test("inline recovery can submit a replacement question without persisting brows
   const result = coordinator({
     draftStore,
     client: fakeClient({
-      get: async () => ({ requestId: "restore", session: drawnSession() }),
+      get: async () => ({ requestId: "restore", session: drawnSession(), cardBack }),
       recommendations: async (_sessionId, input) => {
         requests.push(input);
         return { requestId: input.requestId, session: recommendedSession() };
@@ -385,7 +392,7 @@ test("duplicate Continue input shares one recommendation request without invalid
   let resolveRecommendations!: (value: Awaited<ReturnType<TarotResultClient["recommendations"]>>) => void;
   const result = coordinator({
     client: fakeClient({
-      get: async () => ({ requestId: "restore", session: drawnSession() }),
+      get: async () => ({ requestId: "restore", session: drawnSession(), cardBack }),
       recommendations: async () => {
         calls += 1;
         return new Promise((resolve) => { resolveRecommendations = resolve; });
@@ -410,7 +417,7 @@ test("a rejected recommendation keeps an inline retry path instead of stranding 
   const result = coordinator({
     draftStore,
     client: fakeClient({
-      get: async () => ({ requestId: "restore", session: drawnSession() }),
+      get: async () => ({ requestId: "restore", session: drawnSession(), cardBack }),
       recommendations: async (_sessionId, input) => {
         calls += 1;
         if (calls === 1) throw new FrontendApiError("VALIDATION_ERROR", "retry safely");
@@ -436,7 +443,7 @@ test("recommendation and reconciliation failures preserve the draft and restore 
     client: fakeClient({
       get: async () => {
         getCalls += 1;
-        if (getCalls === 1) return { requestId: "restore", session: drawnSession() };
+        if (getCalls === 1) return { requestId: "restore", session: drawnSession(), cardBack };
         throw new FrontendApiError("NETWORK_ERROR", "reconcile unavailable");
       },
       recommendations: async () => {
@@ -458,7 +465,11 @@ test("persisted RECOMMENDED and SAVED sessions render immediately without regene
     let recommendationCalls = 0;
     const result = coordinator({
       client: fakeClient({
-        get: async () => ({ requestId: "restore", session: status === "SAVED" ? recommendedSession("SAVED") : recommendedSession() }),
+        get: async () => ({
+          requestId: "restore",
+          session: status === "SAVED" ? recommendedSession("SAVED") : recommendedSession(),
+          cardBack
+        }),
         recommendations: async () => { recommendationCalls += 1; throw new Error("must not regenerate"); }
       })
     });
@@ -475,7 +486,7 @@ test("authoritative recommended or saved restore clears the raw question draft",
     draftStore.set("session/with space", { question: "服务器已经有结果", saveQuestion: true });
     const result = coordinator({
       draftStore,
-      client: fakeClient({ get: async () => ({ requestId: "restore", session }) })
+      client: fakeClient({ get: async () => ({ requestId: "restore", session, cardBack }) })
     });
 
     await result.restore();
@@ -547,7 +558,8 @@ test("save conflict restores the authoritative session and does not navigate to 
     client: fakeClient({
       get: async () => ({
         requestId: `get-${++getCalls}`,
-        session: getCalls === 1 ? recommendedSession() : recommendedSession("SAVED")
+        session: getCalls === 1 ? recommendedSession() : recommendedSession("SAVED"),
+        cardBack
       }),
       save: async () => { throw new FrontendApiError("CONFLICT", "stale"); }
     }),
@@ -567,7 +579,7 @@ test("ambiguous save restored as RECOMMENDED remains retryable with the user's s
   const navigation: string[] = [];
   const result = coordinator({
     client: fakeClient({
-      get: async () => ({ requestId: `get-${++getCalls}`, session: recommendedSession() }),
+      get: async () => ({ requestId: `get-${++getCalls}`, session: recommendedSession(), cardBack }),
       save: async (_sessionId, input) => {
         saveCalls += 1;
         if (saveCalls === 1) throw new FrontendApiError("NETWORK_ERROR", "unknown");
@@ -603,7 +615,8 @@ test("ambiguous save restored as SAVED with the same selection enters DIY", asyn
         requestId: `get-${++getCalls}`,
         session: getCalls === 1
           ? recommendedSession()
-          : { ...recommendedSession("SAVED"), selectedDesignId: design(3).designId }
+          : { ...recommendedSession("SAVED"), selectedDesignId: design(3).designId },
+        cardBack
       }),
       save: async () => { throw new FrontendApiError("NETWORK_ERROR", "unknown"); }
     }),
@@ -623,7 +636,7 @@ test("saved session without a server selection requires an explicit local choice
   let saveCalls = 0;
   const result = coordinator({
     client: fakeClient({
-      get: async () => ({ requestId: "restore", session: savedSessionWithoutSelection() }),
+      get: async () => ({ requestId: "restore", session: savedSessionWithoutSelection(), cardBack }),
       save: async (_sessionId, input) => {
         saveCalls += 1;
         return { requestId: input.requestId, session: savedSessionWithoutSelection() };
@@ -663,7 +676,7 @@ test("redraw creates a child session and transfers the in-memory draft", async (
   const result = coordinator({
     draftStore,
     client: fakeClient({
-      get: async () => ({ requestId: "restore", session: drawnSession() }),
+      get: async () => ({ requestId: "restore", session: drawnSession(), cardBack }),
       recommendations: async () => {
         throw new FrontendApiError("VALIDATION_ERROR", "keep draft for redraw");
       },
@@ -692,7 +705,7 @@ test("failed redraw leaves the question draft on its parent session", async () =
   const result = coordinator({
     draftStore,
     client: fakeClient({
-      get: async () => ({ requestId: "restore", session: drawnSession() }),
+      get: async () => ({ requestId: "restore", session: drawnSession(), cardBack }),
       recommendations: async () => {
         throw new FrontendApiError("VALIDATION_ERROR", "keep draft for redraw");
       },
@@ -715,7 +728,7 @@ test("disposed coordinators suppress stale recommendation, save, and redraw effe
   const result = coordinator({
     draftStore,
     client: fakeClient({
-      get: async () => ({ requestId: "restore", session: drawnSession() }),
+      get: async () => ({ requestId: "restore", session: drawnSession(), cardBack }),
       recommendations: async () => new Promise((resolve) => { resolveRecommendations = resolve; })
     }),
     navigate: (path) => navigation.push(path)

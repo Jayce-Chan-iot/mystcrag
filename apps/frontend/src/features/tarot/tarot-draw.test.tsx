@@ -27,6 +27,7 @@ import { TarotSlots, getRequiredTarotSlots } from "./components/tarot-slots";
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
 const createdAt = "2026-08-20T08:00:00.000Z";
+const cardBack = { assetFile: "CardBack.png", altText: "塔罗牌背" } as const;
 
 function drawingSession(
   acceptedSelections: TarotDrawingSession["acceptedSelections"] = []
@@ -96,9 +97,9 @@ function fakeClient(overrides: Partial<TarotDrawClient> = {}): TarotDrawClient {
     create: async () => ({
       requestId: "create-redraw",
       session: drawingSession(),
-      cardBack: { assetFile: "CardBack.png", altText: "塔罗牌背" }
+      cardBack
     }),
-    get: async () => ({ requestId: "restore-session", session: drawingSession() }),
+    get: async () => ({ requestId: "restore-session", session: drawingSession(), cardBack }),
     reveal: async () => ({ requestId: "reveal-session", session: revealedSession() }),
     select: async (_sessionId, input) => ({
       requestId: input.requestId,
@@ -154,7 +155,7 @@ test("slot order is Guidance for single and Past, Present, Future for three-card
   assert.deepEqual(getRequiredTarotSlots("PAST_PRESENT_FUTURE"), ["PAST", "PRESENT", "FUTURE"]);
 
   const markup = renderToStaticMarkup(
-    <TarotSlots pendingPosition={undefined} session={drawingSession()} />
+    <TarotSlots cardBackAssetFile="CardBack.png" pendingPosition={undefined} session={drawingSession()} />
   );
   assert.ok(markup.indexOf("过去") < markup.indexOf("现在"));
   assert.ok(markup.indexOf("现在") < markup.indexOf("未来"));
@@ -221,7 +222,8 @@ test("duplicate, out-of-order, pointer-repeat choices cannot send another select
         requestId: "restore",
         session: drawingSession([
           { slot: "PAST", displayedPosition: 4, operationId: "operation-one" }
-        ])
+        ]),
+        cardBack
       }),
       select: async () => {
         calls += 1;
@@ -292,7 +294,8 @@ test("lost selection response reconciles a committed selection through GET", asy
         requestId: `get-${++getCalls}`,
         session: getCalls === 1
           ? drawingSession()
-          : drawingSession([{ slot: "PAST", displayedPosition: 8, operationId: "operation-2" }])
+          : drawingSession([{ slot: "PAST", displayedPosition: 8, operationId: "operation-2" }]),
+        cardBack
       }),
       select: async () => { throw new FrontendApiError("NETWORK_ERROR", "lost response"); }
     }),
@@ -334,7 +337,7 @@ test("double network failure keeps the card pending and blocks another choice", 
     client: fakeClient({
       get: async () => {
         gets += 1;
-        if (gets === 1) return { requestId: "restore", session: drawingSession() };
+        if (gets === 1) return { requestId: "restore", session: drawingSession(), cardBack };
         throw new FrontendApiError("NETWORK_ERROR", "still offline");
       },
       select: async () => {
@@ -356,6 +359,48 @@ test("double network failure keeps the card pending and blocks another choice", 
   assert.match(coordinator.getState().error ?? "", /正在确认/);
 });
 
+test("an ambiguous pending selection exposes an explicit reconciliation retry", async () => {
+  let gets = 0;
+  const coordinator = createTarotDrawCoordinator({
+    sessionId: "session",
+    client: fakeClient({
+      get: async () => {
+        gets += 1;
+        if (gets === 1) return { requestId: "restore", session: drawingSession(), cardBack };
+        if (gets === 2) throw new FrontendApiError("NETWORK_ERROR", "still offline");
+        return {
+          requestId: "reconciled",
+          session: drawingSession([
+            { slot: "PAST", displayedPosition: 8, operationId: "server-operation" }
+          ]),
+          cardBack
+        };
+      },
+      select: async () => {
+        throw new FrontendApiError("NETWORK_ERROR", "lost response");
+      }
+    }),
+    navigate: () => undefined,
+    requestId: (() => { let index = 0; return () => `id-${++index}`; })(),
+    prefersReducedMotion: () => false,
+    wait: async () => undefined
+  });
+  await coordinator.restore();
+  await coordinator.select(8);
+
+  const retry = (
+    coordinator as unknown as { retrySelectionReconciliation?: () => Promise<void> }
+  ).retrySelectionReconciliation;
+  assert.equal(typeof retry, "function");
+  await retry?.();
+
+  assert.equal(coordinator.getState().pendingPosition, undefined);
+  assert.deepEqual(
+    coordinator.getState().session?.acceptedSelections.map(({ displayedPosition }) => displayedPosition),
+    [8]
+  );
+});
+
 test("explicit validation rejection rolls the pending card back without reconciliation", async () => {
   let getCalls = 0;
   const coordinator = createTarotDrawCoordinator({
@@ -363,7 +408,7 @@ test("explicit validation rejection rolls the pending card back without reconcil
     client: fakeClient({
       get: async () => {
         getCalls += 1;
-        return { requestId: "restore", session: drawingSession() };
+        return { requestId: "restore", session: drawingSession(), cardBack };
       },
       select: async () => { throw new FrontendApiError("VALIDATION_ERROR", "invalid position"); }
     }),
@@ -391,7 +436,8 @@ test("revision conflict restores authoritative selections before allowing anothe
           requestId: `restore-${getCalls}`,
           session: getCalls === 1
             ? drawingSession()
-            : drawingSession([{ slot: "PAST", displayedPosition: 11, operationId: "remote-operation" }])
+            : drawingSession([{ slot: "PAST", displayedPosition: 11, operationId: "remote-operation" }]),
+          cardBack
         };
       },
       select: async () => { throw new FrontendApiError("CONFLICT", "stale revision"); }
@@ -435,7 +481,7 @@ test("server reveal shows slot-ordered faces, rotates reversed art, then navigat
   const coordinator = createTarotDrawCoordinator({
     sessionId: "session/with space",
     client: fakeClient({
-      get: async () => ({ requestId: "restore", session: complete }),
+      get: async () => ({ requestId: "restore", session: complete, cardBack }),
       reveal: async (_sessionId, input) => {
         assert.deepEqual(input, { requestId: "request-reveal", expectedRevision: 4 });
         return { requestId: "request-reveal", session: revealedSession() };
@@ -450,7 +496,9 @@ test("server reveal shows slot-ordered faces, rotates reversed art, then navigat
   await coordinator.reveal();
 
   assert.deepEqual(events, ["wait:1040", "navigate:/tarot/result/session%2Fwith%20space"]);
-  const markup = renderToStaticMarkup(<TarotSlots pendingPosition={undefined} session={revealedSession()} />);
+  const markup = renderToStaticMarkup(
+    <TarotSlots cardBackAssetFile="CardBack.png" pendingPosition={undefined} session={revealedSession()} />
+  );
   assert.ok(markup.indexOf("09-TheHermit.png") < markup.indexOf("17-TheStar.png"));
   assert.ok(markup.indexOf("17-TheStar.png") < markup.indexOf("Cups01.png"));
   assert.match(markup, /data-orientation="REVERSED"/);
@@ -468,7 +516,7 @@ test("reveal completion after disposal never navigates or publishes stale state"
   const coordinator = createTarotDrawCoordinator({
     sessionId: "session",
     client: fakeClient({
-      get: async () => ({ requestId: "restore", session: complete }),
+      get: async () => ({ requestId: "restore", session: complete, cardBack }),
       reveal: async () => new Promise((resolve) => { resolveReveal = resolve; })
     }),
     navigate: (path) => navigation.push(path),
@@ -555,7 +603,8 @@ test("reduced motion reveals and navigates immediately without waiting", async (
           { slot: "PAST", displayedPosition: 4, operationId: "operation-one" },
           { slot: "PRESENT", displayedPosition: 21, operationId: "operation-two" },
           { slot: "FUTURE", displayedPosition: 58, operationId: "operation-three" }
-        ])
+        ]),
+        cardBack
       })
     }),
     navigate: () => undefined,
@@ -576,7 +625,8 @@ test("redraw creates a child session and transfers only the route-memory questio
     client: fakeClient({
       get: async () => ({
         requestId: "restore",
-        session: { ...revealedSession(), sessionId: "parent/session" }
+        session: { ...revealedSession(), sessionId: "parent/session" },
+        cardBack
       }),
       create: async (input) => {
         calls.push(input);
@@ -615,7 +665,7 @@ test("refresh restore treats GET as authoritative and never invents local select
   ]);
   const coordinator = createTarotDrawCoordinator({
     sessionId: "session",
-    client: fakeClient({ get: async () => ({ requestId: "restore", session: restored }) }),
+    client: fakeClient({ get: async () => ({ requestId: "restore", session: restored, cardBack }) }),
     navigate: () => undefined,
     requestId: () => "unused",
     prefersReducedMotion: () => false,
@@ -625,9 +675,55 @@ test("refresh restore treats GET as authoritative and never invents local select
   assert.deepEqual(coordinator.getState().session, restored);
 });
 
+test("refresh restore keeps authoritative card-back metadata for the draw UI", async () => {
+  const coordinator = createTarotDrawCoordinator({
+    sessionId: "session",
+    client: fakeClient({
+      get: async () => ({
+        requestId: "restore-card-back",
+        session: drawingSession(),
+        cardBack: { assetFile: "AuthoritativeCardBack.png", altText: "权威牌背" }
+      })
+    }),
+    navigate: () => undefined,
+    requestId: () => "unused",
+    prefersReducedMotion: () => false,
+    wait: async () => undefined
+  });
+  await coordinator.restore();
+
+  assert.equal(
+    (coordinator.getState() as { cardBack?: { assetFile: string } }).cardBack?.assetFile,
+    "AuthoritativeCardBack.png"
+  );
+});
+
+test("draw view renders the authoritative restored card-back asset", () => {
+  const MetadataTarotDrawView = TarotDrawView as React.ComponentType<Record<string, unknown>>;
+  const markup = renderToStaticMarkup(
+    <MetadataTarotDrawView
+      cardBackAssetFile="Canonical.png"
+      error={null}
+      onBack={() => undefined}
+      onRedraw={() => undefined}
+      onReveal={() => undefined}
+      onSelect={() => undefined}
+      pendingPosition={undefined}
+      revealing={false}
+      session={drawingSession([
+        { slot: "PAST", displayedPosition: 4, operationId: "accepted-card-back" }
+      ])}
+    />
+  );
+
+  assert.equal((markup.match(/src="\/tarot\/cards\/Canonical\.png"/g) ?? []).length, 78);
+  assert.doesNotMatch(markup, /src="\/tarot\/cards\/CardBack\.png"/);
+});
+
 test("draw composition follows the selected cream-and-purple hierarchy without a modal", () => {
   const markup = renderToStaticMarkup(
     <TarotDrawView
+      cardBackAssetFile="CardBack.png"
       error={null}
       onBack={() => undefined}
       onRedraw={() => undefined}
@@ -650,6 +746,7 @@ test("draw composition follows the selected cream-and-purple hierarchy without a
 test("pending selection disables back, redraw, reveal, and every remaining fan choice", () => {
   const markup = renderToStaticMarkup(
     <TarotDrawView
+      cardBackAssetFile="CardBack.png"
       error={null}
       onBack={() => undefined}
       onRedraw={() => undefined}
@@ -664,6 +761,28 @@ test("pending selection disables back, redraw, reveal, and every remaining fan c
   assert.match(markup, /<button[^>]*disabled=""[^>]*>[ \s]*返回修改问题/);
   assert.match(markup, /<button[^>]*disabled=""[^>]*>[ \s]*查看解读/);
   assert.equal((markup.match(/data-tarot-position="\d+"[^>]*disabled=""/g) ?? []).length, 78);
+});
+
+test("ambiguous pending UI exposes an accessible reconciliation retry action", () => {
+  const RetryableTarotDrawView = TarotDrawView as React.ComponentType<Record<string, unknown>>;
+  const markup = renderToStaticMarkup(
+    <RetryableTarotDrawView
+      cardBackAssetFile="CardBack.png"
+      canRetrySelectionReconciliation
+      error="连接不稳定，正在确认这张牌是否已提交。"
+      onBack={() => undefined}
+      onRedraw={() => undefined}
+      onReveal={() => undefined}
+      onRetrySelectionReconciliation={() => undefined}
+      onSelect={() => undefined}
+      pendingPosition={12}
+      revealing={false}
+      session={drawingSession()}
+    />
+  );
+
+  assert.match(markup, /aria-label="重试确认这张牌是否已提交"/);
+  assert.match(markup, />重新确认选牌状态<\/button>/);
 });
 
 test("dynamic page keeps the encoded route identity inside the draw component boundary", async () => {

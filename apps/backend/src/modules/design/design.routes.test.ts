@@ -483,14 +483,15 @@ test("generate creates a server-owned design and immutable revision 1", async ()
   );
 });
 
-test("internal candidate generation persists TAROT_GUIDED mode and reuses its deterministic design ID", async () => {
+test("internal candidate generation persists TAROT_GUIDED mode and reuses its authority-fingerprinted design ID", async () => {
   const harness = createHarness();
   const input = tarotCandidateInput(harness);
 
   const first = await harness.service.generateFromCandidate(input);
   const retry = await harness.service.generateFromCandidate(input);
 
-  assert.equal(first.design.designId, input.designId);
+  assert.match(first.design.designId, /^tarot-design-[0-9a-f]{32}$/);
+  assert.notEqual(first.design.designId, input.designId);
   assert.equal(first.design.designMode, "TAROT_GUIDED");
   assert.deepEqual(first.design.provenance.tarotCandidate, {
     sessionId: "tarot-session-1",
@@ -521,8 +522,8 @@ test("internal TAROT_GUIDED generation rejects a candidate without immutable Tar
 test("deterministic candidate conflict rejects an existing design with a different product sequence", async () => {
   const harness = createHarness();
   const input = tarotCandidateInput(harness);
-  await harness.service.generateFromCandidate(input);
-  const stored = harness.current.get(input.designId)!;
+  const first = await harness.service.generateFromCandidate(input);
+  const stored = harness.current.get(first.design.designId)!;
   const collidingSnapshot = structuredClone(stored.snapshot);
   collidingSnapshot.beads[0]!.beadProductId = collidingSnapshot.beads[1]!.beadProductId;
   stored.snapshot = DesignV1Schema.parse(collidingSnapshot);
@@ -536,8 +537,8 @@ test("deterministic candidate conflict rejects an existing design with a differe
 test("deterministic candidate conflict rejects an existing design with different provenance", async () => {
   const harness = createHarness();
   const input = tarotCandidateInput(harness);
-  await harness.service.generateFromCandidate(input);
-  const stored = harness.current.get(input.designId)!;
+  const first = await harness.service.generateFromCandidate(input);
+  const stored = harness.current.get(first.design.designId)!;
   const collidingSnapshot = structuredClone(stored.snapshot);
   collidingSnapshot.provenance.knowledgeBaseVersion = "different-tarot-rules";
   stored.snapshot = DesignV1Schema.parse(collidingSnapshot);
