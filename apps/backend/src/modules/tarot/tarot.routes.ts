@@ -1,6 +1,8 @@
 import {
   CreateTarotSessionRequestSchema,
   CreateTarotSessionResponseSchema,
+  GenerateTarotRecommendationsRequestSchema,
+  GenerateTarotRecommendationsResponseSchema,
   GetTarotSessionResponseSchema,
   RevealTarotSessionRequestSchema,
   RevealTarotSessionResponseSchema,
@@ -150,6 +152,19 @@ export function registerTarotRoutes(
         RevealTarotSessionRequestSchema,
         RevealTarotSessionResponseSchema,
         (actorId, input) => service.reveal(actorId, request.params.id, input),
+        { ownerScoped: true }
+      )
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/tarot/sessions/:id/recommendations",
+    protectedRoute,
+    (request, reply) =>
+      handleTarotPost(
+        request,
+        reply,
+        GenerateTarotRecommendationsRequestSchema,
+        GenerateTarotRecommendationsResponseSchema,
+        (actorId, input) => service.recommendations(actorId, request.params.id, input),
         { ownerScoped: true }
       )
   );

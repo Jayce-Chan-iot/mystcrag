@@ -94,6 +94,10 @@ POST /api/tarot/sessions/:id/reveal
 
 Reveals a complete selection through `RevealTarotSessionRequestSchema`. Bounded retries return the existing reveal without incrementing revision.
 
+POST /api/tarot/sessions/:id/recommendations
+
+Generates exactly three catalog-backed `TAROT_GUIDED` designs through `GenerateTarotRecommendationsRequestSchema`. Retries reuse deterministic owner-scoped designs and return the existing linked recommendations. Raw questions are ephemeral when `saveQuestion` is false; `saveQuestion: true` fails validation until encrypted question storage is available.
+
 GET /api/tarot/sessions/:id
 
 Returns the validated public restore projection without private deck state, question ciphertext, or other server-only fields.

@@ -1,6 +1,7 @@
 import { createApp } from "./app.js";
 import {
   DesignRepository,
+  ProductRepository,
   TarotSessionRepositoryImpl,
   createPrismaClient
 } from "@mystcrag/database";
@@ -17,8 +18,10 @@ const authProvider = createAuthProviderFromEnvironment();
 const database = createPrismaClient();
 await database.$connect();
 const designRepository = new DesignRepository(database);
+const productRepository = new ProductRepository(database);
+const designApplicationService = createDesignApplicationService(database);
 const app = createApp({
-  designService: createDesignApplicationService(database),
+  designService: designApplicationService,
   tarotService: new TarotService({
     repository: new TarotSessionRepositoryImpl(database),
     random: new NodeCryptoRandomSource(),
@@ -26,7 +29,15 @@ const app = createApp({
       async getOwnedDesign(actorId, designId) {
         return (await designRepository.getDesign(actorId, designId)).snapshot;
       }
-    }
+    },
+    catalog: {
+      async listActiveCatalogProducts(currency) {
+        return (await productRepository.listActiveCatalogProducts(currency)).filter(
+          (product) => product.productType === "MATERIAL"
+        );
+      }
+    },
+    designGenerator: designApplicationService
   }),
   authProvider
 });

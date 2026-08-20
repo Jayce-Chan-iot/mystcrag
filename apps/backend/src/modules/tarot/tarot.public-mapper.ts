@@ -1,11 +1,13 @@
 import {
   CreateTarotSessionResponseSchema,
+  GenerateTarotRecommendationsResponseSchema,
   GetTarotSessionResponseSchema,
   RevealTarotSessionResponseSchema,
   SaveTarotSessionResponseSchema,
   SelectTarotCardResponseSchema,
   toPublicDesign,
   type CreateTarotSessionResponse,
+  type GenerateTarotRecommendationsResponse,
   type GetTarotSessionResponse,
   type RevealTarotSessionResponse,
   type SaveTarotSessionResponse,
@@ -178,6 +180,18 @@ export async function mapGetTarotResponse(
   designReader?: TarotDesignReader
 ): Promise<GetTarotSessionResponse> {
   return GetTarotSessionResponseSchema.parse({
+    requestId,
+    session: await fullSessionFromRecord(actorId, record, designReader)
+  });
+}
+
+export async function mapRecommendationsTarotResponse(
+  actorId: string,
+  requestId: string,
+  record: TarotSessionRecord,
+  designReader?: TarotDesignReader
+): Promise<GenerateTarotRecommendationsResponse> {
+  return GenerateTarotRecommendationsResponseSchema.parse({
     requestId,
     session: await fullSessionFromRecord(actorId, record, designReader)
   });

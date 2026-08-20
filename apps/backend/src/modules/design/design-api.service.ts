@@ -341,20 +341,31 @@ function buildGeneratedDesign(
   catalog: readonly CatalogProduct[],
   timestamp: string,
   designId: string,
-  createComponentId: (prefix: string) => string
+  createComponentId: (prefix: string) => string,
+  designMode: "AI_GENERATED" | "TAROT_GUIDED"
 ): DesignV1 {
   const candidate = AiDesignCandidateSchema.parse(candidateInput);
   const byId = new Map(catalog.map((product) => [product.id, product]));
   const materials = candidate.materialProductIds.map((productId) => {
     const product = byId.get(productId);
-    if (!product || product.productType !== "MATERIAL" || product.currency !== request.currency) {
+    if (
+      !product ||
+      !product.active ||
+      product.productType !== "MATERIAL" ||
+      product.currency !== request.currency
+    ) {
       throw new DomainApiError("INVENTORY_CHANGED", `Material ${productId} is unavailable.`);
     }
     return product;
   });
   const accessoryProducts = candidate.accessoryProductIds.map((productId) => {
     const product = byId.get(productId);
-    if (!product || product.productType !== "ACCESSORY" || product.currency !== request.currency) {
+    if (
+      !product ||
+      !product.active ||
+      product.productType !== "ACCESSORY" ||
+      product.currency !== request.currency
+    ) {
       throw new DomainApiError("INVENTORY_CHANGED", `Accessory ${productId} is unavailable.`);
     }
     return product;
@@ -411,7 +422,7 @@ function buildGeneratedDesign(
     schemaVersion: "1.0.0" as const,
     designId,
     designName: candidate.designName,
-    designMode: "AI_GENERATED" as const,
+    designMode,
     revision: 1,
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -654,21 +665,62 @@ export class DesignApplicationService implements DesignApiService {
       request.excludedProductIds
     );
     const providerOutput = await this.generator.generate(request, catalog);
+    return this.generateFromCandidate(
+      {
+        actorId,
+        request,
+        candidate: providerOutput,
+        designMode: "AI_GENERATED"
+      },
+      catalog
+    );
+  }
+
+  async generateFromCandidate(
+    input: {
+      readonly actorId: string;
+      readonly request: GenerateDesignRequest;
+      readonly candidate: unknown;
+      readonly designMode: "AI_GENERATED" | "TAROT_GUIDED";
+      readonly designId?: string;
+    },
+    catalogInput?: readonly CatalogProduct[]
+  ): Promise<GenerateDesignResponse> {
+    const catalog = catalogInput ?? await this.dependencies.catalog.listActiveCatalogProducts(
+      input.request.currency,
+      input.request.excludedProductIds
+    );
     const timestamp = this.now().toISOString();
     const draft = buildGeneratedDesign(
-      request,
-      providerOutput,
+      input.request,
+      input.candidate,
       catalog,
       timestamp,
-      this.createId("design"),
-      this.createId
+      input.designId ?? this.createId("design"),
+      this.createId,
+      input.designMode
     );
     const priced = DesignV1Schema.parse(
       await this.dependencies.pricing.recalculateDesignPrice(draft)
     );
     await this.dependencies.inventory.validateAvailability(quantitiesByProduct(priced));
-    const persisted = await this.dependencies.designs.createDesign(actorId, priced);
-    return { requestId: request.requestId, design: toPublicDesign(persisted.snapshot), warnings: [] };
+    try {
+      const persisted = await this.dependencies.designs.createDesign(input.actorId, priced);
+      return {
+        requestId: input.request.requestId,
+        design: toPublicDesign(persisted.snapshot),
+        warnings: []
+      };
+    } catch (error) {
+      if (input.designId === undefined || errorCode(error) !== "CONFLICT") throw error;
+      const existing = await this.dependencies.designs.getDesign(input.actorId, input.designId);
+      if (existing.snapshot.designMode !== input.designMode) throw error;
+      return {
+        requestId: input.request.requestId,
+        design: toPublicDesign(existing.snapshot),
+        warnings: []
+      };
+    }
   }
 
   async update(actorId: string, request: UpdateDesignRequest): Promise<UpdateDesignResponse> {

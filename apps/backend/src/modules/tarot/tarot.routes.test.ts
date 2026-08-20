@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  DesignV1Schema,
+  GenerateTarotRecommendationsResponseSchema,
+  type DesignV1
+} from "@mystcrag/design-contract";
+import { standardAiDesignFixture } from "@mystcrag/design-contract/fixtures";
+import { PersistenceError, type TarotRecommendationSnapshot } from "@mystcrag/database";
+
 import { createApp } from "../../app.js";
 import type { AuthProvider, VerifiedAuthClaims } from "../../auth/auth-provider.js";
 import { TarotService } from "./tarot.service.js";
@@ -38,6 +46,41 @@ const validCreatePayload = {
   theme: "SELF_GROWTH" as const
 };
 
+const routeRecommendationSnapshot: TarotRecommendationSnapshot = {
+  interpretation: {
+    headline: "Three directions for reflection",
+    summary: "Compare three visual compositions as a gentle reflective prompt.",
+    cardReflections: [
+      { slot: "GUIDANCE", reflection: "Notice which colors feel most resonant today." }
+    ],
+    designRationale: "The directions vary rhythm, contrast, and visual focus.",
+    disclaimer: "For personal reflection and creative inspiration only."
+  },
+  colorStory: {
+    primaryColor: "#C8954C",
+    supportColor: "#F2EEE5",
+    accentColor: "#31343B",
+    rationale: "Warm, light, and deep tones create a flexible visual palette."
+  },
+  materialRecommendations: [
+    {
+      beadProductId: "product-aquamarine-round-8",
+      displayName: "Aquamarine round bead",
+      crystalName: "Aquamarine",
+      colorTags: ["blue"],
+      reason: "Its blue tone supports the visual palette."
+    }
+  ]
+};
+
+const routeTarotDesign = (rank: number): DesignV1 =>
+  DesignV1Schema.parse({
+    ...structuredClone(standardAiDesignFixture),
+    designId: `route-tarot-design-${rank}`,
+    designName: `Route Tarot direction ${rank}`,
+    designMode: "TAROT_GUIDED"
+  });
+
 function createRouteHarness(options: {
   readonly tarotEnabled?: boolean;
   readonly logger?: false | { readonly stream: { write(message: string): void } };
@@ -71,6 +114,20 @@ test("Tarot routes require a valid bearer credential", async () => {
     assert.equal(response.json().error.message, "Authentication is required.");
     assert.equal(typeof response.json().error.requestId, "string");
   }
+
+  const recommendationResponse = await app.inject({
+    method: "POST",
+    url: "/api/tarot/sessions/unknown/recommendations",
+    payload: {
+      requestId: "unauthenticated-recommendations",
+      expectedRevision: 3,
+      saveQuestion: false,
+      locale: "zh-CN",
+      currency: "CNY"
+    }
+  });
+  assert.equal(recommendationResponse.statusCode, 401);
+  assert.equal(recommendationResponse.json().error.code, "UNAUTHORIZED");
 
   await app.close();
 });
@@ -262,7 +319,7 @@ test("create, final select, restore, and reveal preserve one owner-scoped lifecy
   await app.close();
 });
 
-test("Tarot is listed only when its routes are registered and no recommendation placeholder exists", async () => {
+test("Tarot is listed only when its authenticated lifecycle routes are registered", async () => {
   const withoutTarot = createApp({ logger: false });
   const { app: withTarot } = createRouteHarness();
 
@@ -271,16 +328,99 @@ test("Tarot is listed only when its routes are registered and no recommendation 
   assert.equal(absentModules.modules.some(({ name }: { name: string }) => name === "tarot"), false);
   assert.equal(presentModules.modules.some(({ name }: { name: string }) => name === "tarot"), true);
 
-  const missingRecommendationRoute = await withTarot.inject({
+  const malformedRecommendation = await withTarot.inject({
     method: "POST",
     url: "/api/tarot/sessions/unknown/recommendations",
     headers: ownerHeaders,
     payload: {}
   });
-  assert.equal(missingRecommendationRoute.statusCode, 404);
+  assert.equal(malformedRecommendation.statusCode, 400);
+  assert.equal(malformedRecommendation.json().error.code, "VALIDATION_ERROR");
+
+  const ownerScopedRecommendation = await withTarot.inject({
+    method: "POST",
+    url: "/api/tarot/sessions/unknown/recommendations",
+    headers: ownerHeaders,
+    payload: {
+      requestId: "route-owner-scoped-recommendation",
+      expectedRevision: 3,
+      saveQuestion: false,
+      locale: "zh-CN",
+      currency: "CNY"
+    }
+  });
+  assert.equal(ownerScopedRecommendation.statusCode, 403);
+  assert.equal(ownerScopedRecommendation.json().error.code, "FORBIDDEN");
+  assert.equal(
+    ownerScopedRecommendation.json().error.requestId,
+    "route-owner-scoped-recommendation"
+  );
 
   await withoutTarot.close();
   await withTarot.close();
+});
+
+test("recommendations route returns the strict authenticated response for linked designs", async () => {
+  const repository = new InMemoryTarotRepository();
+  const designs = [1, 2, 3].map(routeTarotDesign);
+  const tarotService = new TarotService({
+    repository,
+    random: new ZeroRandomSource(),
+    designReader: {
+      async getOwnedDesign(ownerId: string, designId: string) {
+        if (ownerId !== actorId) throw new PersistenceError("NOT_FOUND", "Design not found");
+        const design = designs.find((candidate) => candidate.designId === designId);
+        if (!design) throw new PersistenceError("NOT_FOUND", "Design not found");
+        return structuredClone(design);
+      }
+    }
+  });
+  const created = await tarotService.create(actorId, {
+    ...validCreatePayload,
+    requestId: "route-recommendation-create"
+  });
+  await tarotService.select(actorId, created.session.sessionId, {
+    requestId: "route-recommendation-select",
+    slot: "GUIDANCE",
+    displayedPosition: 0,
+    expectedRevision: 1,
+    operationId: "route-recommendation-select"
+  });
+  const revealed = await tarotService.reveal(actorId, created.session.sessionId, {
+    requestId: "route-recommendation-reveal",
+    expectedRevision: 2
+  });
+  await repository.saveRecommendations({
+    ownerId: actorId,
+    sessionId: created.session.sessionId,
+    expectedRevision: revealed.session.revision,
+    recommendationSnapshot: routeRecommendationSnapshot,
+    recommendations: designs.map((design, index) => ({
+      rank: index + 1,
+      designId: design.designId
+    }))
+  });
+  const app = createApp({ tarotService, authProvider, tarotEnabled: true, logger: false });
+
+  const response = await app.inject({
+    method: "POST",
+    url: `/api/tarot/sessions/${created.session.sessionId}/recommendations`,
+    headers: ownerHeaders,
+    payload: {
+      requestId: "route-recommendation-response",
+      expectedRevision: revealed.session.revision,
+      saveQuestion: false,
+      locale: "zh-CN",
+      currency: "CNY"
+    }
+  });
+
+  assert.equal(response.statusCode, 200);
+  const parsed = GenerateTarotRecommendationsResponseSchema.parse(response.json());
+  assert.equal(parsed.requestId, "route-recommendation-response");
+  assert.equal(parsed.session.status, "RECOMMENDED");
+  assert.equal(parsed.session.recommendations?.length, 3);
+  await app.close();
 });
 
 test("Tarot request logs omit bearer credentials, bodies, and raw question text", async () => {
@@ -294,15 +434,19 @@ test("Tarot request logs omit bearer credentials, bodies, and raw question text"
   const privateToken = "valid-route-token";
   const response = await app.inject({
     method: "POST",
-    url: "/api/tarot/sessions",
+    url: "/api/tarot/sessions/unknown/recommendations",
     headers: { authorization: `Bearer ${privateToken}` },
     payload: {
-      ...validCreatePayload,
-      question: privateQuestion
+      requestId: "private-question-recommendation",
+      expectedRevision: 3,
+      question: privateQuestion,
+      saveQuestion: false,
+      locale: "zh-CN",
+      currency: "CNY"
     }
   });
 
-  assert.equal(response.statusCode, 400);
+  assert.equal(response.statusCode, 403);
   assert.equal(logs.includes(privateQuestion), false);
   assert.equal(logs.includes(privateToken), false);
   assert.equal(logs.includes('"body"'), false);

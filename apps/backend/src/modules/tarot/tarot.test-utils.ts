@@ -148,9 +148,42 @@ export class InMemoryTarotRepository implements TarotSessionRepository {
   }
 
   async saveRecommendations(
-    _input: SaveTarotRecommendationsRecord
+    input: SaveTarotRecommendationsRecord
   ): Promise<TarotSessionRecord> {
-    throw new Error("Recommendation generation belongs to Task 5");
+    const current = this.requireOwned(input.ownerId, input.sessionId);
+    if (current.status === "RECOMMENDED" || current.status === "SAVED") {
+      const sameRecommendations = JSON.stringify(
+        current.recommendations.map(({ rank, designId }) => ({ rank, designId }))
+      ) === JSON.stringify(input.recommendations);
+      const sameSnapshot = JSON.stringify(current.recommendationSnapshot) ===
+        JSON.stringify(input.recommendationSnapshot);
+      if (sameRecommendations && sameSnapshot) return cloneTestValue(current);
+      throw new PersistenceError("CONFLICT", "Tarot recommendations already exist");
+    }
+    if (current.status !== "DRAWN") {
+      throw new PersistenceError("CONFLICT", "Tarot session is not ready for recommendations");
+    }
+    if (current.stateRevision !== input.expectedRevision) {
+      throw new PersistenceError("CONFLICT", "Tarot session revision conflict");
+    }
+    const updatedAt = new Date(current.updatedAt.getTime() + 1_000);
+    const updated: TarotSessionRecord = {
+      ...current,
+      status: "RECOMMENDED",
+      stateRevision: current.stateRevision + 1,
+      recommendationSnapshot: cloneTestValue(input.recommendationSnapshot),
+      questionCiphertext: input.questionCiphertext ?? null,
+      questionSavedAt: input.questionSavedAt ?? null,
+      recommendations: input.recommendations.map(({ rank, designId }) => ({
+        id: `recommendation-${current.id}-${rank}`,
+        rank,
+        designId,
+        createdAt: updatedAt
+      })),
+      updatedAt
+    };
+    this.records.set(updated.id, updated);
+    return cloneTestValue(updated);
   }
 
   async markSaved(input: MarkTarotSessionSavedRecord): Promise<TarotSessionRecord> {

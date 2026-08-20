@@ -104,6 +104,7 @@ function createHarness(
   const revisionRows = new Map<string, PersistedDesignRevision[]>();
   const orderSnapshots: DesignV1[] = [];
   let componentCounter = 0;
+  let createAttempts = 0;
   let failUpdate = false;
   let inventoryChanged = false;
   let orderPriceChanged = false;
@@ -145,6 +146,10 @@ function createHarness(
 
   const designs = {
     async createDesign(ownerId: string, snapshot: DesignV1) {
+      createAttempts += 1;
+      if (current.has(snapshot.designId)) {
+        throw new DomainApiError("CONFLICT", "Design already exists");
+      }
       seed(snapshot, ownerId);
       return structuredClone(current.get(snapshot.designId)!);
     },
@@ -388,7 +393,10 @@ function createHarness(
     setOrderInventoryChanged(value: boolean) {
       orderInventoryChanged = value;
     },
-    catalog
+    catalog,
+    getCreateAttempts() {
+      return createAttempts;
+    }
   };
 }
 
@@ -432,6 +440,65 @@ test("generate creates a server-owned design and immutable revision 1", async ()
     result.design.beads.map((bead) => bead.unitPriceMinor),
     [1200, 800, 1000]
   );
+});
+
+test("internal candidate generation persists TAROT_GUIDED mode and reuses its deterministic design ID", async () => {
+  const harness = createHarness();
+  const materialIds = harness.catalog
+    .filter((product) => product.productType === "MATERIAL")
+    .map(({ id }) => id);
+  const candidate = {
+    designName: "Tarot balanced direction",
+    materialProductIds: Array.from(
+      { length: 20 },
+      (_, index) => materialIds[index % materialIds.length]!
+    ),
+    accessoryProductIds: [],
+    designStory: "A reflective color rhythm built from the selected cards.",
+    recommendationReasons: ["Uses a balanced visual rhythm."],
+    culturalInspiration: [],
+    sourceTemplateIds: [],
+    providerMetadata: {
+      modelProvider: "deterministic",
+      modelName: "tarot-candidate-builder",
+      promptVersion: "tarot-copy-v1",
+      knowledgeBaseVersion: "tarot-design-rules-v1",
+      designTemplateVersion: null
+    }
+  };
+  const input = {
+    actorId,
+    request: { ...generateBody, requestId: "tarot-session-1:1" },
+    candidate,
+    designMode: "TAROT_GUIDED" as const,
+    designId: "tarot-design-session-1-rules-v1-rank-1"
+  };
+
+  const first = await harness.service.generateFromCandidate(input);
+  const retry = await harness.service.generateFromCandidate(input);
+
+  assert.equal(first.design.designId, input.designId);
+  assert.equal(first.design.designMode, "TAROT_GUIDED");
+  assert.equal(first.design.pricing.pricingVersion, "cny-retail-2026-07-v1");
+  assert.deepEqual(retry, first);
+  assert.equal(harness.current.size, 1);
+  assert.equal(harness.getCreateAttempts(), 2);
+});
+
+test("public generate rejects a client-supplied design mode", async () => {
+  const harness = createHarness();
+  const app = createApp({ designService: harness.service, authProvider });
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/design/generate",
+    headers: requestHeaders(),
+    payload: { ...generateBody, designMode: "TAROT_GUIDED" }
+  });
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(response.json().error.code, "VALIDATION_ERROR");
+  assert.equal(harness.current.size, 0);
+  await app.close();
 });
 
 test("AI-generated two-material options remain distinct after pricing and persistence", async () => {
