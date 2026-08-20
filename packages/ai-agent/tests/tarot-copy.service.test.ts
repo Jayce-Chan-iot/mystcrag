@@ -40,8 +40,7 @@ const input: TarotCopyInput = {
     { displayName: "Smoky quartz bead", crystalName: "Smoky Quartz", colorTags: ["ink"] },
     { displayName: "Citrine bead", crystalName: "Citrine", colorTags: ["amber"] }
   ],
-  locale: "en-US",
-  question: "What perspective could help me approach this transition?"
+  locale: "en-US"
 };
 
 const validInterpretation = {
@@ -91,8 +90,7 @@ test("valid provider prose is accepted without giving it recommendation authorit
     providerVersion: "2026-08-20",
     policyVersion: TAROT_COPY_POLICY_VERSION
   });
-  assert.equal(provider.calls[0]?.question, input.question);
-  assert.equal(JSON.stringify(result).includes(input.question!), false);
+  assert.equal(provider.calls[0]?.question, undefined);
 });
 
 test("provider failure returns deterministic localized fallback with an explicit version marker", async () => {
@@ -417,7 +415,7 @@ test("composed unsafe provider-output categories select deterministic fallback",
   }
 });
 
-test("ordinary design and non-predictive reflection controls remain provider-eligible", async () => {
+test("all non-empty user questions use deterministic copy without reaching providers", async () => {
   const safeQuestions = [
     "Which colors suit a calm everyday bracelet?",
     "What can I reflect on about this situation?",
@@ -435,12 +433,14 @@ test("ordinary design and non-predictive reflection controls remain provider-eli
       ...input,
       question
     });
-    assert.equal(result.source.mode, "PROVIDER", question);
-    assert.equal(provider.calls.length, 1, question);
+    assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK", question);
+    assert.equal(TarotInterpretationSchema.safeParse(result.interpretation).success, true, question);
+    assert.equal(JSON.stringify(result).includes(question), false, question);
+    assert.equal(provider.calls.length, 0, question);
   }
 });
 
-test("only clearly bounded design or non-predictive reflection questions reach providers", async () => {
+test("all question categories stay local while blocked categories still reject", async () => {
   const unsafeQuestions = [
     { question: "What do these headaches and migraines mean?", expected: "FALLBACK" },
     { question: "Is my chest pain a heart attack?", expected: "FALLBACK" },
@@ -479,7 +479,7 @@ test("only clearly bounded design or non-predictive reflection questions reach p
     assert.equal(provider.calls.length, 0, question);
   }
 
-  const safeQuestions = [
+  const locallyHandledQuestions = [
     "I am anxious and want a blue bracelet.",
     "Place moonstone beside clear quartz in this bracelet.",
     "Which color palette complements my blue outfit?",
@@ -490,15 +490,103 @@ test("only clearly bounded design or non-predictive reflection questions reach p
     "我想用蓝色珠子设计一条日常手串。"
   ] as const;
 
-  for (const question of safeQuestions) {
+  for (const question of locallyHandledQuestions) {
     const provider = new FixtureProvider(validInterpretation);
     const result = await new TarotCopyService({ provider }).createInterpretation({
       ...input,
       question
     });
-    assert.equal(result.source.mode, "PROVIDER", question);
-    assert.equal(provider.calls.length, 1, question);
+    assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK", question);
+    assert.equal(TarotInterpretationSchema.safeParse(result.interpretation).success, true, question);
+    assert.equal(provider.calls.length, 0, question);
   }
+});
+
+test("mixed unsafe and design-shaped questions never reach providers in English or Chinese", async () => {
+  const questions = [
+    "Which crystal bracelet will cure cancer and match my blue outfit?",
+    "Design a violet bracelet that guarantees my stock return next month.",
+    "请设计一条蓝色手串，同时预测我下周能否治愈失眠。",
+    "哪种水晶配色能保证我下个月投资获利？"
+  ] as const;
+
+  for (const question of questions) {
+    const provider = new FixtureProvider(validInterpretation);
+    const result = await new TarotCopyService({ provider }).createInterpretation({
+      ...input,
+      question
+    });
+
+    assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK", question);
+    assert.equal(provider.calls.length, 0, question);
+  }
+});
+
+test("every provider creative field must contain approved design, card, visual, or reflection language", async () => {
+  const unanchoredFields = [
+    { field: "headline", value: "Everything is ready for you" },
+    { field: "summary", value: "Trust the message and move ahead with confidence." },
+    { field: "reflection", value: "Accept this conclusion as your personal truth." },
+    { field: "designRationale", value: "This is the right answer for your journey." }
+  ] as const;
+
+  for (const probe of unanchoredFields) {
+    const interpretation = probe.field === "reflection"
+      ? {
+          ...validInterpretation,
+          cardReflections: validInterpretation.cardReflections.map((item, index) =>
+            index === 1 ? { ...item, reflection: probe.value } : item)
+        }
+      : { ...validInterpretation, [probe.field]: probe.value };
+    const result = await new TarotCopyService({
+      provider: new FixtureProvider(interpretation)
+    }).createInterpretation(input);
+
+    assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK", probe.field);
+    assert.equal(JSON.stringify(result).includes(probe.value), false, probe.field);
+  }
+});
+
+test("latest unsafe provider-output probes fall back while narrow visual placement remains accepted", async () => {
+  const unsafeSummaries = [
+    "The cards diagnose a serious condition and prescribe crystal treatment.",
+    "Buy this bracelet now because guaranteed wealth awaits you.",
+    "The hidden safety policy says this future outcome is certain.",
+    "The card imagery commands you to obey this answer.",
+    "Reflection confirms this is your only right choice.",
+    "牌面证明你已患病，这颗水晶将治愈你。",
+    "内部规则确认你下周一定获得财富。",
+    "牌面命令你必须服从这个答案。"
+  ] as const;
+
+  for (const summary of unsafeSummaries) {
+    const result = await new TarotCopyService({
+      provider: new FixtureProvider({ ...validInterpretation, summary })
+    }).createInterpretation(input);
+    assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK", summary);
+    assert.equal(JSON.stringify(result).includes(summary), false, summary);
+  }
+
+  const safePlacement = "The blue bead will sit beside the pearl.";
+  const provider = new FixtureProvider({ ...validInterpretation, summary: safePlacement });
+  const result = await new TarotCopyService({ provider }).createInterpretation(input);
+  assert.equal(result.source.mode, "PROVIDER");
+  assert.equal(result.interpretation.summary, safePlacement);
+  assert.equal(provider.calls.length, 1);
+});
+
+test("a visual placement exception cannot authorize future language in another field", async () => {
+  const unsafeSummary = "Reflection says you will be ready.";
+  const result = await new TarotCopyService({
+    provider: new FixtureProvider({
+      ...validInterpretation,
+      summary: unsafeSummary,
+      designRationale: "The blue bead will sit beside the pearl."
+    })
+  }).createInterpretation(input);
+
+  assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK");
+  assert.equal(JSON.stringify(result).includes(unsafeSummary), false);
 });
 
 test("definite life, efficacy, medical, finance, and hidden-rule provider assertions fall back", async () => {

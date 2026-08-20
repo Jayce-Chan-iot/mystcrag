@@ -532,28 +532,21 @@ test("concurrent identical opt-in recommendations both reuse one persisted encry
   );
 });
 
-test("concurrent same-question retries converge on persisted copy when provider prose differs", async () => {
+test("concurrent same-question retries converge on deterministic copy without provider exposure", async () => {
   let providerCalls = 0;
-  let releaseBoth: (() => void) | undefined;
-  const bothStarted = new Promise<void>((resolve) => {
-    releaseBoth = resolve;
-  });
   const provider: TarotCopyProvider = {
     providerId: "nondeterministic-fixture",
     providerVersion: "1",
     async generate(request) {
       providerCalls += 1;
-      const call = providerCalls;
-      if (providerCalls === 2) releaseBoth?.();
-      await bothStarted;
       return {
-        headline: `Reflective direction ${call}`,
-        summary: `A nonpredictive reflection variant ${call} for comparing visual directions.`,
+        headline: "Provider reflection",
+        summary: "Provider reflection for comparing visual directions.",
         cardReflections: request.cards.map((card) => ({
           slot: card.slot,
-          reflection: `Notice the color and form of ${card.nameEn} in variant ${call}.`
+          reflection: `Notice the color and form of ${card.nameEn}.`
         })),
-        designRationale: `Amber, ivory, and ink form visual composition ${call}.`,
+        designRationale: "Amber, ivory, and ink form a visual composition.",
         disclaimer: "Reflection only."
       };
     }
@@ -575,13 +568,14 @@ test("concurrent same-question retries converge on persisted copy when provider 
     harness.tarotService.recommendations(actorId, revealed.session.sessionId, request)
   ]);
 
-  assert.equal(providerCalls, 2);
+  assert.equal(providerCalls, 0);
   assert.deepEqual(second.session, first.session);
   const stored = harness.tarotRepository.readPrivate(revealed.session.sessionId);
-  assert.ok(
-    stored.recommendationSnapshot?.interpretation.headline === "Reflective direction 1" ||
-      stored.recommendationSnapshot?.interpretation.headline === "Reflective direction 2"
+  assert.equal(
+    stored.recommendationSnapshot?.interpretation.headline,
+    "从牌面意象出发的三种灵感"
   );
+  assert.equal(stored.recommendationSnapshot?.copySource?.mode, "DETERMINISTIC_FALLBACK");
   assert.equal(
     await encryption.matchesIdentity(request.question, stored.questionCiphertext ?? ""),
     true

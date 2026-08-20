@@ -160,30 +160,86 @@ function deterministicFallback(input: TarotCopyInput): TarotInterpretation {
   });
 }
 
-function containsRestrictedCopy(interpretation: TarotInterpretation): boolean {
-  const copy = [
+const APPROVED_COPY_ANCHORS = [
+  "card", "cards", "imagery", "image", "reflection", "reflect", "reflective", "notice",
+  "consider", "compare", "invite", "balance", "balanced", "renewal", "choice", "direction",
+  "perspective", "pause", "exchange", "giving", "receiving", "meaning", "feeling", "open",
+  "path", "paths", "today", "design", "visual", "color", "palette", "style", "material",
+  "bracelet", "outfit", "bead", "beads", "crystal", "quartz", "focal", "tone", "rhythm",
+  "warmth", "space", "focus", "alternate", "alternating", "beside", "between", "placement",
+  "牌面", "图像", "意象", "反思", "自我反思", "留意", "观察", "比较", "平衡", "更新",
+  "选择", "方向", "视角", "联想", "感受", "设计", "视觉", "颜色", "色彩", "配色", "风格",
+  "材质", "手串", "穿搭", "珠子", "水晶", "焦点", "色调", "节奏", "层次", "排列", "位置"
+] as const;
+
+function approvedAnchors(input: TarotCopyInput): readonly string[] {
+  return [
+    ...APPROVED_COPY_ANCHORS,
+    input.theme,
+    input.palette.primary,
+    input.palette.support,
+    input.palette.accent,
+    ...input.cards.flatMap((card) => [card.nameEn, card.nameZh, ...card.keywords]),
+    ...input.materials.flatMap((material) => [
+      material.displayName,
+      material.crystalName,
+      ...material.colorTags
+    ])
+  ];
+}
+
+function hasApprovedCopyAnchor(value: string, input: TarotCopyInput): boolean {
+  return hasAnyTerm(normalizeRiskText(value), approvedAnchors(input));
+}
+
+function isNarrowVisualFuture(value: string): boolean {
+  const normalized = normalizeRiskText(value).normalized;
+  return /\b(?:bead|beads|bracelet|crystal|quartz|pearl|moonstone|amethyst|citrine|obsidian|jade|color|colors|palette|focal point)\b[^.!?]{0,80}\bwill\s+(?:sit|rest|appear|alternate|be placed)\b[^.!?]{0,60}\b(?:beside|between|next to|along|across|in|on)\b/u.test(normalized) ||
+    /\byou will see\b[^.!?]{0,100}\b(?:bead|beads|bracelet|design|color|colors|palette)\b/u.test(normalized) ||
+    /(?:珠子|手串|水晶|珍珠|配色).{0,40}(?:会|将)(?:位于|置于|排列|交替|呈现).{0,40}(?:旁边|之间|一侧|设计|手串)/u.test(normalized);
+}
+
+function isOpenReflectiveFuture(value: string): boolean {
+  const normalized = normalizeRiskText(value).normalized;
+  return /\b(?:no outcome is guaranteed|without predicting|not predetermined|choices? remain open)\b/u.test(normalized) ||
+    /(?:不预测|并非注定|选择仍然开放|没有确定结果)/u.test(normalized);
+}
+
+function containsRestrictedCopy(interpretation: TarotInterpretation, input: TarotCopyInput): boolean {
+  const creativeFields = [
     interpretation.headline,
     interpretation.summary,
     ...interpretation.cardReflections.map(({ reflection }) => reflection),
     interpretation.designRationale
-  ].join("\n");
-  return hasUnsafeCategoryCombination(classifyRisk(copy)) || hasRestrictedOutputStructure(copy);
+  ];
+  if (creativeFields.some((field) => !hasApprovedCopyAnchor(field, input))) return true;
+
+  const copy = creativeFields.join("\n");
+  const source = normalizeRiskText(copy);
+  const authoritativeDirective = hasAnyTerm(source, [
+    "command", "commands", "obey", "must", "only right", "personal truth", "trust the message",
+    "命令", "服从", "必须", "唯一正确", "个人真理", "相信这个信息"
+  ]);
+  const hasUnapprovedFuture = creativeFields.some((field) => {
+    const fieldSource = normalizeRiskText(field);
+    const hasFutureLanguage = hasAnyTerm(
+      fieldSource,
+      ["will", "shall", "going to", "会", "将", "即将"]
+    );
+    return hasFutureLanguage && !isNarrowVisualFuture(field) && !isOpenReflectiveFuture(field);
+  });
+  return authoritativeDirective ||
+    hasUnsafeCategoryCombination(classifyRisk(copy)) ||
+    hasRestrictedOutputStructure(copy) ||
+    hasUnapprovedFuture;
 }
 
-const DESIGN_REQUEST_TERMS = [
-  "design", "color", "palette", "style", "material", "bracelet", "outfit", "bead",
-  "placement", "place", "arrange", "wear", "visual", "focal point", "tone",
-  "设计", "颜色", "色彩", "配色", "风格", "材质", "手串", "穿搭", "服装", "珠子",
-  "搭配", "排列", "位置", "佩戴", "视觉", "造型"
-] as const;
-const REFLECTION_REQUEST_TERMS = [
-  "reflect", "reflection", "perspective", "contemplate", "journal", "explore my feelings",
-  "self reflection", "self-reflection", "反思", "自我反思", "觉察", "看待", "感受"
-] as const;
 const HEALTH_CONDITION_TERMS = [
   "headache", "migraine", "chest pain", "heart attack", "insomnia", "sleep", "anxiety", "depression",
   "cancer", "diabetes", "blood pressure", "glucose", "disease", "illness", "condition", "symptom",
-  "头痛", "偏头痛", "胸痛", "心脏病", "心肌梗塞", "失眠", "睡眠", "焦虑", "抑郁", "癌症", "糖尿病", "血压", "血糖", "疾病", "症状"
+  "diagnosis", "diagnose", "treatment", "prescribe",
+  "头痛", "偏头痛", "胸痛", "心脏病", "心肌梗塞", "失眠", "睡眠", "焦虑", "抑郁", "癌症", "糖尿病", "血压", "血糖", "疾病", "症状",
+  "患病", "诊断", "治疗", "处方"
 ] as const;
 const MATERIAL_NAMES = [
   "crystal", "gemstone", "quartz", "amethyst", "citrine", "jade", "moonstone", "obsidian",
@@ -220,11 +276,6 @@ function containsLifespanLanguage(value: string): boolean {
     /(?:还能活多久|能活到|寿命|余命|会长寿|将长寿)/u.test(normalized);
 }
 
-function questionIsProviderEligible(question: string): boolean {
-  const source = normalizeRiskText(question);
-  return hasAnyTerm(source, DESIGN_REQUEST_TERMS) || hasAnyTerm(source, REFLECTION_REQUEST_TERMS);
-}
-
 function hasRestrictedOutputStructure(value: string): boolean {
   if (containsHiddenContentReference(value) || containsLifespanLanguage(value)) return true;
 
@@ -248,7 +299,8 @@ function hasRestrictedOutputStructure(value: string): boolean {
     "你有", "你是", "你的", "意味着", "说明", "表明", "就是"
   ]);
 
-  return (health && diagnosticAssertion) ||
+  return finance ||
+    (health && (diagnosticAssertion || efficacy)) ||
     (material && health && efficacy) ||
     (definiteFuture && (lifeOutcome || finance)) ||
     (finance && (efficacy || hasAnyTerm(source, ["double", "windfall", "guarantee", "翻倍", "横财", "保证"])));
@@ -258,22 +310,6 @@ const questionIsBlocked = (question: string): boolean => {
   const signals = classifyRisk(question);
   return containsHiddenContentReference(question) || containsLifespanLanguage(question) ||
     (signals.death && (signals.predictive || signals.temporal || signals.outcomeAction));
-};
-
-const questionRequiresFallback = (question: string): boolean => {
-  if (!questionIsProviderEligible(question)) return true;
-  const signals = classifyRisk(question);
-  const source = normalizeRiskText(question);
-  const safeEmotionalDesignContext = hasAnyTerm(source, DESIGN_REQUEST_TERMS) &&
-    signals.health && signals.diagnostic && !signals.efficacy && !signals.predictive &&
-    !signals.certain && !signals.death && !signals.finance && !signals.lifeOutcome;
-  const health = hasAnyTerm(source, HEALTH_CONDITION_TERMS);
-  const finance = hasAnyTerm(source, FINANCE_OUTCOME_TERMS);
-  const lifeOutcome = hasAnyTerm(source, LIFE_OUTCOME_TERMS);
-  const unsafeOutcomeRequest = (health && (signals.efficacy || signals.predictive)) ||
-    ((finance || lifeOutcome) && (signals.efficacy || signals.predictive || signals.outcomeAction));
-  return unsafeOutcomeRequest ||
-    (!safeEmotionalDesignContext && hasUnsafeCategoryCombination(signals));
 };
 
 function fallbackResult(input: TarotCopyInput): TarotCopyResult {
@@ -296,7 +332,7 @@ export class TarotCopyService {
     if (input.question && questionIsBlocked(input.question)) {
       throw new TarotCopyComplianceError();
     }
-    if (input.question && questionRequiresFallback(input.question)) {
+    if (input.question) {
       return fallbackResult(input);
     }
 
@@ -317,7 +353,7 @@ export class TarotCopyService {
         parsed.data.cardReflections.some(
           (reflection, index) => reflection.slot !== input.cards[index]?.slot
         ) ||
-        containsRestrictedCopy(parsed.data)
+        containsRestrictedCopy(parsed.data, input)
       ) {
         return fallbackResult(input);
       }
