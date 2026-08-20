@@ -333,7 +333,9 @@ export function DiyEditor({ designId }: { designId: string }) {
     const protectedComponentId = design.accessories.find(
       (accessory) => accessory.placementMode === "ANCHORED"
     )?.anchorComponentId;
-    const keepComponentId = protectedComponentId ?? design.beads[0]?.componentId;
+    const keepComponentId = protectedComponentId && design.beads.some((bead) => bead.componentId === protectedComponentId)
+      ? protectedComponentId
+      : design.beads[0]?.componentId;
     const removableBeads = [...design.beads]
       .filter((bead) => bead.componentId !== keepComponentId)
       .sort((left, right) => right.positionIndex - left.positionIndex);
@@ -460,6 +462,96 @@ export function DiyEditor({ designId }: { designId: string }) {
   };
 
   const noticeAction = notice === "CONFLICT" ? () => { setIsLoading(true); void loadDesign(); } : () => setNotice(null);
+
+  if (order) {
+    const completedDesign = order.snapshot.design;
+    const completedFit = evaluateBraceletFit(completedDesign);
+    return (
+      <main className="min-h-screen bg-[var(--surface)] px-4 py-5 sm:px-7 sm:py-7" data-design-completion-page="true">
+        <div className="mx-auto flex min-h-[calc(100dvh-2.5rem)] max-w-6xl flex-col overflow-hidden rounded-[2rem] border border-[var(--border)] bg-white/72 shadow-[0_24px_80px_rgb(57_45_67/0.10)] sm:min-h-[calc(100dvh-3.5rem)]">
+          <header className="flex min-h-16 items-center justify-between gap-4 border-b border-[var(--border)]/70 px-5 sm:px-8">
+            <Link className="font-serif text-2xl tracking-[0.08em] text-[var(--accent-deep)]" href="/">玄矶</Link>
+            <span className="rounded-full bg-[var(--accent-soft)] px-4 py-2 text-xs font-medium text-[var(--success)]">设计快照已保存</span>
+          </header>
+
+          <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(22rem,0.85fr)]">
+            <section className="flex min-h-0 flex-col items-center justify-center border-b border-[var(--border)]/70 px-5 py-7 lg:border-b-0 lg:border-r lg:px-10" aria-labelledby="completion-title">
+              <p className="text-xs uppercase tracking-[0.24em] text-[var(--accent)]">Design completed</p>
+              <h1 className="mt-2 text-center font-serif text-3xl text-[var(--accent-deep)] sm:text-4xl" id="completion-title">你的设计已经完成</h1>
+              <p className="mt-3 max-w-xl text-center text-sm leading-6 text-[var(--muted)]">手串、实时价格和生产快照已经确认。你可以直接导出设计图，或返回继续调整。</p>
+              <div className="mt-3 w-full max-w-[31rem]">
+                <FlatBraceletEditor
+                  busy
+                  connected
+                  design={completedDesign}
+                  fit={completedFit}
+                  onMove={() => undefined}
+                  onRemove={() => undefined}
+                  onSelect={() => undefined}
+                  selectedComponentId=""
+                />
+              </div>
+            </section>
+
+            <aside className="flex min-h-0 flex-col px-5 py-6 sm:px-8 lg:overflow-y-auto" aria-labelledby="completion-summary-title">
+              <div className="flex items-start justify-between gap-5">
+                <div>
+                  <p className="text-xs tracking-[0.16em] text-[var(--muted)]">下一步</p>
+                  <h2 className="mt-1 font-serif text-2xl" id="completion-summary-title">确认并分享你的方案</h2>
+                </div>
+                <strong className="shrink-0 rounded-full bg-[var(--accent-deep)] px-4 py-2 text-sm font-medium text-white">
+                  {formatMinorAmount({ amountMinor: completedDesign.pricing.totalPriceMinor, currency: completedDesign.currency, locale: completedDesign.locale })}
+                </strong>
+              </div>
+
+              <div className="mt-6 grid grid-cols-3 gap-2">
+                <div className="rounded-2xl bg-[var(--surface-soft)] px-3 py-4 text-center">
+                  <strong className="block font-serif text-xl">{completedFit.circumferenceCmLabel}cm</strong>
+                  <span className="mt-1 block text-xs text-[var(--muted)]">当前手围</span>
+                </div>
+                <div className="rounded-2xl bg-[var(--surface-soft)] px-3 py-4 text-center">
+                  <strong className="block font-serif text-xl">{completedDesign.beads.length}</strong>
+                  <span className="mt-1 block text-xs text-[var(--muted)]">珠子数量</span>
+                </div>
+                <div className="rounded-2xl bg-[var(--surface-soft)] px-3 py-4 text-center">
+                  <strong className="block font-serif text-xl">R{completedDesign.revision}</strong>
+                  <span className="mt-1 block text-xs text-[var(--muted)]">设计版本</span>
+                </div>
+              </div>
+
+              <section className="mt-6 min-h-0 flex-1" aria-labelledby="completion-materials-title">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-serif text-lg" id="completion-materials-title">方案用料</h3>
+                  <span className="text-xs text-[var(--muted)]">{designSummary.length} 种珠材</span>
+                </div>
+                <div className="mt-3 max-h-48 space-y-2 overflow-y-auto pr-1">
+                  {designSummary.map((item) => (
+                    <div className="grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-xl bg-white/80 px-3 py-2" key={item.beadProductId}>
+                      <span className="block h-10 w-10"><CrystalBeadImage alt="" materialKey={item.materialKey} sizes="40px" /></span>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{item.name}</p>
+                        <p className="text-xs text-[var(--muted)]">{item.diameterMm}mm · × {item.count}</p>
+                      </div>
+                      <span className="text-sm">{formatMinorAmount({ amountMinor: item.unitPriceMinor * item.count, currency: completedDesign.currency, locale: completedDesign.locale })}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <p className="mt-5 break-all text-xs leading-5 text-[var(--muted)]">订单快照：{order.orderId} · {order.orderStatus}</p>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                <button className="min-h-14 rounded-xl bg-[var(--accent-deep)] px-5 font-semibold text-white shadow-[0_12px_28px_rgb(73_53_95/0.24)] transition hover:bg-[var(--accent)] disabled:opacity-55" disabled={isExporting} onClick={() => void exportDesignImage()} type="button">
+                  {isExporting ? "正在导出…" : "导出设计图"}
+                </button>
+                <Link className="grid min-h-14 place-items-center rounded-xl border border-[var(--accent)] px-5 text-center font-medium text-[var(--accent-deep)] transition hover:bg-[var(--accent-soft)]" href={`/design/${encodeURIComponent(completedDesign.designId)}`}>查看设计详情</Link>
+              </div>
+              <button className="mt-3 min-h-11 text-sm text-[var(--muted)] underline decoration-[var(--border)] underline-offset-4 hover:text-[var(--accent-deep)]" onClick={() => setOrder(null)} type="button">返回继续调整</button>
+            </aside>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen" data-diy-editor-page="true" onKeyDown={(event) => {
@@ -652,11 +744,6 @@ export function DiyEditor({ designId }: { designId: string }) {
             </section>
 
             <div className="border-t border-[var(--border)]/70 pt-5">
-              {order ? (
-                <p className="mb-4 rounded-xl bg-[var(--accent-soft)] px-4 py-3 text-center text-sm text-[var(--success)]" role="status">
-                  设计已完成，订单快照已生成
-                </p>
-              ) : null}
               <div className="mb-5 flex items-center justify-between">
                 <span className="font-medium">合计</span>
                 <strong className="text-lg font-medium text-[var(--accent-deep)]">
@@ -674,11 +761,11 @@ export function DiyEditor({ designId }: { designId: string }) {
               <button
                 className="mt-3 min-h-16 w-full rounded-xl bg-[var(--accent-deep)] px-5 text-base font-semibold tracking-[0.08em] text-white shadow-[0_12px_30px_rgb(73_53_95/0.28)] transition hover:-translate-y-0.5 hover:bg-[var(--accent)] hover:shadow-[0_16px_34px_rgb(73_53_95/0.32)] disabled:translate-y-0 disabled:opacity-55"
                 aria-describedby={braceletFit.canComplete ? undefined : "desktop-bracelet-fit-help"}
-                disabled={isOrdering || Boolean(order) || !braceletFit.canComplete}
+                disabled={isOrdering || !braceletFit.canComplete}
                 onClick={() => void createOrder()}
                 type="button"
               >
-                {isOrdering ? "生成中…" : order ? "设计已完成" : "完成设计"}
+                {isOrdering ? "生成中…" : "完成设计"}
               </button>
               {!braceletFit.canComplete ? (
                 <p className="mt-2 text-center text-xs text-[var(--muted)]" id="desktop-bracelet-fit-help">
@@ -765,7 +852,7 @@ export function DiyEditor({ designId }: { designId: string }) {
             <button className="min-h-11 justify-self-start px-2 text-[var(--muted)] disabled:opacity-35" disabled={isUpdating || undoStack.length === 0} onClick={() => void runHistory("undo")} type="button">↶ 撤销</button>
             <button className="min-h-11 justify-self-center px-2 text-[var(--muted)] disabled:opacity-35" disabled={isUpdating || redoStack.length === 0} onClick={() => void runHistory("redo")} type="button">↷ 重做</button>
             <button className="min-h-11 justify-self-center px-2 text-[var(--muted)] disabled:opacity-55" disabled={isSaving} onClick={() => void save()} type="button">{isSaving ? "保存中…" : savedAt ? "✓ 已保存" : "保存"}</button>
-            <button aria-describedby={braceletFit.canComplete ? undefined : "mobile-bracelet-fit-help"} className="min-h-11 justify-self-end rounded-full bg-[var(--accent-deep)] px-4 text-white disabled:opacity-40 sm:px-7" disabled={isOrdering || Boolean(order) || !braceletFit.canComplete} onClick={() => void createOrder()} type="button">{isOrdering ? "生成中…" : order ? "设计已完成" : "完成设计"}</button>
+            <button aria-describedby={braceletFit.canComplete ? undefined : "mobile-bracelet-fit-help"} className="min-h-11 justify-self-end rounded-full bg-[var(--accent-deep)] px-4 text-white disabled:opacity-40 sm:px-7" disabled={isOrdering || !braceletFit.canComplete} onClick={() => void createOrder()} type="button">{isOrdering ? "生成中…" : "完成设计"}</button>
           </div>
           {!braceletFit.canComplete ? <p className="border-b border-[var(--border)]/70 bg-white/55 px-4 pb-3 text-right text-xs text-[var(--muted)]" id="mobile-bracelet-fit-help">调整到 13.0–20.0cm 后即可完成</p> : null}
 
@@ -832,13 +919,6 @@ export function DiyEditor({ designId }: { designId: string }) {
             {isUpdating ? <p className="mt-4 text-center text-sm text-[var(--muted)]" role="status">正在同步手串、库存与价格…</p> : null}
           </section>
         </section>
-
-        {order ? (
-          <section className="mt-4 rounded-2xl border border-[var(--success)]/30 bg-white/70 p-5" aria-labelledby="order-snapshot-title" data-order-id={order.orderId}>
-            <h2 className="font-serif text-xl" id="order-snapshot-title">设计已确认，订单快照已生成（未接支付）</h2>
-            <p className="mt-2 text-sm text-[var(--muted)]">{order.orderId} · Revision {order.snapshot.design.revision} · {formatMinorAmount({ amountMinor: order.snapshot.design.pricing.totalPriceMinor, currency: order.snapshot.design.currency, locale: order.snapshot.design.locale })}</p>
-          </section>
-        ) : null}
 
         <details className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
           <summary className="min-h-11 cursor-pointer text-sm text-[var(--muted)]">查看选中珠子与设计说明</summary>

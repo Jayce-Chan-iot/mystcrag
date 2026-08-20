@@ -157,7 +157,10 @@ test("DIY editor keeps the focused mobile column and adds the desktop workbench"
   assert.match(source, /data-desktop-diy-workspace="true"/);
   assert.match(source, /导出设计图/);
   assert.match(source, /完成设计/);
-  assert.match(source, /设计已完成，订单快照已生成/);
+  assert.match(source, /data-design-completion-page="true"/);
+  assert.match(source, /你的设计已经完成/);
+  assert.match(source, /下一步/);
+  assert.match(source, /返回继续调整/);
   assert.match(source, /清空设计/);
   assert.match(source, /收缩成串/);
   assert.match(source, /散开查看/);
