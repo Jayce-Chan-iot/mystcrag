@@ -6,7 +6,15 @@ export const tarotModule: BackendModule = {
 };
 
 export { registerTarotRoutes } from "./tarot.routes.js";
-export { TarotService } from "./tarot.service.js";
+export {
+  DeterministicTarotRecommendationCopyPort,
+  TarotAiRecommendationCopyPort,
+  TarotService
+} from "./tarot.service.js";
+export {
+  AesGcmTarotQuestionEncryption,
+  createTarotQuestionEncryptionFromEnvironment
+} from "./tarot-question-encryption.js";
 export type {
   TarotApiService,
   TarotCatalogPort,
@@ -14,5 +22,6 @@ export type {
   TarotDesignGenerator,
   TarotDesignReader,
   TarotPreferencePort,
+  TarotQuestionEncryptionPort,
   TarotRecommendationCopyPort
 } from "./tarot.types.js";

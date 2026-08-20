@@ -6,15 +6,21 @@ import {
   createPrismaClient
 } from "@mystcrag/database";
 import { NodeCryptoRandomSource } from "@mystcrag/tarot-engine";
+import { TarotCopyService } from "@mystcrag/ai-agent/tarot";
 import { createAuthProviderFromEnvironment } from "./auth/auth-provider.factory.js";
 import { createDesignApplicationService } from "./modules/design/design.service.js";
-import { TarotService } from "./modules/tarot/tarot.service.js";
+import {
+  TarotAiRecommendationCopyPort,
+  TarotService
+} from "./modules/tarot/tarot.service.js";
+import { createTarotQuestionEncryptionFromEnvironment } from "./modules/tarot/tarot-question-encryption.js";
 
 const defaultPort = 4000;
 const configuredPort = Number(process.env.BACKEND_PORT ?? defaultPort);
 const port = Number.isInteger(configuredPort) && configuredPort > 0 ? configuredPort : defaultPort;
 
 const authProvider = createAuthProviderFromEnvironment();
+const tarotQuestionEncryption = createTarotQuestionEncryptionFromEnvironment(process.env);
 const database = createPrismaClient();
 await database.$connect();
 const designRepository = new DesignRepository(database);
@@ -38,6 +44,8 @@ const app = createApp({
       }
     },
     designGenerator: designApplicationService,
+    copy: new TarotAiRecommendationCopyPort(new TarotCopyService()),
+    questionEncryption: tarotQuestionEncryption,
     preferences: {
       async getDesignPreferences() {
         return undefined;

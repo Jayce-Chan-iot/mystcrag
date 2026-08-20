@@ -22,6 +22,7 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 - Tarot transitions conditionally match session ID, owner ID, and state revision inside a transaction. Accepted selection operation IDs remain in the validated private engine state, making identical retries idempotent while stale or conflicting commands fail.
 - Recommendation ranks must be exactly 1, 2, and 3 with three distinct, owner-scoped designs. `selectedDesignId` is nullable metadata validated against those links by the repository; it is intentionally not a cascading foreign key.
 - Tarot question text has no database field. The default path stores neither question text nor ciphertext; explicit opt-in may populate only the paired nullable `questionCiphertext` and `questionSavedAt` fields, and public DTO mapping must omit ciphertext.
+- New recommendation snapshots persist an internal `copySource` marker with provider or deterministic-fallback mode, provider ID/version, and copy-policy version. The marker is optional only so existing persisted snapshots remain readable; every newly generated recommendation supplies it.
 
 ## Tarot lifecycle persistence
 

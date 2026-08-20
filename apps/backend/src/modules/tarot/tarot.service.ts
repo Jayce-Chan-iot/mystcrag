@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
+import { TarotCopyComplianceError, TarotCopyService } from "@mystcrag/ai-agent/tarot";
+
 import type {
   CreateTarotSessionRequest,
   CreateTarotSessionResponse,
@@ -54,6 +56,7 @@ import type {
   TarotDesignGenerator,
   TarotDesignReader,
   TarotPreferencePort,
+  TarotQuestionEncryptionPort,
   TarotRecommendationCopyPort
 } from "./tarot.types.js";
 
@@ -242,26 +245,43 @@ function requestForDirection(input: {
   });
 }
 
-export class DeterministicTarotRecommendationCopyPort
+export class TarotAiRecommendationCopyPort
 implements TarotRecommendationCopyPort {
+  constructor(private readonly copyService = new TarotCopyService()) {}
+
   async createSnapshot(input: {
     cards: readonly RevealedTarotCard[];
     signals: TarotDesignSignals;
     materials: readonly CatalogMaterialProduct[];
     locale: string;
+    theme: Parameters<TarotRecommendationCopyPort["createSnapshot"]>[0]["theme"];
     question?: string;
   }): Promise<TarotRecommendationSnapshot> {
+    const copy = await this.copyService.createInterpretation({
+      cards: input.cards.map((card) => ({
+        slot: card.slot,
+        nameZh: card.nameZh,
+        nameEn: card.nameEn,
+        orientation: card.orientation,
+        keywords: [...(card.orientation === "UPRIGHT"
+          ? card.uprightKeywords
+          : card.reversedKeywords)]
+      })),
+      theme: input.theme,
+      palette: { ...input.signals.palette },
+      materials: input.materials.map((material) => ({
+        displayName: material.name,
+        crystalName: input.locale.toLowerCase().startsWith("zh")
+          ? material.crystalNameCn
+          : material.crystalNameEn,
+        colorTags: [...material.colorTags]
+      })),
+      locale: input.locale,
+      ...(input.question === undefined ? {} : { question: input.question })
+    });
     return {
-      interpretation: {
-        headline: "Three directions for reflection",
-        summary: "Use the revealed imagery as a gentle prompt while comparing balance, contrast, and neutral-led compositions.",
-        cardReflections: input.cards.map((card) => ({
-          slot: card.slot,
-          reflection: `Notice which colors and forms in ${card.nameEn} feel most resonant today.`
-        })),
-        designRationale: "The three bracelets vary bead rhythm and visual focus while keeping catalog and pricing decisions server-authoritative.",
-        disclaimer: "For personal reflection and creative inspiration only."
-      },
+      interpretation: copy.interpretation,
+      copySource: copy.source,
       colorStory: {
         primaryColor: colorHex(input.signals.palette.primary),
         supportColor: colorHex(input.signals.palette.support),
@@ -281,7 +301,9 @@ implements TarotRecommendationCopyPort {
   }
 }
 
-const defaultCopyPort = new DeterministicTarotRecommendationCopyPort();
+export class DeterministicTarotRecommendationCopyPort extends TarotAiRecommendationCopyPort {}
+
+const defaultCopyPort = new TarotAiRecommendationCopyPort();
 
 function validateGeneratedDesign(
   responseInput: GenerateDesignResponse,
@@ -390,7 +412,9 @@ export class TarotService implements TarotApiService {
       readonly catalog?: TarotCatalogPort;
       readonly designGenerator?: TarotDesignGenerator;
       readonly copy?: TarotRecommendationCopyPort;
+      readonly questionEncryption?: TarotQuestionEncryptionPort;
       readonly preferences?: TarotPreferencePort;
+      readonly now?: () => Date;
     }
   ) {}
 
@@ -519,7 +543,7 @@ export class TarotService implements TarotApiService {
     sessionId: string,
     input: GenerateTarotRecommendationsRequest
   ): Promise<GenerateTarotRecommendationsResponse> {
-    if (input.saveQuestion) {
+    if (input.saveQuestion && (input.question === undefined || !this.dependencies.questionEncryption)) {
       throw new DomainApiError(
         "VALIDATION_ERROR",
         "Saving a Tarot question requires encrypted question storage."
@@ -548,6 +572,15 @@ export class TarotService implements TarotApiService {
         "INTERNAL_ERROR",
         "Tarot recommendation dependencies are unavailable."
       );
+    }
+    let encryptedQuestion:
+      | { readonly questionCiphertext: string; readonly questionSavedAt: Date }
+      | undefined;
+    if (input.saveQuestion && input.question !== undefined) {
+      encryptedQuestion = {
+        questionCiphertext: await this.dependencies.questionEncryption!.encrypt(input.question),
+        questionSavedAt: (this.dependencies.now ?? (() => new Date()))()
+      };
     }
 
     const revealed = revealDraw(
@@ -596,13 +629,22 @@ export class TarotService implements TarotApiService {
       );
     }
 
-    const snapshot = await (this.dependencies.copy ?? defaultCopyPort).createSnapshot({
-      cards: revealed.cards,
-      signals,
-      materials: rankedMaterials.slice(0, 3),
-      locale: input.locale,
-      ...(input.question === undefined ? {} : { question: input.question })
-    });
+    let snapshot: TarotRecommendationSnapshot;
+    try {
+      snapshot = await (this.dependencies.copy ?? defaultCopyPort).createSnapshot({
+        cards: revealed.cards,
+        signals,
+        materials: rankedMaterials.slice(0, 3),
+        locale: input.locale,
+        theme: current.theme,
+        ...(input.question === undefined ? {} : { question: input.question })
+      });
+    } catch (error) {
+      if (error instanceof TarotCopyComplianceError) {
+        throw new DomainApiError("COMPLIANCE_BLOCKED", error.message);
+      }
+      throw error;
+    }
     const generated = [];
     for (const [index, { direction, sequence }] of candidates.entries()) {
       const rank = index + 1;
@@ -664,6 +706,7 @@ export class TarotService implements TarotApiService {
       sessionId,
       expectedRevision: input.expectedRevision,
       recommendationSnapshot: snapshot,
+      ...encryptedQuestion,
       recommendations: generated.map(({ rank, response }) => ({
         rank,
         designId: response.design.designId

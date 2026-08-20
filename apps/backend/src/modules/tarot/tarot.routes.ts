@@ -50,7 +50,8 @@ function mapTarotError(error: unknown, ownerScoped: boolean): DomainApiError {
     code === "FORBIDDEN" ||
     code === "NOT_FOUND" ||
     code === "CONFLICT" ||
-    code === "VALIDATION_ERROR"
+    code === "VALIDATION_ERROR" ||
+    code === "COMPLIANCE_BLOCKED"
   ) {
     if (code === "NOT_FOUND" && ownerScoped) {
       return new DomainApiError("FORBIDDEN", "You do not have access to this resource.");

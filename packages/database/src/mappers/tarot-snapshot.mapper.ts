@@ -62,6 +62,14 @@ export const TarotDrawSnapshotSchema = z
 
 export const TarotRecommendationSnapshotSchema = z.strictObject({
   interpretation: TarotInterpretationSchema,
+  copySource: z
+    .strictObject({
+      mode: z.enum(["PROVIDER", "DETERMINISTIC_FALLBACK"]),
+      providerId: z.string().trim().min(1).max(128),
+      providerVersion: z.string().trim().min(1).max(80),
+      policyVersion: z.string().trim().min(1).max(80)
+    })
+    .optional(),
   colorStory: TarotColorStorySchema,
   materialRecommendations: z.array(TarotMaterialDisplayRecommendationSchema).min(1).max(12)
 });

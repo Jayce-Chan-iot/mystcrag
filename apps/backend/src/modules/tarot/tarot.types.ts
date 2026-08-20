@@ -12,7 +12,8 @@ import type {
   SaveTarotSessionRequest,
   SaveTarotSessionResponse,
   SelectTarotCardRequest,
-  SelectTarotCardResponse
+  SelectTarotCardResponse,
+  TarotTheme
 } from "@mystcrag/design-contract";
 import type {
   CatalogMaterialProduct,
@@ -61,8 +62,13 @@ export interface TarotRecommendationCopyPort {
     signals: TarotDesignSignals;
     materials: readonly CatalogMaterialProduct[];
     locale: string;
+    theme: TarotTheme;
     question?: string;
   }): Promise<TarotRecommendationSnapshot>;
+}
+
+export interface TarotQuestionEncryptionPort {
+  encrypt(question: string): Promise<string>;
 }
 
 export interface TarotApiService {
