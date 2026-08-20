@@ -16,13 +16,21 @@ export * from "./schemas/catalog.schema";
 export * from "./schemas/community.schema";
 export * from "./schemas/compliance.schema";
 export * from "./schemas/component.schema";
+export * from "./schemas/decision-rule.schema";
+export * from "./schemas/decision-trace.schema";
 export * from "./schemas/design.schema";
+export * from "./schemas/json.schema";
+export * from "./schemas/knowledge.schema";
 export * from "./schemas/metadata.schema";
 export * from "./schemas/order-snapshot.schema";
 export * from "./schemas/pricing.schema";
 export * from "./schemas/production.schema";
 export * from "./schemas/provenance.schema";
 export * from "./schemas/public-design.schema";
+export * from "./schemas/recommendation-context.schema";
 export * from "./schemas/story.schema";
+export * from "./schemas/taxonomy.schema";
+
+export * from "./taxonomy";
 
 export * from "./types/index";
