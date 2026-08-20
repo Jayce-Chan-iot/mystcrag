@@ -1,7 +1,7 @@
 # Knowledge-Driven Design System Specification
 
-> 状态：**PROPOSED（EPIC 0 架构审计与提案）**，等待项目所有者按任务书 §63 回复「批准架构，开始实施」。
-> 批准后本文档成为知识系统域的控制性规范（controlling specification），ADR 条目同步登记入 `DECISION_LOG.md`。
+> 状态：**APPROVED（2026-08-20 项目所有者批准「批准架构，开始实施」）**，登记为 `DEC-KNOWLEDGE-SYSTEM-001`。
+> 本文档是知识系统域的控制性规范（controlling specification），ADR 条目见 §15 并已登记入 `DECISION_LOG.md`。
 > 依据：《玄矶 Mystcrag：知识驱动水晶 DIY 设计系统完整开发任务书》（2026-08-20）。
 
 ## 1. 目标与范围
@@ -311,12 +311,12 @@ pg-boss 自管 `pgboss` schema（其内置迁移机制），**不纳入 prisma m
 
 | 指标 | 预算 | Baseline（EPIC 0 采集，实施前） | After（各 Epic 完成复测） |
 | --- | --- | --- | --- |
-| DIY initial bundle（gzipped） | 增长 ≤10% | EPIC 0 记录 `next build` 数字 | EPIC 10 后复测 |
-| Design evaluate p95 | <200ms | 现有 generate 耗时（空知识库） | EPIC 9/10 后 |
-| Hybrid retrieval p95 @10k records | <300ms（不含首次模型加载） | — | EPIC 4 后 |
+| DIY initial bundle（gzipped） | 增长 ≤10% | `.next/static` JS 产物总量：raw 1,384,553 B / **gzip 377,761 B**（2026-08-20，`pnpm validate` 8/8 全绿） | EPIC 10 后复测 |
+| Design evaluate p95 | <200ms | 现有规则推荐管线 proxy（`generateRecommendations`，空知识库，100 次）：p50=0.14ms / p95=0.43ms / max=3.44ms；API 级 generate 耗时受 DB I/O 主导，EPIC 9 benchmark 脚本补齐 | EPIC 9/10 后 |
+| Hybrid retrieval p95 @10k records | <300ms（不含首次模型加载） | 暂无（EPIC 4 建 10k 合成数据集时采集空载基线） | EPIC 4 后 |
 | 交互同步链 | 禁止 crawler/embedding/ingestion | 架构测试保证 | 架构测试保证 |
 
-Baseline 采集脚本（`node --test` bench 风格 + `ANALYZE=true next build`）在 EPIC 0 批准后、EPIC 1 实施前执行并回填本表。
+Baseline 采集方式：bundle 数字来自 `pnpm validate`（FULL TURBO 全绿）后对 `apps/frontend/.next/static/**/*.js` 的 raw 与 gzip 总量统计（Turbopack 构建输出不含每路由尺寸列，以产物总量作为可比指标）；管线数字来自包内临时 `node:test` 基准探针（100 次迭代取分位，已删除）。
 
 ## 15. ADR List（批准后登记 DECISION_LOG.md）
 

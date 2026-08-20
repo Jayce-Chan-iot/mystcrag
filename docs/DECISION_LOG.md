@@ -20,6 +20,22 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 
 ## Decisions
 
+### DEC-KNOWLEDGE-SYSTEM-001 — Approve the knowledge-driven design system architecture
+
+- Date: 2026-08-20
+- Proposed by Agent: Chief Architect (EPIC 0 audit)
+- Affected modules: `packages/design-contract`, `packages/ai-agent`, `packages/database`, `apps/backend`, `apps/frontend`, plus planned `packages/knowledge-core`, `packages/design-engine`, `packages/knowledge-ingestion`, `apps/knowledge-worker`, `apps/mcp-server`, `packages/tarot-engine`
+- Decision: Adopt the knowledge-driven design system architecture recorded in `docs/KNOWLEDGE_SYSTEM_SPEC.md`. The authoritative ADR list (ADR-1 through ADR-13) is section 15 of that specification: DesignV1 stays unchanged with decision traces in a sidecar table; `ai-agent` narrows to an explanation layer while a deterministic `design-engine` owns composition; taxonomy ships as a versioned fixture in `design-contract`; knowledge storage uses PostgreSQL + pgvector (no ChromaDB); the job queue uses pg-boss (no Redis); ingestion uses Crawlee; rule evaluation spikes `json-rules-engine`; color math uses Culori; MCP uses the official TypeScript SDK behind a dedicated `apps/mcp-server`; tarot enters the pipeline as a soft `RecommendationContext` source (P6) instead of a dedicated scoring engine.
+- Rationale: The task book requires an explainable, testable, deterministic design chain (Context → Knowledge → Decision Rules → Design Engine → DesignV1) without a mandatory LLM, without a parallel design contract, and without duplicate infrastructure. The repository audit confirmed the existing contracts, repositories, and geometry kernel can be extended in place.
+- Rejected alternatives: A parallel `DesignPlan` schema; embedding decision traces inside `DesignV1`; ChromaDB/Redis/new vector stores; a tarot-specific design engine; a second test framework; frontend-bundled knowledge runtimes.
+- Contract impact: Additive only. New schema families (taxonomy, RecommendationContext, Knowledge, DecisionRule, DesignDecisionTrace) join `@mystcrag/design-contract`; optional `lengthAlongStringMm` on beads/accessories and the `TAROT_GUIDED` design mode remain the only DesignV1-facing additions. `schemaVersion` stays `1.0.0`.
+- Database impact: Incremental migrations only (Product V2 nullable columns, knowledge table family, `design_decision_traces`, tarot sessions). Existing rows and order snapshots remain untouched; `pgvector/pgvector:pg17` replaces the stock postgres image.
+- API impact: Existing routes unchanged. Planned additive routes: `/api/design/recommend|evaluate|optimize|suggest`, `/api/design/:id/trace`, `/api/knowledge/search`, and the six tarot session endpoints, all following the current Bearer + Zod + error-envelope conventions.
+- Approval status: `APPROVED`
+- Approved by: Project owner
+- Approval date: 2026-08-20
+- Implementation branch or commit: `feat/knowledge-system` worktree; EPIC 0 documents committed at `efec785`.
+
 ### DEC-MVP-2P5D-001 — Adopt the 2.5D editor as the MVP interaction target
 
 - Date: 2026-08-17
