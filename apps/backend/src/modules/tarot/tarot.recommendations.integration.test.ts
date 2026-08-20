@@ -407,12 +407,75 @@ test("real Design application retry reuses a partial rank without creating dupli
   assert.equal(harness.getCreateAttempts(), 4);
 });
 
-test("saved wrist and budget preferences drive every real candidate without hard-filtering catalog products", async () => {
+test("saved budget reverses a no-budget lexical tie in the persisted real Design sequence", async () => {
+  const noBudgetHarness = createRealRecommendationHarness({
+    authoritativeMetadata: false
+  });
+  const noBudgetRevealed = await revealRealRecommendationSession(
+    noBudgetHarness.tarotService
+  );
+  const noBudgetResponse = await noBudgetHarness.tarotService.recommendations(
+    actorId,
+    noBudgetRevealed.session.sessionId,
+    recommendationRequest(noBudgetRevealed.session.revision)
+  );
+  const noBudgetBalanced = noBudgetResponse.session.recommendations?.find(
+    ({ rank }) => rank === 1
+  );
+  assert.ok(noBudgetBalanced);
+  const noBudgetPersisted = noBudgetHarness.designs.get(
+    noBudgetBalanced.design.designId
+  )?.snapshot;
+  assert.ok(noBudgetPersisted);
+  assert.equal(
+    noBudgetPersisted.beads[0]?.beadProductId,
+    "product-aquamarine-round-8"
+  );
+  assert.equal(
+    noBudgetBalanced.design.beads[0]?.beadProductId,
+    "product-aquamarine-round-8"
+  );
+
+  const savedBudgetHarness = createRealRecommendationHarness({
+    authoritativeMetadata: false,
+    preferences: {
+      budget: { minMinor: 900, maxMinor: 1_050 }
+    }
+  });
+  const savedBudgetRevealed = await revealRealRecommendationSession(
+    savedBudgetHarness.tarotService
+  );
+  const savedBudgetResponse = await savedBudgetHarness.tarotService.recommendations(
+    actorId,
+    savedBudgetRevealed.session.sessionId,
+    recommendationRequest(savedBudgetRevealed.session.revision)
+  );
+
+  assert.ok(savedBudgetResponse.session.recommendations);
+  const savedBudgetBalanced = savedBudgetResponse.session.recommendations.find(
+    ({ rank }) => rank === 1
+  );
+  assert.ok(savedBudgetBalanced);
+  const savedBudgetPersisted = savedBudgetHarness.designs.get(
+    savedBudgetBalanced.design.designId
+  )?.snapshot;
+  assert.ok(savedBudgetPersisted);
+  assert.equal(
+    savedBudgetPersisted.beads[0]?.beadProductId,
+    "product-quartz-round-10"
+  );
+  assert.equal(
+    savedBudgetBalanced.design.beads[0]?.beadProductId,
+    "product-quartz-round-10"
+  );
+});
+
+test("saved wrist reaches every real candidate and budget does not hard-filter products", async () => {
   const harness = createRealRecommendationHarness({
     authoritativeMetadata: false,
     preferences: {
       wristCircumferenceMm: 165,
-      budget: { minMinor: 1_100, maxMinor: 1_300 }
+      budget: { minMinor: 900, maxMinor: 1_050 }
     }
   });
   const revealed = await revealRealRecommendationSession(harness.tarotService);
@@ -426,8 +489,6 @@ test("saved wrist and budget preferences drive every real candidate without hard
   assert.ok(response.session.recommendations.every(
     ({ design }) => design.bracelet.wristCircumferenceMm === 165
   ));
-  const rankedFirst = [...harness.candidateSequences.values()][0];
-  assert.equal(rankedFirst?.[0], harness.catalog[0]!.id);
   const selectedProductIds = new Set(
     [...harness.candidateSequences.values()].flat()
   );
