@@ -7,7 +7,7 @@ import {
   type TarotInterpretation
 } from "./tarot-copy.schema";
 
-export const TAROT_COPY_POLICY_VERSION = "tarot-copy-policy-v1";
+export const TAROT_COPY_POLICY_VERSION = "tarot-copy-policy-v2";
 export const TAROT_FALLBACK_PROVIDER_ID = "mystcrag-deterministic-tarot-copy";
 export const TAROT_FALLBACK_PROVIDER_VERSION = "1.0.0";
 
@@ -16,34 +16,10 @@ const EN_DISCLAIMER =
 const ZH_DISCLAIMER =
   "仅供自我反思与设计灵感，不构成确定性建议，也不声称水晶具有任何功效。";
 
-type RiskSignals = Readonly<{
-  hidden: boolean;
-  death: boolean;
-  health: boolean;
-  finance: boolean;
-  relationship: boolean;
-  lifeOutcome: boolean;
-  material: boolean;
-  efficacy: boolean;
-  predictive: boolean;
-  temporal: boolean;
-  certain: boolean;
-  diagnostic: boolean;
-  outcomeAction: boolean;
-}>;
-
-const RISK_LEXICON = {
+const QUESTION_BLOCK_LEXICON = {
   death: ["die", "death", "dying", "pass away", "dead", "死亡", "死期", "去世", "会死"],
-  health: ["cancer", "blood pressure", "glucose", "diabetes", "pregnant", "pregnancy", "disease", "illness", "condition", "disorder", "symptom", "anxiety", "anxious", "depression", "depressed", "panic", "pain", "insomnia", "medical", "癌症", "血压", "血糖", "糖尿病", "怀孕", "疾病", "病症", "症状", "焦虑", "抑郁", "恐慌", "疼痛", "失眠", "医学"],
-  finance: ["wealth", "wealthy", "money", "rich", "financial", "investment", "savings", "profit", "return", "gain", "fortune", "财富", "金钱", "发财", "致富", "投资", "收益", "回报", "赚钱", "招财"],
-  relationship: ["soulmate", "relationship", "marriage", "married", "divorce", "partner", "reconcile", "romance", "灵魂伴侣", "感情", "关系", "婚姻", "结婚", "离婚", "伴侣", "复合"],
-  lifeOutcome: ["job", "career", "application", "accepted", "hired", "success", "succeed", "fail", "future", "outcome", "工作", "职业", "申请", "录用", "成功", "失败", "未来", "结果"],
-  material: ["crystal", "bracelet", "gemstone", "quartz", "amethyst", "citrine", "jade", "bead", "水晶", "手串", "石英", "紫水晶", "黄水晶", "珠子", "宝石"],
-  efficacy: ["cure", "heal", "treat", "prevent", "relieve", "reduce", "lower", "ease", "normalize", "attract", "bring", "ensure", "guarantee", "promise", "help with", "proven efficacy", "治愈", "治疗", "预防", "缓解", "降低", "改善", "正常化", "吸引", "招来", "保证", "确保", "功效", "疗效"],
   predictive: ["will", "shall", "going to", "when am", "when will", "whether", "destined", "predict", "会不会", "会", "将", "什么时候", "是否", "注定", "预测"],
   temporal: ["tomorrow", "next week", "next month", "next year", "this week", "this month", "this year", "soon", "in the future", "明天", "下周", "下个月", "明年", "今年", "未来", "很快"],
-  certain: ["definitely", "certain", "certainly", "guaranteed", "inevitable", "destined", "prove", "risk free", "必定", "一定", "肯定", "无法避免", "注定", "稳赚", "保本"],
-  diagnostic: ["diagnose", "identify", "do i have", "am i", "you have", "you are", "i have", "i am", "what disease", "what illness", "symptoms mean", "symptoms show", "诊断", "我得了什么病", "我有什么病", "你有", "你是", "我是", "症状说明", "症状意味着", "症状表明"],
   outcomeAction: ["get", "become", "meet", "end", "happen", "accepted", "hired", "married", "divorced", "reconcile", "succeed", "fail", "win", "lose", "pass away", "pregnant", "得到", "成为", "遇到", "结束", "发生", "录用", "结婚", "离婚", "复合", "成功", "失败", "去世", "怀孕"]
 } as const;
 
@@ -82,42 +58,6 @@ function hasLexiconSignal(
       : source.normalized.includes(normalizedEntry);
   });
 }
-
-function classifyRisk(value: string): RiskSignals {
-  const source = normalizeRiskText(value
-    .replace(/\b(?:no|not|never)\b[^.!?;]{0,40}\b(?:guaranteed|certain|inevitable|destined|predetermined)\b/giu, "")
-    .replace(/\bwithout\s+(?:predicting|guaranteeing)\b/giu, "")
-    .replace(/(?:不|并非|无法).{0,16}(?:一定|必定|注定|肯定)/gu, ""));
-  return {
-    hidden: hasLexiconSignal(source, HIDDEN_CONTENT_DIRECT) ||
-      (hasLexiconSignal(source, HIDDEN_CONTENT_DESCRIPTORS) &&
-        hasLexiconSignal(source, HIDDEN_CONTENT_OBJECTS)),
-    death: hasLexiconSignal(source, RISK_LEXICON.death),
-    health: hasLexiconSignal(source, RISK_LEXICON.health),
-    finance: hasLexiconSignal(source, RISK_LEXICON.finance),
-    relationship: hasLexiconSignal(source, RISK_LEXICON.relationship),
-    lifeOutcome: hasLexiconSignal(source, RISK_LEXICON.lifeOutcome),
-    material: hasLexiconSignal(source, RISK_LEXICON.material),
-    efficacy: hasLexiconSignal(source, RISK_LEXICON.efficacy),
-    predictive: hasLexiconSignal(source, RISK_LEXICON.predictive),
-    temporal: hasLexiconSignal(source, RISK_LEXICON.temporal),
-    certain: hasLexiconSignal(source, RISK_LEXICON.certain),
-    diagnostic: hasLexiconSignal(source, RISK_LEXICON.diagnostic),
-    outcomeAction: hasLexiconSignal(source, RISK_LEXICON.outcomeAction)
-  };
-}
-
-const hasUnsafeCategoryCombination = (signals: RiskSignals): boolean => {
-  const sensitiveOutcome = signals.death || signals.health || signals.finance ||
-    signals.relationship || signals.lifeOutcome;
-  return signals.hidden ||
-    (signals.material && signals.efficacy && (signals.health || signals.finance)) ||
-    (signals.health && signals.diagnostic) ||
-    (signals.death && (signals.predictive || signals.certain || signals.temporal)) ||
-    (signals.predictive && sensitiveOutcome && (signals.temporal || signals.outcomeAction)) ||
-    (signals.certain && sensitiveOutcome) ||
-    (signals.finance && signals.efficacy);
-};
 
 export interface TarotCopyProvider {
   readonly providerId: string;
@@ -160,103 +100,32 @@ function deterministicFallback(input: TarotCopyInput): TarotInterpretation {
   });
 }
 
-const APPROVED_COPY_ANCHORS = [
-  "card", "cards", "imagery", "image", "reflection", "reflect", "reflective", "notice",
-  "consider", "compare", "invite", "balance", "balanced", "renewal", "choice", "direction",
-  "perspective", "pause", "exchange", "giving", "receiving", "meaning", "feeling", "open",
-  "path", "paths", "today", "design", "visual", "color", "palette", "style", "material",
-  "bracelet", "outfit", "bead", "beads", "crystal", "quartz", "focal", "tone", "rhythm",
-  "warmth", "space", "focus", "alternate", "alternating", "beside", "between", "placement",
-  "牌面", "图像", "意象", "反思", "自我反思", "留意", "观察", "比较", "平衡", "更新",
-  "选择", "方向", "视角", "联想", "感受", "设计", "视觉", "颜色", "色彩", "配色", "风格",
-  "材质", "手串", "穿搭", "珠子", "水晶", "焦点", "色调", "节奏", "层次", "排列", "位置"
-] as const;
-
-function approvedAnchors(input: TarotCopyInput): readonly string[] {
-  return [
-    ...APPROVED_COPY_ANCHORS,
-    input.theme,
-    input.palette.primary,
-    input.palette.support,
-    input.palette.accent,
-    ...input.cards.flatMap((card) => [card.nameEn, card.nameZh, ...card.keywords]),
-    ...input.materials.flatMap((material) => [
-      material.displayName,
-      material.crystalName,
-      ...material.colorTags
-    ])
-  ];
-}
-
-function hasApprovedCopyAnchor(value: string, input: TarotCopyInput): boolean {
-  return hasAnyTerm(normalizeRiskText(value), approvedAnchors(input));
-}
-
-function isNarrowVisualFuture(value: string): boolean {
-  const normalized = normalizeRiskText(value).normalized;
-  return /\b(?:bead|beads|bracelet|crystal|quartz|pearl|moonstone|amethyst|citrine|obsidian|jade|color|colors|palette|focal point)\b[^.!?]{0,80}\bwill\s+(?:sit|rest|appear|alternate|be placed)\b[^.!?]{0,60}\b(?:beside|between|next to|along|across|in|on)\b/u.test(normalized) ||
-    /\byou will see\b[^.!?]{0,100}\b(?:bead|beads|bracelet|design|color|colors|palette)\b/u.test(normalized) ||
-    /(?:珠子|手串|水晶|珍珠|配色).{0,40}(?:会|将)(?:位于|置于|排列|交替|呈现).{0,40}(?:旁边|之间|一侧|设计|手串)/u.test(normalized);
-}
-
-function isOpenReflectiveFuture(value: string): boolean {
-  const normalized = normalizeRiskText(value).normalized;
-  return /\b(?:no outcome is guaranteed|without predicting|not predetermined|choices? remain open)\b/u.test(normalized) ||
-    /(?:不预测|并非注定|选择仍然开放|没有确定结果)/u.test(normalized);
-}
-
-function containsRestrictedCopy(interpretation: TarotInterpretation, input: TarotCopyInput): boolean {
-  const creativeFields = [
-    interpretation.headline,
-    interpretation.summary,
-    ...interpretation.cardReflections.map(({ reflection }) => reflection),
-    interpretation.designRationale
-  ];
-  if (creativeFields.some((field) => !hasApprovedCopyAnchor(field, input))) return true;
-
-  const copy = creativeFields.join("\n");
-  const source = normalizeRiskText(copy);
-  const authoritativeDirective = hasAnyTerm(source, [
-    "command", "commands", "obey", "must", "only right", "personal truth", "trust the message",
-    "命令", "服从", "必须", "唯一正确", "个人真理", "相信这个信息"
-  ]);
-  const hasUnapprovedFuture = creativeFields.some((field) => {
-    const fieldSource = normalizeRiskText(field);
-    const hasFutureLanguage = hasAnyTerm(
-      fieldSource,
-      ["will", "shall", "going to", "会", "将", "即将"]
-    );
-    return hasFutureLanguage && !isNarrowVisualFuture(field) && !isOpenReflectiveFuture(field);
-  });
-  return authoritativeDirective ||
-    hasUnsafeCategoryCombination(classifyRisk(copy)) ||
-    hasRestrictedOutputStructure(copy) ||
-    hasUnapprovedFuture;
-}
-
-const HEALTH_CONDITION_TERMS = [
-  "headache", "migraine", "chest pain", "heart attack", "insomnia", "sleep", "anxiety", "depression",
-  "cancer", "diabetes", "blood pressure", "glucose", "disease", "illness", "condition", "symptom",
-  "diagnosis", "diagnose", "treatment", "prescribe",
-  "头痛", "偏头痛", "胸痛", "心脏病", "心肌梗塞", "失眠", "睡眠", "焦虑", "抑郁", "癌症", "糖尿病", "血压", "血糖", "疾病", "症状",
-  "患病", "诊断", "治疗", "处方"
-] as const;
-const MATERIAL_NAMES = [
-  "crystal", "gemstone", "quartz", "amethyst", "citrine", "jade", "moonstone", "obsidian",
-  "水晶", "宝石", "石英", "紫水晶", "黄水晶", "玉", "月光石", "黑曜石"
-] as const;
-const FINANCE_OUTCOME_TERMS = [
-  "stock", "investment", "return", "profit", "wealth", "money", "windfall", "financial",
-  "股票", "投资", "回报", "收益", "财富", "金钱", "横财", "发财"
-] as const;
-const LIFE_OUTCOME_TERMS = [
-  "promotion", "visa", "approval", "application", "job", "career", "relationship", "marriage",
-  "pregnant", "pregnancy", "soulmate", "reconcile", "windfall",
-  "升职", "签证", "批准", "申请", "工作", "职业", "感情", "婚姻", "怀孕", "灵魂伴侣", "复合", "横财"
-] as const;
-
 const hasAnyTerm = (source: ReturnType<typeof normalizeRiskText>, terms: readonly string[]): boolean =>
   hasLexiconSignal(source, terms);
+
+const normalizeApprovedCopy = (value: string): string =>
+  value.normalize("NFKC").trim().replace(/\s+/gu, " ");
+
+function approvedTemplateMatch(
+  interpretation: TarotInterpretation,
+  input: TarotCopyInput
+): TarotInterpretation | undefined {
+  const approvedTemplates = [deterministicFallback(input)] as const;
+  return approvedTemplates.find((approved) =>
+    normalizeApprovedCopy(interpretation.headline) === normalizeApprovedCopy(approved.headline) &&
+    normalizeApprovedCopy(interpretation.summary) === normalizeApprovedCopy(approved.summary) &&
+    normalizeApprovedCopy(interpretation.designRationale) ===
+      normalizeApprovedCopy(approved.designRationale) &&
+    interpretation.cardReflections.length === approved.cardReflections.length &&
+    interpretation.cardReflections.every((reflection, index) => {
+      const approvedReflection = approved.cardReflections[index];
+      return approvedReflection !== undefined &&
+        reflection.slot === approvedReflection.slot &&
+        normalizeApprovedCopy(reflection.reflection) ===
+          normalizeApprovedCopy(approvedReflection.reflection);
+    })
+  );
+}
 
 function containsHiddenContentReference(value: string): boolean {
   const source = normalizeRiskText(value);
@@ -276,40 +145,14 @@ function containsLifespanLanguage(value: string): boolean {
     /(?:还能活多久|能活到|寿命|余命|会长寿|将长寿)/u.test(normalized);
 }
 
-function hasRestrictedOutputStructure(value: string): boolean {
-  if (containsHiddenContentReference(value) || containsLifespanLanguage(value)) return true;
-
-  const source = normalizeRiskText(value);
-  const health = hasAnyTerm(source, HEALTH_CONDITION_TERMS);
-  const material = hasAnyTerm(source, MATERIAL_NAMES);
-  const finance = hasAnyTerm(source, FINANCE_OUTCOME_TERMS);
-  const lifeOutcome = hasAnyTerm(source, LIFE_OUTCOME_TERMS);
-  const efficacy = hasAnyTerm(source, [
-    ...RISK_LEXICON.efficacy,
-    "support", "improve", "soothe", "calm", "aid", "boost", "protect", "promote healthy",
-    "支持", "促进", "帮助", "助眠", "提升", "保护", "镇静", "舒缓"
-  ]);
-  const definiteFuture = hasAnyTerm(source, [
-    "will", "going to", "coming", "getting", "approved", "expect", "awaits", "shall", "destined",
-    "double", "receive",
-    "会", "将", "即将", "注定", "翻倍"
-  ]);
-  const diagnosticAssertion = hasAnyTerm(source, [
-    "you have", "you are", "your", "means", "indicates", "is a", "are",
-    "你有", "你是", "你的", "意味着", "说明", "表明", "就是"
-  ]);
-
-  return finance ||
-    (health && (diagnosticAssertion || efficacy)) ||
-    (material && health && efficacy) ||
-    (definiteFuture && (lifeOutcome || finance)) ||
-    (finance && (efficacy || hasAnyTerm(source, ["double", "windfall", "guarantee", "翻倍", "横财", "保证"])));
-}
-
 const questionIsBlocked = (question: string): boolean => {
-  const signals = classifyRisk(question);
+  const source = normalizeRiskText(question);
+  const death = hasAnyTerm(source, QUESTION_BLOCK_LEXICON.death);
+  const predictive = hasAnyTerm(source, QUESTION_BLOCK_LEXICON.predictive);
+  const temporal = hasAnyTerm(source, QUESTION_BLOCK_LEXICON.temporal);
+  const outcomeAction = hasAnyTerm(source, QUESTION_BLOCK_LEXICON.outcomeAction);
   return containsHiddenContentReference(question) || containsLifespanLanguage(question) ||
-    (signals.death && (signals.predictive || signals.temporal || signals.outcomeAction));
+    (death && (predictive || temporal || outcomeAction));
 };
 
 function fallbackResult(input: TarotCopyInput): TarotCopyResult {
@@ -348,12 +191,13 @@ export class TarotCopyService {
     try {
       const parsed = TarotInterpretationSchema.safeParse(providerOutput);
       if (!parsed.success) return fallbackResult(input);
+      const approvedInterpretation = approvedTemplateMatch(parsed.data, input);
       if (
         parsed.data.cardReflections.length !== input.cards.length ||
         parsed.data.cardReflections.some(
           (reflection, index) => reflection.slot !== input.cards[index]?.slot
         ) ||
-        containsRestrictedCopy(parsed.data, input)
+        !approvedInterpretation
       ) {
         return fallbackResult(input);
       }
@@ -370,10 +214,7 @@ export class TarotCopyService {
       }
 
       return TarotCopyResultSchema.parse({
-        interpretation: {
-          ...parsed.data,
-          disclaimer: isChineseLocale(input.locale) ? ZH_DISCLAIMER : EN_DISCLAIMER
-        },
+        interpretation: approvedInterpretation,
         source: {
           mode: "PROVIDER",
           providerId,

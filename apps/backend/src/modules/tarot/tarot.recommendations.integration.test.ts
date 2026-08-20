@@ -424,7 +424,7 @@ test("real Design application service persists the exact three Tarot candidates 
     mode: "DETERMINISTIC_FALLBACK",
     providerId: "mystcrag-deterministic-tarot-copy",
     providerVersion: "1.0.0",
-    policyVersion: "tarot-copy-policy-v1"
+    policyVersion: "tarot-copy-policy-v2"
   });
   assert.equal(storedSession.questionCiphertext, null);
   assert.equal(JSON.stringify(storedSession).includes(rawQuestion), false);

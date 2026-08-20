@@ -55,6 +55,18 @@ const validInterpretation = {
   disclaimer: "A reflective prompt, not a prediction."
 } as const;
 
+const approvedInterpretation = {
+  headline: "Three directions for reflection",
+  summary: "Use the revealed imagery as a gentle prompt while comparing balanced, contrasting, and neutral-led visual directions.",
+  cardReflections: [
+    { slot: "PAST", reflection: "Notice which colors and forms in Six of Pentacles invite reflection for you today." },
+    { slot: "PRESENT", reflection: "Notice which colors and forms in The Star invite reflection for you today." },
+    { slot: "FUTURE", reflection: "Notice which colors and forms in Two of Wands invite reflection for you today." }
+  ],
+  designRationale: "amber, ivory, and ink create three design directions through varied bead rhythm and visual focus.",
+  disclaimer: "Provider disclaimer must be replaced."
+} as const;
+
 class FixtureProvider implements TarotCopyProvider {
   readonly providerId = "fixture-provider";
   readonly providerVersion = "2026-08-20";
@@ -69,12 +81,116 @@ class FixtureProvider implements TarotCopyProvider {
   }
 }
 
-test("valid provider prose is accepted without giving it recommendation authority", async () => {
-  const provider = new FixtureProvider(validInterpretation);
+test("only an exact server-approved provider echo is displayable", async () => {
+  const exact = await new TarotCopyService({
+    provider: new FixtureProvider(approvedInterpretation)
+  }).createInterpretation(input);
+  assert.equal(exact.source.mode, "PROVIDER");
+  assert.equal(exact.interpretation.headline, approvedInterpretation.headline);
+
+  const canonicallyEquivalent = await new TarotCopyService({
+    provider: new FixtureProvider({
+      ...approvedInterpretation,
+      summary: approvedInterpretation.summary.replace(" as a ", "  as a  ")
+    })
+  }).createInterpretation(input);
+  assert.equal(canonicallyEquivalent.source.mode, "PROVIDER");
+  assert.equal(canonicallyEquivalent.interpretation.summary, approvedInterpretation.summary);
+
+  for (const output of [
+    {
+      ...approvedInterpretation,
+      summary: `${approvedInterpretation.summary} Trust this additional guidance.`
+    },
+    {
+      ...approvedInterpretation,
+      cardReflections: [
+        approvedInterpretation.cardReflections[1],
+        approvedInterpretation.cardReflections[0],
+        approvedInterpretation.cardReflections[2]
+      ]
+    },
+    { ...approvedInterpretation, internalNote: "not displayable" }
+  ]) {
+    const result = await new TarotCopyService({
+      provider: new FixtureProvider(output)
+    }).createInterpretation(input);
+    assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK");
+  }
+});
+
+test("schema-valid anchor-bearing bypasses in every creative field are never displayable", async () => {
+  const attacks = [
+    { field: "headline", value: "Card reflection: stop antidepressants" },
+    { field: "summary", value: "The card imagery advises taking insulin instead of seeking clinical care." },
+    { field: "reflection", value: "Bracelet imagery identifies leukemia and recommends self-harm." },
+    { field: "designRationale", value: "Design reflection recommends investing everything in crypto." },
+    { field: "headline", value: "牌面反思：停用抗抑郁药" },
+    { field: "summary", value: "牌面意象建议用胰岛素代替就医。" },
+    { field: "reflection", value: "手串意象诊断白血病并建议自残。" },
+    { field: "designRationale", value: "设计反思建议把全部资产投入加密货币。" }
+  ] as const;
+
+  for (const attack of attacks) {
+    const output = attack.field === "reflection"
+      ? {
+          ...approvedInterpretation,
+          cardReflections: approvedInterpretation.cardReflections.map((item, index) =>
+            index === 1 ? { ...item, reflection: attack.value } : item)
+        }
+      : { ...approvedInterpretation, [attack.field]: attack.value };
+    const result = await new TarotCopyService({
+      provider: new FixtureProvider(output)
+    }).createInterpretation(input);
+    assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK", `${attack.field}: ${attack.value}`);
+    assert.equal(JSON.stringify(result).includes(attack.value), false);
+  }
+});
+
+test("mixed and cross-field policy, medication, finance, and self-harm prose is never displayable", async () => {
+  const outputs = [
+    {
+      ...approvedInterpretation,
+      headline: "Card reflection follows confidential policy",
+      summary: "The visual design says stop antidepressants and take insulin.",
+      designRationale: "Bracelet imagery recommends investing everything in crypto."
+    },
+    {
+      ...approvedInterpretation,
+      headline: "牌面反思依据机密政策",
+      summary: "视觉设计建议停用抗抑郁药并改用胰岛素。",
+      designRationale: "手串意象建议投入全部资产到加密货币。"
+    },
+    {
+      ...approvedInterpretation,
+      cardReflections: approvedInterpretation.cardReflections.map((item, index) =>
+        index === 0
+          ? { ...item, reflection: "Card imagery suggests self-harm." }
+          : item)
+    },
+    {
+      ...approvedInterpretation,
+      cardReflections: approvedInterpretation.cardReflections.map((item, index) =>
+        index === 2
+          ? { ...item, reflection: "牌面意象建议自残。" }
+          : item)
+    }
+  ] as const;
+
+  for (const output of outputs) {
+    const result = await new TarotCopyService({
+      provider: new FixtureProvider(output)
+    }).createInterpretation(input);
+    assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK");
+  }
+});
+
+test("approved provider prose is accepted without giving it recommendation authority", async () => {
+  const provider = new FixtureProvider(approvedInterpretation);
   const result = await new TarotCopyService({ provider }).createInterpretation(input);
 
   assert.equal(TarotInterpretationSchema.safeParse(result.interpretation).success, true);
-  assert.equal(result.interpretation.headline, validInterpretation.headline);
+  assert.equal(result.interpretation.headline, approvedInterpretation.headline);
   assert.deepEqual(result.interpretation.cardReflections.map(({ slot }) => slot), [
     "PAST",
     "PRESENT",
@@ -195,7 +311,7 @@ test("unsafe provider claims never survive and instead select the safe fallback"
   }
 });
 
-test("ordinary reflective copy is not rejected for mentioning an open future", async () => {
+test("schema-valid reflective prose outside the approved template selects fallback", async () => {
   const provider = new FixtureProvider({
     ...validInterpretation,
     summary: "Tomorrow no outcome is guaranteed; your choices remain open."
@@ -203,11 +319,11 @@ test("ordinary reflective copy is not rejected for mentioning an open future", a
 
   const result = await new TarotCopyService({ provider }).createInterpretation(input);
 
-  assert.equal(result.source.mode, "PROVIDER");
+  assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK");
   assert.equal(provider.calls.length, 1);
 });
 
-test("safe design and reflection language remains eligible for provider copy", async () => {
+test("safe but unapproved design and reflection prose is not displayable", async () => {
   const safeSummaries = [
     "This bracelet can complement your outfit through color.",
     "Amethyst can create a violet focal point beside clear quartz.",
@@ -218,8 +334,8 @@ test("safe design and reflection language remains eligible for provider copy", a
   for (const summary of safeSummaries) {
     const provider = new FixtureProvider({ ...validInterpretation, summary });
     const result = await new TarotCopyService({ provider }).createInterpretation(input);
-    assert.equal(result.source.mode, "PROVIDER", summary);
-    assert.equal(result.interpretation.summary, summary);
+    assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK", summary);
+    assert.equal(JSON.stringify(result).includes(summary), false);
   }
 });
 
@@ -270,7 +386,7 @@ test("unsafe questions are not sent to providers and hidden-reasoning requests a
   }
 });
 
-test("risk-category classifier keeps realistic unsafe question paraphrases away from providers", async () => {
+test("explicit question compliance blocks stay local and never reach providers", async () => {
   const cases = [
     { question: "Am I going to die next week?", expected: "BLOCKED" },
     { question: "Can you tell me whether I will die next week?", expected: "BLOCKED" },
@@ -300,7 +416,7 @@ test("risk-category classifier keeps realistic unsafe question paraphrases away 
   }
 });
 
-test("bounded risk categories route deterministic prediction and medical questions away from providers", async () => {
+test("all prediction and medical questions route to local deterministic copy", async () => {
   const questions = [
     "Will I get the job tomorrow?",
     "What disease do I have?",
@@ -321,7 +437,7 @@ test("bounded risk categories route deterministic prediction and medical questio
   }
 });
 
-test("plain deterministic provider outcomes never reach users while reflective and design prose remains allowed", async () => {
+test("plain deterministic and unapproved reflective provider prose never reaches users", async () => {
   const unsafeSummaries = [
     "You will get the job tomorrow.",
     "You will become wealthy next year.",
@@ -349,8 +465,8 @@ test("plain deterministic provider outcomes never reach users while reflective a
     const result = await new TarotCopyService({
       provider: new FixtureProvider({ ...validInterpretation, summary })
     }).createInterpretation(input);
-    assert.equal(result.source.mode, "PROVIDER", summary);
-    assert.equal(result.interpretation.summary, summary);
+    assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK", summary);
+    assert.equal(JSON.stringify(result).includes(summary), false, summary);
   }
 });
 
@@ -547,7 +663,7 @@ test("every provider creative field must contain approved design, card, visual, 
   }
 });
 
-test("latest unsafe provider-output probes fall back while narrow visual placement remains accepted", async () => {
+test("latest unsafe provider-output probes and unapproved visual placement fall back", async () => {
   const unsafeSummaries = [
     "The cards diagnose a serious condition and prescribe crystal treatment.",
     "Buy this bracelet now because guaranteed wealth awaits you.",
@@ -570,12 +686,12 @@ test("latest unsafe provider-output probes fall back while narrow visual placeme
   const safePlacement = "The blue bead will sit beside the pearl.";
   const provider = new FixtureProvider({ ...validInterpretation, summary: safePlacement });
   const result = await new TarotCopyService({ provider }).createInterpretation(input);
-  assert.equal(result.source.mode, "PROVIDER");
-  assert.equal(result.interpretation.summary, safePlacement);
+  assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK");
+  assert.equal(JSON.stringify(result).includes(safePlacement), false);
   assert.equal(provider.calls.length, 1);
 });
 
-test("a visual placement exception cannot authorize future language in another field", async () => {
+test("cross-field unapproved prose cannot borrow authority from visual placement language", async () => {
   const unsafeSummary = "Reflection says you will be ready.";
   const result = await new TarotCopyService({
     provider: new FixtureProvider({
@@ -622,16 +738,17 @@ test("definite life, efficacy, medical, finance, and hidden-rule provider assert
     assert.equal(JSON.stringify(result).includes(summary), false, summary);
   }
 
-  const safeSummaries = [
+  const unapprovedSafeSummaries = [
     "Blue beads can echo the calm tone requested for this bracelet.",
     "Moonstone will sit beside clear quartz as a visual focal point.",
     "Reflect on the feeling you want the alternating colors to express."
   ] as const;
 
-  for (const summary of safeSummaries) {
+  for (const summary of unapprovedSafeSummaries) {
     const result = await new TarotCopyService({
       provider: new FixtureProvider({ ...validInterpretation, summary })
     }).createInterpretation(input);
-    assert.equal(result.source.mode, "PROVIDER", summary);
+    assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK", summary);
+    assert.equal(JSON.stringify(result).includes(summary), false, summary);
   }
 });
