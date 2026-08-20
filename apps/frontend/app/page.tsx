@@ -91,7 +91,7 @@ export default function HomePage() {
             <p className="text-xs uppercase tracking-[0.3em] text-[var(--accent)]">Choose a path</p>
             <h2 className="mt-3 font-serif text-3xl sm:text-4xl" id="creation-paths-title">从你喜欢的方式开始</h2>
           </div>
-          <p className="max-w-md text-sm leading-7 text-[var(--muted)]">三种创作方式拥有相同的设计自由，最终都可以进入 DIY 继续调整。</p>
+          <p className="max-w-md text-sm leading-7 text-[var(--muted)]">{creationPaths.length === 3 ? "三种" : "两种"}创作方式拥有相同的设计自由，最终都可以进入 DIY 继续调整。</p>
         </div>
         <div className={`grid gap-5 ${creationPaths.length === 3 ? "lg:grid-cols-3" : "md:grid-cols-2"}`} data-creation-path-group="true">
           {creationPaths.map((path) => (

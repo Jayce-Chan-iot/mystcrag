@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import * as React from "react";
@@ -55,6 +56,17 @@ test("disabled landing omits only the Tarot entry", () => {
   assert.doesNotMatch(landing, /href="\/tarot\/setup"/);
   assert.match(landing, /href="\/ai-design"/);
   assert.match(landing, /href="\/diy"/);
+  assert.match(landing, /两种创作方式拥有相同的设计自由/);
+  assert.doesNotMatch(landing, /三种创作方式拥有相同的设计自由/);
+});
+
+test("enabled mobile header keeps every navigation entry reachable without wrapping the brand", () => {
+  const layoutSource = readFileSync(new URL("../../../app/layout.tsx", import.meta.url), "utf8");
+
+  assert.match(layoutSource, /data-mobile-scroll-navigation="true"/);
+  assert.match(layoutSource, /overflow-x-auto/);
+  assert.match(layoutSource, /whitespace-nowrap/);
+  assert.match(layoutSource, /sm:flex-row/);
 });
 
 test("main navigation places Tarot beside AI and DIY only when enabled", async () => {
