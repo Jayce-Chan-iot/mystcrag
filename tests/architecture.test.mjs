@@ -175,6 +175,10 @@ test("pnpm dev isolates each app's documented environment", () => {
   assert.equal(frontendEnvironment.includes("DATABASE_URL"), false);
   assert.equal(frontendEnvironment.includes("MYSTCRAG_AUTH_SIGNING_SECRET"), false);
   assert.equal(frontendEnvironment.includes("MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY"), false);
+  assert.equal(backend?.resolvedTaskDefinition?.cache, false);
+  assert.equal(backend?.resolvedTaskDefinition?.persistent, true);
+  assert.equal(frontend?.resolvedTaskDefinition?.cache, false);
+  assert.equal(frontend?.resolvedTaskDefinition?.persistent, true);
 });
 
 function assertNoMatches(matches) {

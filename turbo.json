@@ -18,6 +18,8 @@
       "persistent": true
     },
     "@mystcrag/backend#dev": {
+      "cache": false,
+      "persistent": true,
       "passThroughEnv": [
         "BACKEND_PORT",
         "DATABASE_URL",
@@ -32,6 +34,8 @@
       ]
     },
     "@mystcrag/frontend#dev": {
+      "cache": false,
+      "persistent": true,
       "passThroughEnv": [
         "MYSTCRAG_BACKEND_ORIGIN",
         "MYSTCRAG_TAROT_ENABLED",
