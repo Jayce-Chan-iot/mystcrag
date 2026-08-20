@@ -24,5 +24,6 @@ export * from "./schemas/production.schema";
 export * from "./schemas/provenance.schema";
 export * from "./schemas/public-design.schema";
 export * from "./schemas/story.schema";
+export * from "./schemas/tarot.schema";
 
 export * from "./types/index";

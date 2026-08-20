@@ -20,6 +20,20 @@ test("DesignV1 accepts the standard fixture", () => {
   assert.equal(DesignV1Schema.safeParse(cloneDesign()).success, true);
 });
 
+test("Design metadata keeps existing modes and accepts TAROT_GUIDED", () => {
+  for (const designMode of [
+    "AI_GENERATED",
+    "DIY_CREATED",
+    "AI_ASSISTED",
+    "TEMPLATE_REMIX",
+    "TAROT_GUIDED"
+  ]) {
+    const candidate = cloneDesign() as unknown as { designMode: string };
+    candidate.designMode = designMode;
+    assert.equal(DesignV1Schema.safeParse(candidate).success, true);
+  }
+});
+
 test("the fixture registry contains all ten categorized scenarios", () => {
   assert.equal(Object.keys(designContractFixtures).length, 10);
   assert.equal(restrictedClaimFixture.category, "flagged");
