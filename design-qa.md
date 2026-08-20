@@ -57,3 +57,30 @@ The focused input isolates both bracelet regions. The implementation now matches
 - P3: Future catalog photography can replace the shared crystal base render with material-specific inclusion patterns for tiger eye, lapis, agate, and other opaque products. The current treatment already satisfies the requested photographic volume and lighting behavior.
 
 final result: passed
+
+---
+
+# Tarot draw design QA
+
+- Source visual truth: `/Users/chenyanyan/.codex/generated_images/019f8979-5008-7d52-9fb2-8e26856b9ea7/exec-d2b280fa-b4ca-461b-b7c5-88b82b57f187.png`
+- Source pixels: 1487 × 1058
+- Intended implementation viewports: 1440 × 1024 desktop and 390 × 844 mobile, device scale factor 1
+- State: three-card draw with two confirmed selections and the Future slot empty
+- Implementation screenshot: unavailable in the selected Chrome surface
+
+**Findings**
+
+- Visual comparison is blocked because the Codex Chrome control connection is unavailable. Code review, interaction tests, asset hashes, responsive source assertions, and production builds are green, but those are not substitutes for a rendered same-state comparison.
+
+**Required comparison once Chrome is available**
+
+- Capture the desktop and mobile draw screen in the same partial-selection state.
+- Compare the full view and focused fan/slot/footer regions.
+- Explicitly verify typography, spacing, cream/purple tokens, real card image quality, copy, fixed actions, overflow, and the authorized purple card-back deviation from the pale reference.
+- Test pointer, touch-sized controls, Enter/Space, rejected selection, reduced motion, and browser console output.
+
+**Comparison history**
+
+- No valid visual iteration yet; the source can be opened, but the selected Chrome surface cannot be controlled to produce the implementation capture.
+
+final result: blocked
