@@ -106,6 +106,39 @@ test("requires Past before Present and Future in a three-card spread", () => {
   );
 });
 
+test("reveals a completed three-card draw in Past, Present, Future order", () => {
+  const initial = createPrivateDrawState({
+    spreadType: "PAST_PRESENT_FUTURE",
+    random: new ZeroRandomSource(),
+  });
+  const past = selectPosition(initial, {
+    slot: "PAST",
+    displayedPosition: 0,
+    expectedRevision: 0,
+    operationId: "three-card-past",
+  });
+  const present = selectPosition(past, {
+    slot: "PRESENT",
+    displayedPosition: 1,
+    expectedRevision: 1,
+    operationId: "three-card-present",
+  });
+  const future = selectPosition(present, {
+    slot: "FUTURE",
+    displayedPosition: 2,
+    expectedRevision: 2,
+    operationId: "three-card-future",
+  });
+
+  const revealed = revealDraw(future, 3);
+
+  assert.deepEqual(revealed.cards.map((card) => ({ id: card.id, slot: card.slot })), [
+    { id: "01-the-magician", slot: "PAST" },
+    { id: "02-the-high-priestess", slot: "PRESENT" },
+    { id: "03-the-empress", slot: "FUTURE" },
+  ]);
+});
+
 test("rejects a displayed deck position already selected by another slot", () => {
   const initial = createPrivateDrawState({
     spreadType: "PAST_PRESENT_FUTURE",

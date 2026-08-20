@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+import { TAROT_CARD_CATALOG } from "./card-catalog";
+import { requiredSlotsForSpread } from "./spreads";
+
 export type TarotSpreadType = "SINGLE" | "PAST_PRESENT_FUTURE";
 export type TarotSlot = "GUIDANCE" | "PAST" | "PRESENT" | "FUTURE";
 export type TarotOrientation = "UPRIGHT" | "REVERSED";
@@ -92,14 +95,43 @@ export const PrivateDrawSelectionSchema = z.strictObject({
   operationId: z.string().min(1),
 });
 
-export const PrivateDrawStateSchema = z.strictObject({
-  spreadType: TarotSpreadTypeSchema,
-  deckOrder: z.array(z.string().min(1)).length(78),
-  orientationOrder: z.array(TarotOrientationSchema).length(78),
-  selections: z.array(PrivateDrawSelectionSchema).max(3),
-  revision: z.number().int().min(0),
-  revealed: z.boolean(),
-});
+const CanonicalCardIds = new Set(TAROT_CARD_CATALOG.map((card) => card.id));
+
+export const PrivateDrawStateSchema = z
+  .strictObject({
+    spreadType: TarotSpreadTypeSchema,
+    deckOrder: z.array(z.string().min(1)).length(78),
+    orientationOrder: z.array(TarotOrientationSchema).length(78),
+    selections: z.array(PrivateDrawSelectionSchema).max(3),
+    revision: z.number().int().min(0),
+    revealed: z.boolean(),
+  })
+  .superRefine((value, context) => {
+    const deckIds = new Set(value.deckOrder);
+    if (deckIds.size !== CanonicalCardIds.size || [...deckIds].some((id) => !CanonicalCardIds.has(id))) {
+      context.addIssue({ code: "custom", message: "deckOrder must contain every canonical card exactly once", path: ["deckOrder"] });
+    }
+
+    const requiredSlots = requiredSlotsForSpread(value.spreadType);
+    if (value.selections.length > requiredSlots.length) {
+      context.addIssue({ code: "custom", message: "selection count exceeds spread slots", path: ["selections"] });
+    }
+    for (const [index, selection] of value.selections.entries()) {
+      if (selection.slot !== requiredSlots[index]) {
+        context.addIssue({ code: "custom", message: "selections must follow canonical spread slots", path: ["selections", index, "slot"] });
+      }
+    }
+
+    if (new Set(value.selections.map((selection) => selection.displayedPosition)).size !== value.selections.length) {
+      context.addIssue({ code: "custom", message: "displayed positions must be unique", path: ["selections"] });
+    }
+    if (new Set(value.selections.map((selection) => selection.operationId)).size !== value.selections.length) {
+      context.addIssue({ code: "custom", message: "operation IDs must be unique", path: ["selections"] });
+    }
+    if (value.revealed && value.selections.length !== requiredSlots.length) {
+      context.addIssue({ code: "custom", message: "revealed draws must have every required selection", path: ["revealed"] });
+    }
+  });
 
 export const RevealedTarotCardSchema = TarotCardDefinitionSchema.extend({
   slot: TarotSlotSchema,

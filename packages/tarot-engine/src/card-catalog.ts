@@ -42,7 +42,20 @@ const MAJOR_SEEDS: readonly MajorCardSeed[] = [
 ];
 
 const MINOR_RANKS = [
-  ["Ace", "王牌"], ["Two", "二"], ["Three", "三"], ["Four", "四"], ["Five", "五"], ["Six", "六"], ["Seven", "七"], ["Eight", "八"], ["Nine", "九"], ["Ten", "十"], ["Page", "侍从"], ["Knight", "骑士"], ["Queen", "皇后"], ["King", "国王"],
+  { nameEn: "Ace", nameZh: "王牌", visual: "seed", upright: ["seed", "possibility"], reversed: ["hesitation", "untapped"], theme: "new-beginnings" },
+  { nameEn: "Two", nameZh: "二", visual: "paired", upright: ["balance", "choice"], reversed: ["indecision", "tension"], theme: "relationships" },
+  { nameEn: "Three", nameZh: "三", visual: "layered", upright: ["collaboration", "expression"], reversed: ["misalignment", "scattered"], theme: "relationships" },
+  { nameEn: "Four", nameZh: "四", visual: "settled", upright: ["foundation", "pause"], reversed: ["rigidity", "restlessness"], theme: "self-growth" },
+  { nameEn: "Five", nameZh: "五", visual: "contrasting", upright: ["challenge", "resilience"], reversed: ["friction", "recovery"], theme: "self-growth" },
+  { nameEn: "Six", nameZh: "六", visual: "exchanging", upright: ["exchange", "generosity"], reversed: ["imbalance", "boundaries"], theme: "relationships" },
+  { nameEn: "Seven", nameZh: "七", visual: "reflective", upright: ["assessment", "patience"], reversed: ["impatience", "uncertainty"], theme: "career" },
+  { nameEn: "Eight", nameZh: "八", visual: "crafted", upright: ["practice", "dedication"], reversed: ["repetition", "overwork"], theme: "career" },
+  { nameEn: "Nine", nameZh: "九", visual: "abundant", upright: ["fruition", "independence"], reversed: ["excess", "isolation"], theme: "self-growth" },
+  { nameEn: "Ten", nameZh: "十", visual: "complete", upright: ["culmination", "legacy"], reversed: ["pressure", "release"], theme: "financial-planning" },
+  { nameEn: "Page", nameZh: "侍从", visual: "curious", upright: ["curiosity", "discovery"], reversed: ["inexperience", "distraction"], theme: "new-beginnings" },
+  { nameEn: "Knight", nameZh: "骑士", visual: "moving", upright: ["momentum", "pursuit"], reversed: ["haste", "direction"], theme: "career" },
+  { nameEn: "Queen", nameZh: "皇后", visual: "assured", upright: ["stewardship", "confidence"], reversed: ["self-doubt", "boundaries"], theme: "self-growth" },
+  { nameEn: "King", nameZh: "国王", visual: "commanding", upright: ["leadership", "responsibility"], reversed: ["control", "accountability"], theme: "financial-planning" },
 ] as const;
 
 const createMinorCards = (input: {
@@ -55,15 +68,15 @@ const createMinorCards = (input: {
   readonly reversedKeywords: readonly string[];
   readonly themes: readonly string[];
 }): readonly TarotCardDefinition[] =>
-  MINOR_RANKS.map(([nameEn, rankZh], index) => ({
+  MINOR_RANKS.map((rank, index) => ({
     id: `${input.suit}-${String(index + 1).padStart(2, "0")}`,
     number: index + 1,
-    nameZh: `${rankZh}${input.suitZh}`,
-    nameEn: `${nameEn} of ${input.suit[0]?.toUpperCase()}${input.suit.slice(1)}`,
+    nameZh: `${rank.nameZh}${input.suitZh}`,
+    nameEn: `${rank.nameEn} of ${input.suit[0]?.toUpperCase()}${input.suit.slice(1)}`,
     assetFile: `${input.assetPrefix}${String(index + 1).padStart(2, "0")}.png`,
-    uprightKeywords: input.uprightKeywords,
-    reversedKeywords: input.reversedKeywords,
-    designTags: tags(input.tone, input.visual, input.themes),
+    uprightKeywords: [...input.uprightKeywords, ...rank.upright],
+    reversedKeywords: [...input.reversedKeywords, ...rank.reversed],
+    designTags: tags(input.tone, `${input.visual}-${rank.visual}`, [...input.themes, rank.theme]),
   }));
 
 export const TAROT_CARD_CATALOG: readonly TarotCardDefinition[] = [
