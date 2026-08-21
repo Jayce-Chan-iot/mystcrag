@@ -244,6 +244,31 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  packages/design-engine:
+    dependencies:
+      '@mystcrag/design-contract':
+        specifier: workspace:*
+        version: link:../design-contract
+      culori:
+        specifier: ^2.1.0
+        version: 2.1.1
+      json-rules-engine:
+        specifier: ^7.3.1
+        version: 7.3.1
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.18.0
+        version: 22.20.1
+      tsx:
+        specifier: ^4.23.1
+        version: 4.23.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   packages/knowledge-core:
     dependencies:
       '@mystcrag/database':
@@ -2128,6 +2153,10 @@ packages:
 
   csv-stringify@6.8.3:
     resolution: {integrity: sha512-gIeSCvq5F4VtXV3naV3VAewLhBkiZBz+PPhTOA8H3Y8h/ELa+R1ml0GZck/4/Nzo9ep2lvOluilJ6MJlbZsKMA==}
+
+  culori@2.1.1:
+    resolution: {integrity: sha512-9klYvB1zTP+AFopf+VSQDzkyk3Wr/TfsiZvrBSybp/QFtS6YTWSwSYNLHcmM29D4iXZNXOON7ZivSYgI1sydow==}
+    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
   d3-array@3.2.1:
     resolution: {integrity: sha512-gUY/qeHq/yNqqoCKNq4vtpFLdoCdvyNpWoC/KNjhGbhDuQpAM9sIQQKkXSNpXa9h5KySs/gzm7R88WkUutgwWQ==}
@@ -6192,6 +6221,8 @@ snapshots:
   csstype@3.2.3: {}
 
   csv-stringify@6.8.3: {}
+
+  culori@2.1.1: {}
 
   d3-array@3.2.1:
     dependencies:

@@ -13,6 +13,8 @@ const requiredPaths = [
   "packages/ai-agent/src/adapters",
   "packages/three-engine/src/adapters",
   "packages/knowledge-core/src",
+  "packages/context-resolver/src",
+  "packages/design-engine/src",
   "apps/backend/src/modules/design",
   "apps/frontend/src/features/design",
   "packages/ai-agent/emotion-agent",
@@ -60,7 +62,31 @@ async function matchingFiles(roots, pattern, excluded = new Set()) {
 test("frontend cannot import server-only contract or database modules", async () => {
   const matches = await matchingFiles(
     ["apps/frontend"],
-    /from\s+["'](?:@mystcrag\/design-contract\/internal|@mystcrag\/database|@mystcrag\/knowledge-core|@mystcrag\/knowledge-ingestion)["']/
+    /from\s+["'](?:@mystcrag\/design-contract\/internal|@mystcrag\/database|@mystcrag\/knowledge-core|@mystcrag\/knowledge-ingestion|@mystcrag\/design-engine|@mystcrag\/context-resolver)["']/
+  );
+  assertNoMatches(matches);
+});
+
+test("design-engine stays a pure deterministic engine over the contract", async () => {
+  const matches = await matchingFiles(
+    ["packages/design-engine"],
+    /from\s+["'](?:@mystcrag\/database|@mystcrag\/knowledge-core|@mystcrag\/knowledge-ingestion|@mystcrag\/bracelet-engine|@mystcrag\/ai-agent|@mystcrag\/tarot-engine|@mystcrag\/context-resolver)["']/
+  );
+  assertNoMatches(matches);
+});
+
+test("context-resolver only depends on the contract and tarot-engine", async () => {
+  const matches = await matchingFiles(
+    ["packages/context-resolver"],
+    /from\s+["'](?:@mystcrag\/database|@mystcrag\/knowledge-core|@mystcrag\/knowledge-ingestion|@mystcrag\/design-engine|@mystcrag\/bracelet-engine|@mystcrag\/ai-agent)["']/
+  );
+  assertNoMatches(matches);
+});
+
+test("ai-agent cannot import the database package", async () => {
+  const matches = await matchingFiles(
+    ["packages/ai-agent"],
+    /from\s+["'](?:@prisma\/client|@mystcrag\/database)["']/
   );
   assertNoMatches(matches);
 });
