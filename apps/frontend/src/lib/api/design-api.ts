@@ -310,6 +310,9 @@ export function createAddRequest(
       materialKey: material.materialKey,
       shape: material.shape,
       diameterMm: material.diameterMm,
+      ...(material.lengthAlongStringMm === undefined || material.lengthAlongStringMm === null
+        ? {}
+        : { lengthAlongStringMm: material.lengthAlongStringMm }),
       quantity: 1,
       role: "MAIN",
       modelAssetKey: material.modelAssetKey,

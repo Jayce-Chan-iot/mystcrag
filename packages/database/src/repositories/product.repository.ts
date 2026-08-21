@@ -21,6 +21,10 @@ export type CatalogMaterialProduct = SellableProduct & {
   colorTags: string[];
   shape: string;
   diameterMm: number;
+  lengthAlongStringMm: number | null;
+  holeDiameterMm: number | null;
+  grade: string | null;
+  visualProfile: unknown;
   materialKey: string;
   modelAssetKey: string | null;
   textureAssetKey: string | null;
@@ -32,6 +36,8 @@ export type CatalogAccessoryProduct = SellableProduct & {
   material: string;
   finish: string;
   dimensions: unknown;
+  lengthAlongStringMm: number | null;
+  visualProfile: unknown;
   modelAssetKey: string | null;
   textureAssetKey: string | null;
 };
@@ -117,6 +123,10 @@ export class ProductRepository {
         colorTags: [...row.crystal.colorTags],
         shape: row.shape,
         diameterMm: row.diameterMm,
+        lengthAlongStringMm: row.lengthAlongStringMm,
+        holeDiameterMm: row.holeDiameterMm,
+        grade: row.grade,
+        visualProfile: row.visualProfile === null ? null : structuredClone(row.visualProfile),
         materialKey: row.materialKey,
         modelAssetKey: row.modelAssetKey,
         textureAssetKey: row.textureAssetKey,
@@ -133,6 +143,8 @@ export class ProductRepository {
         material: row.material,
         finish: row.finish,
         dimensions: structuredClone(row.dimensions),
+        lengthAlongStringMm: row.lengthAlongStringMm,
+        visualProfile: row.visualProfile === null ? null : structuredClone(row.visualProfile),
         modelAssetKey: row.modelAssetKey,
         textureAssetKey: row.textureAssetKey,
         currency: row.currency,

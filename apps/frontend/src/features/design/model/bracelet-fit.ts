@@ -19,16 +19,20 @@ export type BraceletFit = {
 export function inlineAccessoryLengthMm(
   accessory: Extract<PublicDesignV1["accessories"][number], { placementMode: "INLINE" }>
 ): number {
-  return accessory.dimensions.widthMm ?? accessory.dimensions.diameterMm ?? 0;
+  return accessory.lengthAlongStringMm ?? accessory.dimensions.widthMm ?? accessory.dimensions.diameterMm ?? 0;
+}
+
+export function beadLengthMm(bead: PublicDesignV1["beads"][number]): number {
+  return bead.lengthAlongStringMm ?? bead.diameterMm;
 }
 
 export function calculateBraceletCircumferenceMm(design: PublicDesignV1): number {
-  const beadLengthMm = design.beads.reduce((total, bead) => total + bead.diameterMm, 0);
+  const beadLengthTotal = design.beads.reduce((total, bead) => total + beadLengthMm(bead), 0);
   const inlineAccessoryLength = design.accessories.reduce(
     (total, accessory) => total + (accessory.placementMode === "INLINE" ? inlineAccessoryLengthMm(accessory) : 0),
     0
   );
-  return beadLengthMm + inlineAccessoryLength;
+  return beadLengthTotal + inlineAccessoryLength;
 }
 
 export function evaluateBraceletFit(design: PublicDesignV1): BraceletFit {

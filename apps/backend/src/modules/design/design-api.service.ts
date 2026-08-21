@@ -7,6 +7,7 @@ import {
   BeadShapeSchema,
   CulturalInspirationSchema,
   DesignV1Schema,
+  VisualProfileSchema,
   type CatalogMaterialProduct,
   toOrderSnapshot,
   toPublicDesign,
@@ -47,6 +48,9 @@ export type CatalogProduct = {
   colorTags?: string[];
   shape?: string;
   diameterMm?: number;
+  lengthAlongStringMm?: number | null;
+  holeDiameterMm?: number | null;
+  visualProfile?: unknown;
   materialKey?: string;
   accessoryType?: string;
   material?: string;
@@ -367,6 +371,9 @@ function buildGeneratedDesign(
     materialKey: z.string().min(1).parse(product.materialKey),
     shape: BeadShapeSchema.parse(product.shape),
     diameterMm: z.number().positive().parse(product.diameterMm),
+    ...(product.lengthAlongStringMm === null || product.lengthAlongStringMm === undefined
+      ? {}
+      : { lengthAlongStringMm: product.lengthAlongStringMm }),
     quantity: 1,
     role: positionIndex === 0 ? "FOCAL" : "MAIN",
     modelAssetKey: requireAsset(product.modelAssetKey, product.id, "modelAssetKey"),
@@ -787,6 +794,12 @@ export class DesignApplicationService implements DesignApiService {
         materialKey: product.materialKey,
         shape: BeadShapeSchema.parse(product.shape),
         diameterMm: product.diameterMm,
+        ...(product.lengthAlongStringMm === null || product.lengthAlongStringMm === undefined
+          ? {}
+          : { lengthAlongStringMm: product.lengthAlongStringMm }),
+        ...(product.visualProfile
+          ? { visualProfile: VisualProfileSchema.parse(product.visualProfile) }
+          : {}),
         modelAssetKey: product.modelAssetKey,
         textureAssetKey: product.textureAssetKey,
         currency: product.currency,

@@ -7,6 +7,7 @@ import {
   MinorAmountSchema,
   PositionIndexSchema
 } from "./component.schema";
+import { LengthAlongStringSchema } from "./visual-profile.schema";
 
 export const BeadShapeSchema = z.enum(["ROUND", "OVAL", "FACETED", "BAROQUE"]);
 export const BeadRoleSchema = z.enum(["MAIN", "ACCENT", "FOCAL"]);
@@ -19,6 +20,7 @@ export const BeadV1Schema = z.strictObject({
   materialKey: IdentifierSchema,
   shape: BeadShapeSchema,
   diameterMm: MillimeterSchema.positive(),
+  lengthAlongStringMm: LengthAlongStringSchema.optional(),
   quantity: z.literal(1),
   role: BeadRoleSchema,
   modelAssetKey: IdentifierSchema,

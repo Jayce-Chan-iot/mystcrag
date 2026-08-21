@@ -3,6 +3,7 @@ import { z } from "zod";
 import { BeadShapeSchema } from "./bead.schema";
 import { IdentifierSchema, MillimeterSchema, MinorAmountSchema } from "./component.schema";
 import { CurrencySchema } from "./metadata.schema";
+import { VisualProfileSchema } from "./visual-profile.schema";
 
 export const ListCatalogMaterialsQuerySchema = z.strictObject({
   currency: CurrencySchema.default("CNY")
@@ -19,6 +20,8 @@ export const CatalogMaterialProductSchema = z.strictObject({
   materialKey: IdentifierSchema,
   shape: BeadShapeSchema,
   diameterMm: MillimeterSchema.positive(),
+  lengthAlongStringMm: MillimeterSchema.positive().optional(),
+  visualProfile: VisualProfileSchema.optional(),
   modelAssetKey: IdentifierSchema,
   textureAssetKey: IdentifierSchema,
   currency: CurrencySchema,

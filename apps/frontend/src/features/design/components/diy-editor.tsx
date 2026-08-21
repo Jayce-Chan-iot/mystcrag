@@ -279,6 +279,9 @@ export function DiyEditor({ designId }: { designId: string }) {
       materialKey: material.materialKey,
       shape: material.shape,
       diameterMm: material.diameterMm,
+      ...(material.lengthAlongStringMm === undefined || material.lengthAlongStringMm === null
+        ? {}
+        : { lengthAlongStringMm: material.lengthAlongStringMm }),
       modelAssetKey: material.modelAssetKey,
       textureAssetKey: material.textureAssetKey,
       unitPriceMinor: material.unitPriceMinor

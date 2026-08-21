@@ -231,22 +231,26 @@ model OrderDesignSnapshot {
 }
 
 model MaterialProduct {
-  id              String   @id
-  crystalId       String   @map("crystal_id")
-  sku             String   @unique
-  name            String
-  shape           String
-  diameterMm      Float    @map("diameter_mm")
-  materialKey     String   @map("material_key")
-  modelAssetKey   String?  @map("model_asset_key")
-  textureAssetKey String?  @map("texture_asset_key")
-  currency        Currency
-  unitPriceMinor  BigInt   @map("unit_price_minor")
-  unitCostMinor   BigInt   @map("unit_cost_minor")
-  active          Boolean  @default(true)
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
-  crystal         Crystal  @relation(fields: [crystalId], references: [id], onDelete: Restrict)
+  id                 String   @id
+  crystalId          String   @map("crystal_id")
+  sku                String   @unique
+  name               String
+  shape              String
+  diameterMm         Float    @map("diameter_mm")
+  lengthAlongStringMm Float?  @map("length_along_string_mm")
+  holeDiameterMm     Float?   @map("hole_diameter_mm")
+  grade              String?
+  visualProfile      Json?    @map("visual_profile")
+  materialKey        String   @map("material_key")
+  modelAssetKey      String?  @map("model_asset_key")
+  textureAssetKey    String?  @map("texture_asset_key")
+  currency           Currency
+  unitPriceMinor     BigInt   @map("unit_price_minor")
+  unitCostMinor      BigInt   @map("unit_cost_minor")
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+  crystal            Crystal  @relation(fields: [crystalId], references: [id], onDelete: Restrict)
 
   @@index([crystalId, active])
   @@index([currency, active])
@@ -254,20 +258,22 @@ model MaterialProduct {
 }
 
 model AccessoryProduct {
-  id              String   @id
-  sku             String   @unique
-  accessoryType   String   @map("accessory_type")
-  material        String
-  finish          String
-  dimensions      Json
-  modelAssetKey   String?  @map("model_asset_key")
-  textureAssetKey String?  @map("texture_asset_key")
-  currency        Currency
-  unitPriceMinor  BigInt   @map("unit_price_minor")
-  unitCostMinor   BigInt   @map("unit_cost_minor")
-  active          Boolean  @default(true)
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  id                  String   @id
+  sku                 String   @unique
+  accessoryType       String   @map("accessory_type")
+  material            String
+  finish              String
+  dimensions          Json
+  lengthAlongStringMm Float?   @map("length_along_string_mm")
+  visualProfile       Json?    @map("visual_profile")
+  modelAssetKey       String?  @map("model_asset_key")
+  textureAssetKey     String?  @map("texture_asset_key")
+  currency            Currency
+  unitPriceMinor      BigInt   @map("unit_price_minor")
+  unitCostMinor       BigInt   @map("unit_cost_minor")
+  active              Boolean  @default(true)
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
   @@index([currency, active])
   @@map("accessory_products")
