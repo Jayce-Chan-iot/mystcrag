@@ -86,7 +86,7 @@ type StoredRevision = {
   createdAt: Date;
 };
 
-type DesignStore = {
+export type DesignStore = {
   createDesign(actorId: string, snapshot: DesignV1): Promise<StoredDesign>;
   getDesign(actorId: string, designId: string): Promise<StoredDesign>;
   getRevision(designId: string, revision: number): Promise<StoredRevision>;
@@ -100,15 +100,15 @@ type DesignStore = {
   ): Promise<StoredDesign>;
   saveDesign(actorId: string, designId: string, expectedRevision: number): Promise<StoredDesign>;
 };
-type CatalogStore = {
+export type CatalogStore = {
   getCatalogProducts(productIds: readonly string[]): Promise<CatalogProduct[]>;
   listActiveCatalogProducts(
     currency: "CNY" | "TWD",
     excludedProductIds?: readonly string[]
   ): Promise<CatalogProduct[]>;
 };
-type PriceStore = { recalculateDesignPrice(input: unknown): Promise<DesignV1> };
-type InventoryStore = {
+export type PriceStore = { recalculateDesignPrice(input: unknown): Promise<DesignV1> };
+export type InventoryStore = {
   validateAvailability(requirements: ReadonlyMap<string, number>): Promise<void>;
 };
 type PublicationStore = {
@@ -236,7 +236,7 @@ export type DesignApplicationDependencies = {
   createId?: (prefix: string) => string;
 };
 
-function quantitiesByProduct(design: DesignV1): Map<string, number> {
+export function quantitiesByProduct(design: DesignV1): Map<string, number> {
   const quantities = new Map<string, number>();
   for (const bead of design.beads) {
     quantities.set(bead.beadProductId, (quantities.get(bead.beadProductId) ?? 0) + 1);
@@ -250,7 +250,7 @@ function quantitiesByProduct(design: DesignV1): Map<string, number> {
   return quantities;
 }
 
-function rebuildDerived(input: DesignV1): DesignV1 {
+export function rebuildDerived(input: DesignV1): DesignV1 {
   const ring = [
     ...input.beads,
     ...input.accessories.filter((item) => item.placementMode === "INLINE")
@@ -386,7 +386,7 @@ export function deriveTarotDesignAuthorityId(
   return `tarot-design-${digest}`;
 }
 
-function hasSameCandidateAuthority(
+export function hasSameCandidateAuthority(
   existing: DesignV1,
   intended: DesignV1,
   designIdSeed: string

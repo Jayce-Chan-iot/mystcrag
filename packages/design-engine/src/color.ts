@@ -1,3 +1,4 @@
+/// <reference path="./culori.d.ts" />
 import { oklch } from "culori";
 
 /**

@@ -180,11 +180,24 @@ model Design {
   owner                User                        @relation(fields: [ownerId], references: [id], onDelete: Restrict)
   revisions            DesignRevision[]
   publications         DesignPublication[]
+  decisionTraces       DesignDecisionTrace[]
   tarotRecommendations TarotDesignRecommendation[]
 
   @@index([ownerId, updatedAt])
   @@index([status, deletedAt])
   @@map("designs")
+}
+
+model DesignDecisionTrace {
+  id             String   @id @default(cuid())
+  designId       String   @map("design_id")
+  revisionNumber Int      @map("revision_number")
+  trace          Json
+  createdAt      DateTime @default(now()) @map("created_at")
+  design         Design   @relation(fields: [designId], references: [id], onDelete: Restrict)
+
+  @@unique([designId, revisionNumber])
+  @@map("design_decision_traces")
 }
 
 model DesignRevision {

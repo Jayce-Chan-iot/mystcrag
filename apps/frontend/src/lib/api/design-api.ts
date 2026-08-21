@@ -1,10 +1,16 @@
 import {
   CreateOrderFromDesignRequestSchema,
   CreateOrderFromDesignResponseSchema,
+  EvaluateDesignResponseSchema,
   ListCatalogMaterialsResponseSchema,
   GenerateDesignRequestSchema,
   GenerateDesignResponseSchema,
+  MaterialSuggestResponseSchema,
+  OptimizeDesignRequestSchema,
+  OptimizeDesignResponseSchema,
   PublicDesignV1Schema,
+  RecommendDesignRequestSchema,
+  RecommendDesignResponseSchema,
   SaveDesignRequestSchema,
   SaveDesignResponseSchema,
   PriceDesignRequestSchema,
@@ -14,10 +20,15 @@ import {
   type CreateOrderFromDesignRequest,
   type CreateOrderFromDesignResponse,
   type CatalogMaterialProduct,
+  type EvaluateDesignResponse,
   type GenerateDesignRequest,
   type GenerateDesignResponse,
   type ListCatalogMaterialsResponse,
+  type MaterialSuggestResponse,
+  type OptimizeDesignResponse,
   type PublicDesignV1,
+  type RecommendDesignRequest,
+  type RecommendDesignResponse,
   type SaveDesignRequest,
   type SaveDesignResponse,
   type PriceDesignResponse,
@@ -228,6 +239,84 @@ export function createDesignApiClient({
         throw new FrontendApiError("VALIDATION_ERROR", "Mock mode does not fabricate order success.");
       }
       return callApi("/api/orders/from-design", CreateOrderFromDesignResponseSchema, { body: request }, fetcher, accessToken);
+    },
+
+    async recommend(input: RecommendDesignRequest): Promise<RecommendDesignResponse> {
+      const request = RecommendDesignRequestSchema.parse(input);
+      if (useMock) {
+        const generated = await mockGenerateDesigns({
+          ...request,
+          personalizationConsent: request.personalizationConsent
+        });
+        return RecommendDesignResponseSchema.parse({
+          requestId: request.requestId,
+          candidates: generated.slice(0, 3).map((response) => ({
+            designId: response.design.designId,
+            layoutStrategy: "SYMMETRIC_BALANCE" as const,
+            score: {
+              colorScore: 72,
+              materialScore: 70,
+              styleScore: 68,
+              compositionScore: 74,
+              constraintScore: 100,
+              overallScore: 72,
+              formulaVersion: "design-score-v1"
+            },
+            design: response.design
+          })),
+          warnings: []
+        });
+      }
+      return callApi("/api/design/recommend", RecommendDesignResponseSchema, { body: request }, fetcher, accessToken);
+    },
+
+    async evaluate(designId: string): Promise<EvaluateDesignResponse> {
+      if (useMock) {
+        throw new FrontendApiError("VALIDATION_ERROR", "Mock mode does not support design evaluation.");
+      }
+      return callApi(
+        "/api/design/evaluate",
+        EvaluateDesignResponseSchema,
+        { body: { requestId: requestId("evaluate"), designId } },
+        fetcher,
+        accessToken
+      );
+    },
+
+    async optimize(
+      design: PublicDesignV1,
+      lockedComponentIds: readonly string[]
+    ): Promise<OptimizeDesignResponse> {
+      if (useMock) {
+        throw new FrontendApiError("VALIDATION_ERROR", "Mock mode does not support design optimization.");
+      }
+      const request = OptimizeDesignRequestSchema.parse({
+        requestId: requestId("optimize"),
+        designId: design.designId,
+        expectedRevision: design.revision,
+        lockedComponentIds: [...lockedComponentIds]
+      });
+      return callApi("/api/design/optimize", OptimizeDesignResponseSchema, { body: request }, fetcher, accessToken);
+    },
+
+    async suggestMaterials(
+      materialId: string,
+      currency: PublicDesignV1["currency"]
+    ): Promise<MaterialSuggestResponse> {
+      if (useMock) {
+        return MaterialSuggestResponseSchema.parse({
+          materialId,
+          currency,
+          suggestions: []
+        });
+      }
+      return callApi(
+        `/api/materials/${encodeURIComponent(materialId)}/suggest?currency=${encodeURIComponent(currency)}`,
+        MaterialSuggestResponseSchema,
+        { method: "GET" },
+        fetcher,
+        accessToken
+      );
     }
   };
 }
@@ -336,4 +425,55 @@ export function createRemoveRequest(
     operation: "REMOVE_COMPONENT",
     componentId
   }]);
+}
+
+/**
+ * Builds the inverse edit script of an optimization against the design state
+ * the operations were generated from, so an applied optimization can be
+ * undone through the same /api/design/update channel.
+ */
+export function invertOperations(
+  design: PublicDesignV1,
+  operations: readonly UpdateDesignOperation[]
+): UpdateDesignOperation[] {
+  const inverse: UpdateDesignOperation[] = [];
+  for (const operation of [...operations].reverse()) {
+    switch (operation.operation) {
+      case "ADD_COMPONENT":
+        inverse.push({ operation: "REMOVE_COMPONENT", componentId: operation.component.componentId });
+        break;
+      case "REMOVE_COMPONENT": {
+        const bead = design.beads.find((item) => item.componentId === operation.componentId);
+        if (bead) {
+          inverse.push({ operation: "ADD_COMPONENT", component: bead });
+          break;
+        }
+        const accessory = design.accessories.find((item) => item.componentId === operation.componentId);
+        if (accessory?.placementMode === "INLINE") {
+          inverse.push({ operation: "ADD_COMPONENT", component: accessory });
+        }
+        break;
+      }
+      case "MOVE_COMPONENT": {
+        const position = design.production.componentSequence.indexOf(operation.componentId);
+        if (position >= 0) {
+          inverse.push({ operation: "MOVE_COMPONENT", componentId: operation.componentId, targetPositionIndex: position });
+        }
+        break;
+      }
+      case "REPLACE_COMPONENT": {
+        const original =
+          design.beads.find((item) => item.componentId === operation.componentId) ??
+          design.accessories.find((item) => item.componentId === operation.componentId);
+        if (original) {
+          inverse.push({ operation: "REPLACE_COMPONENT", componentId: operation.componentId, replacement: original });
+        }
+        break;
+      }
+      case "UPDATE_BRACELET":
+        inverse.push({ operation: "UPDATE_BRACELET", bracelet: design.bracelet });
+        break;
+    }
+  }
+  return inverse;
 }

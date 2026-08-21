@@ -66,6 +66,20 @@ GET /api/design/:id/revisions
 
 Requires verified authentication and returns the actor-owned immutable revision history using public projections.
 
+## Design Recommendation API
+
+All five endpoints require verified bearer authentication and owner-scoped access. They expose the deterministic design engine (spec §4.1, ADR-6 scoring) through the Backend: no LLM call participates in candidate generation, and identical inputs produce identical candidates. Their executable DTOs live in [recommendation-api.schema.ts](../packages/design-contract/src/schemas/recommendation-api.schema.ts); every request rejects unknown fields and every successful response is parsed before it leaves Backend.
+
+| Route | Request DTO | Response DTO | Behavior |
+| --- | --- | --- | --- |
+| `POST /api/design/recommend` | `RecommendDesignRequestSchema` | `RecommendDesignResponseSchema` | Resolves a `RecommendationContext` from questionnaire inputs (or accepts a pre-resolved one), compiles active `APPROVED` rules, and returns at most three engine candidates. Each candidate carries a `PublicDesignV1`, its layout strategy, `design-score-v1` sub-scores, and localized reasons. Candidates are persisted as revision-1 designs with an immutable decision-trace sidecar. |
+| `POST /api/design/evaluate` | `EvaluateDesignRequestSchema` | `EvaluateDesignResponseSchema` | Re-scores a persisted actor-owned design against the current catalog and active rules. `traceStale: true` flags designs whose persisted trace predates later edits. |
+| `POST /api/design/optimize` | `OptimizeDesignRequestSchema` | `OptimizeDesignResponseSchema` | Regenerates an improved layout while preserving `lockedComponentIds`. Returns the optimized design plus a finite edit-operation script (`ADD/MOVE/REMOVE/REPLACE_COMPONENT`) compatible with `POST /api/design/update`, so the client applies it through normal revisioned edits and can undo. |
+| `GET /api/design/:id/trace` | no body | `DesignTraceResponseSchema` | Returns the latest immutable decision trace for an owner-scoped design: fired rule ids, layout strategy, score breakdown, and inputs hash. |
+| `GET /api/materials/:id/suggest?currency=CNY&locale=zh-CN` | query only | `MaterialSuggestResponseSchema` | Ranks at most eight compatible partner materials for one catalog material using color harmony plus tag affinity. Excludes the base material itself; descending by score. |
+
+Recommendation is idempotent for unchanged context: engine design IDs are content-addressed, so an identical re-request returns the same persisted candidates instead of duplicating designs. A content-addressed ID that collides with a design the owner has since edited falls back to a fresh ID rather than failing. Responses never expose inventory quantities, unit costs, or rule-compile internals; violations surface as stable warning codes on the candidate. Optimization results are advisory only — the client applies operations through the revisioned Update endpoint, and cultural or emotional copy remains inspiration language without medical or guaranteed-effect claims.
+
 ## Material Catalog API
 
 GET /api/catalog/materials?currency=CNY
@@ -117,6 +131,6 @@ Requires verified authentication and owner access. Uses `CreateOrderFromDesignRe
 
 ## Current service status
 
-`/health`, `/api/modules`, the Design/catalog/order routes, and the authenticated Tarot lifecycle are registered by the current Backend startup. Repository-backed Design, publication, order, pricing, inventory, Tarot session, and catalog services all receive the verified `actorId`; Tarot copy currently uses the deterministic bounded adapter documented in `AI_AGENT_SPEC.md`.
+`/health`, `/api/modules`, the Design/catalog/order routes, the authenticated Tarot lifecycle, and the five Design Recommendation routes are registered by the current Backend startup. Repository-backed Design, publication, order, pricing, inventory, Tarot session, catalog, and recommendation services all receive the verified `actorId`; Tarot copy currently uses the deterministic bounded adapter documented in `AI_AGENT_SPEC.md`, and Design recommendation uses the deterministic `@mystcrag/design-engine` pipeline.
 
 Persistence conflicts map to the existing stable codes: stale `expectedRevision` becomes `CONFLICT`; server price/version mismatch becomes `PRICE_CHANGED`; latest stock mismatch becomes `INVENTORY_CHANGED`; consent and compliance failures retain `CONSENT_REQUIRED` and `COMPLIANCE_BLOCKED`. Clients never submit `ownerId`, unit costs, trusted totals, or trusted inventory. Order intent is limited to design/revision identity plus `expectedTotalPriceMinor` and `expectedPricingVersion`.

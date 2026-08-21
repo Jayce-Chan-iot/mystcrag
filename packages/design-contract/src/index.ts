@@ -28,6 +28,7 @@ export * from "./schemas/production.schema";
 export * from "./schemas/provenance.schema";
 export * from "./schemas/public-design.schema";
 export * from "./schemas/recommendation-context.schema";
+export * from "./schemas/recommendation-api.schema";
 export * from "./schemas/story.schema";
 export * from "./schemas/taxonomy.schema";
 export * from "./schemas/visual-profile.schema";

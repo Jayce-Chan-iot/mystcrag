@@ -7,11 +7,16 @@ import {
   registerDesignContractRoutes,
   type DesignApiService
 } from "./modules/design/design.routes.js";
+import {
+  registerRecommendationRoutes,
+  type RecommendationApiService
+} from "./modules/design/recommendation.routes.js";
 import { registerTarotRoutes } from "./modules/tarot/tarot.routes.js";
 import type { TarotApiService } from "./modules/tarot/tarot.types.js";
 
 export type CreateAppOptions = {
   readonly designService?: DesignApiService;
+  readonly recommendationService?: RecommendationApiService;
   readonly tarotService?: TarotApiService;
   readonly authProvider?: AuthProvider;
   readonly tarotEnabled?: boolean;
@@ -32,11 +37,14 @@ export function createApp(options: CreateAppOptions = {}) {
 
   app.get("/health", async () => ({ status: "ok" }));
   app.get("/api/modules", async () => ({ modules: registeredModules }));
-  if ((options.designService || options.tarotService) && !options.authProvider) {
+  if ((options.designService || options.tarotService || options.recommendationService) && !options.authProvider) {
     throw new Error("An authentication provider is required for protected API routes.");
   }
   if (options.designService && options.authProvider) {
     registerDesignContractRoutes(app, options.designService, options.authProvider);
+  }
+  if (options.recommendationService && options.authProvider) {
+    registerRecommendationRoutes(app, options.recommendationService, options.authProvider);
   }
   if (options.tarotService && options.authProvider) {
     registerTarotRoutes(

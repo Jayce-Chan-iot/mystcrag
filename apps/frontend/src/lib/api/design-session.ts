@@ -1,7 +1,8 @@
 import {
   CreateOrderFromDesignResponseSchema,
   type CreateOrderFromDesignResponse,
-  type GenerateDesignRequest
+  type GenerateDesignRequest,
+  type RecommendDesignRequest
 } from "@mystcrag/design-contract";
 
 const STORAGE_PREFIX = "mystcrag:generation:";
@@ -14,7 +15,9 @@ export type DesignBudgetContext = Pick<
   "currency" | "minBudgetMinor" | "maxBudgetMinor"
 >;
 
-export function saveDesignBudgetContext(designId: string, request: GenerateDesignRequest): void {
+type BudgetContextSource = GenerateDesignRequest | RecommendDesignRequest;
+
+export function saveDesignBudgetContext(designId: string, request: BudgetContextSource): void {
   if (typeof window === "undefined") return;
   const context: DesignBudgetContext = {
     currency: request.currency,
@@ -27,7 +30,7 @@ export function saveDesignBudgetContext(designId: string, request: GenerateDesig
 export function saveGeneratedDesignOptions(
   routeDesignId: string,
   designIds: readonly string[],
-  request: GenerateDesignRequest
+  request: BudgetContextSource
 ): void {
   if (typeof window === "undefined") return;
   const uniqueIds = [...new Set(designIds)].filter(Boolean);

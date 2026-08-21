@@ -20,12 +20,21 @@ importers:
       '@mystcrag/ai-agent':
         specifier: workspace:*
         version: link:../../packages/ai-agent
+      '@mystcrag/context-resolver':
+        specifier: workspace:*
+        version: link:../../packages/context-resolver
       '@mystcrag/database':
         specifier: workspace:*
         version: link:../../packages/database
       '@mystcrag/design-contract':
         specifier: workspace:*
         version: link:../../packages/design-contract
+      '@mystcrag/design-engine':
+        specifier: workspace:*
+        version: link:../../packages/design-engine
+      '@mystcrag/knowledge-core':
+        specifier: workspace:*
+        version: link:../../packages/knowledge-core
       '@mystcrag/tarot-engine':
         specifier: workspace:*
         version: link:../../packages/tarot-engine

@@ -8,7 +8,10 @@ import {
 import { NodeCryptoRandomSource } from "@mystcrag/tarot-engine";
 import { TarotCopyService } from "@mystcrag/ai-agent/tarot";
 import { createAuthProviderFromEnvironment } from "./auth/auth-provider.factory.js";
-import { createDesignApplicationService } from "./modules/design/design.service.js";
+import {
+  createDesignApplicationService,
+  createRecommendationApplicationService
+} from "./modules/design/design.service.js";
 import {
   TarotAiRecommendationCopyPort,
   TarotService
@@ -28,6 +31,7 @@ const productRepository = new ProductRepository(database);
 const designApplicationService = createDesignApplicationService(database);
 const app = createApp({
   designService: designApplicationService,
+  recommendationService: createRecommendationApplicationService(database),
   tarotService: new TarotService({
     repository: new TarotSessionRepositoryImpl(database),
     random: new NodeCryptoRandomSource(),

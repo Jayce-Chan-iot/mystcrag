@@ -15,8 +15,11 @@
   },
   "dependencies": {
     "@mystcrag/ai-agent": "workspace:*",
+    "@mystcrag/context-resolver": "workspace:*",
     "@mystcrag/database": "workspace:*",
     "@mystcrag/design-contract": "workspace:*",
+    "@mystcrag/design-engine": "workspace:*",
+    "@mystcrag/knowledge-core": "workspace:*",
     "@mystcrag/tarot-engine": "workspace:*",
     "fastify": "^5.10.0",
     "zod": "^4.4.3"

@@ -5,6 +5,7 @@ export * from "./mappers/money.mapper.js";
 export * from "./mappers/snapshot.mapper.js";
 export * from "./mappers/tarot-snapshot.mapper.js";
 export * from "./repositories/design.repository.js";
+export * from "./repositories/design-decision-trace.repository.js";
 export * from "./repositories/design-revision.repository.js";
 export * from "./repositories/inventory.repository.js";
 export * from "./repositories/knowledge.repository.js";

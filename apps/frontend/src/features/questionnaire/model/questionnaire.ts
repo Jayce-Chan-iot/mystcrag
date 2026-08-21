@@ -1,4 +1,8 @@
-import type { GenerateDesignRequest } from "@mystcrag/design-contract";
+import {
+  RecommendDesignRequestSchema,
+  type GenerateDesignRequest,
+  type RecommendDesignRequest
+} from "@mystcrag/design-contract";
 
 export const QUESTIONNAIRE_STEPS = [
   { id: "state", eyebrow: "01 · 当下", title: "此刻，你更接近哪一种状态？", description: "没有标准答案，也不用于任何心理判断。只选最贴近当下的一项。" },
@@ -109,18 +113,27 @@ export function toGenerateDesignRequest(answers: QuestionnaireAnswers): Generate
   };
 }
 
-const DESIGN_DIRECTIONS = [
-  { id: "clear-rhythm", styleTag: "airy-rhythm", colorTag: "clear-accent" },
-  { id: "layered-contrast", styleTag: "layered-contrast", colorTag: "smoky-accent" },
-  { id: "focused-balance", styleTag: "focal-balance", colorTag: "neutral-accent" }
-] as const;
-
-export function toGenerateDesignRequests(answers: QuestionnaireAnswers): GenerateDesignRequest[] {
+/**
+ * EPIC 10: the questionnaire now issues a single deterministic recommend
+ * request; candidate diversity comes from the Design Engine's layout
+ * strategies instead of three concurrent generate calls.
+ */
+export function toRecommendDesignRequest(answers: QuestionnaireAnswers): RecommendDesignRequest {
   const base = toGenerateDesignRequest(answers);
-  return DESIGN_DIRECTIONS.map((direction) => ({
-    ...base,
-    requestId: `${base.requestId}-${direction.id}`,
-    styleTags: [...base.styleTags, direction.styleTag],
-    colorTags: [...base.colorTags, direction.colorTag]
-  }));
+  return RecommendDesignRequestSchema.parse({
+    requestId: `frontend-recommend-${answers.state}-${answers.color}`,
+    locale: base.locale,
+    currency: base.currency,
+    wristCircumferenceMm: base.wristCircumferenceMm,
+    ...(base.targetInnerCircumferenceMm === undefined
+      ? {}
+      : { targetInnerCircumferenceMm: base.targetInnerCircumferenceMm }),
+    emotionTags: base.emotionTags,
+    styleTags: base.styleTags,
+    colorTags: base.colorTags,
+    ...(base.minBudgetMinor === undefined ? {} : { minBudgetMinor: base.minBudgetMinor }),
+    ...(base.maxBudgetMinor === undefined ? {} : { maxBudgetMinor: base.maxBudgetMinor }),
+    excludedProductIds: base.excludedProductIds,
+    personalizationConsent: base.personalizationConsent
+  });
 }

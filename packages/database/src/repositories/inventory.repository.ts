@@ -15,4 +15,22 @@ export class InventoryRepository {
       }
     }
   }
+
+  /** Latest available (minus reserved) quantity per product; missing rows mean 0. */
+  async getAvailableQuantities(
+    productIds: readonly string[]
+  ): Promise<Map<string, number>> {
+    if (productIds.length === 0) return new Map();
+    const rows = await this.prisma.inventorySnapshot.findMany({
+      where: { productId: { in: [...productIds] } },
+      orderBy: { capturedAt: "desc" }
+    });
+    const available = new Map<string, number>();
+    for (const row of rows) {
+      if (!available.has(row.productId)) {
+        available.set(row.productId, Math.max(0, row.availableQuantity - row.reservedQuantity));
+      }
+    }
+    return available;
+  }
 }

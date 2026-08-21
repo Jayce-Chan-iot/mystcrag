@@ -1,11 +1,12 @@
 # Database Schema
 
-The executable source is `packages/database/prisma/schema.prisma`; the reviewed baseline is `20260721140000_init_mystcrag_persistence_v1`, with additive order-idempotency and `20260820100000_add_tarot_sessions` migrations applied afterward. PostgreSQL tables use snake_case and Prisma fields use camelCase.
+The executable source is `packages/database/prisma/schema.prisma`; the reviewed baseline is `20260721140000_init_mystcrag_persistence_v1`, with additive order-idempotency, `20260820100000_add_tarot_sessions`, and `20260821100000_add_design_decision_traces` migrations applied afterward. PostgreSQL tables use snake_case and Prisma fields use camelCase.
 
 ## Transactional model
 
 - `Design` is the owner-scoped, soft-deletable current aggregate. `currentSnapshot` is a validated `DesignV1` and `currentRevision` starts at one.
 - `DesignRevision` is append-only and unique by `(designId, revisionNumber)`. PostgreSQL triggers reject updates and deletes.
+- `DesignDecisionTrace` (migration `20260821100000_add_design_decision_traces`) is the immutable recommendation sidecar: one trace per `(designId, revisionNumber)`, appended when the design engine generates or optimizes a revision. Each row stores the validated `DesignDecisionTrace` JSON — fired rule ids, layout strategy, `design-score-v1` breakdown, and inputs hash — as `JSONB`. A trigger rejects updates and deletes; the restrictive design FK means trace evidence survives design deletion.
 - `DesignPublication` fixes community visibility and consent to a specific revision; unpublishing changes status/timestamp without deleting history.
 - `Order` stores a BIGINT minor-unit total and references a revision. Its nullable, unique `idempotencyKey` is populated for new order intents so concurrent retries for the same user and design revision resolve to one order; legacy rows remain readable. Its required `OrderDesignSnapshot` stores immutable design, pricing, and production JSON plus currency and pricing-rule version. Triggers reject snapshot updates/deletes and order deletes.
 - `MaterialProduct` and `AccessoryProduct` are sellable catalog records; `Crystal` remains knowledge data. Cost fields are server-only. Product V2 adds nullable `lengthAlongStringMm`, `holeDiameterMm`, `grade`, and taxonomy-validated `visualProfile` JSON to materials, and `lengthAlongStringMm`/`visualProfile` to accessories; old rows stay valid without them.
