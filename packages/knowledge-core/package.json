@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "review:cli": "tsx src/cli/index.ts",
     "seed:sources": "tsx scripts/seed-sources.ts",
-    "bench:retrieval": "tsx benchmarks/retrieval.benchmark.ts"
+    "bench:retrieval": "tsx benchmarks/retrieval.benchmark.ts",
+    "bench:semantic": "tsx benchmarks/semantic-eval.ts"
   },
   "dependencies": {
     "@mystcrag/database": "workspace:*",

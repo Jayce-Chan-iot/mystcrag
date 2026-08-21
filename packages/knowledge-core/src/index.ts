@@ -1,5 +1,7 @@
 export * from "./knowledge-core.js";
 export * from "./search/embedding-provider.js";
+export * from "./search/embedding-factory.js";
+export * from "./search/semantic-embedding.js";
 export * from "./search/rrf.js";
 export * from "./catalog.js";
 export * from "./compiler/rule-compiler.js";

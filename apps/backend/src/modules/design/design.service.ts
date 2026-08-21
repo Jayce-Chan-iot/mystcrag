@@ -15,7 +15,7 @@ import {
   ProductRepository as DatabaseProductRepository,
   PublicationRepository as DatabasePublicationRepository
 } from "@mystcrag/database";
-import { KnowledgeCore } from "@mystcrag/knowledge-core";
+import { createEmbeddingProviderFromEnv, KnowledgeCore } from "@mystcrag/knowledge-core";
 import type { DesignV1 } from "@mystcrag/design-contract";
 
 import { DomainApiError } from "../../contracts/api-error.js";
@@ -107,7 +107,8 @@ export function createRecommendationApplicationService(client: DatabaseClient) {
   const inventory = new DatabaseInventoryRepository(client);
   const knowledge = new KnowledgeCore({
     database: client,
-    repository: new DatabaseKnowledgeRepository(client)
+    repository: new DatabaseKnowledgeRepository(client),
+    embeddings: createEmbeddingProviderFromEnv()
   });
   return new RecommendationApplicationService({
     designs: new DatabaseDesignRepository(client),

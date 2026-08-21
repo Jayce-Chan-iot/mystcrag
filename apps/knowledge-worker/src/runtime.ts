@@ -5,7 +5,7 @@ import {
   KnowledgeRepository,
   type DatabaseClient
 } from "@mystcrag/database";
-import { HashEmbeddingProvider, KnowledgeCore } from "@mystcrag/knowledge-core";
+import { createEmbeddingProviderFromEnv, KnowledgeCore } from "@mystcrag/knowledge-core";
 import { runIngestionPipeline } from "@mystcrag/knowledge-ingestion";
 
 import {
@@ -100,7 +100,7 @@ export async function createKnowledgeWorkerRuntime(
   const knowledgeCore = new KnowledgeCore({
     database,
     repository,
-    embeddings: new HashEmbeddingProvider()
+    embeddings: createEmbeddingProviderFromEnv()
   });
 
   const boss = new PgBoss({
