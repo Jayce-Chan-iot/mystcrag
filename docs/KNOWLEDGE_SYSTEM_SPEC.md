@@ -339,6 +339,6 @@ Baseline 采集方式：bundle 数字来自干净单次构建（`rm -rf .next &&
 ## 16. Open Questions（批准时请一并裁决）
 
 1. **Embedding Spike 优先序**：本地 transformers.js 优先（零外部依赖、离线）还是远程 API 优先（零运维）？——建议本地优先，benchmark 定案。
-2. **MCP 传输**：stdio 还是 Streamable HTTP？——建议 HTTP（可容器化、可被远程 client 调用），Fastify adapter 兼容性在 EPIC 11 实施时核对官方文档。
+2. **MCP 传输**：stdio 还是 Streamable HTTP？——**已裁决（EPIC 11，DEC-KNOWLEDGE-SYSTEM-007）**：双传输一并交付——stdio 为缺省（本地/编辑器客户端），Streamable HTTP 无会话模式 `POST /mcp`（容器化/远程客户端，水平可扩展）；SDK 1.30 自带 Express adapter（含 DNS rebinding 防护），Fastify 兼容性核对不再需要（MCP 为独立进程，backend 不动）。
 3. **审核界面形态**：Admin API + CLI（建议，V1）还是简单后台页（延后）？
 4. **塔罗 worktree 处置**：按 §9 保留续作（建议）还是废弃重做？

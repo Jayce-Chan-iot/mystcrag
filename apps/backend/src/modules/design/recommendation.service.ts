@@ -1,10 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import { resolveQuestionnaireContext } from "@mystcrag/context-resolver";
 import {
-  BeadShapeSchema,
   DesignV1Schema,
-  VisualProfileSchema,
   toPublicDesign,
   type BeadV1,
   type DesignDecisionTrace,
@@ -31,11 +29,13 @@ import {
   type DesignCandidate,
   type DesignFacts
 } from "@mystcrag/design-engine";
+import { toContractCatalogMaterials } from "@mystcrag/database";
 import type {
   CatalogFeasibilitySnapshot,
   CompiledRuleSet,
   RuleCompileOptions
 } from "@mystcrag/knowledge-core";
+import { catalogFeasibilitySnapshotOf } from "@mystcrag/knowledge-core";
 
 import { DomainApiError } from "../../contracts/api-error.js";
 import {
@@ -123,85 +123,6 @@ function round2(value: number): number {
   return Number(value.toFixed(2));
 }
 
-function catalogVersionOf(products: readonly EngineCatalogProduct[]): string {
-  const digest = createHash("sha256")
-    .update(
-      JSON.stringify(
-        products.map((product) => [
-          product.beadProductId,
-          product.unitPriceMinor,
-          product.colorTags,
-          product.styleTags,
-          product.materialKey
-        ])
-      )
-    )
-    .digest("hex")
-    .slice(0, 12);
-  return `catalog-${digest}`;
-}
-
-function toEngineProducts(rows: readonly CatalogProduct[]): EngineCatalogProduct[] {
-  const products: EngineCatalogProduct[] = [];
-  for (const row of rows) {
-    if (
-      row.productType !== "MATERIAL" ||
-      !row.active ||
-      !row.crystalId ||
-      !row.materialKey ||
-      !row.shape ||
-      row.diameterMm === undefined ||
-      !row.modelAssetKey ||
-      !row.textureAssetKey
-    ) {
-      continue;
-    }
-    const shape = BeadShapeSchema.safeParse(row.shape);
-    if (!shape.success) continue;
-    let visualProfile: ReturnType<typeof VisualProfileSchema.safeParse> | undefined;
-    if (row.visualProfile !== undefined && row.visualProfile !== null) {
-      const parsed = VisualProfileSchema.safeParse(row.visualProfile);
-      if (!parsed.success) continue;
-      visualProfile = parsed;
-    }
-    products.push({
-      beadProductId: row.id,
-      displayName: row.name,
-      crystalId: row.crystalId,
-      crystalNameCn: row.crystalNameCn ?? row.name,
-      crystalNameEn: row.crystalNameEn ?? row.name,
-      colorTags: row.colorTags ?? [],
-      visualTags: row.visualTags ?? [],
-      styleTags: row.styleTags ?? [],
-      emotionTags: row.emotionTags ?? [],
-      cultureTags: row.cultureTags ?? [],
-      materialKey: row.materialKey,
-      shape: shape.data,
-      diameterMm: row.diameterMm,
-      ...(row.lengthAlongStringMm === null || row.lengthAlongStringMm === undefined
-        ? {}
-        : { lengthAlongStringMm: row.lengthAlongStringMm }),
-      ...(visualProfile?.success ? { visualProfile: visualProfile.data } : {}),
-      modelAssetKey: row.modelAssetKey,
-      textureAssetKey: row.textureAssetKey,
-      currency: row.currency,
-      unitPriceMinor: row.unitPriceMinor
-    });
-  }
-  return products;
-}
-
-function feasibilitySnapshotOf(
-  products: readonly EngineCatalogProduct[]
-): CatalogFeasibilitySnapshot {
-  return {
-    productCatalogVersion: catalogVersionOf(products),
-    availableTaxonomyRefs: [
-      ...new Set(products.flatMap((product) => [...product.colorTags, product.materialKey]))
-    ]
-  };
-}
-
 function errorCodeOf(error: unknown): string | undefined {
   return typeof error === "object" && error !== null && "code" in error
     ? String(error.code)
@@ -283,7 +204,7 @@ export class RecommendationApplicationService implements RecommendationApiServic
       context.currency,
       context.hardConstraints.excludedProductIds
     );
-    const products = toEngineProducts(catalogRows);
+    const products = toContractCatalogMaterials(catalogRows);
     if (products.length === 0) {
       return {
         requestId: request.requestId,
@@ -294,7 +215,7 @@ export class RecommendationApplicationService implements RecommendationApiServic
 
     const ruleSet = await this.compileRules(
       context,
-      feasibilitySnapshotOf(products),
+      catalogFeasibilitySnapshotOf(products),
       true
     );
     const stock = await this.loadStock(products.map((product) => product.beadProductId));
@@ -559,8 +480,8 @@ export class RecommendationApplicationService implements RecommendationApiServic
 
     const context = this.contextFromDesign(design);
     const catalogRows = await this.dependencies.catalog.listActiveCatalogProducts(design.currency);
-    const products = toEngineProducts(catalogRows);
-    const ruleSet = await this.compileRules(context, feasibilitySnapshotOf(products), true);
+    const products = toContractCatalogMaterials(catalogRows);
+    const ruleSet = await this.compileRules(context, catalogFeasibilitySnapshotOf(products), true);
     const stock = await this.loadStock(products.map((product) => product.beadProductId));
 
     const draft = {
@@ -631,7 +552,7 @@ export class RecommendationApplicationService implements RecommendationApiServic
   ): Promise<MaterialSuggestResponse> {
     void actorId;
     const catalogRows = await this.dependencies.catalog.listActiveCatalogProducts(currency);
-    const products = toEngineProducts(catalogRows);
+    const products = toContractCatalogMaterials(catalogRows);
     const base = products.find((product) => product.beadProductId === materialId);
     if (base === undefined) {
       throw new DomainApiError("NOT_FOUND", "Material not found in the active catalog.");
@@ -639,7 +560,7 @@ export class RecommendationApplicationService implements RecommendationApiServic
 
     // Context-free compile: cacheable per (knowledge version, catalog version).
     const ruleSet = await this.dependencies.rules.compileActiveRules(
-      feasibilitySnapshotOf(products)
+      catalogFeasibilitySnapshotOf(products)
     );
 
     const zh = isChinese(locale);
@@ -755,8 +676,8 @@ export class RecommendationApplicationService implements RecommendationApiServic
     });
 
     const catalogRows = await this.dependencies.catalog.listActiveCatalogProducts(current.currency);
-    const products = toEngineProducts(catalogRows);
-    const ruleSet = await this.compileRules(context, feasibilitySnapshotOf(products), true);
+    const products = toContractCatalogMaterials(catalogRows);
+    const ruleSet = await this.compileRules(context, catalogFeasibilitySnapshotOf(products), true);
     const stock = await this.loadStock(products.map((product) => product.beadProductId));
     const timestamp = this.now().toISOString();
 

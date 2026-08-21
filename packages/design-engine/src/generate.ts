@@ -36,7 +36,7 @@ function contentId(prefix: string, payload: unknown): string {
   return `${prefix}-${digest}`;
 }
 
-function buildBracelet(
+export function buildBracelet(
   context: RecommendationContext,
   totalBeadCount: number
 ): BraceletV1 {

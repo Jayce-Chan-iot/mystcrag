@@ -1,6 +1,7 @@
 export * from "./client/lifecycle.js";
 export * from "./client/prisma-client.js";
 export * from "./errors/persistence-errors.js";
+export * from "./mappers/catalog-mapper.js";
 export * from "./mappers/money.mapper.js";
 export * from "./mappers/snapshot.mapper.js";
 export * from "./mappers/tarot-snapshot.mapper.js";

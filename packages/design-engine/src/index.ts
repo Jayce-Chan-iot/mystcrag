@@ -1,8 +1,13 @@
 export { allocateComposition, beadUnitLengthMm, type AllocatedProduct, type BeadRole } from "./allocation.js";
 export { COLOR_HEX_BY_TAXONOMY_ID, hueDistance, pairHarmony, taxonomyColorOklch } from "./color.js";
+export {
+  recommendPalettes,
+  type PaletteColorRule,
+  type PaletteSuggestion
+} from "./palette.js";
 export { selectCandidates, type RejectedProduct, type SelectionResult } from "./candidate-selection.js";
 export { buildDesignFacts, buildDraftFacts, type DesignFacts } from "./facts.js";
-export { generateDesignCandidates } from "./generate.js";
+export { buildBracelet, generateDesignCandidates } from "./generate.js";
 export { evaluateDesignDraft, type DesignEvaluation } from "./evaluate.js";
 export { LAYOUT_STRATEGIES, layoutSequence, toBeadV1Sequence } from "./layout.js";
 export { planQuantities, type QuantityPlan } from "./quantity.js";

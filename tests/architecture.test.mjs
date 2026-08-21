@@ -17,6 +17,8 @@ const requiredPaths = [
   "packages/design-engine/src",
   "apps/backend/src/modules/design",
   "apps/frontend/src/features/design",
+  "apps/mcp-server/src",
+  "apps/knowledge-worker/src",
   "packages/ai-agent/emotion-agent",
   "packages/ai-agent/crystal-agent",
   "packages/ai-agent/design-agent",
@@ -83,6 +85,27 @@ test("context-resolver only depends on the contract and tarot-engine", async () 
   assertNoMatches(matches);
 });
 
+test("mcp-server projects knowledge-core and design-engine without business copies", async () => {
+  const matches = await matchingFiles(
+    ["apps/mcp-server"],
+    /from\s+["'](?:@mystcrag\/knowledge-ingestion|@mystcrag\/knowledge-worker|@mystcrag\/ai-agent|@mystcrag\/bracelet-engine|@mystcrag\/tarot-engine|@mystcrag\/ui|@mystcrag\/three-engine)["']/
+  );
+  assertNoMatches(matches);
+});
+
+test("mcp-server touches Prisma only inside its composition root", async () => {
+  const files = await sourceFiles("apps/mcp-server/src");
+  const violations = [];
+  for (const file of files) {
+    if (path.basename(file) === "runtime.ts") continue;
+    const content = await readFile(file, "utf8");
+    if (/createPrismaClient|@prisma\/client|PrismaClient/.test(content)) {
+      violations.push(file);
+    }
+  }
+  assertNoMatches(violations);
+});
+
 test("ai-agent cannot import the database package", async () => {
   const matches = await matchingFiles(
     ["packages/ai-agent"],
@@ -97,6 +120,7 @@ test("backend HTTP boundary does not expose Prisma or database package types", a
     "apps/backend/src/modules/design/design.service.ts",
     "apps/backend/src/modules/design/inventory.service.ts",
     "apps/backend/src/modules/design/pricing.service.ts",
+    "apps/backend/src/modules/design/recommendation.service.ts",
     "apps/backend/src/modules/order/order.service.ts"
   ]);
   const matches = await matchingFiles(

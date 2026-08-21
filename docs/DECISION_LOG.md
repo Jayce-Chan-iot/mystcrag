@@ -292,6 +292,24 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 
 ---
 
+### DEC-KNOWLEDGE-SYSTEM-007 — MCP server as a thin dual-transport projection over knowledge-core and design-engine (EPIC 11)
+
+- Date: 2026-08-21
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `apps/mcp-server` (new app: `src/tools.ts`, `src/server.ts`, `src/runtime.ts`, `src/index.ts`, `src/deps.ts`, `src/projection.ts`, `tests/tools.test.ts`), `tests/architecture.test.mjs`, `turbo.json`, `packages/database/src/mappers/catalog-mapper.ts` (shared `toContractCatalogMaterials`), `packages/knowledge-core/src/catalog.ts` (shared `catalogFeasibilitySnapshotOf`), `packages/design-engine/src/palette.ts` (`recommendPalettes`)
+- Decision: `@mystcrag/mcp-server` exposes exactly five tools — `search_knowledge`, `get_rules`, `get_material_compatibility`, `recommend_palette`, `evaluate_design` — on the official `@modelcontextprotocol/sdk` `McpServer` with Zod `strictObject` input schemas. Tools consume narrow dependency ports (`KnowledgeSearchPort`, `CatalogPort`, `StockPort`) so tests wire in-memory fakes; the composition root `src/runtime.ts` alone constructs Prisma (`createPrismaClient`), `KnowledgeCore` (with `HashEmbeddingProvider` so the vector channel matches the worker), `ProductRepository`, and `InventoryRepository`. Both transports ship in one entrypoint: stdio (default; all logs go to stderr so the JSON-RPC stream stays clean) and stateless Streamable HTTP (`POST /mcp`, one transport+server per request, no session id, DNS-rebinding-protected via the SDK's `createMcpExpressApp`). Rule responses use a public projection (`ruleId`, type, domain, subject, relation, confidence, summary) that hides fingerprints, source references, and version bookkeeping. `recommend_palette` delegates to the new pure `recommendPalettes` in design-engine (OKLCH pair harmony), and `evaluate_design` runs the same catalog→context→compile→evaluate pipeline as the Backend recommend API through shared `toContractCatalogMaterials` / `catalogFeasibilitySnapshotOf` helpers.
+- Rationale: Task book §36/37 and ADR-12 require official-SDK MCP exposure with zero business-logic duplication; ports keep the tool layer testable without a database, and the shared catalog mappers guarantee the MCP `evaluate_design` and the Backend `/api/design/recommend` see byte-identical catalog views (same `productCatalogVersion`). Resolves spec open question 3.2: both transports are supported — stdio for local/editor clients, stateless HTTP for containerized or remote clients — because the stateless pattern needs no session store and survives horizontal scaling.
+- Rejected alternatives: reimplementing retrieval/scoring inside the MCP layer (business copy, violates architecture tests); routing the Backend through MCP (ADR-12 explicitly forbids; adds a network hop and an LLM-client dependency the main chain must not have); stateful HTTP sessions (requires sticky routing and a session store for no current benefit); Fastify adapter (SDK 1.30 ships a first-party Express adapter with DNS-rebinding protection; Backend's Fastify stays untouched because MCP is a separate process).
+- Contract impact: None. `@mystcrag/design-contract` is unchanged; MCP input schemas are transport-local Zod schemas validated before any knowledge-core call.
+- Database impact: None. Read-only access to existing tables through existing repositories.
+- API impact: Additive, separate protocol. Documented in `API_SPECIFICATION.md` (MCP Knowledge Tools API section). No HTTP routes on the Backend change.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-21
+- Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 11 MCP server commit.
+
+---
+
 ## New decision template
 
 ### P3-NNN — Short decision title

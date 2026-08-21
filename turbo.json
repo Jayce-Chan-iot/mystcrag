@@ -45,6 +45,17 @@
         "NODE_ENV"
       ]
     },
+    "@mystcrag/mcp-server#dev": {
+      "cache": false,
+      "persistent": true,
+      "passThroughEnv": [
+        "DATABASE_URL",
+        "MCP_TRANSPORT",
+        "MCP_HOST",
+        "MCP_PORT",
+        "NODE_ENV"
+      ]
+    },
     "lint": {
       "dependsOn": ["^lint"]
     },
