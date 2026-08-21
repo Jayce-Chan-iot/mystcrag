@@ -18,7 +18,9 @@ const migrationNames = [
   "20260820100000_add_tarot_sessions",
   "20260820120000_product_v2_visual_profile",
   "20260820130000_knowledge_storage_v1",
-  "20260820140000_knowledge_embeddings"
+  "20260820140000_knowledge_embeddings",
+  "20260821100000_add_design_decision_traces",
+  "20260821120000_add_knowledge_usage_events"
 ];
 
 function nextRevision(

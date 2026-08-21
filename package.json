@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "node scripts/workspace-gate.mjs build",
+    "closed-loop": "tsx scripts/closed-loop.mts",
     "db:down": "docker compose down",
     "db:generate": "pnpm --filter @mystcrag/database db:generate",
     "db:migrate": "pnpm --filter @mystcrag/database db:migrate",

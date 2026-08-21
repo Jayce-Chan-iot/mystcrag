@@ -9,6 +9,7 @@ import {
   DesignDecisionTraceRepository,
   InventoryRepository as DatabaseInventoryRepository,
   KnowledgeRepository as DatabaseKnowledgeRepository,
+  KnowledgeUsageEventRepository,
   OrderRepository as DatabaseOrderRepository,
   PricingRepository as DatabasePricingRepository,
   ProductRepository as DatabaseProductRepository,
@@ -18,6 +19,7 @@ import { KnowledgeCore } from "@mystcrag/knowledge-core";
 import type { DesignV1 } from "@mystcrag/design-contract";
 
 import { DomainApiError } from "../../contracts/api-error.js";
+import { knowledgeUsageRecorderFromRepository } from "../../observability/knowledge-usage-recorder.js";
 import { AiRecommendationDesignAdapter } from "./ai-recommendation-design.adapter.js";
 import { DesignApplicationService } from "./design-api.service.js";
 import { RecommendationApplicationService } from "./recommendation.service.js";
@@ -96,7 +98,8 @@ export function createDesignApplicationService(client: DatabaseClient) {
     inventory: new DatabaseInventoryRepository(client),
     publications: new DatabasePublicationRepository(client),
     orders: new DatabaseOrderRepository(client),
-    generator: new AiRecommendationDesignAdapter()
+    generator: new AiRecommendationDesignAdapter(),
+    usage: knowledgeUsageRecorderFromRepository(new KnowledgeUsageEventRepository(client))
   });
 }
 
@@ -113,6 +116,7 @@ export function createRecommendationApplicationService(client: DatabaseClient) {
     inventory,
     rules: knowledge,
     traces: new DesignDecisionTraceRepository(client),
-    stock: inventory
+    stock: inventory,
+    usage: knowledgeUsageRecorderFromRepository(new KnowledgeUsageEventRepository(client))
   });
 }

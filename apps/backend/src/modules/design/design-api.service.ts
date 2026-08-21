@@ -33,6 +33,12 @@ import {
 import { z } from "zod";
 
 import { DomainApiError } from "../../contracts/api-error.js";
+import {
+  NOOP_KNOWLEDGE_USAGE_RECORDER,
+  catalogVersionOfRows,
+  type KnowledgeUsageEvent,
+  type KnowledgeUsageRecorder
+} from "../../observability/knowledge-usage-recorder.js";
 
 export type CatalogProduct = {
   id: string;
@@ -232,6 +238,7 @@ export type DesignApplicationDependencies = {
   publications: PublicationStore;
   orders: OrderStore;
   generator: DesignGenerationAdapter;
+  usage?: KnowledgeUsageRecorder;
   now?: () => Date;
   createId?: (prefix: string) => string;
 };
@@ -726,11 +733,13 @@ export class DesignApplicationService implements DesignApiService {
   private readonly generator: DesignGenerationAdapter;
   private readonly now: () => Date;
   private readonly createId: (prefix: string) => string;
+  private readonly usage: KnowledgeUsageRecorder;
 
   constructor(private readonly dependencies: DesignApplicationDependencies) {
     this.generator = dependencies.generator;
     this.now = dependencies.now ?? (() => new Date());
     this.createId = dependencies.createId ?? ((prefix) => `${prefix}-${randomUUID()}`);
+    this.usage = dependencies.usage ?? NOOP_KNOWLEDGE_USAGE_RECORDER;
   }
 
   async generate(
@@ -792,6 +801,14 @@ export class DesignApplicationService implements DesignApiService {
     await this.dependencies.inventory.validateAvailability(quantitiesByProduct(priced));
     try {
       const persisted = await this.dependencies.designs.createDesign(input.actorId, priced);
+      await this.usage.record([
+        this.designCreatedUsageEvent({
+          actorId: input.actorId,
+          design: persisted.snapshot,
+          source: input.designMode === "TAROT_GUIDED" ? "tarot" : "generate",
+          productCatalogVersion: catalogVersionOfRows(catalog)
+        })
+      ]);
       return {
         requestId: input.request.requestId,
         design: toPublicDesign(persisted.snapshot),
@@ -812,6 +829,36 @@ export class DesignApplicationService implements DesignApiService {
         warnings: []
       };
     }
+  }
+
+  private designCreatedUsageEvent(input: {
+    actorId: string;
+    design: DesignV1;
+    source: "generate" | "tarot";
+    productCatalogVersion?: string;
+  }): KnowledgeUsageEvent {
+    return {
+      eventType: "design.created",
+      actorId: input.actorId,
+      designId: input.design.designId,
+      revisionNumber: input.design.revision,
+      knowledgeVersion: input.design.provenance.knowledgeBaseVersion,
+      ...(input.productCatalogVersion === undefined
+        ? {}
+        : { productCatalogVersion: input.productCatalogVersion }),
+      payload: {
+        source: input.source,
+        designMode: input.design.designMode,
+        beadCount: input.design.beads.length,
+        totalPriceMinor: input.design.pricing.totalPriceMinor
+      }
+    };
+  }
+
+  private async currentCatalogVersion(currency: "CNY" | "TWD"): Promise<string> {
+    return catalogVersionOfRows(
+      await this.dependencies.catalog.listActiveCatalogProducts(currency)
+    );
   }
 
   async update(actorId: string, request: UpdateDesignRequest): Promise<UpdateDesignResponse> {
@@ -838,6 +885,23 @@ export class DesignApplicationService implements DesignApiService {
       next,
       request.operations.map(({ operation }) => operation).join(",")
     );
+    await this.usage.record([
+      {
+        eventType: "design.updated",
+        actorId,
+        designId: request.designId,
+        revisionNumber: persisted.currentRevision,
+        knowledgeVersion: persisted.snapshot.provenance.knowledgeBaseVersion,
+        productCatalogVersion: await this.currentCatalogVersion(next.currency),
+        payload: {
+          requestId: request.requestId,
+          operationTypes: request.operations.map(({ operation }) => operation),
+          previousRevision: request.expectedRevision,
+          beadCount: persisted.snapshot.beads.length,
+          totalPriceMinor: persisted.snapshot.pricing.totalPriceMinor
+        }
+      }
+    ]);
     return { requestId: request.requestId, design: toPublicDesign(persisted.snapshot), warnings: [] };
   }
 
@@ -889,6 +953,21 @@ export class DesignApplicationService implements DesignApiService {
       validated.designId,
       validated.revision
     );
+    await this.usage.record([
+      {
+        eventType: "design.saved",
+        actorId,
+        designId: validated.designId,
+        revisionNumber: validated.revision,
+        knowledgeVersion: saved.snapshot.provenance.knowledgeBaseVersion,
+        productCatalogVersion: await this.currentCatalogVersion(validated.currency),
+        payload: {
+          requestId: request.requestId,
+          designMode: saved.snapshot.designMode,
+          totalPriceMinor: saved.snapshot.pricing.totalPriceMinor
+        }
+      }
+    ]);
     return {
       requestId: request.requestId,
       design: toPublicDesign(saved.snapshot),

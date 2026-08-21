@@ -39,6 +39,12 @@ import { catalogFeasibilitySnapshotOf } from "@mystcrag/knowledge-core";
 
 import { DomainApiError } from "../../contracts/api-error.js";
 import {
+  NOOP_KNOWLEDGE_USAGE_RECORDER,
+  ruleFiredEvents,
+  type KnowledgeUsageEvent,
+  type KnowledgeUsageRecorder
+} from "../../observability/knowledge-usage-recorder.js";
+import {
   hasSameCandidateAuthority,
   quantitiesByProduct,
   rebuildDerived,
@@ -80,6 +86,7 @@ export type RecommendationApplicationDependencies = {
   rules: ActiveRuleCompiler;
   traces: DecisionTraceStore;
   stock: StockSnapshotStore;
+  usage?: KnowledgeUsageRecorder;
   now?: () => Date;
   createId?: (prefix: string) => string;
 };
@@ -157,10 +164,12 @@ function accentNamesOf(
 export class RecommendationApplicationService implements RecommendationApiService {
   private readonly now: () => Date;
   private readonly createId: (prefix: string) => string;
+  private readonly usage: KnowledgeUsageRecorder;
 
   constructor(private readonly dependencies: RecommendationApplicationDependencies) {
     this.now = dependencies.now ?? (() => new Date());
     this.createId = dependencies.createId ?? ((prefix) => `${prefix}-${randomUUID()}`);
+    this.usage = dependencies.usage ?? NOOP_KNOWLEDGE_USAGE_RECORDER;
   }
 
   private async compileRules(
@@ -206,6 +215,16 @@ export class RecommendationApplicationService implements RecommendationApiServic
     );
     const products = toContractCatalogMaterials(catalogRows);
     if (products.length === 0) {
+      await this.usage.record([
+        this.recommendationServedEvent({
+          actorId,
+          request,
+          context,
+          knowledgeVersion: undefined,
+          productCatalogVersion: undefined,
+          candidates: []
+        })
+      ]);
       return {
         requestId: request.requestId,
         candidates: [],
@@ -213,11 +232,8 @@ export class RecommendationApplicationService implements RecommendationApiServic
       };
     }
 
-    const ruleSet = await this.compileRules(
-      context,
-      catalogFeasibilitySnapshotOf(products),
-      true
-    );
+    const snapshot = catalogFeasibilitySnapshotOf(products);
+    const ruleSet = await this.compileRules(context, snapshot, true);
     const stock = await this.loadStock(products.map((product) => product.beadProductId));
     const timestamp = this.now().toISOString();
 
@@ -230,6 +246,16 @@ export class RecommendationApplicationService implements RecommendationApiServic
       candidateCount: 3
     });
     if (engineCandidates.length === 0) {
+      await this.usage.record([
+        this.recommendationServedEvent({
+          actorId,
+          request,
+          context,
+          knowledgeVersion: ruleSet.knowledgeVersion,
+          productCatalogVersion: snapshot.productCatalogVersion,
+          candidates: []
+        })
+      ]);
       return {
         requestId: request.requestId,
         candidates: [],
@@ -243,6 +269,7 @@ export class RecommendationApplicationService implements RecommendationApiServic
     }
 
     const candidates: RecommendDesignResponse["candidates"] = [];
+    const usageEvents: KnowledgeUsageEvent[] = [];
     for (const candidate of engineCandidates) {
       const persisted = await this.materializeCandidate({
         actorId,
@@ -259,9 +286,100 @@ export class RecommendationApplicationService implements RecommendationApiServic
         score: candidate.score,
         design: toPublicDesign(persisted.snapshot)
       });
+      usageEvents.push(
+        this.designCreatedEvent({
+          actorId,
+          design: persisted.snapshot,
+          source: "recommendation",
+          productCatalogVersion: snapshot.productCatalogVersion
+        }),
+        ...ruleFiredEvents({
+          ruleIds: candidate.trace.activeRuleIds,
+          actorId,
+          designId: persisted.snapshot.designId,
+          revisionNumber: 1,
+          knowledgeVersion: ruleSet.knowledgeVersion,
+          productCatalogVersion: snapshot.productCatalogVersion,
+          source: "recommend"
+        })
+      );
     }
+    usageEvents.push(
+      this.recommendationServedEvent({
+        actorId,
+        request,
+        context,
+        knowledgeVersion: ruleSet.knowledgeVersion,
+        productCatalogVersion: snapshot.productCatalogVersion,
+        candidates: candidates.map((candidate) => ({
+          designId: candidate.designId,
+          layoutStrategy: candidate.layoutStrategy,
+          overallScore: candidate.score.overallScore
+        }))
+      })
+    );
+    await this.usage.record(usageEvents);
 
     return { requestId: request.requestId, candidates, warnings: [] };
+  }
+
+  private recommendationServedEvent(input: {
+    actorId: string;
+    request: RecommendDesignRequest;
+    context: RecommendationContext;
+    knowledgeVersion?: string;
+    productCatalogVersion?: string;
+    candidates: Array<{
+      designId: string;
+      layoutStrategy: LayoutStrategy;
+      overallScore: number;
+    }>;
+  }): KnowledgeUsageEvent {
+    return {
+      eventType: "recommendation.served",
+      actorId: input.actorId,
+      knowledgeVersion: input.knowledgeVersion,
+      productCatalogVersion: input.productCatalogVersion,
+      payload: {
+        requestId: input.request.requestId,
+        source: "recommend",
+        currency: input.context.currency,
+        locale: input.context.locale,
+        wristCircumferenceMm: input.context.hardConstraints.wristCircumferenceMm,
+        ...(input.context.hardConstraints.maxBudgetMinor === undefined
+          ? {}
+          : { maxBudgetMinor: input.context.hardConstraints.maxBudgetMinor }),
+        emotionTags: [...input.context.preferences.emotionTags],
+        styleTags: [...input.context.preferences.styleTags],
+        colorTags: [...input.context.preferences.colorPreferences],
+        candidateCount: input.candidates.length,
+        candidates: input.candidates
+      }
+    };
+  }
+
+  private designCreatedEvent(input: {
+    actorId: string;
+    design: DesignV1;
+    source: "recommendation";
+    productCatalogVersion?: string;
+  }): KnowledgeUsageEvent {
+    return {
+      eventType: "design.created",
+      actorId: input.actorId,
+      designId: input.design.designId,
+      revisionNumber: input.design.revision,
+      knowledgeVersion: input.design.provenance.knowledgeBaseVersion,
+      ...(input.productCatalogVersion === undefined
+        ? {}
+        : { productCatalogVersion: input.productCatalogVersion }),
+      payload: {
+        source: input.source,
+        designMode: input.design.designMode,
+        beadCount: input.design.beads.length,
+        totalPriceMinor: input.design.pricing.totalPriceMinor
+      }
+    };
   }
 
   private async materializeCandidate(input: {
@@ -481,7 +599,8 @@ export class RecommendationApplicationService implements RecommendationApiServic
     const context = this.contextFromDesign(design);
     const catalogRows = await this.dependencies.catalog.listActiveCatalogProducts(design.currency);
     const products = toContractCatalogMaterials(catalogRows);
-    const ruleSet = await this.compileRules(context, catalogFeasibilitySnapshotOf(products), true);
+    const snapshot = catalogFeasibilitySnapshotOf(products);
+    const ruleSet = await this.compileRules(context, snapshot, true);
     const stock = await this.loadStock(products.map((product) => product.beadProductId));
 
     const draft = {
@@ -515,6 +634,34 @@ export class RecommendationApplicationService implements RecommendationApiServic
     for (const violation of evaluation.violations) {
       warnings.push({ code: violation.code, message: violation.message });
     }
+
+    await this.usage.record([
+      {
+        eventType: "design.evaluated",
+        actorId,
+        designId: request.designId,
+        revisionNumber: design.revision,
+        knowledgeVersion: ruleSet.knowledgeVersion,
+        productCatalogVersion: snapshot.productCatalogVersion,
+        payload: {
+          requestId: request.requestId,
+          layoutStrategy,
+          scores: evaluation.scores,
+          softRuleScore: round2(evaluation.softRuleScore),
+          firedRuleIds: [...evaluation.firedRuleIds],
+          violationCodes: evaluation.violations.map((violation) => violation.code)
+        }
+      },
+      ...ruleFiredEvents({
+        ruleIds: evaluation.firedRuleIds,
+        actorId,
+        designId: request.designId,
+        revisionNumber: design.revision,
+        knowledgeVersion: ruleSet.knowledgeVersion,
+        productCatalogVersion: snapshot.productCatalogVersion,
+        source: "evaluate"
+      })
+    ]);
 
     return {
       requestId: request.requestId,
@@ -677,7 +824,8 @@ export class RecommendationApplicationService implements RecommendationApiServic
 
     const catalogRows = await this.dependencies.catalog.listActiveCatalogProducts(current.currency);
     const products = toContractCatalogMaterials(catalogRows);
-    const ruleSet = await this.compileRules(context, catalogFeasibilitySnapshotOf(products), true);
+    const snapshot = catalogFeasibilitySnapshotOf(products);
+    const ruleSet = await this.compileRules(context, snapshot, true);
     const stock = await this.loadStock(products.map((product) => product.beadProductId));
     const timestamp = this.now().toISOString();
 
@@ -732,6 +880,34 @@ export class RecommendationApplicationService implements RecommendationApiServic
         ? `保留 ${request.lockedComponentIds.length} 个锁定组件，共 ${priced.beads.length} 颗珠子。`
         : `${request.lockedComponentIds.length} locked components preserved; ${priced.beads.length} beads in total.`
     ];
+
+    await this.usage.record([
+      {
+        eventType: "design.optimized",
+        actorId,
+        designId: request.designId,
+        revisionNumber: stored.currentRevision,
+        knowledgeVersion: ruleSet.knowledgeVersion,
+        productCatalogVersion: snapshot.productCatalogVersion,
+        payload: {
+          requestId: request.requestId,
+          layoutStrategy: optimized.layoutStrategy,
+          lockedComponentIds: [...request.lockedComponentIds],
+          operationTypes: optimized.operations.map((operation) => operation.operation),
+          scores: evaluation.scores,
+          firedRuleIds: [...evaluation.firedRuleIds]
+        }
+      },
+      ...ruleFiredEvents({
+        ruleIds: evaluation.firedRuleIds,
+        actorId,
+        designId: request.designId,
+        revisionNumber: stored.currentRevision,
+        knowledgeVersion: ruleSet.knowledgeVersion,
+        productCatalogVersion: snapshot.productCatalogVersion,
+        source: "optimize"
+      })
+    ]);
 
     return {
       requestId: request.requestId,

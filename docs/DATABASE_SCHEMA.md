@@ -1,6 +1,6 @@
 # Database Schema
 
-The executable source is `packages/database/prisma/schema.prisma`; the reviewed baseline is `20260721140000_init_mystcrag_persistence_v1`, with additive order-idempotency, `20260820100000_add_tarot_sessions`, and `20260821100000_add_design_decision_traces` migrations applied afterward. PostgreSQL tables use snake_case and Prisma fields use camelCase.
+The executable source is `packages/database/prisma/schema.prisma`; the reviewed baseline is `20260721140000_init_mystcrag_persistence_v1`, with additive order-idempotency, `20260820100000_add_tarot_sessions`, `20260821100000_add_design_decision_traces`, and `20260821120000_add_knowledge_usage_events` migrations applied afterward. PostgreSQL tables use snake_case and Prisma fields use camelCase.
 
 ## Transactional model
 
@@ -13,6 +13,7 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 - `InventorySnapshot` and `PricingRule` are versioned inputs to order validation and price recalculation.
 - Knowledge storage (migration `20260820130000_knowledge_storage_v1`): `KnowledgeSource` (registry with authority score and allowed domains, disabled by default), `KnowledgeDocument` (content-hash deduplicated with normalized URL and an English `tsvector` full-text index over title plus clean content), `KnowledgeRule` (mandatory provenance via source FK and `sourceRefs` JSON, unique rule fingerprint, eight-state `KnowledgeStatus` lifecycle), and `KnowledgeVersion` (DRAFT → PUBLISHED → RETIRED). Production retrieval returns only `APPROVED` rules attached to the current `PUBLISHED` version; rejected, conflicted, superseded, or unversioned rules never reach the decision pipeline.
 - `TarotSession` is an owner-scoped, revisioned draw aggregate. It stores canonical private engine state separately from strict contract-safe draw and recommendation snapshots. `TarotDesignRecommendation` links exactly three ranked, distinct designs without duplicating design snapshots.
+- `KnowledgeUsageEvent` (migration `20260821120000_add_knowledge_usage_events`) is the collect-only observability log (spec section 11, EPIC 12). Rows are appended after `POST /api/design/recommend|evaluate|optimize`, design generate/update/save, and Tarot recommendation/session-save flows. Each row anchors optional `actorId`, `designId`, `revisionNumber`, `knowledgeVersion`, and `productCatalogVersion` plus a typed `payload` (`recommendation.served`, `rule.fired`, `design.created|updated|saved|evaluated|optimized`, `tarot.session_saved`). A trigger rejects updates and deletes; the restrictive design FK keeps event evidence stable. No read API ships with the events — analysis is offline SQL.
 
 ## Guardrails
 

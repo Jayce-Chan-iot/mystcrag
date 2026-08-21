@@ -310,6 +310,42 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 
 ---
 
+### DEC-KNOWLEDGE-SYSTEM-008 — Collect-only knowledge usage events on one append-only table (EPIC 12)
+
+- Date: 2026-08-21
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `packages/database` (`KnowledgeUsageEvent` model + migration `20260821120000_add_knowledge_usage_events`, `KnowledgeUsageEventRepository`), `apps/backend/src/observability/knowledge-usage-recorder.ts` (new), `apps/backend` design/recommendation/Tarot services (event emission), `tests/architecture.test.mjs` (observability boundary), `docker-compose.yml` + `.github/workflows/postgres-verification.yml` (pgvector image switch per spec §7.2)
+- Decision: observability is a single append-only `knowledge_usage_events` table with a closed event vocabulary — `recommendation.served`, `rule.fired`, `design.created|updated|saved|evaluated|optimized`, `tarot.session_saved`. Each row anchors optional actor/design/revision plus `knowledgeVersion` and the content-addressed `productCatalogVersion` and stores a typed JSONB payload. Emission happens inside the existing Backend services through an optional `KnowledgeUsageRecorder` port (NOOP default; the composition root adapts `KnowledgeUsageEventRepository`); `rule.fired` events are emitted per fired rule from recommend/evaluate/optimize so rule usage counts aggregate directly, while `GET /api/materials/:id/suggest` stays uninstrumented to keep the cacheable drag path at zero write amplification. A database trigger rejects updates and deletes, mirroring `design_decision_traces`. No read API ships with EPIC 12 — analysis is offline SQL per the task book's collect-only wording.
+- Rationale: task book §49–58/EPIC 12 asks for rule usage counts, recommendation outcomes, and apply/edit/save lifecycle signals as feedback data only; one table with a closed vocabulary keeps the schema simple, the payloads self-describing, and later analytics a pure SQL concern. Optional port wiring keeps every existing service test green without a database.
+- Rejected alternatives: per-event tables or an event-sourcing stream (schema sprawl for collect-only data); counters on `knowledge_rules` (mutable aggregation state, races under concurrency, loses design/actor context); instrumenting the MCP server (agent-facing read projections, not user behavior); emitting `rule.fired` from `suggest` (multiplies writes by ~8 partners per keystroke for near-zero analytical value).
+- Contract impact: None. `@mystcrag/design-contract` is unchanged; event shapes are Backend-internal.
+- Database impact: Additive migration `20260821120000_add_knowledge_usage_events` (table + immutability trigger + `(event_type, created_at)`/`(design_id, created_at)` indexes); `DATABASE_SCHEMA.md` updated.
+- API impact: None. All request/response DTOs are unchanged; events are a write-only side effect. `API_SPECIFICATION.md` documents the behavior.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-21
+- Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 12 observability commit.
+
+---
+
+### DEC-KNOWLEDGE-SYSTEM-009 — Tarot stock-capacity gate and the closed-loop E2E driver (EPIC 12 close-out)
+
+- Date: 2026-08-21
+- Proposed by Agent: Backend Agent
+- Affected modules: `apps/backend/src/modules/tarot` (`TarotStockPort`, wrap-capacity sellable filter, event version anchoring), `apps/backend/src/modules/design` (`design-api.service.ts` catalog-version anchoring on generate/update/save), `apps/backend/src/observability/knowledge-usage-recorder.ts` (`catalogVersionOfRows` shared helper), `apps/backend/src/index.ts` (stock port wiring), `scripts/closed-loop.mts` (E2E driver)
+- Decision: Tarot material selection now consumes a `TarotStockPort` (`InventoryRepository.getAvailableQuantities`) and filters candidates to materials whose available stock can complete the largest supported wrist on their own — `ceil(MAX_COMPLETION_MM / diameterMm)` beads. Because direction patterns repeat three or four materials around the wrist, requiring single-material wrap capacity guarantees every generated sequence passes downstream `validateAvailability` instead of failing mid-generation with `INVENTORY_CHANGED` on zero-stock or low-stock rows (the seed intentionally marks six SKUs out-of-stock and two low-stock). Knowledge usage events from every lifecycle path now anchor both `knowledgeVersion` and the content-addressed `productCatalogVersion`: recommendation candidates reuse the compiled catalog snapshot, while design generate/update/save and Tarot flows compute the version through one shared `catalogVersionOfRows` helper (shared mapper + hasher in the observability module), keeping design-module files free of direct `@mystcrag/database` imports per the architecture boundary test. The closed loop is verified by `scripts/closed-loop.mts`, a driver that boots nothing itself and walks the real HTTP + MCP + PostgreSQL surface: preflight, the design journey (recommend → trace → evaluate → optimize → update → save → order), the Tarot journey (create → select → reveal → recommend → save), MCP tool consistency against the database (rule counts, published-version anchoring, deterministic `evaluate_design` with Δ0.00 vs the backend), and observability validation (per-type event counts, actor anchoring, version completeness, immutability triggers). The driver truncates `knowledge_usage_events` at start so each run asserts its own events.
+- Rationale: the first closed-loop run failed exactly where unit fakes could not — the real seeded catalog contains deliberate stock holes, and the Tarot path selected a zero-stock SKU because sellability was previously a static catalog predicate. Wrap-capacity filtering is deterministic, needs no per-pattern quantity prediction, and degrades to the existing `INVENTORY_CHANGED` error when the catalog genuinely cannot field two materials. Version anchoring on every lifecycle event makes the collect-only table fully joinable to knowledge versions and catalog snapshots offline, closing the gap the first run exposed (18 rows missing `productCatalogVersion`).
+- Rejected alternatives: filtering only `stock > 0` (mirrors the design engine's hard filter but leaves low-stock rows that direction patterns over-consume, failing mid-generation); validating sufficiency after sequencing and retrying with more materials (nondeterministic retry surface for a collect-only epic); exempting lifecycle events from version anchoring (breaks offline joins for update/save analysis); per-service re-implementations of the catalog hash (architecture test forces one shared mapper).
+- Contract impact: None. `@mystcrag/design-contract` is unchanged.
+- Database impact: None. No schema change; observability rows simply carry the already-optional `productCatalogVersion`.
+- API impact: Behavioral only — `POST /api/tarot/sessions/:id/recommendations` skips materials below wrap capacity and returns `INVENTORY_CHANGED` when fewer than two qualify; documented in `API_SPECIFICATION.md`.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-21
+- Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 12 closed-loop commit (47/47 driver checks green; `pnpm validate` 15/15).
+
+---
+
 ## New decision template
 
 ### P3-NNN — Short decision title

@@ -1,6 +1,8 @@
 import { createApp } from "./app.js";
 import {
   DesignRepository,
+  InventoryRepository,
+  KnowledgeUsageEventRepository,
   ProductRepository,
   TarotSessionRepositoryImpl,
   createPrismaClient
@@ -8,6 +10,7 @@ import {
 import { NodeCryptoRandomSource } from "@mystcrag/tarot-engine";
 import { TarotCopyService } from "@mystcrag/ai-agent/tarot";
 import { createAuthProviderFromEnvironment } from "./auth/auth-provider.factory.js";
+import { knowledgeUsageRecorderFromRepository } from "./observability/knowledge-usage-recorder.js";
 import {
   createDesignApplicationService,
   createRecommendationApplicationService
@@ -47,9 +50,11 @@ const app = createApp({
         );
       }
     },
+    stock: new InventoryRepository(database),
     designGenerator: designApplicationService,
     copy: new TarotAiRecommendationCopyPort(new TarotCopyService()),
     questionEncryption: tarotQuestionEncryption,
+    usage: knowledgeUsageRecorderFromRepository(new KnowledgeUsageEventRepository(database)),
     preferences: {
       async getDesignPreferences() {
         return undefined;

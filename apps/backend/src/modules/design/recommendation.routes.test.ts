@@ -19,6 +19,7 @@ import {
   signTestAccessToken
 } from "../../auth/signed-test-auth-provider.js";
 import { DomainApiError } from "../../contracts/api-error.js";
+import type { KnowledgeUsageEvent } from "../../observability/knowledge-usage-recorder.js";
 import type { CatalogProduct } from "./design-api.service.js";
 import { RecommendationApplicationService } from "./recommendation.service.js";
 
@@ -163,6 +164,12 @@ function createHarness() {
   const catalogById = new Map(catalog.map((product) => [product.id, product]));
   const designsById = new Map<string, StoredDesign>();
   const tracesByKey = new Map<string, DesignDecisionTrace>();
+  const recordedUsageEvents: KnowledgeUsageEvent[] = [];
+  const usage = {
+    async record(events: readonly KnowledgeUsageEvent[]) {
+      recordedUsageEvents.push(...events.map((event) => ({ ...event })));
+    }
+  };
 
   const requireOwned = (owner: string, designId: string): StoredDesign => {
     const design = designsById.get(designId);
@@ -333,6 +340,7 @@ function createHarness() {
     rules,
     traces,
     stock,
+    usage,
     now: () => fixedNow
   });
 
@@ -342,7 +350,7 @@ function createHarness() {
     logger: false
   });
 
-  return { app, service, designsById, tracesByKey, catalog };
+  return { app, service, designsById, tracesByKey, catalog, recordedUsageEvents };
 }
 
 function requestHeaders(
@@ -606,4 +614,113 @@ test("public design projection hides internal pricing detail fields", async () =
   const publicDesign = toPublicDesign(harness.designsById.get(first.designId)!.snapshot);
   assert.equal(publicDesign.designId, first.design.designId);
   assert.deepEqual(publicDesign.beads.length, first.design.beads.length);
+});
+
+test("recommend, evaluate, and optimize record knowledge usage events", async () => {
+  const harness = createHarness();
+  const recommended = await harness.service.recommend(actorId, recommendBody);
+  const designId = recommended.candidates[0]!.designId;
+
+  const recommendEvents = [...harness.recordedUsageEvents];
+  const served = recommendEvents.filter(
+    (event) => event.eventType === "recommendation.served"
+  );
+  assert.equal(served.length, 1);
+  assert.equal(served[0]!.actorId, actorId);
+  assert.equal(served[0]!.payload.source, "recommend");
+  assert.equal(
+    (served[0]!.payload.candidateCount as number),
+    recommended.candidates.length
+  );
+  assert.deepEqual(
+    (served[0]!.payload.candidates as Array<{ designId: string }>).map(
+      (candidate) => candidate.designId
+    ),
+    recommended.candidates.map((candidate) => candidate.designId)
+  );
+
+  const created = recommendEvents.filter((event) => event.eventType === "design.created");
+  assert.equal(created.length, recommended.candidates.length);
+  assert.ok(
+    created.every(
+      (event) =>
+        event.actorId === actorId &&
+        event.revisionNumber === 1 &&
+        event.payload.source === "recommendation"
+    )
+  );
+
+  const ruleFiredFromRecommend = recommendEvents.filter(
+    (event) =>
+      event.eventType === "rule.fired" && event.payload.source === "recommend"
+  );
+  const expectedRuleFiredFromRecommend = recommended.candidates.flatMap((candidate) =>
+    (harness.tracesByKey.get(`${candidate.designId}#1`)?.activeRuleIds ?? []).map(
+      (ruleId) => `${candidate.designId}:${ruleId}`
+    )
+  );
+  assert.equal(ruleFiredFromRecommend.length, expectedRuleFiredFromRecommend.length);
+  assert.deepEqual(
+    ruleFiredFromRecommend
+      .map((event) => `${event.designId}:${event.payload.ruleId}`)
+      .sort(),
+    [...expectedRuleFiredFromRecommend].sort()
+  );
+
+  harness.recordedUsageEvents.length = 0;
+  const evaluated = await harness.service.evaluate(actorId, {
+    requestId: "request-evaluate-usage",
+    designId
+  });
+  assert.equal(evaluated.designId, designId);
+
+  const evaluateEvents = [...harness.recordedUsageEvents];
+  const evaluatedEvent = evaluateEvents.find(
+    (event) => event.eventType === "design.evaluated"
+  );
+  assert.ok(evaluatedEvent, "design.evaluated event is recorded");
+  assert.equal(evaluatedEvent!.designId, designId);
+  assert.equal(evaluatedEvent!.revisionNumber, 1);
+  const evaluatedFiredRuleIds = evaluatedEvent!.payload.firedRuleIds as string[];
+  assert.ok(Array.isArray(evaluatedFiredRuleIds));
+  const ruleFiredFromEvaluate = evaluateEvents.filter(
+    (event) => event.eventType === "rule.fired" && event.payload.source === "evaluate"
+  );
+  assert.equal(
+    ruleFiredFromEvaluate.length,
+    evaluatedFiredRuleIds.length
+  );
+  assert.deepEqual(
+    ruleFiredFromEvaluate.map((event) => event.payload.ruleId as string).sort(),
+    [...evaluatedFiredRuleIds].sort()
+  );
+
+  harness.recordedUsageEvents.length = 0;
+  const optimized = await harness.service.optimize(actorId, {
+    requestId: "request-optimize-usage",
+    designId,
+    expectedRevision: 1,
+    lockedComponentIds: []
+  });
+
+  const optimizeEvents = [...harness.recordedUsageEvents];
+  const optimizedEvent = optimizeEvents.find(
+    (event) => event.eventType === "design.optimized"
+  );
+  assert.ok(optimizedEvent, "design.optimized event is recorded");
+  assert.equal(optimizedEvent!.designId, designId);
+  assert.equal(optimizedEvent!.revisionNumber, 1);
+  assert.deepEqual(
+    optimizedEvent!.payload.layoutStrategy as string,
+    optimized.layoutStrategy
+  );
+  const optimizedFiredRuleIds = optimizedEvent!.payload.firedRuleIds as string[];
+  const ruleFiredFromOptimize = optimizeEvents.filter(
+    (event) => event.eventType === "rule.fired" && event.payload.source === "optimize"
+  );
+  assert.equal(ruleFiredFromOptimize.length, optimizedFiredRuleIds.length);
+  assert.deepEqual(
+    ruleFiredFromOptimize.map((event) => event.payload.ruleId as string).sort(),
+    [...optimizedFiredRuleIds].sort()
+  );
 });

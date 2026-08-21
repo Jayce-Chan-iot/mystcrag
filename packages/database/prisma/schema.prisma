@@ -182,6 +182,7 @@ model Design {
   publications         DesignPublication[]
   decisionTraces       DesignDecisionTrace[]
   tarotRecommendations TarotDesignRecommendation[]
+  usageEvents          KnowledgeUsageEvent[]
 
   @@index([ownerId, updatedAt])
   @@index([status, deletedAt])
@@ -198,6 +199,23 @@ model DesignDecisionTrace {
 
   @@unique([designId, revisionNumber])
   @@map("design_decision_traces")
+}
+
+model KnowledgeUsageEvent {
+  id                    String   @id @default(cuid())
+  eventType             String   @map("event_type")
+  actorId               String?  @map("actor_id")
+  designId              String?  @map("design_id")
+  revisionNumber        Int?     @map("revision_number")
+  knowledgeVersion      String?  @map("knowledge_version")
+  productCatalogVersion String?  @map("product_catalog_version")
+  payload               Json
+  createdAt             DateTime @default(now()) @map("created_at")
+  design                Design?  @relation(fields: [designId], references: [id], onDelete: Restrict)
+
+  @@index([eventType, createdAt])
+  @@index([designId, createdAt])
+  @@map("knowledge_usage_events")
 }
 
 model DesignRevision {

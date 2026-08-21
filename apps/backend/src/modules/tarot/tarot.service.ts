@@ -29,6 +29,12 @@ import {
   type TarotDrawSnapshot,
   type TarotSessionRepository
 } from "@mystcrag/database";
+
+import {
+  NOOP_KNOWLEDGE_USAGE_RECORDER,
+  catalogVersionOfRows,
+  type KnowledgeUsageRecorder
+} from "../../observability/knowledge-usage-recorder.js";
 import {
   TAROT_DESIGN_RULE_VERSION,
   createPrivateDrawState,
@@ -59,7 +65,8 @@ import type {
   TarotDesignReader,
   TarotPreferencePort,
   TarotQuestionEncryptionPort,
-  TarotRecommendationCopyPort
+  TarotRecommendationCopyPort,
+  TarotStockPort
 } from "./tarot.types.js";
 
 const TAROT_DECK_VERSION = "rws-major-minor-v1";
@@ -95,7 +102,18 @@ const deterministicDesignId = (
   return `tarot-design-${digest}`;
 };
 
-const isSellableMaterial = (product: CatalogMaterialProduct): boolean =>
+/**
+ * Beads a single material needs to complete the largest supported wrist on
+ * its own. Requiring this much stock guarantees every direction pattern
+ * (which repeats materials) passes downstream inventory validation.
+ */
+const wrapCapacityOf = (diameterMm: number): number =>
+  Math.ceil(MAX_COMPLETION_MM / diameterMm);
+
+const isSellableMaterial = (
+  product: CatalogMaterialProduct,
+  stock?: ReadonlyMap<string, number>
+): boolean =>
   product.active &&
   product.productType === "MATERIAL" &&
   product.colorTags.length > 0 &&
@@ -104,7 +122,9 @@ const isSellableMaterial = (product: CatalogMaterialProduct): boolean =>
   typeof product.modelAssetKey === "string" &&
   product.modelAssetKey.length > 0 &&
   typeof product.textureAssetKey === "string" &&
-  product.textureAssetKey.length > 0;
+  product.textureAssetKey.length > 0 &&
+  (stock === undefined ||
+    (stock.get(product.id) ?? 0) >= wrapCapacityOf(product.diameterMm));
 
 function sequenceAroundWrist(
   pattern: readonly CatalogMaterialProduct[],
@@ -169,7 +189,7 @@ function directionPatterns(
   if (!primary || !secondary) {
     throw new DomainApiError(
       "INVENTORY_CHANGED",
-      "At least two active materials are required for distinct Tarot directions."
+      "At least two available materials are required for distinct Tarot directions."
     );
   }
   const accent = materials[2] ?? secondary;
@@ -406,19 +426,25 @@ function conflictFromEngine(error: unknown): never {
 }
 
 export class TarotService implements TarotApiService {
+  private readonly usage: KnowledgeUsageRecorder;
+
   constructor(
     private readonly dependencies: {
       readonly repository: TarotSessionRepository;
       readonly random: RandomSource;
       readonly designReader?: TarotDesignReader;
       readonly catalog?: TarotCatalogPort;
+      readonly stock?: TarotStockPort;
       readonly designGenerator?: TarotDesignGenerator;
       readonly copy?: TarotRecommendationCopyPort;
       readonly questionEncryption?: TarotQuestionEncryptionPort;
       readonly preferences?: TarotPreferencePort;
+      readonly usage?: KnowledgeUsageRecorder;
       readonly now?: () => Date;
     }
-  ) {}
+  ) {
+    this.usage = dependencies.usage ?? NOOP_KNOWLEDGE_USAGE_RECORDER;
+  }
 
   async create(
     actorId: string,
@@ -655,7 +681,14 @@ export class TarotService implements TarotApiService {
       await this.dependencies.preferences?.getDesignPreferences(actorId)
     );
     const catalog = await this.dependencies.catalog.listActiveCatalogProducts(input.currency);
-    const sellable = catalog.filter(isSellableMaterial);
+    const stock = this.dependencies.stock
+      ? new Map(
+          await this.dependencies.stock.getAvailableQuantities(
+            catalog.map((product) => product.id)
+          )
+        )
+      : undefined;
+    const sellable = catalog.filter((product) => isSellableMaterial(product, stock));
     const byId = new Map(sellable.map((product) => [product.id, product]));
     const scored = scoreTarotMaterials({
       signals,
@@ -815,6 +848,22 @@ export class TarotService implements TarotApiService {
       }
       saved = concurrent;
     }
+    await this.usage.record([
+      {
+        eventType: "recommendation.served",
+        actorId,
+        knowledgeVersion: current.ruleVersion,
+        productCatalogVersion: catalogVersionOfRows(catalog),
+        payload: {
+          requestId: input.requestId,
+          source: "tarot",
+          sessionId,
+          theme: current.theme,
+          spreadType: current.spreadType,
+          candidates: saved.recommendations.map(({ rank, designId }) => ({ rank, designId }))
+        }
+      }
+    ]);
     return mapRecommendationsTarotResponse(
       actorId,
       input.requestId,
@@ -836,6 +885,21 @@ export class TarotService implements TarotApiService {
         ? {}
         : { selectedDesignId: input.selectedDesignId })
     });
+    await this.usage.record([
+      {
+        eventType: "tarot.session_saved",
+        actorId,
+        ...(record.selectedDesignId === null ? {} : { designId: record.selectedDesignId }),
+        knowledgeVersion: record.ruleVersion,
+        payload: {
+          requestId: input.requestId,
+          sessionId,
+          ...(input.selectedDesignId === undefined
+            ? {}
+            : { selectedDesignId: input.selectedDesignId })
+        }
+      }
+    ]);
     return mapSaveTarotResponse(
       actorId,
       input.requestId,

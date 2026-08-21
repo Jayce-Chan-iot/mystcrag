@@ -14,6 +14,7 @@ import {
   signTestAccessToken
 } from "../../auth/signed-test-auth-provider.js";
 import { DomainApiError } from "../../contracts/api-error.js";
+import type { KnowledgeUsageEvent } from "../../observability/knowledge-usage-recorder.js";
 import { AiRecommendationDesignAdapter } from "./ai-recommendation-design.adapter.js";
 import {
   DesignApplicationService,
@@ -107,6 +108,7 @@ function createHarness(
   const current = new Map<string, PersistedDesign>();
   const revisionRows = new Map<string, PersistedDesignRevision[]>();
   const orderSnapshots: DesignV1[] = [];
+  const recordedUsageEvents: KnowledgeUsageEvent[] = [];
   let componentCounter = 0;
   let createAttempts = 0;
   let failUpdate = false;
@@ -358,6 +360,11 @@ function createHarness(
   const service = new DesignApplicationService({
     generator,
     designs,
+    usage: {
+      async record(events) {
+        recordedUsageEvents.push(...events.map((event) => ({ ...event })));
+      }
+    },
     catalog: {
       async getCatalogProducts(ids) {
         return catalog.filter((product) => ids.includes(product.id));
@@ -384,6 +391,7 @@ function createHarness(
     current,
     revisionRows,
     orderSnapshots,
+    recordedUsageEvents,
     seed,
     setFailUpdate(value: boolean) {
       failUpdate = value;
@@ -1019,4 +1027,59 @@ test("protected routes reject missing, invalid, expired, and wrong-audience cred
     assert.equal(response.body.includes("secret-token-value"), false, credentialCase.name);
   }
   await app.close();
+});
+
+test("generate, update, and save record knowledge usage lifecycle events", async () => {
+  const harness = createHarness();
+  const generated = await harness.service.generate(actorId, generateBody);
+  const createdEvents = harness.recordedUsageEvents.filter(
+    (event) => event.eventType === "design.created"
+  );
+  assert.equal(createdEvents.length, 1);
+  assert.equal(createdEvents[0]!.actorId, actorId);
+  assert.equal(createdEvents[0]!.designId, generated.design.designId);
+  assert.equal(createdEvents[0]!.revisionNumber, 1);
+  assert.equal(createdEvents[0]!.payload.source, "generate");
+  assert.equal(createdEvents[0]!.payload.designMode, "AI_GENERATED");
+
+  harness.recordedUsageEvents.length = 0;
+  const original = cloneDesign();
+  harness.seed(original);
+  await harness.service.update(actorId, {
+    requestId: "request-update-usage",
+    designId: original.designId,
+    expectedRevision: 1,
+    operations: [
+      {
+        operation: "MOVE_COMPONENT",
+        componentId: "bead-moonstone-1",
+        targetPositionIndex: 0
+      }
+    ]
+  });
+  const updatedEvent = harness.recordedUsageEvents.find(
+    (event) => event.eventType === "design.updated"
+  );
+  assert.ok(updatedEvent, "design.updated event is recorded");
+  assert.equal(updatedEvent!.actorId, actorId);
+  assert.equal(updatedEvent!.designId, original.designId);
+  assert.equal(updatedEvent!.revisionNumber, 2);
+  assert.deepEqual(updatedEvent!.payload.operationTypes, ["MOVE_COMPONENT"]);
+  assert.equal(updatedEvent!.payload.previousRevision, 1);
+
+  harness.recordedUsageEvents.length = 0;
+  const snapshot = harness.current.get(original.designId)!.snapshot;
+  const saved = await harness.service.save(actorId, {
+    requestId: "request-save-usage",
+    design: DesignV1Schema.parse(snapshot)
+  });
+  assert.equal(saved.design.revision, 2);
+  const savedEvent = harness.recordedUsageEvents.find(
+    (event) => event.eventType === "design.saved"
+  );
+  assert.ok(savedEvent, "design.saved event is recorded");
+  assert.equal(savedEvent!.actorId, actorId);
+  assert.equal(savedEvent!.designId, original.designId);
+  assert.equal(savedEvent!.revisionNumber, 2);
+  assert.equal(savedEvent!.payload.designMode, snapshot.designMode);
 });

@@ -10,6 +10,7 @@ export * from "./repositories/design-decision-trace.repository.js";
 export * from "./repositories/design-revision.repository.js";
 export * from "./repositories/inventory.repository.js";
 export * from "./repositories/knowledge.repository.js";
+export * from "./repositories/knowledge-usage-event.repository.js";
 export * from "./repositories/order.repository.js";
 export * from "./repositories/pricing.repository.js";
 export * from "./repositories/product.repository.js";
