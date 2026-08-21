@@ -24,6 +24,7 @@ const validDocument = {
   url: "https://books.example.com/color-theory/ch3",
   contentHash: "a".repeat(64),
   title: "第三章 邻近色与类似色",
+  contentText: "Adjacent hues on the color wheel share undertones...",
   fetchedAt: "2026-08-20T10:00:00+08:00",
   parser: "static-html-basic",
   language: "zh-CN"
@@ -104,7 +105,7 @@ test("knowledge domains must reference the controlled knowledge-domain taxonomy"
   assert.equal(KnowledgeRuleSchema.safeParse(wrongDomain).success, false);
 });
 
-test("documents validate url, content hash, and parser identity", () => {
+test("documents validate url, content hash, parser identity, and content text", () => {
   const badUrl = { ...validDocument, url: "not-a-url" };
   assert.equal(KnowledgeDocumentSchema.safeParse(badUrl).success, false);
 
@@ -114,6 +115,12 @@ test("documents validate url, content hash, and parser identity", () => {
   const missingParser = { ...validDocument } as { parser?: string };
   delete missingParser.parser;
   assert.equal(KnowledgeDocumentSchema.safeParse(missingParser).success, false);
+
+  const oversized = { ...validDocument, contentText: "x".repeat(200_001) };
+  assert.equal(KnowledgeDocumentSchema.safeParse(oversized).success, false);
+
+  const parsed = KnowledgeDocumentSchema.parse({ ...validDocument, contentText: undefined });
+  assert.equal(parsed.contentText, "");
 });
 
 test("sources validate score bounds, source types, and allowed domains", () => {

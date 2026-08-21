@@ -8,8 +8,9 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 - `DesignRevision` is append-only and unique by `(designId, revisionNumber)`. PostgreSQL triggers reject updates and deletes.
 - `DesignPublication` fixes community visibility and consent to a specific revision; unpublishing changes status/timestamp without deleting history.
 - `Order` stores a BIGINT minor-unit total and references a revision. Its nullable, unique `idempotencyKey` is populated for new order intents so concurrent retries for the same user and design revision resolve to one order; legacy rows remain readable. Its required `OrderDesignSnapshot` stores immutable design, pricing, and production JSON plus currency and pricing-rule version. Triggers reject snapshot updates/deletes and order deletes.
-- `MaterialProduct` and `AccessoryProduct` are sellable catalog records; `Crystal` remains knowledge data. Cost fields are server-only.
+- `MaterialProduct` and `AccessoryProduct` are sellable catalog records; `Crystal` remains knowledge data. Cost fields are server-only. Product V2 adds nullable `lengthAlongStringMm`, `holeDiameterMm`, `grade`, and taxonomy-validated `visualProfile` JSON to materials, and `lengthAlongStringMm`/`visualProfile` to accessories; old rows stay valid without them.
 - `InventorySnapshot` and `PricingRule` are versioned inputs to order validation and price recalculation.
+- Knowledge storage (migration `20260820130000_knowledge_storage_v1`): `KnowledgeSource` (registry with authority score and allowed domains, disabled by default), `KnowledgeDocument` (content-hash deduplicated with normalized URL and an English `tsvector` full-text index over title plus clean content), `KnowledgeRule` (mandatory provenance via source FK and `sourceRefs` JSON, unique rule fingerprint, eight-state `KnowledgeStatus` lifecycle), and `KnowledgeVersion` (DRAFT → PUBLISHED → RETIRED). Production retrieval returns only `APPROVED` rules attached to the current `PUBLISHED` version; rejected, conflicted, superseded, or unversioned rules never reach the decision pipeline.
 
 ## Guardrails
 
@@ -21,6 +22,6 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 
 ## Demo catalog baseline
 
-The local seed synchronizes 18 compliant crystal knowledge entries into 36 active material products: one independent CNY and one TWD SKU per crystal. The public material catalog reads bilingual names and color tags from `Crystal`, while price, render keys, sellable status, and currency remain product-specific. Cultural references remain design inspiration only and do not introduce medical or guaranteed-effect claims.
+The local seed synchronizes 20 compliant crystal knowledge entries into 96 active material products (6/8/10 mm variants per crystal, one independent CNY and one TWD SKU per size) plus CNY/TWD silver spacer and pendant accessories. Every material carries Product V2 backfill: string length (round beads equal diameter, faceted beads 1.05x), hole diameter, grade, and a taxonomy-derived visual profile. Inventory snapshots are append-only by `sourceVersion`; the current `seed-2026-08-v2` set deliberately marks six SKUs out of stock and two low stock so decision-engine tests exercise real availability constraints. The public material catalog reads bilingual names and color tags from `Crystal`, while price, render keys, sellable status, and currency remain product-specific. Cultural references remain design inspiration only and do not introduce medical or guaranteed-effect claims.
 
-See `PERSISTENCE_MODEL_V1.md` for the ERD, full lifecycle, constraints, and JSON boundaries.
+See `PERSISTENCE_MODEL_V1.md` for the ERD, full lifecycle, constraints, and JSON boundaries. Knowledge-system tables and lifecycle rules are specified in `KNOWLEDGE_SYSTEM_SPEC.md`.

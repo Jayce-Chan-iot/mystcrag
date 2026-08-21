@@ -65,6 +65,7 @@ export const KnowledgeDocumentSchema = z.strictObject({
     .string()
     .regex(/^[a-f0-9]{64}$/, "Expected a sha-256 hex content hash"),
   title: z.string().trim().min(1).max(300),
+  contentText: z.string().max(200_000).default(""),
   fetchedAt: IsoDateTimeSchema,
   parser: IdentifierSchema,
   language: LocaleSchema,

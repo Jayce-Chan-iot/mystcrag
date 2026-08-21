@@ -6,7 +6,8 @@ export type PersistenceErrorCode =
   | "COMPLIANCE_BLOCKED"
   | "CONSENT_REQUIRED"
   | "PRICE_CHANGED"
-  | "INVENTORY_CHANGED";
+  | "INVENTORY_CHANGED"
+  | "DUPLICATE_KNOWLEDGE";
 
 export class PersistenceError extends Error {
   constructor(

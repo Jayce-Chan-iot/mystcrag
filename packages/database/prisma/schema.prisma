@@ -70,6 +70,23 @@ enum DesignChangeType {
   AI_OPTIMIZED
 }
 
+enum KnowledgeStatus {
+  NEW
+  EXTRACTED
+  VALIDATED
+  NEEDS_REVIEW
+  APPROVED
+  REJECTED
+  CONFLICTED
+  SUPERSEDED
+}
+
+enum KnowledgeVersionStatus {
+  DRAFT
+  PUBLISHED
+  RETIRED
+}
+
 model User {
   id           String              @id @default(cuid())
   email        String?             @unique
@@ -304,4 +321,85 @@ model PricingRule {
   @@unique([version, currency])
   @@index([currency, active])
   @@map("pricing_rules")
+}
+
+model KnowledgeSource {
+  id                     String   @id
+  name                   String
+  sourceType             String   @map("source_type")
+  baseUrl                String?  @map("base_url")
+  enabled                Boolean  @default(false)
+  authorityScore         Float    @map("authority_score")
+  allowedKnowledgeDomains String[] @map("allowed_knowledge_domains")
+  crawlFrequency         String?  @map("crawl_frequency")
+  language               String
+  rateLimit              Json?    @map("rate_limit")
+  legalNote              String?  @map("legal_note")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+  documents              KnowledgeDocument[]
+  rules                  KnowledgeRule[]
+
+  @@index([enabled])
+  @@map("knowledge_sources")
+}
+
+model KnowledgeDocument {
+  id            String   @id
+  sourceId      String   @map("source_id")
+  url           String
+  urlNormalized String   @map("url_normalized")
+  contentHash   String   @unique @map("content_hash")
+  title         String
+  contentText   String   @map("content_text")
+  fetchedAt     DateTime @map("fetched_at")
+  parser        String
+  language      String
+  status        String   @default("FETCHED")
+  createdAt     DateTime @default(now()) @map("created_at")
+  source        KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+
+  @@index([sourceId])
+  @@index([sourceId, fetchedAt])
+  @@index([urlNormalized])
+  @@map("knowledge_documents")
+}
+
+model KnowledgeRule {
+  id                String            @id
+  sourceId          String            @map("source_id")
+  knowledgeType     String            @map("knowledge_type")
+  knowledgeDomain   String            @map("knowledge_domain")
+  subject           String
+  relation          String
+  payload           Json
+  conditions        Json              @default("{}")
+  confidence        Float
+  status            KnowledgeStatus   @default(NEW)
+  fingerprint       String            @unique
+  sourceRefs        Json              @map("source_refs")
+  version           Int               @default(1)
+  knowledgeVersionId String?          @map("knowledge_version_id")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+  source            KnowledgeSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  knowledgeVersion  KnowledgeVersion? @relation(fields: [knowledgeVersionId], references: [id], onDelete: Restrict)
+
+  @@index([status, knowledgeDomain])
+  @@index([knowledgeVersionId])
+  @@index([subject, relation])
+  @@map("knowledge_rules")
+}
+
+model KnowledgeVersion {
+  id          String                  @id
+  version     String                  @unique
+  status      KnowledgeVersionStatus  @default(DRAFT)
+  ruleCount   Int                     @default(0) @map("rule_count")
+  publishedAt DateTime?               @map("published_at")
+  createdAt   DateTime                @default(now()) @map("created_at")
+  rules       KnowledgeRule[]
+
+  @@index([status])
+  @@map("knowledge_versions")
 }

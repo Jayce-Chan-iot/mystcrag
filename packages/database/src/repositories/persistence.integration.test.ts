@@ -15,7 +15,8 @@ const databaseUrl = process.env.DATABASE_URL;
 const migrationNames = [
   "20260721140000_init_mystcrag_persistence_v1",
   "20260818120000_add_order_idempotency",
-  "20260820120000_product_v2_visual_profile"
+  "20260820120000_product_v2_visual_profile",
+  "20260820130000_knowledge_storage_v1"
 ];
 
 function nextRevision(
