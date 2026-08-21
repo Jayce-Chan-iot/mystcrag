@@ -7,8 +7,9 @@
   "scripts": {
     "build": "tsc --noEmit",
     "lint": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts",
+    "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
     "typecheck": "tsc --noEmit",
+    "review:cli": "tsx src/cli/index.ts",
     "bench:retrieval": "tsx benchmarks/retrieval.benchmark.ts"
   },
   "dependencies": {

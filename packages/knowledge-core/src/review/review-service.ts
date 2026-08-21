@@ -1,0 +1,262 @@
+import {
+  PersistenceError,
+  type DatabaseClient,
+  type KnowledgeRepository,
+  type StoredKnowledgeRule,
+  type StoredKnowledgeSource,
+  type StoredKnowledgeVersion
+} from "@mystcrag/database";
+
+import { KNOWLEDGE_DOCUMENT_FIXTURES, KNOWLEDGE_SOURCE_FIXTURES } from "../fixtures/knowledge-sources.js";
+import { KNOWLEDGE_RULE_FIXTURES } from "../fixtures/knowledge-rules.js";
+import {
+  classifyCandidate,
+  detectRuleConflicts,
+  validateKnowledgeRuleCandidate,
+  type KnowledgeConflictGroup,
+  type KnowledgeRuleValidation
+} from "./rules.js";
+
+export type ReviewPipelineSummary = {
+  extracted: number;
+  validated: number;
+  needsReview: number;
+  conflicted: number;
+};
+
+export type ReviewEvidence = {
+  source: {
+    id: string;
+    name: string;
+    sourceType: StoredKnowledgeSource["sourceType"];
+    authorityScore: number;
+    enabled: boolean;
+  };
+  document: {
+    id: string;
+    title: string;
+    url: string;
+    fetchedAt: string;
+  } | null;
+};
+
+export type ReviewQueueItem = {
+  rule: StoredKnowledgeRule;
+  validation: KnowledgeRuleValidation;
+  evidence: ReviewEvidence[];
+};
+
+export type FixtureImportSummary = {
+  sources: number;
+  documents: number;
+  rules: number;
+  inserted: number;
+  duplicates: number;
+};
+
+export type KnowledgeReviewServiceOptions = {
+  database: DatabaseClient;
+  repository: KnowledgeRepository;
+};
+
+const CANDIDATE_STATUSES = ["VALIDATED", "NEEDS_REVIEW"] as const;
+const LIST_LIMIT = 2000;
+
+/**
+ * Review chain (task book sections 12, 18, 30, 34): candidates extracted by
+ * ingestion move NEW → EXTRACTED → VALIDATED | NEEDS_REVIEW, divergent
+ * same-key candidates are parked in CONFLICTED, and a human approves,
+ * rejects, or supersedes. Only APPROVED rules are ever published into a
+ * knowledge version; the repository enforces that boundary.
+ */
+export class KnowledgeReviewService {
+  private readonly repository: KnowledgeRepository;
+
+  constructor(options: KnowledgeReviewServiceOptions) {
+    this.repository = options.repository;
+  }
+
+  async runReviewPipeline(): Promise<ReviewPipelineSummary> {
+    const summary: ReviewPipelineSummary = {
+      extracted: 0,
+      validated: 0,
+      needsReview: 0,
+      conflicted: 0
+    };
+
+    const fresh = await this.repository.listRules({ status: "NEW", limit: LIST_LIMIT });
+    for (const rule of fresh) {
+      await this.repository.transitionRule(rule.id, "EXTRACTED");
+      summary.extracted += 1;
+    }
+
+    const extracted = await this.repository.listRules({ status: "EXTRACTED", limit: LIST_LIMIT });
+    for (const rule of extracted) {
+      const classification = await this.classify(rule);
+      await this.repository.transitionRule(rule.id, classification);
+      if (classification === "VALIDATED") {
+        summary.validated += 1;
+      } else {
+        summary.needsReview += 1;
+      }
+    }
+
+    summary.conflicted = await this.markCandidateConflicts();
+    return summary;
+  }
+
+  private async classify(rule: StoredKnowledgeRule): Promise<"VALIDATED" | "NEEDS_REVIEW"> {
+    const sourceId = rule.sourceRefs[0]?.sourceId ?? rule.sourceId;
+    const source = await this.repository.getSource(sourceId);
+    return classifyCandidate(rule, source);
+  }
+
+  /**
+   * Conflict detection compares candidates against each other and against
+   * APPROVED rules, but only ever transitions the candidates: production
+   * rules stay stable until a human supersedes them. CONFLICTED rules stay
+   * in scope so their groups remain visible until a human resolves them.
+   */
+  private async markCandidateConflicts(): Promise<number> {
+    const groups = await this.detectConflicts();
+    let conflicted = 0;
+    for (const group of groups) {
+      for (const rule of group.rules) {
+        if (rule.status === "APPROVED" || rule.status === "CONFLICTED") continue;
+        if (rule.status === "VALIDATED") {
+          await this.repository.transitionRule(rule.id, "NEEDS_REVIEW");
+        }
+        await this.repository.transitionRule(rule.id, "CONFLICTED");
+        conflicted += 1;
+      }
+    }
+    return conflicted;
+  }
+
+  private async detectConflicts(): Promise<KnowledgeConflictGroup[]> {
+    const rules: StoredKnowledgeRule[] = [];
+    for (const status of [...CANDIDATE_STATUSES, "APPROVED", "CONFLICTED"] as const) {
+      rules.push(...(await this.repository.listRules({ status, limit: LIST_LIMIT })));
+    }
+    const groups = detectRuleConflicts(rules);
+    return groups.filter((group) => group.rules.some((rule) => rule.status !== "APPROVED"));
+  }
+
+  async listConflictGroups(): Promise<KnowledgeConflictGroup[]> {
+    return this.detectConflicts();
+  }
+
+  async listReviewQueue(filter?: {
+    status?: StoredKnowledgeRule["status"];
+    limit?: number;
+  }): Promise<ReviewQueueItem[]> {
+    const rules = await this.repository.listRules({
+      status: filter?.status,
+      limit: filter?.limit
+    });
+    const sourceCache = new Map<string, StoredKnowledgeSource>();
+    const documentCache = new Map<string, { id: string; title: string; url: string; fetchedAt: string }>();
+
+    const items: ReviewQueueItem[] = [];
+    for (const rule of rules) {
+      const evidence: ReviewEvidence[] = [];
+      for (const ref of rule.sourceRefs) {
+        let source = sourceCache.get(ref.sourceId);
+        if (source === undefined) {
+          source = await this.repository.getSource(ref.sourceId);
+          sourceCache.set(ref.sourceId, source);
+        }
+        let document = ref.documentId === undefined ? undefined : documentCache.get(ref.documentId);
+        if (document === undefined && ref.documentId !== undefined) {
+          const stored = await this.repository.getDocument(ref.documentId);
+          document = {
+            id: stored.id,
+            title: stored.title,
+            url: stored.url,
+            fetchedAt: stored.fetchedAt
+          };
+          documentCache.set(ref.documentId, document);
+        }
+        evidence.push({
+          source: {
+            id: source.id,
+            name: source.name,
+            sourceType: source.sourceType,
+            authorityScore: source.authorityScore,
+            enabled: source.enabled
+          },
+          document: document ?? null
+        });
+      }
+      items.push({
+        rule,
+        validation: validateKnowledgeRuleCandidate(rule),
+        evidence
+      });
+    }
+    return items;
+  }
+
+  async approveRule(id: string): Promise<StoredKnowledgeRule> {
+    const rule = await this.repository.getRule(id);
+    if (rule.status === "CONFLICTED") {
+      await this.repository.transitionRule(id, "NEEDS_REVIEW");
+    }
+    return this.repository.transitionRule(id, "APPROVED");
+  }
+
+  async rejectRule(id: string): Promise<StoredKnowledgeRule> {
+    const rule = await this.repository.getRule(id);
+    if (rule.status === "CONFLICTED") {
+      await this.repository.transitionRule(id, "NEEDS_REVIEW");
+    }
+    return this.repository.transitionRule(id, "REJECTED");
+  }
+
+  async supersedeRule(id: string): Promise<StoredKnowledgeRule> {
+    return this.repository.transitionRule(id, "SUPERSEDED");
+  }
+
+  async publishVersion(version: string): Promise<StoredKnowledgeVersion> {
+    const created = await this.repository.createKnowledgeVersion(`kv-${version}`, version);
+    return this.repository.publishKnowledgeVersion(created.id);
+  }
+
+  /**
+   * Loads the internally reviewed handbook corpus (MANUAL sources with the
+   * highest authority score) as APPROVED rules. The corpus is the E2E-2
+   * baseline knowledge set; re-imports are idempotent via the unique
+   * fingerprint.
+   */
+  async importFixtureCorpus(): Promise<FixtureImportSummary> {
+    for (const source of KNOWLEDGE_SOURCE_FIXTURES) {
+      await this.repository.upsertSource(source);
+    }
+    for (const document of KNOWLEDGE_DOCUMENT_FIXTURES) {
+      await this.repository.upsertDocument({ ...document, status: "PARSED" });
+    }
+
+    let inserted = 0;
+    let duplicates = 0;
+    for (const seed of KNOWLEDGE_RULE_FIXTURES) {
+      try {
+        await this.repository.insertRule(seed);
+        inserted += 1;
+      } catch (error) {
+        if (error instanceof PersistenceError && error.code === "DUPLICATE_KNOWLEDGE") {
+          duplicates += 1;
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    return {
+      sources: KNOWLEDGE_SOURCE_FIXTURES.length,
+      documents: KNOWLEDGE_DOCUMENT_FIXTURES.length,
+      rules: KNOWLEDGE_RULE_FIXTURES.length,
+      inserted,
+      duplicates
+    };
+  }
+}

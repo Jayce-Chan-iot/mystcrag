@@ -2,14 +2,13 @@ import { createHash } from "node:crypto";
 
 import {
   KnowledgeTypeSchema,
+  knowledgeDomainForType,
   resolveTaxonomyId,
   type JsonValue,
   type KnowledgeRule,
   type KnowledgeType
 } from "@mystcrag/design-contract";
 import { z } from "zod";
-
-import { knowledgeDomainForType } from "../security.js";
 
 export type KnowledgeRuleSeed = KnowledgeRule & { sourceId: string };
 

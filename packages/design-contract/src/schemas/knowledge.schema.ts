@@ -98,6 +98,24 @@ export const KnowledgeRuleSchema = z.strictObject({
 
 export const PRODUCTION_KNOWLEDGE_STATUSES = ["APPROVED"] as const;
 
+const KNOWLEDGE_DOMAIN_BY_TYPE: Record<KnowledgeType, string> = {
+  COLOR_THEORY: "knowledge-domain:color-theory",
+  MATERIAL_COMPATIBILITY: "knowledge-domain:material-compatibility",
+  STYLE_RULE: "knowledge-domain:style-rule",
+  PROPORTION_RULE: "knowledge-domain:proportion-rule",
+  COMPOSITION_RULE: "knowledge-domain:composition-rule",
+  TRANSITION_RULE: "knowledge-domain:transition-rule",
+  FOCAL_RULE: "knowledge-domain:focal-rule",
+  NEGATIVE_RULE: "knowledge-domain:negative-rule",
+  CULTURAL_SYMBOLISM: "knowledge-domain:cultural-symbolism",
+  TAROT: "knowledge-domain:tarot",
+  MARKET_OBSERVATION: "knowledge-domain:market-observation"
+};
+
+export function knowledgeDomainForType(knowledgeType: KnowledgeType): string {
+  return KNOWLEDGE_DOMAIN_BY_TYPE[knowledgeType];
+}
+
 export type ProductionKnowledgeStatus = (typeof PRODUCTION_KNOWLEDGE_STATUSES)[number];
 
 export function isProductionEligibleKnowledgeStatus(
