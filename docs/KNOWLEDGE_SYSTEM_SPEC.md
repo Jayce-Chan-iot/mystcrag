@@ -342,3 +342,48 @@ Baseline 采集方式：bundle 数字来自干净单次构建（`rm -rf .next &&
 2. **MCP 传输**：stdio 还是 Streamable HTTP？——**已裁决（EPIC 11，DEC-KNOWLEDGE-SYSTEM-007）**：双传输一并交付——stdio 为缺省（本地/编辑器客户端），Streamable HTTP 无会话模式 `POST /mcp`（容器化/远程客户端，水平可扩展）；SDK 1.30 自带 Express adapter（含 DNS rebinding 防护），Fastify 兼容性核对不再需要（MCP 为独立进程，backend 不动）。
 3. **审核界面形态**：Admin API + CLI（建议，V1）还是简单后台页（延后）？
 4. **塔罗 worktree 处置**：按 §9 保留续作（建议）还是废弃重做？
+
+## 17. Knowledge Quality Phase（Q0–Q5，2026-08 批准）
+
+质量阶段目标：语义检索质量、抽取质量、人工审核闭环、语料规模、设计质量评估。每个 EPIC 走 spec → TDD RED → GREEN → review → commit。
+
+### 17.1 已完成
+
+| EPIC | 内容 | 提交 |
+| --- | --- | --- |
+| Q0 | Source Registry 生产化（编辑分类/审核状态机/抓取健康/限速/36 seed，DEC-KNOWLEDGE-SYSTEM-010） | `2234dde` |
+| Q1 | Semantic Embedding 升级（方案 B OpenAI 兼容 Provider + 熔断 fallback + 统一工厂 + 语义评测集，ADR-9 更新） | `c670622` |
+| Q2 | Knowledge Extraction 升级（9 类关系词表/Extractor 接口/证据溯源/标注句评测集，DEC-KNOWLEDGE-SYSTEM-011，§17.2） | 本次提交 |
+
+### 17.2 Q2 Knowledge Extraction 升级
+
+**目标**：自由文本抽取从"单一 `mentioned-with` 候选"升级为**可插拔 Extractor 体系 + 9 类规范关系词表 + 句级证据溯源 + 标注句评测集**，让候选规则对 Q3 审核后台可判读、抽取质量可量化回归。
+
+**关系词表（9 类，`design-contract` 枚举强约束 relation × knowledgeType 合法组合）**：
+
+| relation | 允许的 knowledgeType | 模式信号（中/英） |
+| --- | --- | --- |
+| `pairs-well-with` | COLOR_THEORY / MATERIAL_COMPATIBILITY / STYLE_RULE | 搭配、适合、协调、pairs、complements |
+| `conflicts-with` | NEGATIVE_RULE / MATERIAL_COMPATIBILITY / COLOR_THEORY | 不宜、相克、冲突、conflicts、clashes |
+| `avoid-exposure` | NEGATIVE_RULE / MATERIAL_COMPATIBILITY | 避免接触水/阳光/高温/汗水、avoid water/sunlight |
+| `care-instruction` | MATERIAL_COMPATIBILITY | 保养、清洁、存放、clean、store、maintain |
+| `symbolizes` | CULTURAL_SYMBOLISM / TAROT | 象征、寓意、代表、symbolizes、stands for |
+| `suits-style` | STYLE_RULE | 风格适配、suits、in the style of |
+| `proportion-of` | PROPORTION_RULE / COMPOSITION_RULE / FOCAL_RULE | 比例、主石、数量、proportion、focal |
+| `transitions-to` | TRANSITION_RULE | 渐变、过渡、gradient、transition |
+| `trending-in` | MARKET_OBSERVATION | 流行、趋势、上升、trending、demand |
+
+**Extractor 接口**（`knowledge-ingestion/src/extract/`）：
+
+- `KnowledgeExtractor { id, method: structured | pattern | semantic, extract(input) → ExtractionCandidate[] }`
+- `StructuredExtractor`：结构化 feed（JSON 规则）→ `NEW` 候选（现状语义保留）
+- `PatternExtractor`：句切分 + taxonomy 主体识别 + 关系模式推断 → 证据（句子 + 字符偏移）→ `NEEDS_REVIEW`
+- `SemanticExtractor`：OpenAI 兼容 chat 端点（`KNOWLEDGE_EXTRACTION_ENDPOINT/MODEL/API_KEY`，未配置即休眠），LLM JSON 输出严格 Zod 校验后按关系词表过滤，只产 `NEEDS_REVIEW`（Provenance 铁律：`source = AI` 不可作为最终来源）
+- 置信度策略：模式强度基线 × 来源可靠度（HIGH 1.0 / MEDIUM 0.9 / LOW 0.75），上限 0.85；模式/语义候选永不自动 APPROVE
+- 来源政策在抽取层强制：FORUM / SOCIAL_OBSERVATION 来源的候选域限定 market-observation（Q0 政策的执行点），且域必须落在 `allowedKnowledgeDomains` 内
+
+**候选 schema 升级**：`payload.extraction = { extractor, method, evidence: [{ sentence, startOffset, endOffset, documentId }] }`——审核者可定位原句（Q3 审核后台消费），偏移量可回链文档。
+
+**标注句评测集**（`bench:extraction`）：≥40 双语标注句（每类关系 ≥3），对 PatternExtractor 计算 relation 级 precision / recall / F1 作为抽取质量回归基线；semantic 端点接入后跑同一集合对比验收。
+
+**验收**：9 类关系全部可产出且有测试覆盖；标注句集基线入库；pipeline 走 extractor 体系；Q0 来源政策在抽取层强制；既有 ingestion 集成测试保持绿。

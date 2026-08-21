@@ -2,12 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  EXTRACTION_RELATION_ALLOWED_TYPES,
+  ExtractionEvidenceSchema,
+  ExtractionMetadataSchema,
+  ExtractionRelationSchema,
   KnowledgeDocumentSchema,
   KnowledgeRuleSchema,
   KnowledgeSourceSchema,
   SOURCE_REVIEW_TRANSITIONS,
   PRODUCTION_KNOWLEDGE_STATUSES,
-  isProductionEligibleKnowledgeStatus
+  isProductionEligibleKnowledgeStatus,
+  isRelationAllowedForKnowledgeType
 } from "../src/index";
 
 const validSource = {
@@ -215,4 +220,92 @@ test("Q0 source review transitions never allow direct DISCOVERED -> APPROVED", (
   assert.equal(SOURCE_REVIEW_TRANSITIONS.APPROVED.includes("DISABLED"), true);
   assert.equal(SOURCE_REVIEW_TRANSITIONS.DISABLED.includes("NEEDS_REVIEW"), true);
   assert.equal(SOURCE_REVIEW_TRANSITIONS.REJECTED.includes("NEEDS_REVIEW"), true);
+});
+
+test("the extraction relation vocabulary has exactly nine canonical relations (Q2)", () => {
+  assert.deepEqual(ExtractionRelationSchema.options, [
+    "pairs-well-with",
+    "conflicts-with",
+    "avoid-exposure",
+    "care-instruction",
+    "symbolizes",
+    "suits-style",
+    "proportion-of",
+    "transitions-to",
+    "trending-in"
+  ]);
+  assert.equal(ExtractionRelationSchema.safeParse("mentioned-with").success, false);
+});
+
+test("every relation declares at least one allowed knowledge type and the matrix is total", () => {
+  for (const relation of ExtractionRelationSchema.options) {
+    const allowed = EXTRACTION_RELATION_ALLOWED_TYPES[relation];
+    assert.ok(allowed !== undefined && allowed.length > 0, `${relation} must allow types`);
+    for (const knowledgeType of allowed) {
+      assert.equal(
+        isRelationAllowedForKnowledgeType(relation, knowledgeType),
+        true,
+        `${relation} × ${knowledgeType} must be allowed`
+      );
+    }
+  }
+  assert.equal(isRelationAllowedForKnowledgeType("trending-in", "COLOR_THEORY"), false);
+  assert.equal(isRelationAllowedForKnowledgeType("pairs-well-with", "TAROT"), false);
+});
+
+test("every knowledge type is reachable through at least one relation", () => {
+  const reachable = new Set(
+    ExtractionRelationSchema.options.flatMap(
+      (relation) => EXTRACTION_RELATION_ALLOWED_TYPES[relation]
+    )
+  );
+  for (const knowledgeType of KnowledgeRuleSchema.shape.knowledgeType.options) {
+    assert.equal(
+      reachable.has(knowledgeType),
+      true,
+      `${knowledgeType} has no extraction relation`
+    );
+  }
+});
+
+test("extraction evidence requires a sentence with ordered offsets", () => {
+  assert.equal(
+    ExtractionEvidenceSchema.safeParse({
+      documentId: "doc-1",
+      sentence: "Amethyst purple pairs well with blue.",
+      startOffset: 0,
+      endOffset: 36
+    }).success,
+    true
+  );
+  assert.equal(
+    ExtractionEvidenceSchema.safeParse({ sentence: "", startOffset: 0, endOffset: 0 }).success,
+    false
+  );
+  assert.equal(
+    ExtractionEvidenceSchema.safeParse({ sentence: "x", startOffset: 5, endOffset: 3 }).success,
+    false
+  );
+  assert.equal(
+    ExtractionEvidenceSchema.safeParse({ sentence: "x", startOffset: -1, endOffset: 3 }).success,
+    false
+  );
+});
+
+test("extraction metadata names its extractor, method, and evidence list", () => {
+  assert.equal(
+    ExtractionMetadataSchema.safeParse({
+      extractor: "pattern-extractor-v1",
+      method: "pattern",
+      evidence: [
+        { documentId: "doc-1", sentence: "…", startOffset: 0, endOffset: 3 }
+      ]
+    }).success,
+    true
+  );
+  assert.equal(
+    ExtractionMetadataSchema.safeParse({ extractor: "x", method: "telepathy", evidence: [] })
+      .success,
+    false
+  );
 });

@@ -171,6 +171,65 @@ export const KnowledgeRuleSchema = z.strictObject({
 
 export const PRODUCTION_KNOWLEDGE_STATUSES = ["APPROVED"] as const;
 
+/**
+ * Canonical relation vocabulary for extracted candidates (Quality Phase Q2).
+ * Free-text extraction used to emit a single `mentioned-with` relation; the
+ * nine relations below make candidates reviewable and measurable, and the
+ * allowed-types matrix keeps relation × knowledgeType pairs honest.
+ */
+export const ExtractionRelationSchema = z.enum([
+  "pairs-well-with",
+  "conflicts-with",
+  "avoid-exposure",
+  "care-instruction",
+  "symbolizes",
+  "suits-style",
+  "proportion-of",
+  "transitions-to",
+  "trending-in"
+]);
+
+export const EXTRACTION_RELATION_ALLOWED_TYPES: Record<
+  ExtractionRelation,
+  readonly KnowledgeType[]
+> = {
+  "pairs-well-with": ["COLOR_THEORY", "MATERIAL_COMPATIBILITY", "STYLE_RULE"],
+  "conflicts-with": ["NEGATIVE_RULE", "MATERIAL_COMPATIBILITY", "COLOR_THEORY"],
+  "avoid-exposure": ["NEGATIVE_RULE", "MATERIAL_COMPATIBILITY"],
+  "care-instruction": ["MATERIAL_COMPATIBILITY"],
+  symbolizes: ["CULTURAL_SYMBOLISM", "TAROT"],
+  "suits-style": ["STYLE_RULE"],
+  "proportion-of": ["PROPORTION_RULE", "COMPOSITION_RULE", "FOCAL_RULE"],
+  "transitions-to": ["TRANSITION_RULE"],
+  "trending-in": ["MARKET_OBSERVATION"]
+};
+
+export function isRelationAllowedForKnowledgeType(
+  relation: ExtractionRelation,
+  knowledgeType: KnowledgeType
+): boolean {
+  return EXTRACTION_RELATION_ALLOWED_TYPES[relation].includes(knowledgeType);
+}
+
+export const ExtractionMethodSchema = z.enum(["structured", "pattern", "semantic"]);
+
+export const ExtractionEvidenceSchema = z
+  .strictObject({
+    documentId: IdentifierSchema,
+    sentence: z.string().trim().min(1).max(500),
+    startOffset: z.number().int().min(0),
+    endOffset: z.number().int().min(0)
+  })
+  .refine((evidence) => evidence.endOffset >= evidence.startOffset, {
+    message: "endOffset must not precede startOffset"
+  });
+
+export const ExtractionMetadataSchema = z.strictObject({
+  extractor: z.string().trim().min(1).max(100),
+  method: ExtractionMethodSchema,
+  evidence: z.array(ExtractionEvidenceSchema).max(20)
+});
+
 const KNOWLEDGE_DOMAIN_BY_TYPE: Record<KnowledgeType, string> = {
   COLOR_THEORY: "knowledge-domain:color-theory",
   MATERIAL_COMPATIBILITY: "knowledge-domain:material-compatibility",
@@ -199,6 +258,10 @@ export function isProductionEligibleKnowledgeStatus(
 
 export type KnowledgeType = z.infer<typeof KnowledgeTypeSchema>;
 export type KnowledgeStatus = z.infer<typeof KnowledgeStatusSchema>;
+export type ExtractionRelation = z.infer<typeof ExtractionRelationSchema>;
+export type ExtractionMethod = z.infer<typeof ExtractionMethodSchema>;
+export type ExtractionEvidence = z.infer<typeof ExtractionEvidenceSchema>;
+export type ExtractionMetadata = z.infer<typeof ExtractionMetadataSchema>;
 export type KnowledgeSourceType = z.infer<typeof KnowledgeSourceTypeSchema>;
 export type SourceCategory = z.infer<typeof SourceCategorySchema>;
 export type SourceReliability = z.infer<typeof SourceReliabilitySchema>;

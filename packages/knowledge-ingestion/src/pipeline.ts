@@ -7,12 +7,11 @@ import {
   type StoredKnowledgeSource
 } from "@mystcrag/database";
 
-import {
-  extractFreeTextCandidates,
-  structuredRuleToSeed,
-  type KnowledgeRuleSeed,
-  type StructuredFeed
-} from "./extract/candidates.js";
+import { structuredRuleToSeed, type StructuredFeed } from "./extract/candidates.js";
+import { PatternExtractor } from "./extract/pattern-extractor.js";
+import { createSemanticExtractorFromEnv } from "./extract/semantic-extractor.js";
+import { StructuredExtractor } from "./extract/structured-extractor.js";
+import type { ExtractorInput, KnowledgeExtractor, KnowledgeRuleSeed } from "./extract/extractor.js";
 import { fetchStructuredFeed } from "./fetchers/json-api.js";
 import { fetchHtmlDocuments } from "./fetchers/static-html.js";
 import { contentHash } from "./security.js";
@@ -45,6 +44,13 @@ export type IngestionOptions = {
   /** Optional temp directory for Crawlee's request storage. */
   crawlerStorageDir?: string;
   maxPages?: number;
+  /**
+   * Extractor composition (Quality Phase Q2). Default: StructuredExtractor +
+   * PatternExtractor + env-configured SemanticExtractor. Structured documents
+   * run the `structured` extractors; free-text documents run the rest. A
+   * failing free-text extractor degrades to the remaining ones.
+   */
+  extractors?: readonly KnowledgeExtractor[];
 };
 
 type PendingDocument = {
@@ -104,6 +110,12 @@ export async function runIngestionPipeline(
     throw new Error(`UNSUPPORTED_SOURCE_TYPE: ${source.id} (${source.sourceType})`);
   }
 
+  const extractors = options.extractors ?? [
+    new StructuredExtractor(),
+    new PatternExtractor(),
+    createSemanticExtractorFromEnv()
+  ];
+
   const records: IngestionDocumentRecord[] = [];
   let createdDocuments = 0;
   let duplicateDocuments = 0;
@@ -131,18 +143,36 @@ export async function runIngestionPipeline(
       duplicateDocuments += 1;
     }
 
-    const seeds: KnowledgeRuleSeed[] =
-      document.rules.length > 0
-        ? document.rules.map((rule) =>
-            structuredRuleToSeed(rule, { sourceId: source.id, documentId, fetchedAt })
-          )
-        : created
-          ? extractFreeTextCandidates(document.contentText, {
-              documentId,
-              sourceId: source.id,
-              fetchedAt
-            })
-          : [];
+    const extractorInput: ExtractorInput = {
+      documentId,
+      title: document.title,
+      contentText: document.contentText,
+      fetchedAt,
+      source: {
+        sourceId: source.id,
+        sourceCategory: source.sourceCategory,
+        reliabilityLevel: source.reliabilityLevel,
+        allowedKnowledgeDomains: source.allowedKnowledgeDomains
+      }
+    };
+
+    let seeds: KnowledgeRuleSeed[] = [];
+    if (document.rules.length > 0) {
+      for (const extractor of extractors.filter((e) => e.method === "structured")) {
+        seeds.push(
+          ...(await extractor.extract({ ...extractorInput, structuredRules: document.rules }))
+        );
+      }
+    } else if (created) {
+      for (const extractor of extractors.filter((e) => e.method !== "structured")) {
+        try {
+          seeds.push(...(await extractor.extract(extractorInput)));
+        } catch {
+          // One degraded extractor (e.g. an unreachable LLM endpoint) must not
+          // drop the deterministic candidates of the others.
+        }
+      }
+    }
 
     const candidateRuleIds: string[] = [];
     for (const seed of seeds) {

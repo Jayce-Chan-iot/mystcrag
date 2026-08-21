@@ -364,6 +364,24 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 
 ---
 
+### DEC-KNOWLEDGE-SYSTEM-011 — Canonical nine-relation extraction with evidence traceability and a labeled eval set (Knowledge Quality Phase Q2)
+
+- Date: 2026-08-22
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `packages/design-contract/src/schemas/knowledge.schema.ts` (`ExtractionRelationSchema`, `EXTRACTION_RELATION_ALLOWED_TYPES`, `isRelationAllowedForKnowledgeType`, `ExtractionMethodSchema`, `ExtractionEvidenceSchema`, `ExtractionMetadataSchema`), `packages/knowledge-ingestion/src/extract/` (new `extractor.ts` interface + policy helpers, `pattern-extractor.ts`, `semantic-extractor.ts`, `structured-extractor.ts`, `eval.ts`; `candidates.ts` loses the old `mentioned-with` free-text path), `src/pipeline.ts` (extractor composition), `src/fixtures/labeled-sentences.ts` + `benchmarks/extraction-eval.ts` (`bench:extraction`), `.env.example` (`KNOWLEDGE_EXTRACTION_ENDPOINT/MODEL/API_KEY`)
+- Decision: free-text extraction stops emitting a single `mentioned-with` relation. A nine-relation canonical vocabulary (`pairs-well-with`, `conflicts-with`, `avoid-exposure`, `care-instruction`, `symbolizes`, `suits-style`, `proportion-of`, `transitions-to`, `trending-in`) is enforced in the contract as an enum plus a total relation × knowledgeType matrix covering all eleven knowledge types. Extraction becomes a pluggable `KnowledgeExtractor` interface (`id`, `method: structured|pattern|semantic`, `extract(input)`) with three implementations: `StructuredExtractor` (feed rules → NEW, semantics unchanged), `PatternExtractor` (sentence spans with char offsets, CJK-substring + ASCII word-boundary taxonomy subject matching with gem-compound color suppression — 紫 in 紫水晶 no longer surfaces color:purple —, first-match relation inference, reliability-weighted confidence capped at 0.85), and `SemanticExtractor` (OpenAI-compatible chat endpoint, dormant until `KNOWLEDGE_EXTRACTION_ENDPOINT` is set; strict Zod validation, vocabulary filtering, and a verbatim-evidence gate that discards any candidate whose quoted sentence cannot be located in the document). Pattern and semantic candidates are always NEEDS_REVIEW per the provenance rule. Fingerprints cover knowledge identity only (type, subject, relation, matched domains / LLM payload) — evidence offsets deliberately excluded so one repeated sentence stays one rule. The Q0 source policy is enforced at extraction time: FORUM/SOCIAL_OBSERVATION sources may only yield market-observation candidates, and every candidate's domain must be within the source's allowed domains. Quality is regression-locked by a 50-sentence labeled set (40 positives ≥3 per relation, 10 negatives) with `evaluateExtractor` computing per-relation precision/recall/F1; the pattern baseline is F1 = 1.00 on that set and a test pins it.
+- Rationale: the review queue (Q3) cannot scale on `mentioned-with` blobs — reviewers need typed relations and the exact supporting sentence to approve or reject quickly, and extraction quality needs a measurable baseline before semantic extraction lands. The verbatim-evidence gate is the hallucination firewall for LLM extraction: a model cannot smuggle knowledge into the corpus it cannot quote from the source document. Confidence scaling by source reliability keeps a LOW forum claim strictly below a HIGH gemology source even with identical phrasing.
+- Rejected alternatives: keeping `mentioned-with` and classifying later at review time (moves the hardest work onto humans, no measurable precision); free-form LLM relations per source (breaks compiler expectations and cross-source dedup); trusting LLM-claimed offsets (models hallucinate positions — offsets are recomputed by locating the quote server-side); storing evidence in a side table (payload JSON keeps candidates self-contained and schema-free for Q2's scope).
+- Contract impact: additive exports only (`ExtractionRelationSchema` et al.); existing `KnowledgeRuleSchema` and all stored rules remain valid — old `mentioned-with` rows keep their relation string, they merely stop being produced.
+- Database impact: None. No schema change; extraction metadata and evidence ride inside the existing `payload` JSONB column.
+- API impact: None. Extraction is internal to the ingestion pipeline.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-22
+- Implementation branch or commit: `feat/knowledge-quality`, Knowledge Quality Phase Q2 commit (ingestion 20/20 unit + 4/4 integration; design-contract 88/88; `bench:extraction` F1=1.00; `pnpm validate` 15/15).
+
+---
+
 ## New decision template
 
 ### P3-NNN — Short decision title

@@ -78,7 +78,7 @@ test("E2E-1 automatic knowledge ingestion across three source types", { skip: !d
       response.end(
         htmlPage(
           "Color theory basics",
-          "Amethyst purple sits beside blue on the wheel. Silver spacers keep minimal designs calm."
+          "Amethyst purple pairs well with blue on the wheel. Silver spacers keep minimal designs calm."
         )
       );
       return;
@@ -193,7 +193,16 @@ test("E2E-1 automatic knowledge ingestion across three source types", { skip: !d
         "free-text page with taxonomy vocabulary must yield NEEDS_REVIEW candidates"
       );
       const reviewRules = await repository.listRules({ status: "NEEDS_REVIEW" });
-      assert.ok(reviewRules.every((rule) => rule.confidence <= 0.6));
+      assert.ok(reviewRules.length >= 1);
+      assert.ok(reviewRules.every((rule) => rule.confidence <= 0.85));
+      assert.ok(reviewRules.every((rule) => rule.relation !== "mentioned-with"));
+      for (const rule of reviewRules) {
+        const payload = rule.payload as { extraction?: { evidence?: unknown[] } };
+        assert.ok(
+          (payload.extraction?.evidence?.length ?? 0) >= 1,
+          "free-text candidates carry sentence evidence (Q2)"
+        );
+      }
 
       const multiPageRun = await runIngestionPipeline(multiPageSource, options);
       const urls = multiPageRun.documents.map((record) => record.url).sort();

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "scripts": {
+    "bench:extraction": "tsx benchmarks/extraction-eval.ts",
     "build": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
