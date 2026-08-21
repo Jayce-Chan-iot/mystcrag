@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { StoredKnowledgeRule, StoredKnowledgeSource } from "@mystcrag/database";
+import { KnowledgeSourceSchema } from "@mystcrag/design-contract";
 
 import {
   classifyCandidate,
@@ -39,7 +40,7 @@ function baseRule(overrides: Partial<StoredKnowledgeRule> = {}): StoredKnowledge
 }
 
 function baseSource(overrides: Partial<StoredKnowledgeSource> = {}): StoredKnowledgeSource {
-  return {
+  return KnowledgeSourceSchema.parse({
     id: "source-a",
     name: "测试来源",
     sourceType: "OFFICIAL_API",
@@ -48,7 +49,7 @@ function baseSource(overrides: Partial<StoredKnowledgeSource> = {}): StoredKnowl
     allowedKnowledgeDomains: ["knowledge-domain:color-theory"],
     language: "zh-CN",
     ...overrides
-  };
+  });
 }
 
 test("validateKnowledgeRuleCandidate accepts a well-formed rule", () => {

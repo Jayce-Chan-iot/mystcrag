@@ -382,12 +382,21 @@ model KnowledgeSource {
   language               String
   rateLimit              Json?    @map("rate_limit")
   legalNote              String?  @map("legal_note")
+  sourceCategory         String   @default("MANUAL") @map("source_category")
+  reliabilityLevel       String   @default("MEDIUM") @map("reliability_level")
+  countryOrRegion        String?  @map("country_or_region")
+  contentType            String   @default("OTHER") @map("content_type")
+  crawlStrategy          Json?    @map("crawl_strategy")
+  reviewStatus           String   @default("NEEDS_REVIEW") @map("review_status")
+  lastSuccessfulFetch    DateTime? @map("last_successful_fetch")
+  lastFailure            Json?    @map("last_failure")
+  consecutiveFailures    Int      @default(0) @map("consecutive_failures")
   createdAt              DateTime @default(now()) @map("created_at")
   updatedAt              DateTime @updatedAt @map("updated_at")
   documents              KnowledgeDocument[]
   rules                  KnowledgeRule[]
-
   @@index([enabled])
+  @@index([reviewStatus, enabled])
   @@map("knowledge_sources")
 }
 

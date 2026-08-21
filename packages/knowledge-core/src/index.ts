@@ -7,3 +7,4 @@ export * from "./review/rules.js";
 export * from "./review/review-service.js";
 export * from "./fixtures/knowledge-rules.js";
 export * from "./fixtures/knowledge-sources.js";
+export * from "./fixtures/source-registry-candidates.js";

@@ -39,6 +39,70 @@ export const KnowledgeSourceTypeSchema = z.enum([
   "MANUAL"
 ]);
 
+/**
+ * Editorial classification of what a source IS (authority dimension), kept
+ * separate from `sourceType` (the fetch mechanism). Q0 task book: sources are
+ * not all equal — forums and social platforms may only feed market observation.
+ */
+export const SourceCategorySchema = z.enum([
+  "OFFICIAL",
+  "ACADEMIC",
+  "BOOK",
+  "DESIGN_REFERENCE",
+  "JEWELRY_REFERENCE",
+  "GEMOLOGY",
+  "INDUSTRY",
+  "FORUM",
+  "SOCIAL_OBSERVATION",
+  "MANUAL"
+]);
+
+export const SourceReliabilitySchema = z.enum(["HIGH", "MEDIUM", "LOW"]);
+
+/** Sources never crawl before a human approves them (Q0.3). */
+export const SourceReviewStatusSchema = z.enum([
+  "DISCOVERED",
+  "NEEDS_REVIEW",
+  "APPROVED",
+  "REJECTED",
+  "DISABLED"
+]);
+
+export const SourceContentTypeSchema = z.enum([
+  "ARTICLE",
+  "DATASHEET",
+  "TEXTBOOK",
+  "CATALOG",
+  "SPECIFICATION",
+  "FORUM_THREAD",
+  "SOCIAL_POST",
+  "OTHER"
+]);
+
+export const SourceCrawlStrategySchema = z.strictObject({
+  maxPages: PositiveSafeIntegerSchema.max(1000).default(10),
+  followLinks: z.boolean().default(false),
+  /** Recorded intent; the crawler always enforces robots.txt regardless. */
+  respectRobots: z.boolean().default(true)
+});
+
+export const SourceFetchFailureSchema = z.strictObject({
+  at: IsoDateTimeSchema,
+  reason: z.string().trim().min(1).max(500),
+  consecutive: PositiveSafeIntegerSchema
+});
+
+export const SOURCE_REVIEW_TRANSITIONS: Record<
+  SourceReviewStatus,
+  readonly SourceReviewStatus[]
+> = {
+  DISCOVERED: ["NEEDS_REVIEW", "REJECTED"],
+  NEEDS_REVIEW: ["APPROVED", "REJECTED"],
+  APPROVED: ["DISABLED"],
+  DISABLED: ["NEEDS_REVIEW"],
+  REJECTED: ["NEEDS_REVIEW"]
+};
+
 export const KnowledgeDocumentStatusSchema = z.enum(["FETCHED", "PARSED", "FAILED"]);
 
 export const KnowledgeSourceSchema = z.strictObject({
@@ -54,7 +118,16 @@ export const KnowledgeSourceSchema = z.strictObject({
   rateLimit: z
     .strictObject({ maxRequestsPerMinute: PositiveSafeIntegerSchema })
     .optional(),
-  legalNote: z.string().trim().max(2000).optional()
+  legalNote: z.string().trim().max(2000).optional(),
+  sourceCategory: SourceCategorySchema.default("MANUAL"),
+  reliabilityLevel: SourceReliabilitySchema.default("MEDIUM"),
+  countryOrRegion: z.string().trim().min(1).max(100).optional(),
+  contentType: SourceContentTypeSchema.default("OTHER"),
+  crawlStrategy: SourceCrawlStrategySchema.optional(),
+  /** Only `APPROVED` sources may be crawled, and only when also `enabled`. */
+  reviewStatus: SourceReviewStatusSchema.default("NEEDS_REVIEW"),
+  lastSuccessfulFetch: IsoDateTimeSchema.optional(),
+  lastFailure: SourceFetchFailureSchema.optional()
 });
 
 export const KnowledgeDocumentSchema = z.strictObject({
@@ -127,8 +200,16 @@ export function isProductionEligibleKnowledgeStatus(
 export type KnowledgeType = z.infer<typeof KnowledgeTypeSchema>;
 export type KnowledgeStatus = z.infer<typeof KnowledgeStatusSchema>;
 export type KnowledgeSourceType = z.infer<typeof KnowledgeSourceTypeSchema>;
+export type SourceCategory = z.infer<typeof SourceCategorySchema>;
+export type SourceReliability = z.infer<typeof SourceReliabilitySchema>;
+export type SourceReviewStatus = z.infer<typeof SourceReviewStatusSchema>;
+export type SourceContentType = z.infer<typeof SourceContentTypeSchema>;
+export type SourceCrawlStrategy = z.infer<typeof SourceCrawlStrategySchema>;
+export type SourceFetchFailure = z.infer<typeof SourceFetchFailureSchema>;
 export type KnowledgeDocumentStatus = z.infer<typeof KnowledgeDocumentStatusSchema>;
 export type KnowledgeSource = z.infer<typeof KnowledgeSourceSchema>;
+/** Input shape: schema defaults (enabled, reviewStatus, …) stay optional. */
+export type KnowledgeSourceInput = z.input<typeof KnowledgeSourceSchema>;
 export type KnowledgeDocument = z.infer<typeof KnowledgeDocumentSchema>;
 export type KnowledgeSourceRef = z.infer<typeof KnowledgeSourceRefSchema>;
 export type KnowledgeRule = z.infer<typeof KnowledgeRuleSchema>;

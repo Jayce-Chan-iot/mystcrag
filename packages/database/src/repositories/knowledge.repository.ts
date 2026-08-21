@@ -2,12 +2,15 @@ import {
   KnowledgeDocumentSchema,
   KnowledgeRuleSchema,
   KnowledgeSourceSchema,
+  SOURCE_REVIEW_TRANSITIONS,
   type KnowledgeDocument,
   type KnowledgeRule,
-  type KnowledgeSource
+  type KnowledgeSource,
+  type SourceCrawlStrategy,
+  type SourceReviewStatus
 } from "@mystcrag/design-contract";
 
-import type { PrismaClient } from "../../generated/client/client.js";
+import { Prisma, type PrismaClient } from "../../generated/client/client.js";
 import { PersistenceError, rethrowPersistenceError } from "../errors/persistence-errors.js";
 import { toPrismaJson } from "../mappers/snapshot.mapper.js";
 
@@ -75,6 +78,14 @@ function parseSource(row: {
   language: string;
   rateLimit: unknown;
   legalNote: string | null;
+  sourceCategory: string;
+  reliabilityLevel: string;
+  countryOrRegion: string | null;
+  contentType: string;
+  crawlStrategy: unknown;
+  reviewStatus: string;
+  lastSuccessfulFetch: Date | null;
+  lastFailure: unknown;
 }): StoredKnowledgeSource {
   return KnowledgeSourceSchema.parse({
     id: row.id,
@@ -89,7 +100,21 @@ function parseSource(row: {
     ...(row.rateLimit === null || row.rateLimit === undefined
       ? {}
       : { rateLimit: structuredClone(row.rateLimit) }),
-    ...(row.legalNote === null ? {} : { legalNote: row.legalNote })
+    ...(row.legalNote === null ? {} : { legalNote: row.legalNote }),
+    sourceCategory: row.sourceCategory,
+    reliabilityLevel: row.reliabilityLevel,
+    ...(row.countryOrRegion === null ? {} : { countryOrRegion: row.countryOrRegion }),
+    contentType: row.contentType,
+    ...(row.crawlStrategy === null || row.crawlStrategy === undefined
+      ? {}
+      : { crawlStrategy: structuredClone(row.crawlStrategy) }),
+    reviewStatus: row.reviewStatus,
+    ...(row.lastSuccessfulFetch === null
+      ? {}
+      : { lastSuccessfulFetch: row.lastSuccessfulFetch.toISOString() }),
+    ...(row.lastFailure === null || row.lastFailure === undefined
+      ? {}
+      : { lastFailure: structuredClone(row.lastFailure) })
   });
 }
 
@@ -194,7 +219,24 @@ export class KnowledgeRepository {
       crawlFrequency: source.crawlFrequency ?? null,
       language: source.language,
       ...(source.rateLimit === undefined ? {} : { rateLimit: toPrismaJson(source.rateLimit) }),
-      legalNote: source.legalNote ?? null
+      legalNote: source.legalNote ?? null,
+      sourceCategory: source.sourceCategory,
+      reliabilityLevel: source.reliabilityLevel,
+      countryOrRegion: source.countryOrRegion ?? null,
+      contentType: source.contentType,
+      ...(source.crawlStrategy === undefined
+        ? {}
+        : { crawlStrategy: toPrismaJson(source.crawlStrategy) }),
+      reviewStatus: source.reviewStatus,
+      ...(source.lastSuccessfulFetch === undefined
+        ? {}
+        : { lastSuccessfulFetch: new Date(source.lastSuccessfulFetch) }),
+      ...(source.lastFailure === undefined
+        ? {}
+        : {
+            lastFailure: toPrismaJson(source.lastFailure),
+            consecutiveFailures: source.lastFailure.consecutive
+          })
     };
     try {
       const row = await this.prisma.knowledgeSource.upsert({
@@ -206,6 +248,178 @@ export class KnowledgeRepository {
     } catch (error) {
       rethrowPersistenceError(error);
     }
+  }
+
+  /**
+   * Registers a discovered or operator-submitted source candidate. Candidates
+   * always enter review (DISCOVERED or NEEDS_REVIEW) — never APPROVED — so
+   * nothing reaches the crawler without a human approval step (Q0.3/Q0.4).
+   */
+  async registerSourceCandidate(
+    input: unknown,
+    options?: { submitForReview?: boolean }
+  ): Promise<{ source: StoredKnowledgeSource; created: boolean }> {
+    const parsed = KnowledgeSourceSchema.parse(input);
+    const reviewStatus: SourceReviewStatus = options?.submitForReview === true
+      ? "NEEDS_REVIEW"
+      : "DISCOVERED";
+    const candidate = { ...parsed, enabled: false, reviewStatus };
+    try {
+      const existing = await this.prisma.knowledgeSource.findUnique({
+        where: { id: candidate.id }
+      });
+      if (existing !== null) {
+        return { source: parseSource(existing), created: false };
+      }
+      const row = await this.prisma.knowledgeSource.create({
+        data: {
+          id: candidate.id,
+          name: candidate.name,
+          sourceType: candidate.sourceType,
+          baseUrl: candidate.baseUrl ?? null,
+          enabled: false,
+          authorityScore: candidate.authorityScore,
+          allowedKnowledgeDomains: [...candidate.allowedKnowledgeDomains],
+          crawlFrequency: candidate.crawlFrequency ?? null,
+          language: candidate.language,
+          ...(candidate.rateLimit === undefined
+            ? {}
+            : { rateLimit: toPrismaJson(candidate.rateLimit) }),
+          legalNote: candidate.legalNote ?? null,
+          sourceCategory: candidate.sourceCategory,
+          reliabilityLevel: candidate.reliabilityLevel,
+          countryOrRegion: candidate.countryOrRegion ?? null,
+          contentType: candidate.contentType,
+          ...(candidate.crawlStrategy === undefined
+            ? {}
+            : { crawlStrategy: toPrismaJson(candidate.crawlStrategy) }),
+          reviewStatus
+        }
+      });
+      return { source: parseSource(row), created: true };
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  async reviewSource(id: string, next: SourceReviewStatus): Promise<StoredKnowledgeSource> {
+    try {
+      const current = await this.prisma.knowledgeSource.findUnique({ where: { id } });
+      if (current === null) {
+        throw new PersistenceError("NOT_FOUND", `Knowledge source ${id} was not found`);
+      }
+      const allowed =
+        SOURCE_REVIEW_TRANSITIONS[current.reviewStatus as SourceReviewStatus] ?? [];
+      if (!allowed.includes(next)) {
+        throw new PersistenceError(
+          "CONFLICT",
+          `Knowledge source ${id} cannot transition from ${current.reviewStatus} to ${next}`
+        );
+      }
+      const row = await this.prisma.knowledgeSource.update({
+        where: { id },
+        data: { reviewStatus: next }
+      });
+      return parseSource(row);
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  async updateSourcePolicy(
+    id: string,
+    policy: {
+      authorityScore?: number;
+      crawlFrequency?: string | null;
+      rateLimit?: { maxRequestsPerMinute: number } | null;
+      crawlStrategy?: SourceCrawlStrategy | null;
+      enabled?: boolean;
+    }
+  ): Promise<StoredKnowledgeSource> {
+    try {
+      const row = await this.prisma.knowledgeSource.update({
+        where: { id },
+        data: {
+          ...(policy.authorityScore === undefined
+            ? {}
+            : { authorityScore: KnowledgeSourceSchema.shape.authorityScore.parse(policy.authorityScore) }),
+          ...(policy.crawlFrequency === undefined ? {} : { crawlFrequency: policy.crawlFrequency }),
+          ...(policy.rateLimit === undefined
+            ? {}
+            : {
+                rateLimit:
+                  policy.rateLimit === null ? Prisma.DbNull : toPrismaJson(policy.rateLimit)
+              }),
+          ...(policy.crawlStrategy === undefined
+            ? {}
+            : {
+                crawlStrategy:
+                  policy.crawlStrategy === null
+                    ? Prisma.DbNull
+                    : toPrismaJson(policy.crawlStrategy)
+              }),
+          ...(policy.enabled === undefined ? {} : { enabled: policy.enabled })
+        }
+      });
+      return parseSource(row);
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  /**
+   * Records one fetch outcome. Three consecutive failures auto-disable the
+   * source (enabled=false) so a dead site never keeps the worker busy; the
+   * review status stays APPROVED so an operator can re-enable after review.
+   */
+  async recordFetchOutcome(
+    id: string,
+    outcome: { success: boolean; reason?: string; at?: Date; autoDisableThreshold?: number }
+  ): Promise<StoredKnowledgeSource> {
+    const threshold = Math.max(1, outcome.autoDisableThreshold ?? 3);
+    try {
+      const current = await this.prisma.knowledgeSource.findUnique({ where: { id } });
+      if (current === null) {
+        throw new PersistenceError("NOT_FOUND", `Knowledge source ${id} was not found`);
+      }
+      const at = outcome.at ?? new Date();
+      let consecutiveFailures = current.consecutiveFailures;
+      let lastFailure: unknown = current.lastFailure;
+      let lastSuccessfulFetch: Date | null = current.lastSuccessfulFetch;
+      if (outcome.success) {
+        consecutiveFailures = 0;
+        lastFailure = null;
+        lastSuccessfulFetch = at;
+      } else {
+        consecutiveFailures = current.consecutiveFailures + 1;
+        lastFailure = toPrismaJson({
+          at: at.toISOString(),
+          reason: (outcome.reason ?? "unknown failure").slice(0, 500),
+          consecutive: consecutiveFailures
+        });
+      }
+      const row = await this.prisma.knowledgeSource.update({
+        where: { id },
+        data: {
+          consecutiveFailures,
+          lastFailure: lastFailure === null ? Prisma.DbNull : (lastFailure as Prisma.InputJsonValue),
+          lastSuccessfulFetch,
+          enabled: consecutiveFailures >= threshold ? false : current.enabled
+        }
+      });
+      return parseSource(row);
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  /** Sources the worker may fetch: human-approved AND enabled (Q0.3). */
+  async listCrawlableSources(): Promise<StoredKnowledgeSource[]> {
+    const rows = await this.prisma.knowledgeSource.findMany({
+      where: { reviewStatus: "APPROVED", enabled: true },
+      orderBy: { id: "asc" }
+    });
+    return rows.map(parseSource);
   }
 
   async setSourceEnabled(id: string, enabled: boolean): Promise<void> {

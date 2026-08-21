@@ -5,6 +5,7 @@ import {
   KnowledgeDocumentSchema,
   KnowledgeRuleSchema,
   KnowledgeSourceSchema,
+  SOURCE_REVIEW_TRANSITIONS,
   PRODUCTION_KNOWLEDGE_STATUSES,
   isProductionEligibleKnowledgeStatus
 } from "../src/index";
@@ -153,4 +154,65 @@ test("unknown fields are rejected on all knowledge schemas", () => {
     KnowledgeSourceSchema.safeParse({ ...validSource, secretKey: "x" }).success,
     false
   );
+});
+
+test("Q0 source registry fields: category, reliability, review status, crawl strategy", () => {
+  const parsed = KnowledgeSourceSchema.parse({
+    ...validSource,
+    sourceCategory: "GEMOLOGY",
+    reliabilityLevel: "HIGH",
+    countryOrRegion: "United States",
+    contentType: "DATASHEET",
+    crawlStrategy: { maxPages: 5, followLinks: true, respectRobots: true },
+    reviewStatus: "APPROVED",
+    lastSuccessfulFetch: "2026-08-21T10:00:00Z",
+    lastFailure: { at: "2026-08-20T10:00:00Z", reason: "http 503", consecutive: 1 }
+  });
+  assert.equal(parsed.sourceCategory, "GEMOLOGY");
+  assert.equal(parsed.reliabilityLevel, "HIGH");
+  assert.equal(parsed.reviewStatus, "APPROVED");
+  assert.equal(parsed.crawlStrategy?.maxPages, 5);
+  assert.equal(parsed.lastFailure?.consecutive, 1);
+});
+
+test("Q0 source registry defaults keep legacy fixtures parseable", () => {
+  const parsed = KnowledgeSourceSchema.parse(validSource);
+  assert.equal(parsed.sourceCategory, "MANUAL");
+  assert.equal(parsed.reliabilityLevel, "MEDIUM");
+  assert.equal(parsed.contentType, "OTHER");
+  assert.equal(parsed.reviewStatus, "NEEDS_REVIEW");
+  assert.equal(parsed.crawlStrategy, undefined);
+});
+
+test("Q0 source registry rejects invalid category, review status, and crawl strategy", () => {
+  assert.equal(
+    KnowledgeSourceSchema.safeParse({ ...validSource, sourceCategory: "INFLUENCER" }).success,
+    false
+  );
+  assert.equal(
+    KnowledgeSourceSchema.safeParse({ ...validSource, reviewStatus: "LIVE" }).success,
+    false
+  );
+  assert.equal(
+    KnowledgeSourceSchema.safeParse({
+      ...validSource,
+      crawlStrategy: { maxPages: 0 }
+    }).success,
+    false
+  );
+  assert.equal(
+    KnowledgeSourceSchema.safeParse({
+      ...validSource,
+      crawlStrategy: { maxPages: 5, followLinks: true, extra: 1 }
+    }).success,
+    false
+  );
+});
+
+test("Q0 source review transitions never allow direct DISCOVERED -> APPROVED", () => {
+  assert.equal(SOURCE_REVIEW_TRANSITIONS.DISCOVERED.includes("APPROVED"), false);
+  assert.equal(SOURCE_REVIEW_TRANSITIONS.NEEDS_REVIEW.includes("APPROVED"), true);
+  assert.equal(SOURCE_REVIEW_TRANSITIONS.APPROVED.includes("DISABLED"), true);
+  assert.equal(SOURCE_REVIEW_TRANSITIONS.DISABLED.includes("NEEDS_REVIEW"), true);
+  assert.equal(SOURCE_REVIEW_TRANSITIONS.REJECTED.includes("NEEDS_REVIEW"), true);
 });

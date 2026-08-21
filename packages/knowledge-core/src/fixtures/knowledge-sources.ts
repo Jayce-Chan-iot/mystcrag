@@ -20,7 +20,11 @@ export const KNOWLEDGE_SOURCE_FIXTURES: readonly KnowledgeSource[] = [
       "knowledge-domain:market-observation"
     ],
     language: "zh-CN",
-    enabled: true
+    enabled: true,
+    sourceCategory: "MANUAL",
+    reliabilityLevel: "HIGH",
+    contentType: "TEXTBOOK",
+    reviewStatus: "APPROVED"
   },
   {
     id: "source-fixture-market",
@@ -29,7 +33,11 @@ export const KNOWLEDGE_SOURCE_FIXTURES: readonly KnowledgeSource[] = [
     authorityScore: 0.7,
     allowedKnowledgeDomains: ["knowledge-domain:market-observation"],
     language: "zh-CN",
-    enabled: true
+    enabled: true,
+    sourceCategory: "MANUAL",
+    reliabilityLevel: "MEDIUM",
+    contentType: "OTHER",
+    reviewStatus: "APPROVED"
   }
 ];
 

@@ -83,10 +83,14 @@ export async function runIngestionPipeline(
       rules: document.rules
     }));
   } else if (source.sourceType === "STATIC_HTML" || source.sourceType === "BROWSER_AUTOMATION") {
+    const strategy = source.crawlStrategy;
+    const runMaxPages = options.maxPages ?? strategy?.maxPages ?? 10;
+    const maxPages =
+      strategy === undefined ? runMaxPages : Math.min(runMaxPages, strategy.maxPages);
     const documents = await fetchHtmlDocuments(source, {
       allowPrivateNetworks: options.allowPrivateNetworks,
-      maxPages: options.maxPages,
-      followLinks: source.sourceType === "STATIC_HTML",
+      maxPages,
+      followLinks: strategy?.followLinks ?? source.sourceType === "STATIC_HTML",
       storageDir: options.crawlerStorageDir
     });
     pending = documents.map((document) => ({

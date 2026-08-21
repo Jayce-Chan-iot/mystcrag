@@ -3,10 +3,11 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 
 import type { StoredKnowledgeRule, StoredKnowledgeSource } from "@mystcrag/database";
-import type {
-  KnowledgeRule,
-  KnowledgeType,
-  RecommendationContext
+import {
+  KnowledgeSourceSchema,
+  type KnowledgeRule,
+  type KnowledgeType,
+  type RecommendationContext
 } from "@mystcrag/design-contract";
 
 import {
@@ -16,7 +17,7 @@ import {
 
 const TIMESTAMP = "2026-08-21T08:00:00+08:00";
 
-const HANDBOOK_SOURCE: StoredKnowledgeSource = {
+const HANDBOOK_SOURCE: StoredKnowledgeSource = KnowledgeSourceSchema.parse({
   id: "source-handbook",
   name: "玄矶设计手册",
   sourceType: "MANUAL",
@@ -24,9 +25,9 @@ const HANDBOOK_SOURCE: StoredKnowledgeSource = {
   allowedKnowledgeDomains: ["knowledge-domain:color-theory"],
   language: "zh-CN",
   enabled: true
-};
+});
 
-const LOW_AUTHORITY_SOURCE: StoredKnowledgeSource = {
+const LOW_AUTHORITY_SOURCE: StoredKnowledgeSource = KnowledgeSourceSchema.parse({
   id: "source-forum",
   name: "论坛摘录",
   sourceType: "STATIC_HTML",
@@ -34,7 +35,7 @@ const LOW_AUTHORITY_SOURCE: StoredKnowledgeSource = {
   allowedKnowledgeDomains: ["knowledge-domain:color-theory"],
   language: "zh-CN",
   enabled: true
-};
+});
 
 const SOURCES = new Map([
   [HANDBOOK_SOURCE.id, HANDBOOK_SOURCE],

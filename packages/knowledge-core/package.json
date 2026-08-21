@@ -12,6 +12,7 @@
     "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "review:cli": "tsx src/cli/index.ts",
+    "seed:sources": "tsx scripts/seed-sources.ts",
     "bench:retrieval": "tsx benchmarks/retrieval.benchmark.ts"
   },
   "dependencies": {

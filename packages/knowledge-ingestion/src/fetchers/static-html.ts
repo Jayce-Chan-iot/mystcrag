@@ -4,6 +4,7 @@ import { CheerioCrawler, RequestQueue, RobotsTxtFile, type CheerioRoot } from "c
 
 import type { StoredKnowledgeSource } from "@mystcrag/database";
 
+import { createRequestRateLimiter } from "../rate-limit.js";
 import { assertPublicUrl } from "../security.js";
 
 export type FetchedHtmlDocument = {
@@ -71,6 +72,7 @@ export async function fetchHtmlDocuments(
   const maxPages = Math.min(Math.max(options?.maxPages ?? 10, 1), 100);
   const followLinks = options?.followLinks === true;
   const documents = new Map<string, FetchedHtmlDocument>();
+  const limiter = createRequestRateLimiter(source.rateLimit?.maxRequestsPerMinute);
 
   const requestQueue = await RequestQueue.open(`ingestion-${randomUUID()}`);
   await requestQueue.addRequest({ url: source.baseUrl });
@@ -82,6 +84,7 @@ export async function fetchHtmlDocuments(
     maxConcurrency: 2,
     requestHandlerTimeoutSecs: 15,
     navigationTimeoutSecs: 15,
+    preNavigationHooks: limiter === null ? [] : [async () => void (await limiter.acquire())],
     async requestHandler({ request, $, enqueueLinks, log }) {
       const document = extractDocument(request.url, $);
       documents.set(document.url, document);

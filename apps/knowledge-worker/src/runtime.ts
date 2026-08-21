@@ -198,7 +198,7 @@ export async function createKnowledgeWorkerRuntime(
         KNOWLEDGE_JOBS.discoverSource,
         { batchSize: 1, pollingIntervalSeconds },
         async ([job]) => {
-          const sources = await repository.listSources({ enabledOnly: true });
+          const sources = await repository.listCrawlableSources();
           const result: DiscoverSourceJobResult = { enqueued: [], skipped: [] };
           for (const source of sources) {
             const jobId = await runtime.enqueueFetchDocument(source.id);
@@ -236,7 +236,21 @@ export async function createKnowledgeWorkerRuntime(
             allowPrivateNetworks: options.allowPrivateNetworks === true,
             crawlerStorageDir: options.crawlerStorageDir,
             maxPages: options.maxPagesPerCrawl
-          });
+          }).then(
+            async (completed) => {
+              await repository.recordFetchOutcome(source.id, { success: true });
+              return completed;
+            },
+            async (error: unknown) => {
+              await repository
+                .recordFetchOutcome(source.id, {
+                  success: false,
+                  reason: error instanceof Error ? error.message : String(error)
+                })
+                .catch(() => undefined);
+              throw error;
+            }
+          );
           const result: FetchDocumentJobResult = {
             sourceId: run.sourceId,
             createdDocuments: run.createdDocuments,

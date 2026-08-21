@@ -346,6 +346,24 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 
 ---
 
+### DEC-KNOWLEDGE-SYSTEM-010 — Human-gated source registry v2 with editorial classification and fetch-health tracking (Knowledge Quality Phase Q0)
+
+- Date: 2026-08-22
+- Proposed by Agent: Backend Agent
+- Affected modules: `packages/design-contract/src/schemas/knowledge.schema.ts` (source category/reliability/review/crawl-strategy schemas and transition table), `packages/database` (schema + `20260822090000_source_registry_v2` migration, repository methods `registerSourceCandidate`/`reviewSource`/`updateSourcePolicy`/`recordFetchOutcome`/`listCrawlableSources`), `packages/knowledge-ingestion` (`rate-limit.ts` request pacing, crawler `preNavigationHooks` wiring, pipeline honoring per-source `crawlStrategy`), `apps/knowledge-worker` (discover job iterates `listCrawlableSources`; fetch job records outcomes), `packages/knowledge-core` (36-candidate bootstrap registry + idempotent `seed:sources`)
+- Decision: Sources stop being a boolean `enabled` flag and become a two-dimensional editorial object: what the source IS (`sourceCategory` × `reliabilityLevel` × `contentType` × `countryOrRegion`) and whether humans have approved it (`reviewStatus` state machine DISCOVERED → NEEDS_REVIEW → APPROVED, with REJECTED/DISABLED as terminal review outcomes re-openable through NEEDS_REVIEW). Discovery or operator submission registers candidates (`registerSourceCandidate`) that are never APPROVED and never enabled; `reviewSource` enforces the transition table and rejects jumps like DISCOVERED → APPROVED. The worker's discover job iterates only `listCrawlableSources()` (APPROVED **and** enabled). Every fetch attempt records an outcome; three consecutive failures auto-disable the source while keeping its review status so an operator re-enables deliberately. Crawls honor per-source `rateLimit.maxRequestsPerMinute` through a serialized interval gate in `preNavigationHooks` and per-source `crawlStrategy.maxPages`/`followLinks` (robots.txt stays enforced unconditionally). The bootstrap registry seeds 36 curated candidates (all ten categories, forums and social platforms pinned to market-observation with authority ≤ 0.55) as NEEDS_REVIEW via an idempotent script.
+- Rationale: the knowledge system's answer quality is bounded by source trustworthiness; enabling a discovered source without review would let unvetted content reach APPROVED rules. Separating editorial classification from fetch mechanics (`sourceType`) lets review policy differ per category — GIA pages and Reddit threads are not peers — while the transition table keeps approval an explicit human act. Auto-disable with status preservation distinguishes "site is down" from "source was rejected" in the review queue. Rate limiting and robots enforcement are compliance requirements (task book section 46 / R11), and per-source strategies prevent one chatty source from dominating the crawl budget.
+- Rejected alternatives: auto-approving high-authorityScore sources (defeats the human gate; authority is an input to review, not a bypass); recording failures only on terminal retry exhaustion (pg-boss retries would hide transient health drift, and recovery must reset the counter at the first success); a global worker-wide rate limit (per-source limits are what robots/compliance pages publish); storing forum/social content as design rules (forums only feed market observation by schema-validated policy, not by convention).
+- Contract impact: `KnowledgeSourceSchema` gains optional-with-default fields (`sourceCategory`, `reliabilityLevel`, `contentType`, `reviewStatus`, `crawlStrategy`) and optional `countryOrRegion`/`lastSuccessfulFetch`/`lastFailure`; existing sources stay valid. New `KnowledgeSourceInput` type exposes the pre-default shape for registries/seed data.
+- Database impact: additive migration `20260822090000_source_registry_v2` adds nine columns plus `(review_status, enabled)` index; existing rows are grandfathered to APPROVED.
+- API impact: None yet — review operations ship as repository methods and the Q3 admin surface consumes them.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-22
+- Implementation branch or commit: `feat/knowledge-system`, Knowledge Quality Phase Q0 commit (database suite 56/56; `pnpm validate` green).
+
+---
+
 ## New decision template
 
 ### P3-NNN — Short decision title

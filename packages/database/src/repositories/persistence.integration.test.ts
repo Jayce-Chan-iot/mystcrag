@@ -20,7 +20,8 @@ const migrationNames = [
   "20260820130000_knowledge_storage_v1",
   "20260820140000_knowledge_embeddings",
   "20260821100000_add_design_decision_traces",
-  "20260821120000_add_knowledge_usage_events"
+  "20260821120000_add_knowledge_usage_events",
+  "20260822090000_source_registry_v2"
 ];
 
 function nextRevision(
