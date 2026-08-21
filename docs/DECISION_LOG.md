@@ -217,6 +217,27 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 - Approved by: Autonomous Tech Lead
 - Approval date: 2026-08-21
 - Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 8 spike commit.
+
+---
+
+### DEC-KNOWLEDGE-SYSTEM-004 — Tarot worktree merge order and Context Resolver unification (EPIC 7)
+
+- Date: 2026-08-21
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `packages/context-resolver` (new), `packages/tarot-engine` (consumed), `packages/design-contract` (consumed), `apps/backend` tarot module (deferred to EPIC 9 wiring)
+- Decision: (1) **Merge order (spec §9 registration)**: the in-flight `tarot-guided-integration` branch (03e5ad7) was merged into the knowledge-system branch after EPIC 8 (02a46de) in commit 27fedd8. Preserved as-is per spec §9: the server-authoritative session model, `tarot-engine` pure engine (card catalog, draw session, spreads, deterministic RNG), TarotSession persistence, the backend tarot module with its 6 endpoints, question encryption, and the frontend tarot entry/results flow. The tarot-specific `scoreTarotMaterials` (40/25/15/10/10 weighted scoring) stays behind the runtime flag at this merge point and is not deleted; it retires when the design-engine path consumes the unified pipeline, so the merge stays reversible. (2) **Context Resolver design**: `packages/context-resolver` exposes three deterministic resolvers — `resolveQuestionnaireContext`/`resolveManualContext` (legacy raw tags normalized onto canonical taxonomy ids via `resolveTaxonomyId`; unknown tags are dropped as recorded issues, never fatal) and `resolveTarotContext` (knowledge TAROT-domain rules matched by subject take precedence and map into soft preferences only; uncovered cards fall back to `tarot-engine` design signals — tones from `designTags.colors`, emotions from card keywords; rule provenance lands in `contextWeights` as `confidence × TAROT_SOURCE_WEIGHT`). `mergeContexts` unifies 1–4 sources: source list deduplicated by `sourceType`, preferences/avoidances/hard-constraint id lists unioned with first-occurrence order, context weights keyed per source, and hard constraints taken from the first non-tarot source so tarot never overrides P0/P1/P2 hard constraints. Context ids are content-addressed (SHA-256 of the canonical input projection, 12-hex prefix) so identical inputs yield identical ids for downstream caching.
+- Rationale: Spec §9 explicitly requires the tarot worktree merge order to be registered in DECISION_LOG, and ADR-10 redirects tarot recommendation generation into the knowledge pipeline as soft preferences (never hard constraints, no deterministic fortune claims). Content-addressed context ids make `/api/design/recommend` responses cacheable and reproducible; taxonomy normalization keeps the resolver deterministic while tolerating legacy questionnaire values.
+- Rejected alternatives: Deleting `scoreTarotMaterials` at merge time (irreversible while EPIC 9 wiring is pending; violates "keep changes within the assigned module" until the replacement path lands); letting tarot sources set hard constraints (violates ADR-10 compliance red line); merging questionnaire and tarot as a single monolithic resolver (loses per-source weights and provenance); counter- or timestamp-based context ids (non-deterministic, breaks caching and replay).
+- Contract impact: None. The package consumes `RecommendationContextSchema` from `@mystcrag/design-contract` as-is; no schema changes.
+- Database impact: None.
+- API impact: None yet. The resolver feeds the planned `POST /api/design/recommend` endpoint (EPIC 9 design-engine integration).
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-21
+- Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 7 Context Resolver commit.
+
+---
+
 ### DEC-TAROT-PREFERENCE-001 — Isolate saved Tarot design preferences behind a Backend port
 
 - Date: 2026-08-20
