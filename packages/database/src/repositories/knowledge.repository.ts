@@ -158,6 +158,27 @@ function parseRule(row: {
   return { ...parsed, sourceId: row.sourceId, knowledgeVersionId: row.knowledgeVersionId };
 }
 
+function parseRawRuleRow(row: Record<string, unknown>): StoredKnowledgeRule {
+  return parseRule({
+    id: String(row.id),
+    sourceId: String(row.source_id),
+    knowledgeType: String(row.knowledge_type),
+    knowledgeDomain: String(row.knowledge_domain),
+    subject: String(row.subject),
+    relation: String(row.relation),
+    payload: row.payload,
+    conditions: row.conditions,
+    confidence: Number(row.confidence),
+    status: row.status as KnowledgeStatusValue,
+    fingerprint: String(row.fingerprint),
+    sourceRefs: row.source_refs,
+    version: Number(row.version),
+    knowledgeVersionId: row.knowledge_version_id === null ? null : String(row.knowledge_version_id),
+    createdAt: new Date(row.created_at as string | Date),
+    updatedAt: new Date(row.updated_at as string | Date)
+  });
+}
+
 export class KnowledgeRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -472,6 +493,67 @@ export class KnowledgeRepository {
       orderBy: { id: "asc" }
     });
     return { knowledgeVersion: version.version, rules: rows.map(parseRule) };
+  }
+
+  async listProductionRules(filter?: {
+    knowledgeTypes?: string[];
+    knowledgeDomains?: string[];
+    subjects?: string[];
+    limit?: number;
+  }): Promise<StoredKnowledgeRule[]> {
+    const rows = await this.prisma.knowledgeRule.findMany({
+      where: {
+        status: "APPROVED",
+        knowledgeVersionId: { not: null },
+        knowledgeType: filter?.knowledgeTypes === undefined ? undefined : { in: filter.knowledgeTypes },
+        knowledgeDomain: filter?.knowledgeDomains === undefined ? undefined : { in: filter.knowledgeDomains },
+        subject: filter?.subjects === undefined ? undefined : { in: filter.subjects }
+      },
+      orderBy: { id: "asc" },
+      take: Math.min(Math.max(filter?.limit ?? 2000, 1), 5000)
+    });
+    const published = await this.prisma.knowledgeVersion.findFirst({
+      where: { status: "PUBLISHED" },
+      orderBy: [{ publishedAt: "desc" }, { id: "asc" }]
+    });
+    if (published === null) return [];
+    return rows
+      .filter((row) => row.knowledgeVersionId === published.id)
+      .map(parseRule);
+  }
+
+  async listRulesByDocumentIds(
+    documentIds: readonly string[],
+    options?: { productionOnly?: boolean }
+  ): Promise<StoredKnowledgeRule[]> {
+    if (documentIds.length === 0) return [];
+    try {
+      const productionOnly = options?.productionOnly !== false;
+      const productionClause = productionOnly
+        ? `r."status" = 'APPROVED' AND r."knowledge_version_id" IN (SELECT "id" FROM "knowledge_versions" WHERE "status" = 'PUBLISHED') AND`
+        : "";
+      const rows = await this.prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+        `SELECT r.* FROM "knowledge_rules" r
+         WHERE ${productionClause} r."source_refs" @> ANY (
+           SELECT jsonb_build_array(jsonb_build_object('documentId', d))
+           FROM unnest($1::text[]) AS d
+         )
+         ORDER BY r."id" ASC`,
+        [...documentIds]
+      );
+      return rows.map((row) => parseRawRuleRow(row));
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  async listRulesByIds(ids: readonly string[]): Promise<StoredKnowledgeRule[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.prisma.knowledgeRule.findMany({
+      where: { id: { in: [...ids] } },
+      orderBy: { id: "asc" }
+    });
+    return rows.map(parseRule);
   }
 
   async getLatestPublishedVersion(): Promise<StoredKnowledgeVersion | null> {

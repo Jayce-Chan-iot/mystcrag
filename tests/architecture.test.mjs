@@ -10,6 +10,7 @@ const requiredPaths = [
   "packages/design-contract/tests",
   "packages/ai-agent/src/adapters",
   "packages/three-engine/src/adapters",
+  "packages/knowledge-core/src",
   "apps/backend/src/modules/design",
   "apps/frontend/src/features/design",
   "packages/ai-agent/emotion-agent",
@@ -57,7 +58,7 @@ async function matchingFiles(roots, pattern, excluded = new Set()) {
 test("frontend cannot import server-only contract or database modules", async () => {
   const matches = await matchingFiles(
     ["apps/frontend"],
-    /from\s+["'](?:@mystcrag\/design-contract\/internal|@mystcrag\/database)["']/
+    /from\s+["'](?:@mystcrag\/design-contract\/internal|@mystcrag\/database|@mystcrag\/knowledge-core|@mystcrag\/knowledge-ingestion)["']/
   );
   assertNoMatches(matches);
 });

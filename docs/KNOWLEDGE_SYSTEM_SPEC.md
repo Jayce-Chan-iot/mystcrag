@@ -313,7 +313,7 @@ pg-boss 自管 `pgboss` schema（其内置迁移机制），**不纳入 prisma m
 | --- | --- | --- | --- |
 | DIY initial bundle（gzipped） | 增长 ≤10% | `.next/static` JS 产物总量（干净单次构建）：raw 1,063,701 B / **gzip 301,587 B**（2026-08-20，基线提交 `8cf5af4`，`pnpm validate` 8/8 全绿） | EPIC 1 后：raw 1,082,665 B / gzip 307,235 B（**+1.87%**，预算内）；EPIC 10 后复测 |
 | Design evaluate p95 | <200ms | 现有规则推荐管线 proxy（`generateRecommendations`，空知识库，100 次）：p50=0.14ms / p95=0.43ms / max=3.44ms；API 级 generate 耗时受 DB I/O 主导，EPIC 9 benchmark 脚本补齐 | EPIC 9/10 后 |
-| Hybrid retrieval p95 @10k records | <300ms（不含首次模型加载） | 暂无（EPIC 4 建 10k 合成数据集时采集空载基线） | EPIC 4 后 |
+| Hybrid retrieval p95 @10k records | <300ms（不含首次模型加载） | — | **EPIC 4 后：p50=175.4ms / p95=182.2ms / max=209.5ms**（10,000 合成文档+规则+哈希嵌入，100 次混合查询，PostgreSQL 17 + pgvector HNSW，`pnpm --filter @mystcrag/knowledge-core bench:retrieval`）**通过** |
 | 交互同步链 | 禁止 crawler/embedding/ingestion | 架构测试保证 | 架构测试保证 |
 
 Baseline 采集方式：bundle 数字来自干净单次构建（`rm -rf .next && next build`）后对 `apps/frontend/.next/static/**/*.js` 的 raw 与 gzip 总量统计（Turbopack 构建输出不含每路由尺寸列，以产物总量作为可比指标；主检出的 `.next` 含历史 dev 残留 chunk，不可比，故以 worktree 干净重建为准）；管线数字来自包内临时 `node:test` 基准探针（100 次迭代取分位，已删除）。EPIC 1 引入 taxonomy 数据（99 词项）随 design-contract 入口进入前端 bundle，增加约 5.6KB gzip；若后续逼近预算，可将知识系统 schema 拆分为子路径导出（如 `@mystcrag/design-contract/knowledge`）。
@@ -330,7 +330,7 @@ Baseline 采集方式：bundle 数字来自干净单次构建（`rm -rf .next &&
 | ADR-6 | json-rules-engine Spike：管 conditions/all/any/not/priority/facts；weighted scoring 自建 typed layer | 不重写引擎；Spike 失败才允许最小自研（另立 ADR） |
 | ADR-7 | Crawlee：CheerioCrawler 默认，PlaywrightCrawler 按白名单逐 source 启用 | 任务书 §28 |
 | ADR-8 | Culori 做 OKLCH/ΔE 色彩数学 | 不自实现 |
-| ADR-9 | EmbeddingProvider 接口 + Spike（A: transformers.js 服务端 / B: 远程 API / C: 独立服务），中文/繁中/英文/内存/体积/启动/吞吐/准确率/部署 benchmark 后定 | embedding 失败必须降级可用 |
+| ADR-9 | EmbeddingProvider 接口 + Spike（A: transformers.js 服务端 / B: 远程 API / C: 独立服务），中文/繁中/英文/内存/体积/启动/吞吐/准确率/部署 benchmark 后定 | embedding 失败必须降级可用。**实施状态（EPIC 4）**：接口 + HashEmbeddingProvider（256 维确定性词法哈希，CJK bigram）作为永可用的基线向量通道已落地并通过 10k 基准；语义模型 Provider（A/B/C）的选型 benchmark 需要网络下载模型/调用外部 API，属于部署环境决策，推迟至所有者裁决后接入（接口即插即用，`model` 列隔离不同 Provider 的向量） |
 | ADR-10 | 塔罗并入 RecommendationContext（soft, P6），取代塔罗专用打分 | 任务书 §13/14；已批准塔罗 spec Task 1–4 保留 |
 | ADR-11 | bracelet-engine 输入语义 `widthMm = lengthAlongStringMm ?? diameterMm` | 向后兼容旧行为 |
 | ADR-12 | MCP 用官方 TS SDK，新建 `apps/mcp-server`，仅依赖 knowledge-core/design-engine；backend 不经 MCP | 任务书 §36/37 |

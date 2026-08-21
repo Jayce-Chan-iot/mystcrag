@@ -185,6 +185,28 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  packages/knowledge-core:
+    dependencies:
+      '@mystcrag/database':
+        specifier: workspace:*
+        version: link:../database
+      '@mystcrag/design-contract':
+        specifier: workspace:*
+        version: link:../design-contract
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.18.0
+        version: 22.20.1
+      tsx:
+        specifier: ^4.23.1
+        version: 4.23.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   packages/three-engine:
     dependencies:
       '@mystcrag/bracelet-engine':
@@ -1912,6 +1934,7 @@ packages:
   eslint@9.39.5:
     resolution: {integrity: sha512-DgZS62aPLXKlnxILS/AYCoRvHaZeXceIzlXPkkGGzJWSow1aEk0lbTlxUSlyjC8jcaKxAdOnTDz+o1JFSBsyjw==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'
