@@ -1,4 +1,6 @@
 import { access, readFile, readdir } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 
@@ -129,6 +131,55 @@ test("shared contract dependency direction stays application-independent", async
     (name) => name.startsWith("@mystcrag/") || ["fastify", "next", "react", "three", "@prisma/client"].includes(name)
   );
   assertNoMatches(forbidden);
+});
+
+test("pnpm dev isolates each app's documented environment", () => {
+  const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+  const result = spawnSync(pnpmCommand, ["exec", "turbo", "run", "dev", "--dry=json"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      MYSTCRAG_AUTH_PROVIDER: "signed-test"
+    }
+  });
+
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout || "turbo dry run failed");
+  }
+
+  const dryRun = JSON.parse(result.stdout);
+  const backend = dryRun.tasks.find((task) => task.taskId === "@mystcrag/backend#dev");
+  const frontend = dryRun.tasks.find((task) => task.taskId === "@mystcrag/frontend#dev");
+  const backendEnvironment = backend?.environmentVariables?.specified?.passThroughEnv ?? [];
+  const frontendEnvironment = frontend?.environmentVariables?.specified?.passThroughEnv ?? [];
+
+  assert.deepEqual(backendEnvironment, [
+    "BACKEND_PORT",
+    "DATABASE_URL",
+    "MYSTCRAG_AUTH_AUDIENCE",
+    "MYSTCRAG_AUTH_ISSUER",
+    "MYSTCRAG_AUTH_PROVIDER",
+    "MYSTCRAG_AUTH_SIGNING_SECRET",
+    "MYSTCRAG_ENABLE_SIGNED_TEST_AUTH",
+    "MYSTCRAG_TAROT_ENABLED",
+    "MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY",
+    "NODE_ENV"
+  ]);
+  assert.deepEqual(frontendEnvironment, [
+    "MYSTCRAG_BACKEND_ORIGIN",
+    "MYSTCRAG_TAROT_ENABLED",
+    "NEXT_PUBLIC_API_BASE_URL",
+    "NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN",
+    "NEXT_PUBLIC_MYSTCRAG_MOCK_API",
+    "NODE_ENV"
+  ]);
+  assert.equal(frontendEnvironment.includes("DATABASE_URL"), false);
+  assert.equal(frontendEnvironment.includes("MYSTCRAG_AUTH_SIGNING_SECRET"), false);
+  assert.equal(frontendEnvironment.includes("MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY"), false);
+  assert.equal(backend?.resolvedTaskDefinition?.cache, false);
+  assert.equal(backend?.resolvedTaskDefinition?.persistent, true);
+  assert.equal(frontend?.resolvedTaskDefinition?.cache, false);
+  assert.equal(frontend?.resolvedTaskDefinition?.persistent, true);
 });
 
 function assertNoMatches(matches) {

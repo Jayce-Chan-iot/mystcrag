@@ -33,5 +33,6 @@ export * from "./schemas/taxonomy.schema";
 export * from "./schemas/visual-profile.schema";
 
 export * from "./taxonomy";
+export * from "./schemas/tarot.schema";
 
 export * from "./types/index";

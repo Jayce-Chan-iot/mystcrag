@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import {
@@ -46,6 +46,10 @@ export type CatalogProduct = {
   crystalNameCn?: string;
   crystalNameEn?: string;
   colorTags?: string[];
+  visualTags?: string[];
+  styleTags?: string[];
+  emotionTags?: string[];
+  cultureTags?: string[];
   shape?: string;
   diameterMm?: number;
   lengthAlongStringMm?: number | null;
@@ -152,7 +156,13 @@ const AiDesignCandidateSchema = z.strictObject({
     modelName: z.string().trim().min(1),
     promptVersion: z.string().trim().min(1),
     knowledgeBaseVersion: z.string().trim().min(1),
-    designTemplateVersion: z.string().trim().min(1).nullable()
+    designTemplateVersion: z.string().trim().min(1).nullable(),
+    tarotCandidate: z.strictObject({
+      sessionId: z.string().trim().min(1).max(160),
+      ruleVersion: z.string().trim().min(1).max(160),
+      rank: z.number().int().min(1).max(3),
+      direction: z.enum(["BALANCED", "CONTRAST", "NEUTRAL_LED"])
+    }).optional()
   })
 });
 
@@ -339,26 +349,94 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
+const NORMALIZED_AUTHORITY_TIMESTAMP = "1970-01-01T00:00:00.000Z";
+
+function deterministicComponentIdFactory(seed: string): (prefix: string) => string {
+  let index = 0;
+  return (prefix) => {
+    const digest = createHash("sha256")
+      .update(`${seed}\u0000${prefix}\u0000${index++}`)
+      .digest("hex")
+      .slice(0, 24);
+    return `${prefix}-${digest}`;
+  };
+}
+
+function normalizedTarotCandidateAuthority(design: DesignV1, designIdSeed: string): DesignV1 {
+  return DesignV1Schema.parse({
+    ...design,
+    designId: designIdSeed,
+    createdAt: NORMALIZED_AUTHORITY_TIMESTAMP,
+    updatedAt: NORMALIZED_AUTHORITY_TIMESTAMP,
+    pricing: {
+      ...design.pricing,
+      priceCalculatedAt: NORMALIZED_AUTHORITY_TIMESTAMP
+    }
+  });
+}
+
+export function deriveTarotDesignAuthorityId(
+  designIdSeed: string,
+  design: DesignV1
+): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify(normalizedTarotCandidateAuthority(design, designIdSeed)))
+    .digest("hex")
+    .slice(0, 32);
+  return `tarot-design-${digest}`;
+}
+
+function hasSameCandidateAuthority(
+  existing: DesignV1,
+  intended: DesignV1,
+  designIdSeed: string
+): boolean {
+  return isDeepStrictEqual(
+    normalizedTarotCandidateAuthority(existing, designIdSeed),
+    normalizedTarotCandidateAuthority(intended, designIdSeed)
+  );
+}
+
 function buildGeneratedDesign(
   request: GenerateDesignRequest,
   candidateInput: unknown,
   catalog: readonly CatalogProduct[],
   timestamp: string,
   designId: string,
-  createComponentId: (prefix: string) => string
+  createComponentId: (prefix: string) => string,
+  designMode: "AI_GENERATED" | "TAROT_GUIDED"
 ): DesignV1 {
   const candidate = AiDesignCandidateSchema.parse(candidateInput);
+  if (
+    (designMode === "TAROT_GUIDED") !==
+    (candidate.providerMetadata.tarotCandidate !== undefined)
+  ) {
+    throw new DomainApiError(
+      "VALIDATION_ERROR",
+      "Tarot candidate provenance must be present only for TAROT_GUIDED generation."
+    );
+  }
   const byId = new Map(catalog.map((product) => [product.id, product]));
   const materials = candidate.materialProductIds.map((productId) => {
     const product = byId.get(productId);
-    if (!product || product.productType !== "MATERIAL" || product.currency !== request.currency) {
+    if (
+      !product ||
+      !product.active ||
+      product.productType !== "MATERIAL" ||
+      product.currency !== request.currency
+    ) {
       throw new DomainApiError("INVENTORY_CHANGED", `Material ${productId} is unavailable.`);
     }
     return product;
   });
   const accessoryProducts = candidate.accessoryProductIds.map((productId) => {
     const product = byId.get(productId);
-    if (!product || product.productType !== "ACCESSORY" || product.currency !== request.currency) {
+    if (
+      !product ||
+      !product.active ||
+      product.productType !== "ACCESSORY" ||
+      product.currency !== request.currency
+    ) {
       throw new DomainApiError("INVENTORY_CHANGED", `Accessory ${productId} is unavailable.`);
     }
     return product;
@@ -418,7 +496,7 @@ function buildGeneratedDesign(
     schemaVersion: "1.0.0" as const,
     designId,
     designName: candidate.designName,
-    designMode: "AI_GENERATED" as const,
+    designMode,
     revision: 1,
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -480,7 +558,10 @@ function buildGeneratedDesign(
       knowledgeBaseVersion: candidate.providerMetadata.knowledgeBaseVersion,
       designTemplateVersion: candidate.providerMetadata.designTemplateVersion,
       pricingRuleVersion: "catalog-pending",
-      sourceDesignId: null
+      sourceDesignId: null,
+      ...(candidate.providerMetadata.tarotCandidate === undefined
+        ? {}
+        : { tarotCandidate: candidate.providerMetadata.tarotCandidate })
     },
     community: {
       visibility: "PRIVATE" as const,
@@ -661,21 +742,76 @@ export class DesignApplicationService implements DesignApiService {
       request.excludedProductIds
     );
     const providerOutput = await this.generator.generate(request, catalog);
+    return this.generateFromCandidate(
+      {
+        actorId,
+        request,
+        candidate: providerOutput,
+        designMode: "AI_GENERATED"
+      },
+      catalog
+    );
+  }
+
+  async generateFromCandidate(
+    input: {
+      readonly actorId: string;
+      readonly request: GenerateDesignRequest;
+      readonly candidate: unknown;
+      readonly designMode: "AI_GENERATED" | "TAROT_GUIDED";
+      readonly designId?: string;
+    },
+    catalogInput?: readonly CatalogProduct[]
+  ): Promise<GenerateDesignResponse> {
+    const catalog = catalogInput ?? await this.dependencies.catalog.listActiveCatalogProducts(
+      input.request.currency,
+      input.request.excludedProductIds
+    );
     const timestamp = this.now().toISOString();
+    const designIdSeed = input.designId ?? this.createId("design");
     const draft = buildGeneratedDesign(
-      request,
-      providerOutput,
+      input.request,
+      input.candidate,
       catalog,
       timestamp,
-      this.createId("design"),
-      this.createId
+      designIdSeed,
+      input.designId === undefined
+        ? this.createId
+        : deterministicComponentIdFactory(designIdSeed),
+      input.designMode
     );
-    const priced = DesignV1Schema.parse(
+    const calculated = DesignV1Schema.parse(
       await this.dependencies.pricing.recalculateDesignPrice(draft)
     );
+    const priced = input.designId === undefined
+      ? calculated
+      : DesignV1Schema.parse({
+          ...calculated,
+          designId: deriveTarotDesignAuthorityId(designIdSeed, calculated)
+        });
     await this.dependencies.inventory.validateAvailability(quantitiesByProduct(priced));
-    const persisted = await this.dependencies.designs.createDesign(actorId, priced);
-    return { requestId: request.requestId, design: toPublicDesign(persisted.snapshot), warnings: [] };
+    try {
+      const persisted = await this.dependencies.designs.createDesign(input.actorId, priced);
+      return {
+        requestId: input.request.requestId,
+        design: toPublicDesign(persisted.snapshot),
+        warnings: []
+      };
+    } catch (error) {
+      if (input.designId === undefined || errorCode(error) !== "CONFLICT") throw error;
+      const existing = await this.dependencies.designs.getDesign(input.actorId, priced.designId);
+      if (!hasSameCandidateAuthority(existing.snapshot, priced, designIdSeed)) {
+        throw new DomainApiError(
+          "CONFLICT",
+          "Existing deterministic design does not match the requested candidate."
+        );
+      }
+      return {
+        requestId: input.request.requestId,
+        design: toPublicDesign(existing.snapshot),
+        warnings: []
+      };
+    }
   }
 
   async update(actorId: string, request: UpdateDesignRequest): Promise<UpdateDesignResponse> {
@@ -791,6 +927,10 @@ export class DesignApplicationService implements DesignApiService {
         crystalNameCn: product.crystalNameCn ?? product.name,
         crystalNameEn: product.crystalNameEn ?? product.name,
         colorTags: product.colorTags ?? [],
+        visualTags: product.visualTags ?? [],
+        styleTags: product.styleTags ?? [],
+        emotionTags: product.emotionTags ?? [],
+        cultureTags: product.cultureTags ?? [],
         materialKey: product.materialKey,
         shape: BeadShapeSchema.parse(product.shape),
         diameterMm: product.diameterMm,

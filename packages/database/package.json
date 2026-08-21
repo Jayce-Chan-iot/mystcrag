@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@mystcrag/design-contract": "workspace:*",
+    "@mystcrag/tarot-engine": "workspace:*",
     "@prisma/adapter-pg": "^7.9.0",
     "@prisma/client": "^7.9.0",
     "dotenv": "^17.2.2",

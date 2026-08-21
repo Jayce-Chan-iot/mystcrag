@@ -20,6 +20,48 @@ test("DesignV1 accepts the standard fixture", () => {
   assert.equal(DesignV1Schema.safeParse(cloneDesign()).success, true);
 });
 
+test("Design metadata keeps existing modes and accepts TAROT_GUIDED", () => {
+  for (const designMode of [
+    "AI_GENERATED",
+    "DIY_CREATED",
+    "AI_ASSISTED",
+    "TEMPLATE_REMIX",
+    "TAROT_GUIDED"
+  ]) {
+    const candidate = cloneDesign() as unknown as { designMode: string };
+    candidate.designMode = designMode;
+    assert.equal(DesignV1Schema.safeParse(candidate).success, true);
+  }
+});
+
+test("Tarot provenance carries strict public-safe candidate identity without misusing Design lineage", () => {
+  const candidate = cloneDesign() as DesignV1 & {
+    provenance: DesignV1["provenance"] & {
+      tarotCandidate: {
+        sessionId: string;
+        ruleVersion: string;
+        rank: number;
+        direction: string;
+      };
+    };
+  };
+  candidate.designMode = "TAROT_GUIDED";
+  candidate.provenance.sourceDesignId = null;
+  candidate.provenance.tarotCandidate = {
+    sessionId: "tarot-session-1",
+    ruleVersion: "tarot-design-rules-v1",
+    rank: 1,
+    direction: "BALANCED"
+  };
+
+  const parsed = DesignV1Schema.parse(candidate);
+  assert.deepEqual(parsed.provenance.tarotCandidate, candidate.provenance.tarotCandidate);
+
+  const invalid = structuredClone(candidate);
+  invalid.provenance.tarotCandidate.rank = 4;
+  assert.equal(DesignV1Schema.safeParse(invalid).success, false);
+});
+
 test("the fixture registry contains all ten categorized scenarios", () => {
   assert.equal(Object.keys(designContractFixtures).length, 10);
   assert.equal(restrictedClaimFixture.category, "flagged");

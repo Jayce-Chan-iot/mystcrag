@@ -1,6 +1,6 @@
 # Database Schema
 
-The executable source is `packages/database/prisma/schema.prisma`; the reviewed baseline is `20260721140000_init_mystcrag_persistence_v1`. PostgreSQL tables use snake_case and Prisma fields use camelCase.
+The executable source is `packages/database/prisma/schema.prisma`; the reviewed baseline is `20260721140000_init_mystcrag_persistence_v1`, with additive order-idempotency and `20260820100000_add_tarot_sessions` migrations applied afterward. PostgreSQL tables use snake_case and Prisma fields use camelCase.
 
 ## Transactional model
 
@@ -11,6 +11,7 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 - `MaterialProduct` and `AccessoryProduct` are sellable catalog records; `Crystal` remains knowledge data. Cost fields are server-only. Product V2 adds nullable `lengthAlongStringMm`, `holeDiameterMm`, `grade`, and taxonomy-validated `visualProfile` JSON to materials, and `lengthAlongStringMm`/`visualProfile` to accessories; old rows stay valid without them.
 - `InventorySnapshot` and `PricingRule` are versioned inputs to order validation and price recalculation.
 - Knowledge storage (migration `20260820130000_knowledge_storage_v1`): `KnowledgeSource` (registry with authority score and allowed domains, disabled by default), `KnowledgeDocument` (content-hash deduplicated with normalized URL and an English `tsvector` full-text index over title plus clean content), `KnowledgeRule` (mandatory provenance via source FK and `sourceRefs` JSON, unique rule fingerprint, eight-state `KnowledgeStatus` lifecycle), and `KnowledgeVersion` (DRAFT → PUBLISHED → RETIRED). Production retrieval returns only `APPROVED` rules attached to the current `PUBLISHED` version; rejected, conflicted, superseded, or unversioned rules never reach the decision pipeline.
+- `TarotSession` is an owner-scoped, revisioned draw aggregate. It stores canonical private engine state separately from strict contract-safe draw and recommendation snapshots. `TarotDesignRecommendation` links exactly three ranked, distinct designs without duplicating design snapshots.
 
 ## Guardrails
 
@@ -19,9 +20,23 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 - Design writes conditionally match owner, current revision, and `deletedAt: null`; the current row update and revision insert share one transaction.
 - Publication requires consent, non-private visibility, PASSED compliance, and no review requirement. Order creation first returns an existing order for the same owner and revision, otherwise rejects rejected or review-required flagged designs, validates server price and latest inventory, and creates the order under a unique idempotency key.
 - Every foreign key declares `Restrict`; lifecycle data is never removed by user deletion. Designs use `deletedAt`, publications use `UNPUBLISHED`, and products use `active=false`.
+- Tarot transitions conditionally match session ID, owner ID, and state revision inside a transaction. Accepted selection operation IDs remain in the validated private engine state, making identical retries idempotent across later lifecycle states while stale or conflicting commands fail.
+- Recommendation ranks must be exactly 1, 2, and 3 with three distinct, owner-scoped designs. `selectedDesignId` is nullable metadata validated against those links by the repository; it is intentionally not a cascading foreign key.
+- Tarot question text has no database field. The default path stores neither question text nor ciphertext; explicit opt-in may populate only the paired nullable `questionCiphertext` and `questionSavedAt` fields, and public DTO mapping must omit ciphertext. At the repository boundary, only the exact ciphertext and timestamp pair is an immutable no-op; a different randomized envelope is a conflict. The Backend resolves a concurrent same-question CAS loss by rereading the winner and verifying its keyed envelope identity, while a different question remains a conflict. A later opt-in cannot mutate a recommendation originally committed without question storage.
+- New recommendation snapshots persist an internal `copySource` marker with provider or deterministic-fallback mode, provider ID/version, and copy-policy version. The marker is optional only so existing persisted snapshots remain readable; every newly generated recommendation supplies it.
+- An empty or absent `MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY` means no encryption port is installed. In that mode `saveQuestion: true` fails before repository access and the nullable question columns remain null. A non-empty malformed key fails Backend startup; it never downgrades to plaintext storage.
+
+## Tarot lifecycle persistence
+
+- `TarotSpreadType` supports `SINGLE` and `PAST_PRESENT_FUTURE`; `TarotSessionStatus` supports `DRAWING`, `DRAWN`, `RECOMMENDED`, `SAVED`, and `ABANDONED`. `DesignMode.TAROT_GUIDED` is additive to existing modes.
+- New sessions start at state revision 1 with an unselected, unrevealed canonical private draw state. Selection and reveal transitions update private state and its contract-safe draw snapshot together. Every repository read regenerates the revealed card identity, orientation, artwork, and orientation-specific keywords from the authoritative private deck and selections; any schema-valid persisted divergence is classified as `DATA_INTEGRITY_ERROR`.
+- Recommendation persistence validates interpretation, color story, and material-display data before write and after read, then transactionally creates unique `(sessionId, rank)` and `(sessionId, designId)` links.
+- Saving a session may record a selected design only when it belongs to the session's recommendation links. A nullable restrictive self-relation records redraw lineage through `parentSessionId`.
+- User, parent-session, session-recommendation, and design-recommendation foreign keys use `RESTRICT`. Deleting a referenced design or a parent/recommended session cannot erase Tarot lifecycle evidence.
 
 ## Demo catalog baseline
 
 The local seed synchronizes 20 compliant crystal knowledge entries into 96 active material products (6/8/10 mm variants per crystal, one independent CNY and one TWD SKU per size) plus CNY/TWD silver spacer and pendant accessories. Every material carries Product V2 backfill: string length (round beads equal diameter, faceted beads 1.05x), hole diameter, grade, and a taxonomy-derived visual profile. Inventory snapshots are append-only by `sourceVersion`; the current `seed-2026-08-v2` set deliberately marks six SKUs out of stock and two low stock so decision-engine tests exercise real availability constraints. The public material catalog reads bilingual names and color tags from `Crystal`, while price, render keys, sellable status, and currency remain product-specific. Cultural references remain design inspiration only and do not introduce medical or guaranteed-effect claims.
+The local seed synchronizes 18 compliant crystal knowledge entries into 36 active material products: one independent CNY and one TWD SKU per crystal. The public material catalog reads bilingual names plus color, visual, style, emotion, and compliance-safe culture tags from `Crystal`, while price, render keys, sellable status, and currency remain product-specific. These Crystal arrays are authoritative deterministic-scoring metadata; cultural references remain design inspiration only and do not introduce medical or guaranteed-effect claims.
 
 See `PERSISTENCE_MODEL_V1.md` for the ERD, full lifecycle, constraints, and JSON boundaries. Knowledge-system tables and lifecycle rules are specified in `KNOWLEDGE_SYSTEM_SPEC.md`.

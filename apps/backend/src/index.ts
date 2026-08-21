@@ -1,17 +1,57 @@
 import { createApp } from "./app.js";
-import { createPrismaClient } from "@mystcrag/database";
+import {
+  DesignRepository,
+  ProductRepository,
+  TarotSessionRepositoryImpl,
+  createPrismaClient
+} from "@mystcrag/database";
+import { NodeCryptoRandomSource } from "@mystcrag/tarot-engine";
+import { TarotCopyService } from "@mystcrag/ai-agent/tarot";
 import { createAuthProviderFromEnvironment } from "./auth/auth-provider.factory.js";
 import { createDesignApplicationService } from "./modules/design/design.service.js";
+import {
+  TarotAiRecommendationCopyPort,
+  TarotService
+} from "./modules/tarot/tarot.service.js";
+import { createTarotQuestionEncryptionFromEnvironment } from "./modules/tarot/tarot-question-encryption.js";
 
 const defaultPort = 4000;
 const configuredPort = Number(process.env.BACKEND_PORT ?? defaultPort);
 const port = Number.isInteger(configuredPort) && configuredPort > 0 ? configuredPort : defaultPort;
 
 const authProvider = createAuthProviderFromEnvironment();
+const tarotQuestionEncryption = createTarotQuestionEncryptionFromEnvironment(process.env);
 const database = createPrismaClient();
 await database.$connect();
+const designRepository = new DesignRepository(database);
+const productRepository = new ProductRepository(database);
+const designApplicationService = createDesignApplicationService(database);
 const app = createApp({
-  designService: createDesignApplicationService(database),
+  designService: designApplicationService,
+  tarotService: new TarotService({
+    repository: new TarotSessionRepositoryImpl(database),
+    random: new NodeCryptoRandomSource(),
+    designReader: {
+      async getOwnedDesign(actorId, designId) {
+        return (await designRepository.getDesign(actorId, designId)).snapshot;
+      }
+    },
+    catalog: {
+      async listActiveCatalogProducts(currency) {
+        return (await productRepository.listActiveCatalogProducts(currency)).filter(
+          (product) => product.productType === "MATERIAL"
+        );
+      }
+    },
+    designGenerator: designApplicationService,
+    copy: new TarotAiRecommendationCopyPort(new TarotCopyService()),
+    questionEncryption: tarotQuestionEncryption,
+    preferences: {
+      async getDesignPreferences() {
+        return undefined;
+      }
+    }
+  }),
   authProvider
 });
 app.addHook("onClose", async () => database.$disconnect());

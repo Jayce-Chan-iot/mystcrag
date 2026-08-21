@@ -182,6 +182,10 @@ test("material catalog exposes sellable bead fields without internal cost data",
       crystalNameCn: "紫水晶",
       crystalNameEn: "Amethyst",
       colorTags: ["purple", "cool"],
+      visualTags: ["translucent", "faceted"],
+      styleTags: ["minimal", "contemporary-eastern"],
+      emotionTags: ["calm-aesthetic"],
+      cultureTags: ["design-inspiration-only"],
       materialKey: "crystal-amethyst-material-v1",
       shape: "FACETED",
       diameterMm: 8,
@@ -192,6 +196,10 @@ test("material catalog exposes sellable bead fields without internal cost data",
     }]
   });
   assert.equal(response.materials[0]?.crystalNameCn, "紫水晶");
+  assert.deepEqual(response.materials[0]?.visualTags, ["translucent", "faceted"]);
+  assert.deepEqual(response.materials[0]?.styleTags, ["minimal", "contemporary-eastern"]);
+  assert.deepEqual(response.materials[0]?.emotionTags, ["calm-aesthetic"]);
+  assert.deepEqual(response.materials[0]?.cultureTags, ["design-inspiration-only"]);
   assert.equal(JSON.stringify(response).includes("unitCostMinor"), false);
 });
 

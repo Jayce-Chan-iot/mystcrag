@@ -1,36 +1,158 @@
-/**
- * 塔罗引擎公共类型定义。
- *
- * 数据约定：
- * - TarotArcana 覆盖大阿卡纳（major）与四个小阿卡纳花色（wands/cups/swords/pentacles），
- *   花色与四要素一一对应：wands=Fire、cups=Water、swords=Air、pentacles=Earth。
- * - designTags 各字段取值必须严格使用 design-contract 的 canonical taxonomy id（带域前缀），
- *   不得自造 id；金色调按规范归入 color:yellow（其别名含 gold）。
- * - culturalNote 仅描述文化意象，口径为"仅作设计灵感参考"；
- *   不得出现医疗、功效承诺或确定性命运类表述。
- */
-export type TarotArcana = "major" | "wands" | "cups" | "swords" | "pentacles";
+import { z } from "zod";
+
+import { TAROT_CARD_CATALOG } from "./card-catalog";
+import { requiredSlotsForSpread } from "./spreads";
+
+export type TarotSpreadType = "SINGLE" | "PAST_PRESENT_FUTURE";
+export type TarotSlot = "GUIDANCE" | "PAST" | "PRESENT" | "FUTURE";
 export type TarotOrientation = "UPRIGHT" | "REVERSED";
+export type TarotTheme =
+  | "RELATIONSHIPS"
+  | "CAREER"
+  | "SELF_GROWTH"
+  | "NEW_BEGINNINGS"
+  | "FINANCIAL_PLANNING";
 
-export type TarotDesignTags = {
-  /** Canonical color taxonomy ids, e.g. "color:blue" (subset of color:white/purple/pink/red/orange/yellow/green/teal/blue/gray/black/brown/multicolor). */
-  colors: string[];
-  /** Visual taxonomy ids from the texture:*, luster:*, transparency:*, temperature:*, saturation-level:*, lightness-level:* domains. */
-  visual: string[];
-  /** Emotion taxonomy ids (emotion:calm/focus/confidence/joy/connection/renewal/hope/love/courage/grounding/vitality/protection) and/or style taxonomy ids (style:minimal/eastern-contemporary/romantic/natural/modern/vintage/ethereal/delicate). */
-  themes: string[];
-};
+export interface RandomSource {
+  nextInt(maxExclusive: number): number;
+}
 
-export type TarotCardDefinition = {
-  id: string;
-  nameZh: string;
-  nameEn: string;
-  arcana: TarotArcana;
-  number: number;
-  element: "Fire" | "Water" | "Air" | "Earth";
-  uprightKeywords: string[];
-  reversedKeywords: string[];
-  designTags: TarotDesignTags;
-  /** Cultural imagery note; must stay design-inspiration-only, never a fortune/effect claim. */
-  culturalNote: string;
-};
+export interface TarotCardDefinition {
+  readonly id: string;
+  readonly number: number;
+  readonly nameZh: string;
+  readonly nameEn: string;
+  readonly assetFile: string;
+  readonly uprightKeywords: readonly string[];
+  readonly reversedKeywords: readonly string[];
+  readonly designTags: {
+    readonly colors: readonly string[];
+    readonly visual: readonly string[];
+    readonly themes: readonly string[];
+  };
+}
+
+export interface PrivateDrawSelection {
+  readonly slot: TarotSlot;
+  readonly displayedPosition: number;
+  readonly operationId: string;
+}
+
+export interface PrivateDrawState {
+  readonly spreadType: TarotSpreadType;
+  readonly deckOrder: readonly string[];
+  readonly orientationOrder: readonly TarotOrientation[];
+  readonly selections: readonly PrivateDrawSelection[];
+  readonly revision: number;
+  readonly revealed: boolean;
+}
+
+export interface RevealedTarotCard extends TarotCardDefinition {
+  readonly slot: TarotSlot;
+  readonly orientation: TarotOrientation;
+  readonly displayedPosition: number;
+}
+
+export interface PublicDrawState {
+  readonly spreadType: TarotSpreadType;
+  readonly selections: readonly PrivateDrawSelection[];
+  readonly revision: number;
+  readonly revealed: boolean;
+  readonly cards?: readonly RevealedTarotCard[];
+}
+
+const VersionedTagSchema = z.string().regex(/^[a-z]+-v\d+:[a-z0-9-]+$/);
+
+export const TarotSpreadTypeSchema = z.enum(["SINGLE", "PAST_PRESENT_FUTURE"]);
+export const TarotSlotSchema = z.enum(["GUIDANCE", "PAST", "PRESENT", "FUTURE"]);
+export const TarotOrientationSchema = z.enum(["UPRIGHT", "REVERSED"]);
+export const TarotThemeSchema = z.enum([
+  "RELATIONSHIPS",
+  "CAREER",
+  "SELF_GROWTH",
+  "NEW_BEGINNINGS",
+  "FINANCIAL_PLANNING",
+]);
+
+export const TarotCardDefinitionSchema = z.strictObject({
+  id: z.string().min(1),
+  number: z.number().int().min(0),
+  nameZh: z.string().min(1),
+  nameEn: z.string().min(1),
+  assetFile: z.string().regex(/^[^/\\]+$/).refine((value) => !value.includes("..")),
+  uprightKeywords: z.array(z.string().min(1)).min(1),
+  reversedKeywords: z.array(z.string().min(1)).min(1),
+  designTags: z.strictObject({
+    colors: z.array(VersionedTagSchema).min(1),
+    visual: z.array(VersionedTagSchema).min(1),
+    themes: z.array(VersionedTagSchema).min(1),
+  }),
+});
+
+export const PrivateDrawSelectionSchema = z.strictObject({
+  slot: TarotSlotSchema,
+  displayedPosition: z.number().int().min(0).max(77),
+  operationId: z.string().min(1),
+});
+
+const CanonicalCardIds = new Set(TAROT_CARD_CATALOG.map((card) => card.id));
+
+export const PrivateDrawStateSchema = z
+  .strictObject({
+    spreadType: TarotSpreadTypeSchema,
+    deckOrder: z.array(z.string().min(1)).length(78),
+    orientationOrder: z.array(TarotOrientationSchema).length(78),
+    selections: z.array(PrivateDrawSelectionSchema).max(3),
+    revision: z.number().int().min(0),
+    revealed: z.boolean(),
+  })
+  .superRefine((value, context) => {
+    const deckIds = new Set(value.deckOrder);
+    if (deckIds.size !== CanonicalCardIds.size || [...deckIds].some((id) => !CanonicalCardIds.has(id))) {
+      context.addIssue({ code: "custom", message: "deckOrder must contain every canonical card exactly once", path: ["deckOrder"] });
+    }
+
+    const requiredSlots = requiredSlotsForSpread(value.spreadType);
+    if (value.selections.length > requiredSlots.length) {
+      context.addIssue({ code: "custom", message: "selection count exceeds spread slots", path: ["selections"] });
+    }
+    for (const [index, selection] of value.selections.entries()) {
+      if (selection.slot !== requiredSlots[index]) {
+        context.addIssue({ code: "custom", message: "selections must follow canonical spread slots", path: ["selections", index, "slot"] });
+      }
+    }
+
+    if (new Set(value.selections.map((selection) => selection.displayedPosition)).size !== value.selections.length) {
+      context.addIssue({ code: "custom", message: "displayed positions must be unique", path: ["selections"] });
+    }
+    if (new Set(value.selections.map((selection) => selection.operationId)).size !== value.selections.length) {
+      context.addIssue({ code: "custom", message: "operation IDs must be unique", path: ["selections"] });
+    }
+    if (value.revealed && value.selections.length !== requiredSlots.length) {
+      context.addIssue({ code: "custom", message: "revealed draws must have every required selection", path: ["revealed"] });
+    }
+  });
+
+export const RevealedTarotCardSchema = TarotCardDefinitionSchema.extend({
+  slot: TarotSlotSchema,
+  orientation: TarotOrientationSchema,
+  displayedPosition: z.number().int().min(0).max(77),
+});
+
+export const PublicDrawStateSchema = z
+  .strictObject({
+    spreadType: TarotSpreadTypeSchema,
+    selections: z.array(PrivateDrawSelectionSchema).max(3),
+    revision: z.number().int().min(0),
+    revealed: z.boolean(),
+    cards: z.array(RevealedTarotCardSchema).max(3).optional(),
+  })
+  .superRefine((value, context) => {
+    if (!value.revealed && value.cards !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "unrevealed public draw state must not include cards",
+        path: ["cards"],
+      });
+    }
+  });

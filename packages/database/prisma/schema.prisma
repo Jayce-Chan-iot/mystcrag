@@ -17,6 +17,20 @@ enum DesignMode {
   DIY_CREATED
   AI_ASSISTED
   TEMPLATE_REMIX
+  TAROT_GUIDED
+}
+
+enum TarotSpreadType {
+  SINGLE
+  PAST_PRESENT_FUTURE
+}
+
+enum TarotSessionStatus {
+  DRAWING
+  DRAWN
+  RECOMMENDED
+  SAVED
+  ABANDONED
 }
 
 enum DesignStatus {
@@ -88,15 +102,16 @@ enum KnowledgeVersionStatus {
 }
 
 model User {
-  id           String              @id @default(cuid())
-  email        String?             @unique
-  displayName  String?             @map("display_name")
-  createdAt    DateTime            @default(now()) @map("created_at")
-  updatedAt    DateTime            @updatedAt @map("updated_at")
-  designs      Design[]
-  revisions    DesignRevision[]
-  publications DesignPublication[]
-  orders       Order[]
+  id            String              @id @default(cuid())
+  email         String?             @unique
+  displayName   String?             @map("display_name")
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+  designs       Design[]
+  revisions     DesignRevision[]
+  publications  DesignPublication[]
+  orders        Order[]
+  tarotSessions TarotSession[]
 
   @@map("users")
 }
@@ -144,27 +159,28 @@ model DesignTemplate {
 }
 
 model Design {
-  id                 String              @id
-  ownerId            String              @map("owner_id")
-  name               String
-  mode               DesignMode
-  status             DesignStatus        @default(DRAFT)
-  schemaVersion      String              @map("schema_version")
-  currentRevision    Int                 @default(1) @map("current_revision")
-  locale             String
-  currency           Currency
-  currentSnapshot    Json                @map("current_snapshot")
-  complianceStatus   ComplianceStatus    @map("compliance_status")
-  visibility         Visibility          @default(PRIVATE)
-  publishConsent     Boolean             @default(false) @map("publish_consent")
-  allowRemix         Boolean             @default(false) @map("allow_remix")
-  creatorDisplayMode CreatorDisplayMode  @default(ANONYMOUS) @map("creator_display_mode")
-  createdAt          DateTime            @default(now()) @map("created_at")
-  updatedAt          DateTime            @updatedAt @map("updated_at")
-  deletedAt          DateTime?           @map("deleted_at")
-  owner              User                @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  revisions          DesignRevision[]
-  publications       DesignPublication[]
+  id                   String                      @id
+  ownerId              String                      @map("owner_id")
+  name                 String
+  mode                 DesignMode
+  status               DesignStatus                @default(DRAFT)
+  schemaVersion        String                      @map("schema_version")
+  currentRevision      Int                         @default(1) @map("current_revision")
+  locale               String
+  currency             Currency
+  currentSnapshot      Json                        @map("current_snapshot")
+  complianceStatus     ComplianceStatus            @map("compliance_status")
+  visibility           Visibility                  @default(PRIVATE)
+  publishConsent       Boolean                     @default(false) @map("publish_consent")
+  allowRemix           Boolean                     @default(false) @map("allow_remix")
+  creatorDisplayMode   CreatorDisplayMode          @default(ANONYMOUS) @map("creator_display_mode")
+  createdAt            DateTime                    @default(now()) @map("created_at")
+  updatedAt            DateTime                    @updatedAt @map("updated_at")
+  deletedAt            DateTime?                   @map("deleted_at")
+  owner                User                        @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  revisions            DesignRevision[]
+  publications         DesignPublication[]
+  tarotRecommendations TarotDesignRecommendation[]
 
   @@index([ownerId, updatedAt])
   @@index([status, deletedAt])
@@ -402,4 +418,45 @@ model KnowledgeVersion {
 
   @@index([status])
   @@map("knowledge_versions")
+}
+
+model TarotSession {
+  id                     String                      @id @default(cuid())
+  ownerId                String                      @map("owner_id")
+  spreadType             TarotSpreadType             @map("spread_type")
+  theme                  String
+  status                 TarotSessionStatus          @default(DRAWING)
+  stateRevision          Int                         @default(1) @map("state_revision")
+  deckVersion            String                      @map("deck_version")
+  ruleVersion            String                      @map("rule_version")
+  privateDeckState       Json                        @map("private_deck_state")
+  drawSnapshot           Json                        @map("draw_snapshot")
+  recommendationSnapshot Json?                       @map("recommendation_snapshot")
+  questionCiphertext     String?                     @map("question_ciphertext")
+  questionSavedAt        DateTime?                   @map("question_saved_at")
+  selectedDesignId       String?                     @map("selected_design_id")
+  parentSessionId        String?                     @map("parent_session_id")
+  createdAt              DateTime                    @default(now()) @map("created_at")
+  updatedAt              DateTime                    @updatedAt @map("updated_at")
+  owner                  User                        @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  parentSession          TarotSession?               @relation("TarotRedraw", fields: [parentSessionId], references: [id], onDelete: Restrict)
+  redraws                TarotSession[]              @relation("TarotRedraw")
+  recommendations        TarotDesignRecommendation[]
+
+  @@index([ownerId, updatedAt])
+  @@map("tarot_sessions")
+}
+
+model TarotDesignRecommendation {
+  id        String       @id @default(cuid())
+  sessionId String       @map("session_id")
+  designId  String       @map("design_id")
+  rank      Int
+  createdAt DateTime     @default(now()) @map("created_at")
+  session   TarotSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  design    Design       @relation(fields: [designId], references: [id], onDelete: Restrict)
+
+  @@unique([sessionId, rank])
+  @@unique([sessionId, designId])
+  @@map("tarot_design_recommendations")
 }

@@ -217,6 +217,21 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 - Approved by: Autonomous Tech Lead
 - Approval date: 2026-08-21
 - Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 8 spike commit.
+### DEC-TAROT-PREFERENCE-001 — Isolate saved Tarot design preferences behind a Backend port
+
+- Date: 2026-08-20
+- Proposed by Agent: Tarot guided integration review
+- Affected modules: `apps/backend`, Tarot recommendation orchestration, future user-preference persistence adapter
+- Decision: `TarotService` consumes an optional owner-scoped `TarotPreferencePort` that returns a saved wrist circumference and optional min/max budget. Values are validated before catalog scoring or Design persistence. Production explicitly wires a no-store adapter that returns `undefined`, preserving the 155 mm wrist default and no-hard-budget behavior until a real preference store exists.
+- Rationale: The recommendation service must be able to consume saved preferences without coupling Tarot orchestration to a not-yet-approved persistence model. The explicit no-store adapter makes the current integration cost visible and prevents an accidental plaintext, ad-hoc, or cross-module preference store.
+- Rejected alternatives: Hard-code 155 mm permanently; infer preference persistence from questionnaire requests; add an unreviewed database table; make budget a catalog hard filter.
+- Contract impact: None. Preferences remain server-side generation inputs and are not added to the Tarot request DTO.
+- Database impact: None today. A future saved-preference store requires a separately reviewed adapter and persistence decision.
+- API impact: None. Existing request and response schemas are unchanged.
+- Approval status: `APPROVED`
+- Approved by: Tarot integration task owner through binding review ruling
+- Approval date: 2026-08-20
+- Implementation branch or commit: `codex/tarot-guided-integration`; exact fix-round commit is recorded in the Task 5 report.
 
 ---
 

@@ -19,6 +19,10 @@ export type CatalogMaterialProduct = SellableProduct & {
   crystalNameCn: string;
   crystalNameEn: string;
   colorTags: string[];
+  visualTags: string[];
+  styleTags: string[];
+  emotionTags: string[];
+  cultureTags: string[];
   shape: string;
   diameterMm: number;
   lengthAlongStringMm: number | null;
@@ -121,6 +125,10 @@ export class ProductRepository {
         crystalNameCn: row.crystal.nameCn,
         crystalNameEn: row.crystal.nameEn,
         colorTags: [...row.crystal.colorTags],
+        visualTags: [...row.crystal.visualTags],
+        styleTags: [...row.crystal.styleTags],
+        emotionTags: [...row.crystal.emotionTags],
+        cultureTags: [...row.crystal.cultureTags],
         shape: row.shape,
         diameterMm: row.diameterMm,
         lengthAlongStringMm: row.lengthAlongStringMm,

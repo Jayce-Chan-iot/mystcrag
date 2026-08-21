@@ -3,13 +3,11 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { DevelopmentModeBadge } from "../src/components/development-mode-badge";
+import { isTarotFeatureEnabled } from "../src/lib/api/api-runtime";
 import "./globals.css";
+import { getMainNavigation } from "./navigation";
 
-const navigation = [
-  { href: "/ai-design", label: "AI 设计" },
-  { href: "/diy", label: "DIY 创作" },
-  { href: "/#inspiration", label: "设计灵感" }
-];
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: {
@@ -23,15 +21,20 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  const navigation = getMainNavigation(isTarotFeatureEnabled());
+
   return (
     <html data-scroll-behavior="smooth" lang="zh-CN">
       <body>
         <header className="sticky top-0 z-50 border-b border-[var(--border)]/70 bg-[var(--surface)]/88 backdrop-blur-xl">
-          <nav className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5 sm:h-20 sm:px-8" aria-label="主导航">
-            <Link className="inline-flex min-h-11 items-center font-serif text-lg tracking-[0.18em] sm:text-xl" href="/" aria-label="玄矶 Mystcrag 首页">
+          <nav className="mx-auto flex max-w-7xl flex-col px-5 py-2 sm:h-20 sm:flex-row sm:items-center sm:justify-between sm:px-8 sm:py-0" aria-label="主导航">
+            <Link className="inline-flex min-h-11 items-center whitespace-nowrap font-serif text-lg tracking-[0.18em] sm:text-xl" href="/" aria-label="玄矶 Mystcrag 首页">
               玄矶 <span className="text-[0.68em] tracking-[0.24em] text-[var(--muted)]">MYSTCRAG</span>
             </Link>
-            <div className="flex items-center gap-4 text-sm text-[var(--muted)] sm:gap-7">
+            <div
+              className="-mx-1 flex max-w-full items-center gap-4 overflow-x-auto whitespace-nowrap px-1 text-sm text-[var(--muted)] [scrollbar-width:thin] sm:mx-0 sm:gap-7 sm:overflow-visible sm:px-0"
+              data-mobile-scroll-navigation="true"
+            >
               {navigation.map((item) => (
                 <Link className="inline-flex min-h-11 shrink-0 items-center transition-colors duration-300 hover:text-[var(--accent)]" href={item.href} key={item.href}>
                   {item.label}

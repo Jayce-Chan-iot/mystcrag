@@ -20,6 +20,9 @@ await build({
   },
   external: ["fastify", "zod"],
   alias: {
+    "@mystcrag/ai-agent/tarot": resolveFromBackend(
+      "../../packages/ai-agent/src/tarot/index.ts"
+    ),
     "@mystcrag/ai-agent": resolveFromBackend("../../packages/ai-agent/index.ts"),
     "@mystcrag/database": resolveFromBackend("../../packages/database/src/index.ts"),
     "@mystcrag/design-contract": resolveFromBackend(

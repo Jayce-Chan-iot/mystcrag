@@ -1,5 +1,9 @@
 import Link from "next/link";
 
+import { isTarotFeatureEnabled } from "../src/lib/api/api-runtime";
+
+export const dynamic = "force-dynamic";
+
 const cases = [
   { name: "雨霁青", note: "海蓝 · 月光 · 清透银色", tone: "from-[#a8d7df] to-[#eef1eb]" },
   { name: "暮山紫", note: "紫晶 · 烟晶 · 古银", tone: "from-[#b8a4c7] to-[#e8dfd9]" },
@@ -10,7 +14,7 @@ function BraceletArtwork({ compact = false }: { compact?: boolean }) {
   const beads = Array.from({ length: compact ? 14 : 20 });
 
   return (
-    <div className={`relative mx-auto aspect-square ${compact ? "w-48" : "w-[min(78vw,31rem)]"}`} aria-label="3D 手串视觉集成占位">
+    <div className={`relative mx-auto aspect-square ${compact ? "w-48" : "w-[min(62vw,20rem)]"}`} aria-label="水晶手串设计视觉">
       <div className="absolute inset-[12%] rounded-full border border-white/70 bg-[radial-gradient(circle_at_38%_30%,#fff,rgba(255,255,255,.18)_32%,rgba(104,78,127,.1)_70%)] shadow-[inset_0_0_70px_rgb(89_64_112/0.12),0_30px_80px_rgb(60_44_72/0.16)]" />
       {beads.map((_, index) => {
         const angle = (index / beads.length) * Math.PI * 2 - Math.PI / 2;
@@ -31,30 +35,85 @@ function BraceletArtwork({ compact = false }: { compact?: boolean }) {
 }
 
 export default function HomePage() {
+  const tarotEnabled = isTarotFeatureEnabled();
+  const creationPaths = [
+    {
+      id: "ai",
+      eyebrow: "AI Inspiration",
+      title: "AI 灵感设计",
+      description: "从情绪、色彩、风格、手围与预算出发，融入五行意象，生成三款可继续调整的设计。",
+      note: "五行意象仅作为文化与设计灵感。",
+      href: "/ai-design",
+      action: "开始 AI 设计"
+    },
+    ...(tarotEnabled
+      ? [{
+          id: "tarot",
+          eyebrow: "Tarot Guidance",
+          title: "塔罗水晶引导",
+          description: "选择一个主题与牌阵，从牌面色彩和意象中获得三款水晶搭配灵感。",
+          note: "塔罗内容用于自我反思与设计灵感，不代表事实预测。",
+          href: "/tarot/setup",
+          action: "开始塔罗引导"
+        }]
+      : []),
+    {
+      id: "diy",
+      eyebrow: "Free Creation",
+      title: "DIY 创作",
+      description: "从光泽、色彩与排列中，自由创作只属于你的手串。",
+      note: "直接进入珠子备选库，自由挑选与排列。",
+      href: "/diy",
+      action: "进入 DIY 创作"
+    }
+  ];
+
   return (
     <main>
-      <section className="mx-auto grid min-h-[calc(100vh-5rem)] max-w-7xl items-center gap-10 px-5 py-16 sm:px-8 lg:grid-cols-[1.04fr_.96fr] lg:py-20">
+      <section className="mx-auto grid max-w-7xl items-center gap-8 px-5 py-12 sm:px-8 lg:grid-cols-[1.2fr_.8fr] lg:py-14">
         <div className="animate-reveal-softly max-w-2xl">
           <p className="text-xs font-semibold uppercase tracking-[0.34em] text-[var(--accent)]">玄矶 · Mystcrag</p>
-          <h1 className="mt-7 font-serif text-5xl leading-[1.13] tracking-[-0.04em] sm:text-7xl lg:text-[5.3rem]">
+          <h1 className="mt-6 font-serif text-5xl leading-[1.13] tracking-[-0.04em] sm:text-6xl lg:text-7xl">
             把此刻的心情，<br /><span className="text-[var(--accent-deep)]">串成一条手链。</span>
           </h1>
           <p className="mt-7 max-w-xl text-base leading-8 text-[var(--muted)] sm:text-lg">
             从你的当下、色彩与风格出发，AI 为你提炼三种设计方向；每一颗珠子，都仍由你决定。
           </p>
-          <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-            <Link className="rounded-full bg-[var(--foreground)] px-7 py-3.5 text-center text-sm text-white transition hover:-translate-y-0.5 hover:bg-[var(--accent-deep)]" href="/ai-design">
-              开始 AI 设计 <span aria-hidden="true">→</span>
-            </Link>
-            <Link className="rounded-full border border-[var(--border)] bg-white/55 px-7 py-3.5 text-center text-sm transition hover:border-[var(--accent)] hover:text-[var(--accent-deep)]" href="/diy">
-              直接进入 DIY
-            </Link>
-          </div>
         </div>
         <div className="animate-float-gently relative">
           <div className="absolute inset-[15%] rounded-full bg-[#d8cbe2]/50 blur-3xl" />
           <BraceletArtwork />
-          <p className="absolute bottom-2 right-2 rounded-full border border-white/80 bg-white/70 px-4 py-2 text-xs text-[var(--muted)] backdrop-blur sm:bottom-8 sm:right-8">3D 实时预览集成点</p>
+          <p className="absolute bottom-2 right-2 rounded-full border border-white/80 bg-white/70 px-4 py-2 text-xs text-[var(--muted)] backdrop-blur sm:bottom-5 sm:right-5">2.5D 水晶光影预览</p>
+        </div>
+      </section>
+
+      <section className="mx-auto max-w-7xl px-5 pb-20 sm:px-8 sm:pb-24" aria-labelledby="creation-paths-title">
+        <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-[var(--accent)]">Choose a path</p>
+            <h2 className="mt-3 font-serif text-3xl sm:text-4xl" id="creation-paths-title">从你喜欢的方式开始</h2>
+          </div>
+          <p className="max-w-md text-sm leading-7 text-[var(--muted)]">{creationPaths.length === 3 ? "三种" : "两种"}创作方式拥有相同的设计自由，最终都可以进入 DIY 继续调整。</p>
+        </div>
+        <div className={`grid gap-5 ${creationPaths.length === 3 ? "lg:grid-cols-3" : "md:grid-cols-2"}`} data-creation-path-group="true">
+          {creationPaths.map((path) => (
+            <article
+              className="flex min-h-72 flex-col rounded-[2rem] border border-[var(--border)] bg-white/65 p-7 shadow-[0_18px_45px_rgb(61_47_70/0.06)]"
+              data-creation-path={path.id}
+              key={path.id}
+            >
+              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.26em] text-[var(--accent)]">{path.eyebrow}</p>
+              <h3 className="mt-5 font-serif text-3xl">{path.title}</h3>
+              <p className="mt-4 leading-7 text-[var(--muted)]">{path.description}</p>
+              <p className="mt-3 text-xs leading-6 text-[var(--muted)]">{path.note}</p>
+              <Link
+                className="mt-auto inline-flex min-h-12 items-center justify-between rounded-full bg-[var(--foreground)] px-6 text-sm text-white transition hover:-translate-y-0.5 hover:bg-[var(--accent-deep)]"
+                href={path.href}
+              >
+                {path.action}<span aria-hidden="true">→</span>
+              </Link>
+            </article>
+          ))}
         </div>
       </section>
 
