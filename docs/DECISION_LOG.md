@@ -184,6 +184,24 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 
 ---
 
+### DEC-KNOWLEDGE-SYSTEM-002 — Rule Compiler semantics for Active Decision Rules
+
+- Date: 2026-08-21
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `packages/knowledge-core` (new `src/compiler/rule-compiler.ts` and `KnowledgeCore.compileActiveRules` facade), `packages/design-contract` (consumed `DecisionRuleSchema`)
+- Decision: The Rule Compiler compiles the published APPROVED knowledge version into Active Decision Rules as a pure deterministic function. Knowledge types map onto the task-book section 17 ladder as MATERIAL_COMPATIBILITY→P3, COLOR_THEORY→P4, STYLE_RULE→P5, CULTURAL_SYMBOLISM/TAROT→P6, structural composition types→P7, MARKET_OBSERVATION→P8. Within NEGATIVE_RULE, material-subject prohibitions compile as HARD P3 constraints while color-subject clashes stay SOFT P4. Rule weight = confidence × strongest cited source authority; sources below a 0.6 authority threshold are dropped. Conflict detection groups by (type, subject, relation, canonical applicability conditions): rules guarded by different conditions are complementary situations and both survive, while divergent unconditional rules on the same key resolve by priority, weight, confidence, then id. Context-driven subjects (`tarot:`/`style:`/`emotion:` prefixes) generate conditions on the `contextTaxonomyRefs` fact; all other subjects generate conditions on `designTaxonomyRefs`; authored rule conditions are preserved verbatim. `KnowledgeCore.compileActiveRules` caches context-free compiles per (knowledge version, catalog version, scope) with a 32-entry cap; context-scoped compiles always recompile.
+- Rationale: Task book section 18 requires the compile pipeline to be deterministic and to include relevance, credibility, status, context, feasibility, dedup, conflict, priority, and weight steps. Situation-aware conflict grouping preserves the curated handbook's style-conditional rule pairs (e.g. cool-harmony variants for ethereal vs modern styles) that naive (type, subject, relation) grouping would discard; it keeps the E2E-2 cold-start corpus above the 100-rule floor (94→≥100 compiled rules from the 116-rule fixture corpus).
+- Rejected alternatives: Reusing the review-chain `detectRuleConflicts` directly (payload-divergent groups ignore applicability conditions and over-drop complementary rules); priority derived from source authority; HARD color-level negative rules (over-constrains soft aesthetics guidance); caching context-scoped compiles (unbounded cache keyed by user context).
+- Contract impact: None. `DecisionRuleSchema` is consumed as-is; no schema changes.
+- Database impact: None. Reads use the existing knowledge repository production queries.
+- API impact: None yet. The compiled rule set feeds EPIC 9 design generation and the planned `/api/design/suggest` caching path.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-21
+- Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 8 Rule Compiler commit.
+
+---
+
 ## New decision template
 
 ### P3-NNN — Short decision title

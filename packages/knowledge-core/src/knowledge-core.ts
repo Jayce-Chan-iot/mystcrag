@@ -2,10 +2,17 @@ import type {
   DatabaseClient,
   KnowledgeRepository,
   StoredKnowledgeDocument,
-  StoredKnowledgeRule
+  StoredKnowledgeRule,
+  StoredKnowledgeSource
 } from "@mystcrag/database";
 import type { KnowledgeType } from "@mystcrag/design-contract";
 
+import {
+  compileDecisionRules,
+  type CatalogFeasibilitySnapshot,
+  type CompiledRuleSet,
+  type RuleCompileOptions
+} from "./compiler/rule-compiler.js";
 import type { EmbeddingProvider } from "./search/embedding-provider.js";
 import { vectorToPgLiteral } from "./search/embedding-provider.js";
 import { reciprocalRankFusion } from "./search/rrf.js";
@@ -48,11 +55,18 @@ export type KnowledgeCoreOptions = {
 
 const KEYWORD_CHANNEL_LIMIT = 50;
 const VECTOR_CHANNEL_LIMIT = 50;
+const COMPILED_RULE_CACHE_LIMIT = 32;
 
 export class KnowledgeCore {
   private readonly database: DatabaseClient;
   private readonly repository: KnowledgeRepository;
   private readonly embeddings: EmbeddingProvider | undefined;
+  /**
+   * Compiled rule sets are immutable; caching per (knowledge version,
+   * catalog version, scope) keeps the suggest path cheap and deterministic
+   * (spec section 8). Context-scoped compiles are never cached.
+   */
+  private readonly compiledRuleCache = new Map<string, CompiledRuleSet>();
 
   constructor(options: KnowledgeCoreOptions) {
     this.database = options.database;
@@ -200,6 +214,72 @@ export class KnowledgeCore {
     return this.repository.listProductionRules({
       knowledgeTypes: ["COMPOSITION_RULE", "PROPORTION_RULE", "TRANSITION_RULE", "FOCAL_RULE"]
     });
+  }
+
+  /**
+   * Compiles the current published knowledge version into Active Decision
+   * Rules (task book section 18). Context-free compiles are cached per
+   * (knowledge version, catalog version, scope); compiles that pass a user
+   * context always recompile.
+   */
+  async compileActiveRules(
+    catalog: CatalogFeasibilitySnapshot,
+    options?: RuleCompileOptions
+  ): Promise<CompiledRuleSet> {
+    const published = await this.repository.getLatestPublishedVersion();
+    if (published === null) {
+      return compileDecisionRules({
+        knowledgeVersion: "none",
+        rules: [],
+        sources: new Map<string, StoredKnowledgeSource>(),
+        catalog,
+        options
+      });
+    }
+
+    const cacheable = options?.context === undefined;
+    const cacheKey = cacheable
+      ? [
+          published.version,
+          catalog.productCatalogVersion,
+          JSON.stringify(options?.scope ?? {}),
+          options?.contextFilter === true ? "filter" : "",
+          options?.minSourceAuthority ?? ""
+        ].join("\u0000")
+      : null;
+    if (cacheKey !== null) {
+      const cached = this.compiledRuleCache.get(cacheKey);
+      if (cached !== undefined) return cached;
+    }
+
+    const rules = await this.repository.listProductionRules({
+      knowledgeTypes: options?.scope?.knowledgeTypes === undefined
+        ? undefined
+        : [...options.scope.knowledgeTypes],
+      subjects: options?.scope?.subjects === undefined
+        ? undefined
+        : [...options.scope.subjects]
+    });
+    const sources = new Map(
+      (await this.repository.listSources()).map((source) => [source.id, source])
+    );
+
+    const compiled = compileDecisionRules({
+      knowledgeVersion: published.version,
+      rules,
+      sources,
+      catalog,
+      options
+    });
+
+    if (cacheKey !== null) {
+      if (this.compiledRuleCache.size >= COMPILED_RULE_CACHE_LIMIT) {
+        const oldest = this.compiledRuleCache.keys().next().value;
+        if (oldest !== undefined) this.compiledRuleCache.delete(oldest);
+      }
+      this.compiledRuleCache.set(cacheKey, compiled);
+    }
+    return compiled;
   }
 
   /**
