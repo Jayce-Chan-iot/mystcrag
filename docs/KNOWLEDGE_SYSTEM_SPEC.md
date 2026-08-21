@@ -327,7 +327,7 @@ Baseline 采集方式：bundle 数字来自干净单次构建（`rm -rf .next &&
 | ADR-3 | Taxonomy 为 design-contract 内版本化 Zod schema + TS fixture，V1 不建表 | 数据随代码原子发布、确定性；DB 化留待 Admin UI 需求 |
 | ADR-4 | pgvector（独立 embeddings 表），不新增向量库 | 任务书 §23/24；维度推迟到 spike 后 |
 | ADR-5 | pg-boss，不引入 Redis | 复用 PG；schema 与 prisma migrate 隔离 |
-| ADR-6 | json-rules-engine Spike：管 conditions/all/any/not/priority/facts；weighted scoring 自建 typed layer | 不重写引擎；Spike 失败才允许最小自研（另立 ADR） |
+| ADR-6 | json-rules-engine Spike：管 conditions/all/any/not/priority/facts；weighted scoring 自建 typed layer | 不重写引擎；Spike 失败才允许最小自研（另立 ADR）。**实施状态（EPIC 8）**：Spike 完成（`knowledge-core/tests/engine-spike.test.ts`），结论为采用——全量编译规则可加载求值，all/any/not/facts/priority 全部可用且确定性；两个已记录适配点：裸条件根需包一层单子 `all`（求值器侧适配）、事件无权重需 typed scoring layer 回连编译规则集（DEC-KNOWLEDGE-SYSTEM-003） |
 | ADR-7 | Crawlee：CheerioCrawler 默认，PlaywrightCrawler 按白名单逐 source 启用 | 任务书 §28 |
 | ADR-8 | Culori 做 OKLCH/ΔE 色彩数学 | 不自实现 |
 | ADR-9 | EmbeddingProvider 接口 + Spike（A: transformers.js 服务端 / B: 远程 API / C: 独立服务），中文/繁中/英文/内存/体积/启动/吞吐/准确率/部署 benchmark 后定 | embedding 失败必须降级可用。**实施状态（EPIC 4）**：接口 + HashEmbeddingProvider（256 维确定性词法哈希，CJK bigram）作为永可用的基线向量通道已落地并通过 10k 基准；语义模型 Provider（A/B/C）的选型 benchmark 需要网络下载模型/调用外部 API，属于部署环境决策，推迟至所有者裁决后接入（接口即插即用，`model` 列隔离不同 Provider 的向量） |

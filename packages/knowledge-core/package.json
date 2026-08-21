@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "build": "tsc --noEmit",
     "lint": "tsc --noEmit",
@@ -19,6 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
+    "json-rules-engine": "^7.3.1",
     "tsx": "^4.23.1",
     "typescript": "^6.0.3"
   }

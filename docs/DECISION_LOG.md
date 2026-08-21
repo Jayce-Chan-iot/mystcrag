@@ -202,6 +202,24 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 
 ---
 
+### DEC-KNOWLEDGE-SYSTEM-003 — Adopt json-rules-engine for condition evaluation with a typed scoring layer (ADR-6 spike outcome)
+
+- Date: 2026-08-21
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `packages/knowledge-core` (spike test `tests/engine-spike.test.ts`, `json-rules-engine` devDependency), planned `packages/design-engine` evaluation layer
+- Decision: Adopt `json-rules-engine@7` as the rule evaluation engine for the decision pipeline. The spike proves the full compiled fixture corpus (≥100 Active Decision Rules) loads and evaluates: facts gate firing (`designTaxonomyRefs`/`contextTaxonomyRefs`), `all`/`any`/`not` composites evaluate correctly, engine `priority` (inverted ladder rank: `8 - P{N}`) surfaces HARD rules ahead of SOFT guidance, and evaluation is deterministic across repeated runs. Two documented adaptations: (1) the engine requires the conditions root to be a single `all`/`any`/`not`/`condition` node, so bare compiled conditions are wrapped in a single-child `all` conjunction — semantically identical; (2) the engine emits binary events without weights, hardness, or knowledge provenance, so a Mystcrag typed scoring layer must join fired event rule ids back to the compiled rule set to compute `Σ SoftRuleScore` and verify 100% HARD satisfaction.
+- Rationale: Task book section 19 mandates spiking json-rules-engine before any custom engine and forbids rewriting a full rule engine for a small gap. The spike confirms the only gaps are the conditions-root wrap (one-line adapter) and weighted scoring (explicitly planned as the typed layer per spec ADR-6), so adoption is the cheapest correct path.
+- Rejected alternatives: Building a custom condition evaluator (forbidden without a failed spike); adopting the engine for scoring too (no weighted scoring support; events are binary); changing `DecisionRuleSchema` conditions to always wrap roots in `all` (pushes engine-specific shape into the contract; the wrap belongs to the evaluator adapter).
+- Contract impact: None. `DecisionRuleSchema` unchanged; the wrap is an evaluator-side adaptation.
+- Database impact: None.
+- API impact: None.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-21
+- Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 8 spike commit.
+
+---
+
 ## New decision template
 
 ### P3-NNN — Short decision title
