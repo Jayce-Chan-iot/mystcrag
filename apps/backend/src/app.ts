@@ -11,6 +11,10 @@ import {
   registerRecommendationRoutes,
   type RecommendationApiService
 } from "./modules/design/recommendation.routes.js";
+import {
+  registerKnowledgeAdminRoutes
+} from "./modules/knowledge-admin/knowledge-admin.routes.js";
+import type { KnowledgeAdminApplicationService } from "./modules/knowledge-admin/knowledge-admin.service.js";
 import { registerTarotRoutes } from "./modules/tarot/tarot.routes.js";
 import type { TarotApiService } from "./modules/tarot/tarot.types.js";
 
@@ -20,6 +24,8 @@ export type CreateAppOptions = {
   readonly tarotService?: TarotApiService;
   readonly authProvider?: AuthProvider;
   readonly tarotEnabled?: boolean;
+  readonly knowledgeAdminService?: KnowledgeAdminApplicationService;
+  readonly knowledgeAdminApiKey?: string;
   readonly logger?: false | { readonly stream: { write(message: string): void } };
 };
 
@@ -52,6 +58,18 @@ export function createApp(options: CreateAppOptions = {}) {
       options.tarotService,
       options.authProvider,
       options.tarotEnabled ?? resolveTarotFeatureEnabled(process.env.MYSTCRAG_TAROT_ENABLED)
+    );
+  }
+  if (options.knowledgeAdminService) {
+    if (options.knowledgeAdminApiKey === undefined || options.knowledgeAdminApiKey.length < 16) {
+      throw new Error(
+        "knowledgeAdminApiKey (>=16 chars, e.g. KNOWLEDGE_ADMIN_API_KEY) is required to expose the knowledge admin API."
+      );
+    }
+    registerKnowledgeAdminRoutes(
+      app,
+      options.knowledgeAdminService,
+      options.knowledgeAdminApiKey
     );
   }
 

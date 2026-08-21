@@ -19,7 +19,7 @@ Commands:
 DATABASE_URL must point at the target PostgreSQL database.`;
 
 function printQueueItem(item: ReviewQueueItem): void {
-  const { rule, validation, evidence } = item;
+  const { rule, validation, evidence, extraction } = item;
   console.log(`${rule.id}  [${rule.status}]  ${rule.knowledgeType} ${rule.subject} ${rule.relation}`);
   console.log(`  confidence=${rule.confidence}  domain=${rule.knowledgeDomain}`);
   if (!validation.valid) {
@@ -33,6 +33,14 @@ function printQueueItem(item: ReviewQueueItem): void {
     console.log(
       `  evidence: source="${entry.source.name}" (${entry.source.sourceType}, authority=${entry.source.authorityScore})${document}`
     );
+  }
+  if (extraction !== null) {
+    console.log(
+      `  extraction: ${extraction.extractor} (${extraction.method})`
+    );
+    for (const proof of extraction.evidence) {
+      console.log(`    sentence: "${proof.sentence}" (${proof.startOffset}-${proof.endOffset})`);
+    }
   }
 }
 

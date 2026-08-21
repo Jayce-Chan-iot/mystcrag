@@ -330,6 +330,7 @@ export class KnowledgeRepository {
     id: string,
     policy: {
       authorityScore?: number;
+      allowedKnowledgeDomains?: string[];
       crawlFrequency?: string | null;
       rateLimit?: { maxRequestsPerMinute: number } | null;
       crawlStrategy?: SourceCrawlStrategy | null;
@@ -343,6 +344,13 @@ export class KnowledgeRepository {
           ...(policy.authorityScore === undefined
             ? {}
             : { authorityScore: KnowledgeSourceSchema.shape.authorityScore.parse(policy.authorityScore) }),
+          ...(policy.allowedKnowledgeDomains === undefined
+            ? {}
+            : {
+                allowedKnowledgeDomains: KnowledgeSourceSchema.shape.allowedKnowledgeDomains.parse(
+                  policy.allowedKnowledgeDomains
+                )
+              }),
           ...(policy.crawlFrequency === undefined ? {} : { crawlFrequency: policy.crawlFrequency }),
           ...(policy.rateLimit === undefined
             ? {}
@@ -632,6 +640,27 @@ export class KnowledgeRepository {
       take: Math.min(Math.max(filter?.limit ?? 500, 1), 2000)
     });
     return rows.map(parseRule);
+  }
+
+  async countRulesByStatus(): Promise<Record<KnowledgeStatusValue, number>> {
+    const groups = await this.prisma.knowledgeRule.groupBy({
+      by: ["status"],
+      _count: { _all: true }
+    });
+    const counts: Record<KnowledgeStatusValue, number> = {
+      NEW: 0,
+      EXTRACTED: 0,
+      VALIDATED: 0,
+      NEEDS_REVIEW: 0,
+      APPROVED: 0,
+      REJECTED: 0,
+      CONFLICTED: 0,
+      SUPERSEDED: 0
+    };
+    for (const group of groups) {
+      counts[group.status as KnowledgeStatusValue] = group._count._all;
+    }
+    return counts;
   }
 
   async createKnowledgeVersion(id: string, version: string): Promise<StoredKnowledgeVersion> {

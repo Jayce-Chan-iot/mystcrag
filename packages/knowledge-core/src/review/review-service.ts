@@ -6,6 +6,13 @@ import {
   type StoredKnowledgeSource,
   type StoredKnowledgeVersion
 } from "@mystcrag/database";
+import {
+  ExtractionMetadataSchema,
+  KnowledgeAdminOverviewResponseSchema,
+  type ExtractionMetadata,
+  type KnowledgeRule
+} from "@mystcrag/design-contract";
+import type { z } from "zod";
 
 import { KNOWLEDGE_DOCUMENT_FIXTURES, KNOWLEDGE_SOURCE_FIXTURES } from "../fixtures/knowledge-sources.js";
 import { KNOWLEDGE_RULE_FIXTURES } from "../fixtures/knowledge-rules.js";
@@ -16,6 +23,8 @@ import {
   type KnowledgeConflictGroup,
   type KnowledgeRuleValidation
 } from "./rules.js";
+
+export type KnowledgeAdminOverview = z.infer<typeof KnowledgeAdminOverviewResponseSchema>;
 
 export type ReviewPipelineSummary = {
   extracted: number;
@@ -29,6 +38,8 @@ export type ReviewEvidence = {
     id: string;
     name: string;
     sourceType: StoredKnowledgeSource["sourceType"];
+    sourceCategory: StoredKnowledgeSource["sourceCategory"];
+    reliabilityLevel: StoredKnowledgeSource["reliabilityLevel"];
     authorityScore: number;
     enabled: boolean;
   };
@@ -44,6 +55,8 @@ export type ReviewQueueItem = {
   rule: StoredKnowledgeRule;
   validation: KnowledgeRuleValidation;
   evidence: ReviewEvidence[];
+  /** Q2 sentence-level extraction evidence; null for legacy candidates. */
+  extraction: ExtractionMetadata | null;
 };
 
 export type FixtureImportSummary = {
@@ -61,6 +74,23 @@ export type KnowledgeReviewServiceOptions = {
 
 const CANDIDATE_STATUSES = ["VALIDATED", "NEEDS_REVIEW"] as const;
 const LIST_LIMIT = 2000;
+
+/**
+ * Q3: surfaces the Q2 extraction metadata stored inside the rule payload.
+ * Parsing is lenient on purpose — a malformed extraction block must never
+ * hide a candidate from review, it just loses its evidence rendering.
+ */
+export function parseExtractionMetadata(payload: KnowledgeRule["payload"]): ExtractionMetadata | null {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return null;
+  }
+  const raw = (payload as Record<string, unknown>).extraction;
+  if (raw === undefined || raw === null) {
+    return null;
+  }
+  const parsed = ExtractionMetadataSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
 
 /**
  * Review chain (task book sections 12, 18, 30, 34): candidates extracted by
@@ -146,6 +176,47 @@ export class KnowledgeReviewService {
     return this.detectConflicts();
   }
 
+  /**
+   * Q3 admin dashboard projection. Rule counts come from a groupBy so the
+   * numbers stay correct past the 2000-row list cap.
+   */
+  async getAdminOverview(): Promise<KnowledgeAdminOverview> {
+    const ruleCounts = await this.repository.countRulesByStatus();
+    const sources = await this.repository.listSources();
+    const sourceCounts = {
+      DISCOVERED: 0,
+      NEEDS_REVIEW: 0,
+      APPROVED: 0,
+      REJECTED: 0,
+      DISABLED: 0,
+      enabled: 0
+    };
+    for (const source of sources) {
+      sourceCounts[source.reviewStatus] += 1;
+      if (source.enabled) {
+        sourceCounts.enabled += 1;
+      }
+    }
+    const conflictGroups = await this.detectConflicts();
+    const latest = await this.repository.getLatestPublishedVersion();
+    return {
+      rules: ruleCounts,
+      sources: sourceCounts,
+      conflictGroups: conflictGroups.length,
+      latestVersion:
+        latest === null
+          ? null
+          : {
+              id: latest.id,
+              version: latest.version,
+              status: latest.status,
+              ruleCount: latest.ruleCount,
+              publishedAt:
+                latest.publishedAt === null ? null : latest.publishedAt.toISOString()
+            }
+    };
+  }
+
   async listReviewQueue(filter?: {
     status?: StoredKnowledgeRule["status"];
     limit?: number;
@@ -182,6 +253,8 @@ export class KnowledgeReviewService {
             id: source.id,
             name: source.name,
             sourceType: source.sourceType,
+            sourceCategory: source.sourceCategory,
+            reliabilityLevel: source.reliabilityLevel,
             authorityScore: source.authorityScore,
             enabled: source.enabled
           },
@@ -191,7 +264,8 @@ export class KnowledgeReviewService {
       items.push({
         rule,
         validation: validateKnowledgeRuleCandidate(rule),
-        evidence
+        evidence,
+        extraction: parseExtractionMetadata(rule.payload)
       });
     }
     return items;

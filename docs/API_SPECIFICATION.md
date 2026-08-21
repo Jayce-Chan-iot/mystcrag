@@ -102,6 +102,27 @@ The `@mystcrag/mcp-server` app (ADR-12) exposes the reviewed knowledge base and 
 
 Tool responses carry both a JSON `structuredContent` payload and a text rendering of the same payload. Rule summaries hide fingerprints, source references, source ids, and internal version bookkeeping (they stay server-side). Errors follow MCP semantics: invalid arguments — including unknown `beadProductId`s outside the active catalog — surface as in-band `isError` results carrying JSON-RPC `-32602`; dependency failures surface as `-32603` or the raw message, never a crash. Cultural references in results are inspiration language only; no medical or guaranteed-effect claims are produced. Tool schemas, invalid-input handling, result consistency with the direct `knowledge-core`/`design-engine` pipeline, transport behavior, and error mapping are covered by `apps/mcp-server/tests/tools.test.ts` (client over in-memory transport) and the architecture boundary tests (`tests/architecture.test.mjs`: no business-copy imports; Prisma only inside the composition root `src/runtime.ts`).
 
+## Knowledge Admin API (Quality Phase Q3)
+
+Ten operator endpoints under `/api/admin/knowledge` expose the review chain over HTTP with the same `KnowledgeReviewService`/`KnowledgeSourceAdminService` the CLI uses (`pnpm --filter @mystcrag/knowledge-core review:cli`), so both entrances behave identically. DTOs live in [knowledge-admin-api.schema](../packages/design-contract/src/schemas/knowledge-admin-api.schema.ts) as strict Zod objects; every successful response is parsed before it leaves Backend, and stored rows are never projected raw.
+
+Authentication is a dedicated admin key: the `X-Admin-Key` header compared against `knowledgeAdminApiKey` (≥16 chars, from `KNOWLEDGE_ADMIN_API_KEY`) with `timingSafeEqual`. The surface fails closed — creating the app with the admin service but without a valid key throws, and requests without the exact key get `403 FORBIDDEN` on every admin route while non-admin routes stay untouched. Admin routes are not listed in `/api/modules`.
+
+| Route | Request | Response | Behavior |
+| --- | --- | --- | --- |
+| `GET /overview` | — | `KnowledgeAdminOverviewResponseSchema` | Rule counts per knowledge status (repository `groupBy`, correct past the list cap), source counts per review status plus enabled count, active conflict group count, latest published version or `null`. |
+| `GET /review-queue?status=&limit=` | query filter | `KnowledgeAdminReviewQueueResponseSchema` | Candidates with validation issues, per-source/document provenance evidence, and Q2 extraction evidence (`extractor`, `method`, verbatim `sentence` + offsets) when present; legacy candidates carry `extraction: null`. `limit` is 1–500. |
+| `GET /conflicts` | — | `KnowledgeAdminConflictsResponseSchema` | Same-key divergent-payload groups (≥2 rules each). |
+| `POST /review-pipeline/run` | — | `KnowledgeAdminPipelineResponseSchema` | Runs NEW → EXTRACTED → auto-classification → conflict marking. |
+| `POST /rules/:ruleId/approve` `reject` `supersede` | path id | `KnowledgeAdminRuleActionResponseSchema` | Human verdicts; CONFLICTED candidates are moved through NEEDS_REVIEW first. |
+| `POST /versions` | `KnowledgeAdminPublishVersionRequestSchema` (slug) | `KnowledgeAdminPublishVersionResponseSchema` | Publishes APPROVED rules as a knowledge version; duplicates return `409`. |
+| `GET /sources?reviewStatus=` | query filter | `KnowledgeAdminSourceQueueResponseSchema` | Source queue with editorial classification, fetch health, and rate-limit policy. |
+| `POST /sources/:sourceId/review` | `KnowledgeAdminReviewSourceRequestSchema` (`NEEDS_REVIEW`/`APPROVED`/`REJECTED`) | `KnowledgeAdminSourceMutationResponseSchema` | Human source verdict; illegal transitions return `409` from the repository state machine. |
+| `POST /sources/:sourceId/enabled` | `KnowledgeAdminSetSourceEnabledRequestSchema` | `KnowledgeAdminSourceMutationResponseSchema` | Enables/disables a source (only APPROVED + enabled sources are ever crawled). |
+| `POST /sources/:sourceId/policy` | `KnowledgeAdminUpdateSourcePolicyRequestSchema` (at least one of `allowedKnowledgeDomains`, `maxRequestsPerMinute` ≤600) | `KnowledgeAdminSourceMutationResponseSchema` | Updates the crawl policy. |
+
+Error mapping follows the shared envelope: unknown ids → `404 NOT_FOUND`, illegal status transitions and duplicate versions → `409 CONFLICT`, request-shape violations → `400 VALIDATION_ERROR`, missing/wrong key → `403 FORBIDDEN`. Route coverage — fail-closed key handling, filter validation, verdict mapping, and error codes — is in `apps/backend/src/modules/knowledge-admin/knowledge-admin.routes.test.ts`.
+
 ## Design Save API
 
 POST /api/design/save

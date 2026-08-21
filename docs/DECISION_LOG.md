@@ -382,6 +382,24 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 
 ---
 
+### DEC-KNOWLEDGE-SYSTEM-012 — Knowledge Admin API with fail-closed admin key auth; CLI and HTTP share one review service (Knowledge Quality Phase Q3)
+
+- Date: 2026-08-22
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `packages/design-contract/src/schemas/knowledge-admin-api.schema.ts` (new: overview/queue/conflict/pipeline/rule-action/version/source-queue/mutation DTOs, all strict Zod objects with inferred type exports), `packages/database/src/repositories/knowledge.repository.ts` (`countRulesByStatus()` groupBy; `updateSourcePolicy` now also accepts `allowedKnowledgeDomains`), `packages/knowledge-core/src/review/review-service.ts` (`parseExtractionMetadata` lenient Q2 evidence surfacing; `ReviewQueueItem.extraction`; `ReviewEvidence.source` gains `sourceCategory`/`reliabilityLevel`; `getAdminOverview()`), `packages/knowledge-core/src/admin/source-admin.ts` (new `KnowledgeSourceAdminService`), `packages/knowledge-core/src/cli/index.ts` (prints evidence sentences), `apps/backend/src/modules/knowledge-admin/` (new service + routes), `apps/backend/src/app.ts` (`knowledgeAdminService`/`knowledgeAdminApiKey` options)
+- Decision: Open Question 3 is resolved as Admin API + CLI for V1; a web admin page stays deferred. The backend gains ten `/api/admin/knowledge/*` endpoints (overview, review queue with sentence-level extraction evidence, conflicts, pipeline run, rule approve/reject/supersede, publish version, source queue, source review, source enable, source policy) that delegate to the exact `KnowledgeReviewService`/`KnowledgeSourceAdminService` used by the CLI, so the two entrances cannot diverge. Authentication is a dedicated `X-Admin-Key` header checked with `timingSafeEqual` against `KNOWLEDGE_ADMIN_API_KEY`; the surface fails closed — `createApp` throws when the admin service is registered without a key of at least 16 chars, and every admin request with a missing or wrong key returns `403` while non-admin routes are untouched. Admin routes are excluded from the public `/api/modules` listing. Stored rows are never projected raw: the application service maps stored rules/sources to strict admin DTOs and re-parses every response through the contract schema before it leaves the backend. Overview rule counts come from a repository `groupBy` so dashboard numbers stay correct past the 2000-row list cap. Extraction evidence is surfaced leniently (`safeParse` → `null` on legacy or malformed payloads) so a bad extraction block can never hide a candidate from review.
+- Rationale: the review chain existed only through the CLI after EPIC 6; Q2's sentence-level evidence needed a first-class consumer, and Q0's source review machine had no operator surface at all. Reusing the same services for CLI and HTTP removes an entire class of "API behaves differently from CLI" bugs and keeps the backend module a thin, contract-validated projection. The dedicated admin key (rather than reusing user bearer auth) matches the operator-only blast radius of these endpoints — publishing versions and approving sources are editorial powers no end-user token should ever carry.
+- Rejected alternatives: a web admin page now (deferred by Open Question 3; the API-first surface lets a page consume it later without redesign); routing admin auth through the user `AuthProvider` (user tokens express ownership, not editorial authority; no role model exists in V1); a separate admin service process (would duplicate review logic the CLI already shares); counting statuses via `listRules(...).length` (silently wrong past the 2000-row cap).
+- Contract impact: additive exports only — a new schema module; no existing DTO changes.
+- Database impact: None. No migration; `countRulesByStatus` and the `updateSourcePolicy` extension are query-layer only.
+- API impact: new `## Knowledge Admin API` section in `API_SPECIFICATION.md` with the ten-route table, auth model, and error mapping.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-22
+- Implementation branch or commit: `feat/knowledge-quality`, Knowledge Quality Phase Q3 commit (design-contract 100/100; knowledge-core 95/95 incl. DB integration; database 56/56; backend 99/99; `pnpm validate` 15/15).
+
+---
+
 ## New decision template
 
 ### P3-NNN — Short decision title

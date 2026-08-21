@@ -353,7 +353,7 @@ Baseline 采集方式：bundle 数字来自干净单次构建（`rm -rf .next &&
 | --- | --- | --- |
 | Q0 | Source Registry 生产化（编辑分类/审核状态机/抓取健康/限速/36 seed，DEC-KNOWLEDGE-SYSTEM-010） | `2234dde` |
 | Q1 | Semantic Embedding 升级（方案 B OpenAI 兼容 Provider + 熔断 fallback + 统一工厂 + 语义评测集，ADR-9 更新） | `c670622` |
-| Q2 | Knowledge Extraction 升级（9 类关系词表/Extractor 接口/证据溯源/标注句评测集，DEC-KNOWLEDGE-SYSTEM-011，§17.2） | 本次提交 |
+| Q2 | Knowledge Extraction 升级（9 类关系词表/Extractor 接口/证据溯源/标注句评测集，DEC-KNOWLEDGE-SYSTEM-011，§17.2） | `fc895a8` |
 
 ### 17.2 Q2 Knowledge Extraction 升级
 
@@ -387,3 +387,34 @@ Baseline 采集方式：bundle 数字来自干净单次构建（`rm -rf .next &&
 **标注句评测集**（`bench:extraction`）：≥40 双语标注句（每类关系 ≥3），对 PatternExtractor 计算 relation 级 precision / recall / F1 作为抽取质量回归基线；semantic 端点接入后跑同一集合对比验收。
 
 **验收**：9 类关系全部可产出且有测试覆盖；标注句集基线入库；pipeline 走 extractor 体系；Q0 来源政策在抽取层强制；既有 ingestion 集成测试保持绿。
+
+### 17.3 Q3 Knowledge Admin / Review 后台
+
+**目标**：把 EPIC 6 的 CLI-only 审核链路补齐为 **Admin API（HTTP）+ CLI 双入口**，消费 Q2 句级证据与 Q0 来源审核状态机，形成「抽取 → 证据可判读 → 人工审核 → 发布」的完整服务端闭环。裁决 Open Question 3：V1 形态为 Admin API + CLI，web 后台页继续延后（DEC-KNOWLEDGE-SYSTEM-012）。
+
+**服务层（knowledge-core `src/admin/`）**：
+
+- `ReviewQueueItem` 增加 `extraction: ExtractionMetadata | null`——从 `payload.extraction` 宽松解析（legacy 候选无抽取元数据时为 null），Q2 证据的官方消费点；CLI `list`/`show` 同步打印证据原句
+- `KnowledgeReviewService.getAdminOverview()`：规则按 8 状态计数（repository 新增 `countRulesByStatus()`，prisma groupBy，不受 2000 条 list 上限约束）、来源按审核状态计数 + enabled 数、活跃冲突组数、最新发布版本
+- `KnowledgeSourceAdminService`：来源审核队列（`listSourceQueue(reviewStatus?)`）、`reviewSource`（状态机由 repository 强制）、`setSourceEnabled`、`updateSourcePolicy`
+
+**Admin API（backend `modules/knowledge-admin/`，前缀 `/api/admin/knowledge`）**：
+
+| 方法/路径 | 用途 |
+| --- | --- |
+| `GET /overview` | 审核看板统计（规则/来源/冲突/版本） |
+| `GET /review-queue?status=&limit=` | 候选队列 + 来源/文档证据 + 抽取证据（原句+偏移） |
+| `GET /conflicts` | 冲突组列表 |
+| `POST /review-pipeline/run` | 触发 NEW→EXTRACTED→分类→冲突标记 |
+| `POST /rules/:ruleId/approve \| reject \| supersede` | 人工裁决（与 CLI 同一服务方法） |
+| `POST /versions` | 发布 APPROVED 规则为知识版本 |
+| `GET /sources?reviewStatus=` | 来源审核队列（含抓取健康/限速/政策） |
+| `POST /sources/:sourceId/review` | 来源审批（DISCOVERED→NEEDS_REVIEW→APPROVED/REJECTED 状态机） |
+| `POST /sources/:sourceId/enabled` | 启停来源 |
+| `POST /sources/:sourceId/policy` | 更新 allowedKnowledgeDomains / rate limit |
+
+**鉴权（admin 鉴权，测试矩阵 §13 Security 项）**：`X-Admin-Key` 请求头 + `KNOWLEDGE_ADMIN_API_KEY` 环境变量，timingSafeEqual 恒时比较；**未配置即 fail closed**（所有 admin 路由 403，服务端启动时 service 存在而 key 缺失则抛错），不进 `/api/modules` 公共模块清单。
+
+**DTO（design-contract `schemas/knowledge-admin-api.schema.ts`）**：请求/响应全部 Zod strictObject，响应用既有 `validateResponse` 校验；管理端 DTO 只投影审核所需字段，不透出存储行。
+
+**验收**：Admin API 全端点 200/400/404/409/403 路由测试；fail closed 与错误 key 拒绝有测试；CLI 与 API 走同一 review-service（行为一致）；overview 计数有单测；既有测试全绿 + `pnpm validate`。
