@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   knowledgeDomainForType,
   resolveTaxonomyId,
+  type ClaimType,
   type KnowledgeType
 } from "@mystcrag/design-contract";
 import type { StoredKnowledgeRule, StoredKnowledgeSource } from "@mystcrag/database";
@@ -16,6 +17,39 @@ import type { StoredKnowledgeRule, StoredKnowledgeSource } from "@mystcrag/datab
 
 export const AUTO_VALIDATE_CONFIDENCE_THRESHOLD = 0.8;
 export const AUTO_VALIDATE_AUTHORITY_THRESHOLD = 0.8;
+
+/**
+ * Task book §12: externally-acquired rules (i.e. not seeded from the internal
+ * fixture corpus) must declare a claimType before they may be reviewed, so the
+ * reviewer knows what grade of fact they are handling.
+ */
+const EXTERNAL_SOURCE_PREFIXES: readonly string[] = ["source-fixture-"];
+
+function isExternalSourceRef(sourceId: string): boolean {
+  return !EXTERNAL_SOURCE_PREFIXES.some((prefix) => sourceId.startsWith(prefix));
+}
+
+/**
+ * Task book §19: high-confidence scientific/gemological facts are the ones that
+ * drive downstream recommendations, so they require corroboration from at least
+ * two independent sources before they may auto-validate.
+ */
+const FACT_CLAIM_TYPES: readonly ClaimType[] = [
+  "SCIENTIFIC_FACT",
+  "GEMOLOGICAL_FACT"
+];
+
+function distinctSourceIds(rule: StoredKnowledgeRule): Set<string> {
+  return new Set(rule.sourceRefs.map((ref) => ref.sourceId));
+}
+
+function isSingleSourceFact(rule: StoredKnowledgeRule): boolean {
+  return (
+    rule.claimType !== undefined &&
+    FACT_CLAIM_TYPES.includes(rule.claimType) &&
+    distinctSourceIds(rule).size < 2
+  );
+}
 
 /**
  * Claim phrases that must never ship inside production knowledge text
@@ -99,6 +133,25 @@ export function validateKnowledgeRuleCandidate(
     }
   }
 
+  // Task book §12: external-source rules must declare what grade of fact they
+  // assert so the review chain can route them correctly.
+  const hasExternalSource = rule.sourceRefs.some((ref) =>
+    isExternalSourceRef(ref.sourceId)
+  );
+  if (hasExternalSource && rule.claimType === undefined) {
+    issues.push("external-source rules must declare claimType (task book §12)");
+  }
+
+  // Task book §19: high-confidence factual claims need independent corroboration.
+  if (
+    isSingleSourceFact(rule) &&
+    (rule.confidence ?? 0) >= AUTO_VALIDATE_CONFIDENCE_THRESHOLD
+  ) {
+    issues.push(
+      "high-confidence SCIENTIFIC/GEMOLOGICAL facts require ≥2 independent sources (task book §19)"
+    );
+  }
+
   return { valid: issues.length === 0, issues };
 }
 
@@ -126,6 +179,12 @@ export function classifyCandidate(
     return "NEEDS_REVIEW";
   }
   if (source.authorityScore < AUTO_VALIDATE_AUTHORITY_THRESHOLD) {
+    return "NEEDS_REVIEW";
+  }
+  // Task book §19: a single-source scientific/gemological fact may never
+  // auto-validate, regardless of confidence or authority — its effective
+  // confidence ceiling is just below the auto-validate threshold.
+  if (isSingleSourceFact(rule)) {
     return "NEEDS_REVIEW";
   }
   return "VALIDATED";

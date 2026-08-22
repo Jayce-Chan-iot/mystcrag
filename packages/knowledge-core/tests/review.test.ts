@@ -28,12 +28,12 @@ function baseRule(overrides: Partial<StoredKnowledgeRule> = {}): StoredKnowledge
     conditions: {},
     confidence: 0.9,
     status: "EXTRACTED",
-    sourceRefs: [{ sourceId: "source-a", documentId: "doc-a" }],
+    sourceRefs: [{ sourceId: "source-fixture-handbook", documentId: "doc-a" }],
     version: 1,
     fingerprint: ruleFingerprint(knowledgeType, subject, relation, payload),
     createdAt: "2026-08-21T00:00:00+08:00",
     updatedAt: "2026-08-21T00:00:00+08:00",
-    sourceId: "source-a",
+    sourceId: "source-fixture-handbook",
     knowledgeVersionId: null,
     ...overrides
   };
@@ -162,4 +162,69 @@ test("detectRuleConflicts returns no groups when payloads agree", () => {
   const a = baseRule({ id: "r1" });
   const b = baseRule({ id: "r2" });
   assert.deepEqual(detectRuleConflicts([a, b]), []);
+});
+
+test("external-source rules require claimType", () => {
+  const rule = baseRule({
+    sourceRefs: [{ sourceId: "source-gia-gem-encyclopedia" }]
+  });
+  const result = validateKnowledgeRuleCandidate(rule);
+  assert.equal(result.valid, false);
+  assert.ok(result.issues.some((i) => i.includes("claimType")));
+});
+
+test("fixture-source rules do not require claimType", () => {
+  const result = validateKnowledgeRuleCandidate(
+    baseRule({ sourceRefs: [{ sourceId: "source-fixture-handbook" }] })
+  );
+  assert.equal(result.valid, true);
+});
+
+test("high-confidence scientific facts require two independent sources", () => {
+  const one = baseRule({
+    claimType: "GEMOLOGICAL_FACT",
+    confidence: 0.85,
+    sourceRefs: [{ sourceId: "source-gia-gem-encyclopedia" }]
+  });
+  assert.ok(
+    validateKnowledgeRuleCandidate(one).issues.some((i) => i.includes("independent"))
+  );
+  const two = baseRule({
+    claimType: "GEMOLOGICAL_FACT",
+    confidence: 0.85,
+    sourceRefs: [
+      { sourceId: "source-gia-gem-encyclopedia" },
+      { sourceId: "source-gemdat-gemstone-pages" }
+    ]
+  });
+  assert.equal(validateKnowledgeRuleCandidate(two).valid, true);
+});
+
+test("single-source scientific fact is capped below auto-validate even at high confidence", () => {
+  const rule = baseRule({
+    claimType: "GEMOLOGICAL_FACT",
+    confidence: 0.85,
+    sourceRefs: [{ sourceId: "source-gia-gem-encyclopedia" }]
+  });
+  const source = baseSource({
+    id: "source-gia-gem-encyclopedia",
+    authorityScore: 0.95
+  });
+  assert.equal(classifyCandidate(rule, source), "NEEDS_REVIEW");
+});
+
+test("two-source scientific fact auto-validates at high confidence and authority", () => {
+  const rule = baseRule({
+    claimType: "GEMOLOGICAL_FACT",
+    confidence: 0.85,
+    sourceRefs: [
+      { sourceId: "source-gia-gem-encyclopedia" },
+      { sourceId: "source-gemdat-gemstone-pages" }
+    ]
+  });
+  const source = baseSource({
+    id: "source-gia-gem-encyclopedia",
+    authorityScore: 0.95
+  });
+  assert.equal(classifyCandidate(rule, source), "VALIDATED");
 });
