@@ -356,7 +356,8 @@ Baseline 采集方式：bundle 数字来自干净单次构建（`rm -rf .next &&
 | Q2 | Knowledge Extraction 升级（9 类关系词表/Extractor 接口/证据溯源/标注句评测集，DEC-KNOWLEDGE-SYSTEM-011，§17.2） | `fc895a8` |
 | Q3 | Knowledge Admin / Review 后台（Admin API 10 端点 + fail-closed admin key，DEC-KNOWLEDGE-SYSTEM-012，§17.3） | `9c96d05` |
 | Q4 | Corpus Bootstrap ≥500 规则 + 知识分层（core/taxonomy-coverage/combination，taxonomy v2 TAROT 域，DEC-KNOWLEDGE-SYSTEM-013，§17.4） | `2b2adba` |
-| Q5 | Design Quality Evaluation（golden set/eval:design 质量门禁，DEC-KNOWLEDGE-SYSTEM-014，§17.5） | 本次提交 |
+| Q5 | Design Quality Evaluation（golden set/eval:design 质量门禁，DEC-KNOWLEDGE-SYSTEM-014，§17.5） | `34880b4` |
+| 最终验收 | E2E A/B/C/D（closed-loop 47/47 @ `kb-quality-phase-final` 510 规则）+ 四条质量基线 + 最终报告 | `KNOWLEDGE_QUALITY_PHASE_REPORT.md` |
 
 ### 17.2 Q2 Knowledge Extraction 升级
 
