@@ -181,9 +181,13 @@ export function classifyCandidate(
   if (source.authorityScore < AUTO_VALIDATE_AUTHORITY_THRESHOLD) {
     return "NEEDS_REVIEW";
   }
-  // Task book §19: a single-source scientific/gemological fact may never
-  // auto-validate, regardless of confidence or authority — its effective
-  // confidence ceiling is just below the auto-validate threshold.
+  // Non-load-bearing invariant (task book §7.5): a single-source scientific/
+  // gemological fact may never auto-validate, regardless of confidence or
+  // authority. This guard is deliberately redundant with the validate
+  // two-source issue (confidence ≥ 0.8) and the confidence check (< 0.8)
+  // above — it is kept purely as defense-in-depth so that a future weakening
+  // of validateKnowledgeRuleCandidate can never auto-validate a single-source
+  // FACT claim.
   if (isSingleSourceFact(rule)) {
     return "NEEDS_REVIEW";
   }

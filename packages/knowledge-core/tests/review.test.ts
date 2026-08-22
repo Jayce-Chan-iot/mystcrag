@@ -200,7 +200,7 @@ test("high-confidence scientific facts require two independent sources", () => {
   assert.equal(validateKnowledgeRuleCandidate(two).valid, true);
 });
 
-test("single-source scientific fact is capped below auto-validate even at high confidence", () => {
+test("single-source scientific fact never auto-validates", () => {
   const rule = baseRule({
     claimType: "GEMOLOGICAL_FACT",
     confidence: 0.85,
