@@ -16,6 +16,29 @@ export const KnowledgeTypeSchema = z.enum([
   "NEGATIVE_RULE",
   "CULTURAL_SYMBOLISM",
   "TAROT",
+  "MARKET_OBSERVATION",
+  "CRYSTAL_GEMOLOGY",
+  "CRYSTAL_VISUAL_PROPERTIES",
+  "CRYSTAL_CULTURAL_SYMBOLISM",
+  "WUXING",
+  "WUXING_CRYSTAL_ASSOCIATION",
+  "ZODIAC",
+  "ZODIAC_CRYSTAL_ASSOCIATION",
+  "TAROT_SYMBOLISM",
+  "TAROT_CRYSTAL_ASSOCIATION"
+]);
+
+/** Task book §12: knowledge is not all one grade of fact. */
+export const ClaimTypeSchema = z.enum([
+  "SCIENTIFIC_FACT",
+  "GEMOLOGICAL_FACT",
+  "DESIGN_PRINCIPLE",
+  "DESIGN_HEURISTIC",
+  "CULTURAL_SYMBOLISM",
+  "HISTORICAL_TRADITION",
+  "WUXING_ASSOCIATION",
+  "ASTROLOGY_ASSOCIATION",
+  "TAROT_ASSOCIATION",
   "MARKET_OBSERVATION"
 ]);
 
@@ -159,6 +182,7 @@ export const KnowledgeRuleSchema = z.strictObject({
   payload: JsonValueSchema,
   conditions: JsonValueSchema.default({}),
   confidence: z.number().min(0).max(1),
+  claimType: ClaimTypeSchema.optional(),
   status: KnowledgeStatusSchema,
   sourceRefs: z.array(KnowledgeSourceRefSchema).min(1),
   version: PositiveSafeIntegerSchema,
@@ -193,12 +217,28 @@ export const EXTRACTION_RELATION_ALLOWED_TYPES: Record<
   ExtractionRelation,
   readonly KnowledgeType[]
 > = {
-  "pairs-well-with": ["COLOR_THEORY", "MATERIAL_COMPATIBILITY", "STYLE_RULE"],
-  "conflicts-with": ["NEGATIVE_RULE", "MATERIAL_COMPATIBILITY", "COLOR_THEORY"],
-  "avoid-exposure": ["NEGATIVE_RULE", "MATERIAL_COMPATIBILITY"],
-  "care-instruction": ["MATERIAL_COMPATIBILITY"],
-  symbolizes: ["CULTURAL_SYMBOLISM", "TAROT"],
-  "suits-style": ["STYLE_RULE"],
+  "pairs-well-with": [
+    "COLOR_THEORY",
+    "MATERIAL_COMPATIBILITY",
+    "STYLE_RULE",
+    "CRYSTAL_GEMOLOGY",
+    "CRYSTAL_VISUAL_PROPERTIES"
+  ],
+  "conflicts-with": ["NEGATIVE_RULE", "MATERIAL_COMPATIBILITY", "COLOR_THEORY", "CRYSTAL_GEMOLOGY"],
+  "avoid-exposure": ["NEGATIVE_RULE", "MATERIAL_COMPATIBILITY", "CRYSTAL_GEMOLOGY"],
+  "care-instruction": ["MATERIAL_COMPATIBILITY", "CRYSTAL_GEMOLOGY"],
+  symbolizes: [
+    "CULTURAL_SYMBOLISM",
+    "TAROT",
+    "CRYSTAL_CULTURAL_SYMBOLISM",
+    "WUXING",
+    "WUXING_CRYSTAL_ASSOCIATION",
+    "ZODIAC",
+    "ZODIAC_CRYSTAL_ASSOCIATION",
+    "TAROT_SYMBOLISM",
+    "TAROT_CRYSTAL_ASSOCIATION"
+  ],
+  "suits-style": ["STYLE_RULE", "CRYSTAL_VISUAL_PROPERTIES"],
   "proportion-of": ["PROPORTION_RULE", "COMPOSITION_RULE", "FOCAL_RULE"],
   "transitions-to": ["TRANSITION_RULE"],
   "trending-in": ["MARKET_OBSERVATION"]
@@ -241,7 +281,16 @@ const KNOWLEDGE_DOMAIN_BY_TYPE: Record<KnowledgeType, string> = {
   NEGATIVE_RULE: "knowledge-domain:negative-rule",
   CULTURAL_SYMBOLISM: "knowledge-domain:cultural-symbolism",
   TAROT: "knowledge-domain:tarot",
-  MARKET_OBSERVATION: "knowledge-domain:market-observation"
+  MARKET_OBSERVATION: "knowledge-domain:market-observation",
+  CRYSTAL_GEMOLOGY: "knowledge-domain:crystal-gemology",
+  CRYSTAL_VISUAL_PROPERTIES: "knowledge-domain:crystal-visual-properties",
+  CRYSTAL_CULTURAL_SYMBOLISM: "knowledge-domain:crystal-cultural-symbolism",
+  WUXING: "knowledge-domain:wuxing",
+  WUXING_CRYSTAL_ASSOCIATION: "knowledge-domain:wuxing-crystal-association",
+  ZODIAC: "knowledge-domain:zodiac",
+  ZODIAC_CRYSTAL_ASSOCIATION: "knowledge-domain:zodiac-crystal-association",
+  TAROT_SYMBOLISM: "knowledge-domain:tarot-symbolism",
+  TAROT_CRYSTAL_ASSOCIATION: "knowledge-domain:tarot-crystal-association"
 };
 
 export function knowledgeDomainForType(knowledgeType: KnowledgeType): string {
@@ -257,6 +306,7 @@ export function isProductionEligibleKnowledgeStatus(
 }
 
 export type KnowledgeType = z.infer<typeof KnowledgeTypeSchema>;
+export type ClaimType = z.infer<typeof ClaimTypeSchema>;
 export type KnowledgeStatus = z.infer<typeof KnowledgeStatusSchema>;
 export type ExtractionRelation = z.infer<typeof ExtractionRelationSchema>;
 export type ExtractionMethod = z.infer<typeof ExtractionMethodSchema>;

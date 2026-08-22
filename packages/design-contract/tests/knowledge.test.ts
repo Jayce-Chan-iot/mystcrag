@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  ClaimTypeSchema,
   EXTRACTION_RELATION_ALLOWED_TYPES,
   ExtractionEvidenceSchema,
   ExtractionMetadataSchema,
@@ -12,7 +13,8 @@ import {
   SOURCE_REVIEW_TRANSITIONS,
   PRODUCTION_KNOWLEDGE_STATUSES,
   isProductionEligibleKnowledgeStatus,
-  isRelationAllowedForKnowledgeType
+  isRelationAllowedForKnowledgeType,
+  knowledgeDomainForType
 } from "../src/index";
 
 const validSource = {
@@ -71,11 +73,15 @@ test("knowledge rule confidence must stay within [0, 1]", () => {
   assert.equal(KnowledgeRuleSchema.safeParse(zeroConfidence).success, true);
 });
 
-test("all eleven knowledge types and all eight statuses are accepted; others are rejected", () => {
+test("all twenty knowledge types and all eight statuses are accepted; others are rejected", () => {
   const knowledgeTypes = [
     "COLOR_THEORY", "MATERIAL_COMPATIBILITY", "STYLE_RULE", "PROPORTION_RULE",
     "COMPOSITION_RULE", "TRANSITION_RULE", "FOCAL_RULE", "NEGATIVE_RULE",
-    "CULTURAL_SYMBOLISM", "TAROT", "MARKET_OBSERVATION"
+    "CULTURAL_SYMBOLISM", "TAROT", "MARKET_OBSERVATION",
+    "CRYSTAL_GEMOLOGY", "CRYSTAL_VISUAL_PROPERTIES", "CRYSTAL_CULTURAL_SYMBOLISM",
+    "WUXING", "WUXING_CRYSTAL_ASSOCIATION",
+    "ZODIAC", "ZODIAC_CRYSTAL_ASSOCIATION",
+    "TAROT_SYMBOLISM", "TAROT_CRYSTAL_ASSOCIATION"
   ];
   for (const knowledgeType of knowledgeTypes) {
     assert.equal(
@@ -308,4 +314,54 @@ test("extraction metadata names its extractor, method, and evidence list", () =>
       .success,
     false
   );
+});
+
+test("claimType accepts the ten task-book claim categories", () => {
+  const claimTypes = [
+    "SCIENTIFIC_FACT",
+    "GEMOLOGICAL_FACT",
+    "DESIGN_PRINCIPLE",
+    "DESIGN_HEURISTIC",
+    "CULTURAL_SYMBOLISM",
+    "HISTORICAL_TRADITION",
+    "WUXING_ASSOCIATION",
+    "ASTROLOGY_ASSOCIATION",
+    "TAROT_ASSOCIATION",
+    "MARKET_OBSERVATION"
+  ];
+  for (const claimType of claimTypes) {
+    assert.equal(
+      KnowledgeRuleSchema.safeParse({ ...validRule, claimType }).success,
+      true,
+      `claimType ${claimType} should parse`
+    );
+    assert.equal(ClaimTypeSchema.safeParse(claimType).success, true);
+  }
+  assert.equal(KnowledgeRuleSchema.safeParse({ ...validRule, claimType: "MEDICAL_FACT" }).success, false);
+  assert.equal(ClaimTypeSchema.safeParse("MEDICAL_FACT").success, false);
+});
+
+test("existing rules without claimType stay valid (backward compatible)", () => {
+  const withoutClaimType = { ...validRule } as { claimType?: string };
+  delete withoutClaimType.claimType;
+  assert.equal(KnowledgeRuleSchema.safeParse(withoutClaimType).success, true);
+  assert.equal("claimType" in KnowledgeRuleSchema.parse(withoutClaimType), false);
+});
+
+test("acquisition knowledge types parse and map to their knowledge domains", () => {
+  const cases = [
+    ["CRYSTAL_GEMOLOGY", "knowledge-domain:crystal-gemology"],
+    ["CRYSTAL_VISUAL_PROPERTIES", "knowledge-domain:crystal-visual-properties"],
+    ["CRYSTAL_CULTURAL_SYMBOLISM", "knowledge-domain:crystal-cultural-symbolism"],
+    ["WUXING", "knowledge-domain:wuxing"],
+    ["WUXING_CRYSTAL_ASSOCIATION", "knowledge-domain:wuxing-crystal-association"],
+    ["ZODIAC", "knowledge-domain:zodiac"],
+    ["ZODIAC_CRYSTAL_ASSOCIATION", "knowledge-domain:zodiac-crystal-association"],
+    ["TAROT_SYMBOLISM", "knowledge-domain:tarot-symbolism"],
+    ["TAROT_CRYSTAL_ASSOCIATION", "knowledge-domain:tarot-crystal-association"]
+  ] as const;
+  for (const [type, domain] of cases) {
+    assert.equal(knowledgeDomainForType(type), domain);
+  }
+  assert.equal(knowledgeDomainForType("CRYSTAL_GEMOLOGY"), "knowledge-domain:crystal-gemology");
 });
