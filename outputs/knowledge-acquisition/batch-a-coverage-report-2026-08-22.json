@@ -1,39 +1,39 @@
 {
   "reportId": "coverage-report-2026-08-22",
   "phase": "coverage-report",
-  "generatedAt": "2026-08-22T05:23:11.577Z",
+  "generatedAt": "2026-08-22T05:59:49.295Z",
   "dryRun": false,
   "sourcesCrawled": 7,
-  "documentsAdded": 7,
-  "documentsSkippedDuplicates": 0,
-  "candidatesInserted": 3,
+  "documentsAdded": 1,
+  "documentsSkippedDuplicates": 6,
+  "candidatesInserted": 0,
   "candidatesSkippedDuplicates": 0,
   "review": {
     "extracted": 0,
     "validated": 0,
-    "needsReview": 0,
+    "needsReview": 3,
     "conflicted": 0
   },
   "sources": [
     {
       "sourceId": "source-american-gem-society",
-      "createdDocuments": 1,
-      "duplicateDocuments": 0,
+      "createdDocuments": 0,
+      "duplicateDocuments": 1,
       "insertedCandidates": 0,
       "duplicateCandidates": 0
     },
     {
       "sourceId": "source-britannica-symbolism",
-      "createdDocuments": 1,
-      "duplicateDocuments": 0,
-      "insertedCandidates": 1,
+      "createdDocuments": 0,
+      "duplicateDocuments": 1,
+      "insertedCandidates": 0,
       "duplicateCandidates": 0
     },
     {
       "sourceId": "source-ganoksin-bench-articles",
-      "createdDocuments": 1,
-      "duplicateDocuments": 0,
-      "insertedCandidates": 1,
+      "createdDocuments": 0,
+      "duplicateDocuments": 1,
+      "insertedCandidates": 0,
       "duplicateCandidates": 0
     },
     {
@@ -45,164 +45,50 @@
     },
     {
       "sourceId": "source-gia-gem-encyclopedia",
-      "createdDocuments": 1,
-      "duplicateDocuments": 0,
-      "insertedCandidates": 1,
+      "createdDocuments": 0,
+      "duplicateDocuments": 1,
+      "insertedCandidates": 0,
       "duplicateCandidates": 0
     },
     {
       "sourceId": "source-igi-education",
-      "createdDocuments": 1,
-      "duplicateDocuments": 0,
+      "createdDocuments": 0,
+      "duplicateDocuments": 1,
       "insertedCandidates": 0,
       "duplicateCandidates": 0
     },
     {
       "sourceId": "source-journal-of-gemmology",
-      "createdDocuments": 1,
-      "duplicateDocuments": 0,
+      "createdDocuments": 0,
+      "duplicateDocuments": 1,
       "insertedCandidates": 0,
       "duplicateCandidates": 0
     }
   ],
   "candidatesByDomain": [
     {
-      "domain": "CRYSTAL_GEMOLOGY",
-      "sourceCount": 4,
-      "sources": [
-        "source-gia-gem-encyclopedia",
-        "source-gemdat-gemstone-pages",
-        "source-igi-education",
-        "source-journal-of-gemmology"
+      "domain": "knowledge-domain:cultural-symbolism",
+      "candidateCount": 1,
+      "candidates": [
+        "cand-264d49f235b598246dcedaa3"
       ]
     },
     {
-      "domain": "CRYSTAL_VISUAL_PROPERTIES",
-      "sourceCount": 3,
-      "sources": [
-        "source-gia-gem-encyclopedia",
-        "source-gemdat-gemstone-pages",
-        "source-britannica-symbolism"
+      "domain": "knowledge-domain:material-compatibility",
+      "candidateCount": 1,
+      "candidates": [
+        "cand-ec4dca9ad30274a5c180d17c"
       ]
     },
     {
-      "domain": "CRYSTAL_CULTURAL_SYMBOLISM",
-      "sourceCount": 3,
-      "sources": [
-        "source-gia-gem-encyclopedia",
-        "source-american-gem-society",
-        "source-britannica-symbolism"
+      "domain": "knowledge-domain:proportion-rule",
+      "candidateCount": 1,
+      "candidates": [
+        "cand-b9946401aa58a342a761b80a"
       ]
-    },
-    {
-      "domain": "COLOR_THEORY",
-      "sourceCount": 0,
-      "sources": []
-    },
-    {
-      "domain": "JEWELRY_DESIGN",
-      "sourceCount": 1,
-      "sources": [
-        "source-ganoksin-bench-articles"
-      ]
-    },
-    {
-      "domain": "COMPOSITION",
-      "sourceCount": 1,
-      "sources": [
-        "source-ganoksin-bench-articles"
-      ]
-    },
-    {
-      "domain": "PROPORTION",
-      "sourceCount": 1,
-      "sources": [
-        "source-ganoksin-bench-articles"
-      ]
-    },
-    {
-      "domain": "FOCAL",
-      "sourceCount": 0,
-      "sources": []
-    },
-    {
-      "domain": "TRANSITION",
-      "sourceCount": 0,
-      "sources": []
-    },
-    {
-      "domain": "MATERIAL_COMPATIBILITY",
-      "sourceCount": 4,
-      "sources": [
-        "source-gia-gem-encyclopedia",
-        "source-gemdat-gemstone-pages",
-        "source-igi-education",
-        "source-ganoksin-bench-articles"
-      ]
-    },
-    {
-      "domain": "NEGATIVE_RULE",
-      "sourceCount": 2,
-      "sources": [
-        "source-gia-gem-encyclopedia",
-        "source-gemdat-gemstone-pages"
-      ]
-    },
-    {
-      "domain": "STYLE",
-      "sourceCount": 0,
-      "sources": []
-    },
-    {
-      "domain": "WUXING",
-      "sourceCount": 1,
-      "sources": [
-        "source-britannica-symbolism"
-      ]
-    },
-    {
-      "domain": "WUXING_CRYSTAL_ASSOCIATION",
-      "sourceCount": 0,
-      "sources": []
-    },
-    {
-      "domain": "ZODIAC",
-      "sourceCount": 2,
-      "sources": [
-        "source-britannica-symbolism",
-        "source-gia-gem-encyclopedia"
-      ]
-    },
-    {
-      "domain": "ZODIAC_CRYSTAL_ASSOCIATION",
-      "sourceCount": 2,
-      "sources": [
-        "source-gia-gem-encyclopedia",
-        "source-american-gem-society"
-      ]
-    },
-    {
-      "domain": "TAROT",
-      "sourceCount": 0,
-      "sources": []
-    },
-    {
-      "domain": "TAROT_SYMBOLISM",
-      "sourceCount": 0,
-      "sources": []
-    },
-    {
-      "domain": "TAROT_CRYSTAL_ASSOCIATION",
-      "sourceCount": 0,
-      "sources": []
-    },
-    {
-      "domain": "MARKET_OBSERVATION",
-      "sourceCount": 0,
-      "sources": []
     }
   ],
-  "coverageGaps": [
+  "coverageTargets": [
     {
       "domain": "CRYSTAL_GEMOLOGY",
       "target": 60,
@@ -218,8 +104,8 @@
     {
       "domain": "CRYSTAL_CULTURAL_SYMBOLISM",
       "target": 60,
-      "current": 0,
-      "missing": 60
+      "current": 1,
+      "missing": 59
     },
     {
       "domain": "COLOR_THEORY",
@@ -242,8 +128,8 @@
     {
       "domain": "PROPORTION",
       "target": 40,
-      "current": 0,
-      "missing": 40
+      "current": 1,
+      "missing": 39
     },
     {
       "domain": "FOCAL",
@@ -260,8 +146,8 @@
     {
       "domain": "MATERIAL_COMPATIBILITY",
       "target": 200,
-      "current": 0,
-      "missing": 200
+      "current": 1,
+      "missing": 199
     },
     {
       "domain": "NEGATIVE_RULE",
