@@ -1,6 +1,6 @@
 import { TaxonomyTermSchema, type TaxonomyTerm, type TaxonomyTermInput } from "../schemas/taxonomy.schema";
 
-export const TAXONOMY_VERSION = "taxonomy-2026-08-v1";
+export const TAXONOMY_VERSION = "taxonomy-2026-08-v2";
 
 const RAW_TERMS: readonly TaxonomyTermInput[] = [
   // COLOR
@@ -126,7 +126,32 @@ const RAW_TERMS: readonly TaxonomyTermInput[] = [
   // LIGHTNESS_LEVEL
   { id: "lightness-level:low", domain: "LIGHTNESS_LEVEL", displayName: { zh: "低明度", en: "Low lightness" }, aliases: ["dark", "deep", "暗色", "深色", "低明度"] },
   { id: "lightness-level:medium", domain: "LIGHTNESS_LEVEL", displayName: { zh: "中明度", en: "Medium lightness" }, aliases: ["中明度"] },
-  { id: "lightness-level:high", domain: "LIGHTNESS_LEVEL", displayName: { zh: "高明度", en: "High lightness" }, aliases: ["pale", "浅色", "高明度"] }
+  { id: "lightness-level:high", domain: "LIGHTNESS_LEVEL", displayName: { zh: "高明度", en: "High lightness" }, aliases: ["pale", "浅色", "高明度"] },
+
+  // TAROT — the 22 major arcana (soft cultural context, task book §66; card
+  // identities mirror the tarot-engine card catalog)
+  { id: "tarot:major-00-the-fool", domain: "TAROT", displayName: { zh: "愚者", en: "The Fool" }, aliases: ["the fool", "愚者"] },
+  { id: "tarot:major-01-the-magician", domain: "TAROT", displayName: { zh: "魔术师", en: "The Magician" }, aliases: ["the magician", "魔术师"] },
+  { id: "tarot:major-02-the-high-priestess", domain: "TAROT", displayName: { zh: "女祭司", en: "The High Priestess" }, aliases: ["the high priestess", "女祭司"] },
+  { id: "tarot:major-03-the-empress", domain: "TAROT", displayName: { zh: "皇后", en: "The Empress" }, aliases: ["the empress", "皇后"] },
+  { id: "tarot:major-04-the-emperor", domain: "TAROT", displayName: { zh: "皇帝", en: "The Emperor" }, aliases: ["the emperor", "皇帝"] },
+  { id: "tarot:major-05-the-hierophant", domain: "TAROT", displayName: { zh: "教皇", en: "The Hierophant" }, aliases: ["the hierophant", "教皇"] },
+  { id: "tarot:major-06-the-lovers", domain: "TAROT", displayName: { zh: "恋人", en: "The Lovers" }, aliases: ["the lovers", "恋人"] },
+  { id: "tarot:major-07-the-chariot", domain: "TAROT", displayName: { zh: "战车", en: "The Chariot" }, aliases: ["the chariot", "战车"] },
+  { id: "tarot:major-08-strength", domain: "TAROT", displayName: { zh: "力量", en: "Strength" }, aliases: ["strength", "力量"] },
+  { id: "tarot:major-09-the-hermit", domain: "TAROT", displayName: { zh: "隐者", en: "The Hermit" }, aliases: ["the hermit", "隐者"] },
+  { id: "tarot:major-10-wheel-of-fortune", domain: "TAROT", displayName: { zh: "命运之轮", en: "Wheel of Fortune" }, aliases: ["wheel of fortune", "命运之轮"] },
+  { id: "tarot:major-11-justice", domain: "TAROT", displayName: { zh: "正义", en: "Justice" }, aliases: ["justice", "正义"] },
+  { id: "tarot:major-12-the-hanged-man", domain: "TAROT", displayName: { zh: "倒吊人", en: "The Hanged Man" }, aliases: ["the hanged man", "倒吊人"] },
+  { id: "tarot:major-13-death", domain: "TAROT", displayName: { zh: "死神", en: "Death" }, aliases: ["death", "死神"] },
+  { id: "tarot:major-14-temperance", domain: "TAROT", displayName: { zh: "节制", en: "Temperance" }, aliases: ["temperance", "节制"] },
+  { id: "tarot:major-15-the-devil", domain: "TAROT", displayName: { zh: "恶魔", en: "The Devil" }, aliases: ["the devil", "恶魔"] },
+  { id: "tarot:major-16-the-tower", domain: "TAROT", displayName: { zh: "高塔", en: "The Tower" }, aliases: ["the tower", "高塔"] },
+  { id: "tarot:major-17-the-star", domain: "TAROT", displayName: { zh: "星星", en: "The Star" }, aliases: ["the star", "星星"] },
+  { id: "tarot:major-18-the-moon", domain: "TAROT", displayName: { zh: "月亮", en: "The Moon" }, aliases: ["the moon", "月亮"] },
+  { id: "tarot:major-19-the-sun", domain: "TAROT", displayName: { zh: "太阳", en: "The Sun" }, aliases: ["the sun", "太阳"] },
+  { id: "tarot:major-20-judgement", domain: "TAROT", displayName: { zh: "审判", en: "Judgement" }, aliases: ["judgement", "审判"] },
+  { id: "tarot:major-21-the-world", domain: "TAROT", displayName: { zh: "世界", en: "The World" }, aliases: ["the world", "世界"] }
 ];
 
 export const TAXONOMY_TERMS: readonly TaxonomyTerm[] = RAW_TERMS.map((term) =>

@@ -132,7 +132,7 @@ three-engine      backend ──► ai-agent（文案/偏好）、knowledge-core
 ### 5.1 Taxonomy（`schemas/taxonomy.schema.ts`）
 
 - `TaxonomyTermSchema`：`{ id（canonical，如 "color:cool"）, domain（enum：MATERIAL/COLOR/STYLE/EMOTION/TEXTURE/TRANSPARENCY/LUSTER/TEMPERATURE/COMPOSITION_ROLE/KNOWLEDGE_DOMAIN/CONTEXT_SOURCE）, displayName{zh,en}, aliases[{locale,value}], parentId?, status }`。
-- canonical 数据集以**版本化 TS fixture** 形式随包发布（`TAXONOMY_VERSION = "taxonomy-2026-08-v1"`），运行时 `resolveTaxonomyId(raw, domain)` 做别名归一。V1 不建 taxonomy 数据库表（数据非用户数据、需随代码原子发布）；DB 化留待 Admin UI 需求出现时再议（ADR-3）。
+- canonical 数据集以**版本化 TS fixture** 形式随包发布（`TAXONOMY_VERSION = "taxonomy-2026-08-v2"`，v2 新增 TAROT 域与 22 张大阿尔卡那词条以支撑 Q4 塔罗语料层），运行时 `resolveTaxonomyId(raw, domain)` 做别名归一。V1 不建 taxonomy 数据库表（数据非用户数据、需随代码原子发布）；DB 化留待 Admin UI 需求出现时再议（ADR-3）。
 - 迁移策略：现有 Crystal 的 `colorTags/styleTags/emotionTags` 与 ai-agent `STANDARD_*_TAGS` 在 EPIC 1 建立**旧值 → canonical ID 映射表**，EPIC 2 起目录数据写入 canonical 值；旧值读取时经映射兼容。
 
 ### 5.2 RecommendationContext（`schemas/recommendation-context.schema.ts`）
@@ -354,6 +354,8 @@ Baseline 采集方式：bundle 数字来自干净单次构建（`rm -rf .next &&
 | Q0 | Source Registry 生产化（编辑分类/审核状态机/抓取健康/限速/36 seed，DEC-KNOWLEDGE-SYSTEM-010） | `2234dde` |
 | Q1 | Semantic Embedding 升级（方案 B OpenAI 兼容 Provider + 熔断 fallback + 统一工厂 + 语义评测集，ADR-9 更新） | `c670622` |
 | Q2 | Knowledge Extraction 升级（9 类关系词表/Extractor 接口/证据溯源/标注句评测集，DEC-KNOWLEDGE-SYSTEM-011，§17.2） | `fc895a8` |
+| Q3 | Knowledge Admin / Review 后台（Admin API 10 端点 + fail-closed admin key，DEC-KNOWLEDGE-SYSTEM-012，§17.3） | `9c96d05` |
+| Q4 | Corpus Bootstrap ≥500 规则 + 知识分层（core/taxonomy-coverage/combination，taxonomy v2 TAROT 域，DEC-KNOWLEDGE-SYSTEM-013，§17.4） | 本次提交 |
 
 ### 17.2 Q2 Knowledge Extraction 升级
 
@@ -418,3 +420,17 @@ Baseline 采集方式：bundle 数字来自干净单次构建（`rm -rf .next &&
 **DTO（design-contract `schemas/knowledge-admin-api.schema.ts`）**：请求/响应全部 Zod strictObject，响应用既有 `validateResponse` 校验；管理端 DTO 只投影审核所需字段，不透出存储行。
 
 **验收**：Admin API 全端点 200/400/404/409/403 路由测试；fail closed 与错误 key 拒绝有测试；CLI 与 API 走同一 review-service（行为一致）；overview 计数有单测；既有测试全绿 + `pnpm validate`。
+
+### 17.4 Q4 Corpus Bootstrap ≥500 规则 + 知识分层
+
+**目标**：审核语料从 116 条手工核心集扩到 **≥500 条 APPROVED 规则**，并以**语料分层**（corpus layering）明示来源与可信度结构：`core`（人工审核手册核心，既有 116 条，不改动）之上叠加 `taxonomy-coverage`（taxonomy 系统覆盖层，每个词条至少充当一次 subject）与 `combination`（跨域组合与塔罗全 majors 扩展层）。决策分层沿用 EPIC 8 的 P3–P8 priority ladder + HARD/SOFT（Q4 不改编译器）。
+
+**生成器（`knowledge-core/src/fixtures/corpus-bootstrap.ts`）**：
+
+- 纯确定性：无随机、无时间、无环境依赖；同一 taxonomy 版本生成逐字节一致的规则集（fingerprint = sha256(id)，与 core 同套路）
+- 冲突约束：bootstrap 规则的 (knowledgeType, subject, relation) 键不得与 core 层或彼此重复——生成器读取 core 键集做过滤，测试断言全语料零同键异 fingerprint 组
+- 约束继承：subject 必须解析为 canonical taxonomy ref（compound `a+b` 逐段解析）；knowledgeDomain 与类型映射一致；confidence ∈ [0,1]；payload 备注为设计语言，禁违禁词（复用 `validateKnowledgeRuleCandidate` 全量校验每条生成规则）
+- 层标识：payload `corpusLayer: "taxonomy-coverage" | "combination"`；`importFixtureCorpus` 与 CLI、Admin 发布链路自动获得全量 500+（导入幂等靠 fingerprint 唯一）
+- 覆盖矩阵（全部 11 类知识类型）：COLOR_THEORY（色环 mono/对比/明暗变奏 + 颜色→天然材质映射）、MATERIAL_COMPATIBILITY（配金属/家族渐变/软硬隔珠/最佳纹理呈现）、NEGATIVE_RULE（20 材质 avoid-exposure 保养 + 软硬相邻回避 + 12 情绪 forbidden-claims 合规护栏）、STYLE_RULE（8 风格 × 温度/纹理/光泽/透明度偏好 + 12 情绪材质/纹理偏好）、PROPORTION/COMPOSITION/TRANSITION/FOCAL（composition-role 全 5 角色含 pendant 补全）、CULTURAL_SYMBOLISM（13 色/20 材质/12 情绪/9 纹理/3 光泽/3 透明度象征）、TAROT（补全 22 majors 缺失的 13 张 suggests-palette/suggests-emotion）、MARKET_OBSERVATION（颜色/材质/风格/情绪/纹理观察层）
+
+**验收**：≥500 条且分层计数入测试；11 类知识类型全部有 bootstrap 增量；taxonomy 覆盖域（COLOR/MATERIAL/STYLE/EMOTION/TEXTURE/LUSTER/TRANSPARENCY/COMPOSITION_ROLE）每词条 ≥1 次作 subject；全语料零冲突组、零校验失败；`compileDecisionRules` 对 500+ 规则集确定性编译（同输入同输出、ruleSetVersion 稳定）；既有集成测试（import/发布/MCP/闭环）全部保持绿 + `pnpm validate`。

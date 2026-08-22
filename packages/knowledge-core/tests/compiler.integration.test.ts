@@ -9,14 +9,19 @@ import {
 
 import { KnowledgeCore } from "../src/knowledge-core.js";
 import { KnowledgeReviewService } from "../src/review/review-service.js";
-import { KNOWLEDGE_RULE_FIXTURES } from "../src/fixtures/knowledge-rules.js";
+import { KNOWLEDGE_CORPUS_FIXTURES } from "../src/fixtures/corpus-bootstrap.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 
 function extractSubjectRefs(): string[] {
   const refs = new Set<string>();
-  for (const rule of KNOWLEDGE_RULE_FIXTURES) {
+  for (const rule of KNOWLEDGE_CORPUS_FIXTURES) {
+    // Compound subjects (a+b) must be feasible as a whole, and every part
+    // must be feasible for single-subject rules.
     refs.add(rule.subject);
+    for (const part of rule.subject.split("+")) {
+      refs.add(part);
+    }
   }
   return [...refs].sort();
 }
@@ -47,7 +52,10 @@ test("rule compiler integration against the published fixture corpus", { skip: !
 
     assert.equal(compiled.knowledgeVersion, "compiler-test-v1");
     assert.equal(compiled.productCatalogVersion, "catalog-fixture-v1");
-    assert.ok(compiled.rules.length >= 100, `expected >= 100 rules, got ${compiled.rules.length}`);
+    assert.ok(
+      compiled.rules.length >= 450,
+      `expected >= 450 rules from the 500+ corpus, got ${compiled.rules.length}`
+    );
 
     const priorities = compiled.rules.map((rule) => rule.priority);
     const rankOf = (priority: string) => Number(priority.slice(1));

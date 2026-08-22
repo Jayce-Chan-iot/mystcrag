@@ -90,9 +90,13 @@ export function validateKnowledgeRuleCandidate(
     issues.push("payload must be a JSON object");
   }
 
-  const claimHits = forbiddenClaimsIn(JSON.stringify(rule.payload ?? {}), FORBIDDEN_CLAIM_PHRASES);
-  if (claimHits.length > 0) {
-    issues.push(`payload contains forbidden claim phrases: ${claimHits.join(", ")}`);
+  // The forbidden-claims rules ARE the compliance boundary: their payloads
+  // name the banned phrases, so the claim scan must not flag them.
+  if (rule.relation !== "forbidden-claims") {
+    const claimHits = forbiddenClaimsIn(JSON.stringify(rule.payload ?? {}), FORBIDDEN_CLAIM_PHRASES);
+    if (claimHits.length > 0) {
+      issues.push(`payload contains forbidden claim phrases: ${claimHits.join(", ")}`);
+    }
   }
 
   return { valid: issues.length === 0, issues };

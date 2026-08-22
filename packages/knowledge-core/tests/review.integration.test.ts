@@ -13,7 +13,7 @@ import {
 import { KnowledgeCore } from "../src/knowledge-core.js";
 import { ruleFingerprint } from "../src/review/rules.js";
 import { KnowledgeReviewService } from "../src/review/review-service.js";
-import { KNOWLEDGE_RULE_FIXTURES } from "../src/fixtures/knowledge-rules.js";
+import { KNOWLEDGE_CORPUS_FIXTURES } from "../src/fixtures/corpus-bootstrap.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -96,27 +96,31 @@ test("knowledge review service runs the review chain end to end", { skip: !datab
     status: "PARSED"
   });
 
-  await t.test("importFixtureCorpus seeds the reviewed handbook corpus as APPROVED rules", async () => {
+  await t.test("importFixtureCorpus seeds the reviewed corpus as APPROVED rules", async () => {
     const summary = await review.importFixtureCorpus();
-    assert.equal(summary.sources, 2);
-    assert.equal(summary.documents, 2);
-    assert.equal(summary.rules, KNOWLEDGE_RULE_FIXTURES.length);
-    const rules = await repository.listRules({ status: "APPROVED" });
-    assert.equal(rules.length, KNOWLEDGE_RULE_FIXTURES.length);
+    assert.equal(summary.sources, 3);
+    assert.equal(summary.documents, 3);
+    assert.equal(summary.rules, KNOWLEDGE_CORPUS_FIXTURES.length);
+    assert.ok(summary.rules >= 500, `expected >= 500 corpus rules, got ${summary.rules}`);
+    const rules = await repository.listRules({ status: "APPROVED", limit: 2000 });
+    assert.equal(rules.length, KNOWLEDGE_CORPUS_FIXTURES.length);
   });
 
   await t.test("importFixtureCorpus is idempotent on re-import", async () => {
     const summary = await review.importFixtureCorpus();
-    assert.equal(summary.rules, KNOWLEDGE_RULE_FIXTURES.length);
-    const rules = await repository.listRules({ status: "APPROVED" });
-    assert.equal(rules.length, KNOWLEDGE_RULE_FIXTURES.length);
+    assert.equal(summary.rules, KNOWLEDGE_CORPUS_FIXTURES.length);
+    const rules = await repository.listRules({ status: "APPROVED", limit: 2000 });
+    assert.equal(rules.length, KNOWLEDGE_CORPUS_FIXTURES.length);
   });
 
   await t.test("publishVersion snapshots APPROVED rules into a production knowledge version", async () => {
     const version = await review.publishVersion("fixture-corpus-v1");
     assert.equal(version.status, "PUBLISHED");
     assert.equal(version.version, "fixture-corpus-v1");
-    assert.ok(version.ruleCount >= KNOWLEDGE_RULE_FIXTURES.length - 5, `ruleCount=${version.ruleCount}`);
+    assert.ok(
+      version.ruleCount >= KNOWLEDGE_CORPUS_FIXTURES.length - 5,
+      `ruleCount=${version.ruleCount}`
+    );
     const latest = await repository.getLatestPublishedVersion();
     assert.equal(latest?.version, "fixture-corpus-v1");
   });
@@ -139,8 +143,9 @@ test("knowledge review service runs the review chain end to end", { skip: !datab
   });
 
   await t.test("runReviewPipeline classifies extracted candidates by confidence, authority and validity", async () => {
-    // color:white is deliberately absent from the fixture corpus so these
-    // candidates cannot collide with APPROVED rules and get conflict-flagged.
+    // These candidate keys are deliberately absent from the fixture corpus
+    // (core + bootstrap layers) so they cannot collide with APPROVED rules
+    // and get conflict-flagged.
     await repository.insertRule(
       candidateRule({
         id: "cand-auto-validated",
@@ -155,7 +160,7 @@ test("knowledge review service runs the review chain end to end", { skip: !datab
       candidateRule({
         id: "cand-low-confidence",
         subject: "color:white",
-        relation: "contrasts-with",
+        relation: "contrasts-in-value",
         payload: { contrastColors: ["color:black"] },
         confidence: 0.5,
         status: "EXTRACTED"

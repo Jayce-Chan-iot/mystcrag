@@ -400,6 +400,24 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 
 ---
 
+### DEC-KNOWLEDGE-SYSTEM-013 — Deterministic three-layer corpus bootstrap to 500+ APPROVED rules (Knowledge Quality Phase Q4)
+
+- Date: 2026-08-22
+- Proposed by Agent: Knowledge Backend Agent
+- Affected modules: `packages/knowledge-core` (fixtures, review service), `packages/design-contract` (taxonomy)
+- Decision: The reviewed corpus grows from the 116-rule handbook core to 510 rules via a deterministic bootstrap generator (`fixtures/corpus-bootstrap.ts`) that layers the corpus explicitly: `core` (the untouched human-reviewed handbook), `taxonomy-coverage` (every COLOR/MATERIAL/STYLE/EMOTION/TEXTURE/LUSTER/TRANSPARENCY/COMPOSITION_ROLE term acts as a subject at least once), and `combination` (cross-domain pairs plus the 13 tarot majors missing from core), recorded per rule in `payload.corpusLayer`. Generation is pure — no randomness, time, or environment reads — so the same taxonomy version yields byte-identical rules with fingerprints derived from the id (same scheme as core). The generator reads the core (knowledgeType, subject, relation) key set and skips any colliding key, and tests assert the full corpus introduces no divergent same-key groups beyond the 18 documented core groups and passes `validateKnowledgeRuleCandidate` for every generated rule. `importFixtureCorpus` now imports the combined corpus so the CLI and Admin publish chains automatically publish 500+ rules. Taxonomy is bumped to v2 with a TAROT domain and the 22 major arcana terms so tarot subjects resolve canonically. The `forbidden-claims` relation is exempted from the payload forbidden-phrase scan because those compliance-guardrail rules name the banned phrases by design.
+- Rationale: the 116-rule core was enough to prove the pipeline but too thin for retrieval and recommendation coverage; task book §17.4 requires ≥500 APPROVED rules with explicit layering. A deterministic generator (rather than bulk LLM extraction) keeps the corpus auditable and reproducible — reviewers verify the generator once, not 394 individual rules — and keeps Q2's human-review invariant intact because bootstrap rules are internal MANUAL-source content with the same validation gauntlet as core. Layering makes the trust structure explicit: consumers can weight `core` above generated layers later without a migration.
+- Rejected alternatives: bulk semantic extraction to fill the corpus (violates the Provenance iron rule that AI cannot be the final source; every candidate would need individual human review); hand-writing 394 rules (unreviewable volume, error-prone); relaxing conflict detection for bootstrap layers (would corrupt the deterministic compiler contract).
+- Contract impact: `TaxonomyDomainSchema` adds `TAROT`; `TAXONOMY_VERSION` bumps to `taxonomy-2026-08-v2` with 22 new terms. No rule schema changes — `corpusLayer` rides the existing free-form payload.
+- Database impact: None. The corpus ships as fixtures; fingerprint-unique insertion is idempotent.
+- API impact: None. Publishing via Admin API/CLI now yields 500+ rules with no endpoint changes.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-22
+- Implementation branch or commit: `feat/knowledge-quality`, Knowledge Quality Phase Q4 commit (knowledge-core 88/88 incl. corpus bootstrap suite; `pnpm validate` 15/15).
+
+---
+
 ## New decision template
 
 ### P3-NNN — Short decision title

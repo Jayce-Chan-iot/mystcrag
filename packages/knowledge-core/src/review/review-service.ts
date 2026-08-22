@@ -15,7 +15,7 @@ import {
 import type { z } from "zod";
 
 import { KNOWLEDGE_DOCUMENT_FIXTURES, KNOWLEDGE_SOURCE_FIXTURES } from "../fixtures/knowledge-sources.js";
-import { KNOWLEDGE_RULE_FIXTURES } from "../fixtures/knowledge-rules.js";
+import { KNOWLEDGE_CORPUS_FIXTURES } from "../fixtures/corpus-bootstrap.js";
 import {
   classifyCandidate,
   detectRuleConflicts,
@@ -297,10 +297,10 @@ export class KnowledgeReviewService {
   }
 
   /**
-   * Loads the internally reviewed handbook corpus (MANUAL sources with the
-   * highest authority score) as APPROVED rules. The corpus is the E2E-2
-   * baseline knowledge set; re-imports are idempotent via the unique
-   * fingerprint.
+   * Loads the internally reviewed corpus as APPROVED rules: the handbook core
+   * layer plus the Q4 bootstrap layers (taxonomy-coverage and combination,
+   * see fixtures/corpus-bootstrap.ts). The corpus is the E2E-2 baseline
+   * knowledge set; re-imports are idempotent via the unique fingerprint.
    */
   async importFixtureCorpus(): Promise<FixtureImportSummary> {
     for (const source of KNOWLEDGE_SOURCE_FIXTURES) {
@@ -312,7 +312,7 @@ export class KnowledgeReviewService {
 
     let inserted = 0;
     let duplicates = 0;
-    for (const seed of KNOWLEDGE_RULE_FIXTURES) {
+    for (const seed of KNOWLEDGE_CORPUS_FIXTURES) {
       try {
         await this.repository.insertRule(seed);
         inserted += 1;
@@ -328,7 +328,7 @@ export class KnowledgeReviewService {
     return {
       sources: KNOWLEDGE_SOURCE_FIXTURES.length,
       documents: KNOWLEDGE_DOCUMENT_FIXTURES.length,
-      rules: KNOWLEDGE_RULE_FIXTURES.length,
+      rules: KNOWLEDGE_CORPUS_FIXTURES.length,
       inserted,
       duplicates
     };
