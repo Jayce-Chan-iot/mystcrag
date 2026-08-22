@@ -188,15 +188,17 @@ export async function runCollectBatch(
   }
 
   const crawledIds = new Set(crawlable.map((source: StoredKnowledgeSource) => source.id));
-  const review = await service.runReviewPipeline();
 
   // Extractors insert ingested candidates directly at NEEDS_REVIEW, so the
-  // pipeline's NEW→EXTRACTED→classify flow never sees them. Fold this run's
-  // directly-inserted candidates into the summary so `review.needsReview`
-  // agrees with `candidatesInserted`.
+  // pipeline's NEW→EXTRACTED→classify flow never sees them. Capture this run's
+  // directly-inserted candidates *before* the pipeline runs, so the summary
+  // never double-counts a NEW→classify→NEEDS_REVIEW candidate the pipeline
+  // itself produces from a structured-source run.
   const runCandidates = (
     await repository.listRules({ status: "NEEDS_REVIEW", limit: 2000 })
   ).filter((rule) => crawledIds.has(rule.sourceRefs[0]?.sourceId ?? rule.sourceId));
+
+  const review = await service.runReviewPipeline();
   review.needsReview += runCandidates.length;
 
   const byDomain = new Map<string, string[]>();
