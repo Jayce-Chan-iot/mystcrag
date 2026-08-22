@@ -63,3 +63,89 @@ test("candidate registry covers the editorial spread required for review", () =>
     );
   }
 });
+
+test("acquisition round-1 source registry updates", () => {
+  const ids = new Set(SOURCE_REGISTRY_CANDIDATES.map((s) => s.id));
+  assert.equal(ids.has("source-tarot-heritage-archive"), false, "rejected source must be removed");
+  assert.equal(ids.size, 41, `expected 41 sources, got ${ids.size}`);
+  const byId = new Map(SOURCE_REGISTRY_CANDIDATES.map((s) => [s.id, s]));
+
+  assert.equal(
+    byId.get("source-pictorial-key-tarot")?.baseUrl,
+    "https://www.sacred-texts.com/tarot/pkt/index.htm"
+  );
+  assert.equal(
+    byId.get("source-ganoksin-bench-articles")?.baseUrl,
+    "https://www.ganoksin.com/learning-center/"
+  );
+  assert.equal(
+    byId.get("source-rijksmuseum-jewelry")?.baseUrl,
+    "https://www.rijksmuseum.nl/en/research/our-research/fine-and-decorative-arts/decorative-arts/renaissance-jewellery"
+  );
+  assert.equal(byId.get("source-bnf-tarot-marseille")?.baseUrl, "https://gallica.bnf.fr");
+
+  for (const id of [
+    "source-ctext-wuxing-classics",
+    "source-wikipedia-reference",
+    "source-wikisource-pictorial-key",
+    "source-american-gem-society",
+    "source-astrologyic-zodiac-stones",
+    "source-fengsuihk-wuxing-crystals"
+  ]) {
+    assert.equal(ids.has(id), true, `${id} should be registered`);
+  }
+  assert.ok(
+    byId.get("source-ctext-wuxing-classics")?.allowedKnowledgeDomains.includes("knowledge-domain:wuxing")
+  );
+  assert.ok(
+    byId.get("source-astrologyic-zodiac-stones")?.allowedKnowledgeDomains.includes("knowledge-domain:zodiac-crystal-association")
+  );
+  assert.ok(
+    byId.get("source-fengsuihk-wuxing-crystals")?.allowedKnowledgeDomains.includes("knowledge-domain:wuxing-crystal-association")
+  );
+
+  for (const source of SOURCE_REGISTRY_CANDIDATES) {
+    assert.ok(
+      source.reviewStatus === undefined || source.reviewStatus === "NEEDS_REVIEW",
+      `${source.id} must stay NEEDS_REVIEW in seed form`
+    );
+    assert.ok(
+      source.enabled === undefined || source.enabled === false,
+      `${source.id} must stay disabled in seed form`
+    );
+  }
+});
+
+test("phase-1 authority calibration is written back to the seed", () => {
+  const byId = new Map(SOURCE_REGISTRY_CANDIDATES.map((s) => [s.id, s]));
+  const expected = new Map([
+    ["source-cie-color-standards", 0.75],
+    ["source-mjsa-articles", 0.55],
+    ["source-art-jewelry-forum", 0.5],
+    ["source-pictorial-key-tarot", 0.8],
+    ["source-rijksmuseum-jewelry", 0.75],
+    ["source-ganoksin-bench-articles", 0.55],
+    ["source-munsell-color-education", 0.65],
+    ["source-pantone-trend-reports", 0.65],
+    ["source-color-matters-education", 0.55],
+    ["source-met-tarot-cards", 0.75],
+    ["source-tarot-iconography-abstracts", 0.55],
+    ["source-etsy-crystal-bracelet-search", 0.3],
+    ["source-taobao-crystal-category", 0.25],
+    ["source-xiaohongshu-crystal-notes", 0.2],
+    ["source-google-trends-crystal", 0.3],
+    ["source-weibo-crystal-hashtag", 0.15],
+    ["source-bijuturu-design-proportions", 0.65],
+    ["source-itten-art-of-color", 0.7]
+  ]);
+  for (const [id, authority] of expected) {
+    assert.equal(byId.get(id)?.authorityScore, authority, `${id} authority mismatch`);
+  }
+});
+
+test("britannica covers wuxing and zodiac entries on the same site", () => {
+  const britannica = SOURCE_REGISTRY_CANDIDATES.find((s) => s.id === "source-britannica-symbolism");
+  assert.ok(britannica);
+  assert.ok(britannica.allowedKnowledgeDomains.includes("knowledge-domain:wuxing"));
+  assert.ok(britannica.allowedKnowledgeDomains.includes("knowledge-domain:zodiac"));
+});
