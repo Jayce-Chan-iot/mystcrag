@@ -14,3 +14,4 @@ output/playwright/diy-v2-after/
 *.tsbuildinfo
 .DS_Store
 packages/database/generated/
+packages/*/storage/

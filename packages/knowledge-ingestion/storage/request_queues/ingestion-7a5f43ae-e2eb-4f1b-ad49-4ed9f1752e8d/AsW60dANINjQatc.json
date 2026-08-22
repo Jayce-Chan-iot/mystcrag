@@ -1,9 +1,0 @@
-{
-	"id": "AsW60dANINjQatc",
-	"json": "{\"id\":\"AsW60dANINjQatc\",\"url\":\"http://127.0.0.1:52073/gems/index.html\",\"loadedUrl\":\"http://127.0.0.1:52073/gems/index.html\",\"uniqueKey\":\"http://127.0.0.1:52073/gems/index.html\",\"method\":\"GET\",\"noRetry\":false,\"retryCount\":0,\"errorMessages\":[],\"headers\":{},\"userData\":{\"__crawlee\":{\"state\":4}},\"handledAt\":\"2026-08-22T13:21:12.138Z\"}",
-	"method": "GET",
-	"orderNo": null,
-	"retryCount": 0,
-	"uniqueKey": "http://127.0.0.1:52073/gems/index.html",
-	"url": "http://127.0.0.1:52073/gems/index.html"
-}

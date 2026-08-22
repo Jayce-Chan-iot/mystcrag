@@ -1,9 +1,0 @@
-{
-	"id": "36MHjvGuDvTU9ee",
-	"json": "{\"id\":\"36MHjvGuDvTU9ee\",\"url\":\"http://127.0.0.1:52063/gems/amethyst.html\",\"loadedUrl\":\"http://127.0.0.1:52063/gems/amethyst.html\",\"uniqueKey\":\"http://127.0.0.1:52063/gems/amethyst.html\",\"method\":\"GET\",\"noRetry\":false,\"retryCount\":0,\"errorMessages\":[],\"headers\":{},\"userData\":{\"__crawlee\":{\"crawlDepth\":1,\"enqueueStrategy\":\"same-origin\",\"state\":4}},\"handledAt\":\"2026-08-22T13:20:57.061Z\"}",
-	"method": "GET",
-	"orderNo": null,
-	"retryCount": 0,
-	"uniqueKey": "http://127.0.0.1:52063/gems/amethyst.html",
-	"url": "http://127.0.0.1:52063/gems/amethyst.html"
-}
