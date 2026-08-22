@@ -1,0 +1,327 @@
+{
+  "reportId": "coverage-report-2026-08-22",
+  "phase": "coverage-report",
+  "generatedAt": "2026-08-22T05:23:11.577Z",
+  "dryRun": false,
+  "sourcesCrawled": 7,
+  "documentsAdded": 7,
+  "documentsSkippedDuplicates": 0,
+  "candidatesInserted": 3,
+  "candidatesSkippedDuplicates": 0,
+  "review": {
+    "extracted": 0,
+    "validated": 0,
+    "needsReview": 0,
+    "conflicted": 0
+  },
+  "sources": [
+    {
+      "sourceId": "source-american-gem-society",
+      "createdDocuments": 1,
+      "duplicateDocuments": 0,
+      "insertedCandidates": 0,
+      "duplicateCandidates": 0
+    },
+    {
+      "sourceId": "source-britannica-symbolism",
+      "createdDocuments": 1,
+      "duplicateDocuments": 0,
+      "insertedCandidates": 1,
+      "duplicateCandidates": 0
+    },
+    {
+      "sourceId": "source-ganoksin-bench-articles",
+      "createdDocuments": 1,
+      "duplicateDocuments": 0,
+      "insertedCandidates": 1,
+      "duplicateCandidates": 0
+    },
+    {
+      "sourceId": "source-gemdat-gemstone-pages",
+      "createdDocuments": 1,
+      "duplicateDocuments": 0,
+      "insertedCandidates": 0,
+      "duplicateCandidates": 0
+    },
+    {
+      "sourceId": "source-gia-gem-encyclopedia",
+      "createdDocuments": 1,
+      "duplicateDocuments": 0,
+      "insertedCandidates": 1,
+      "duplicateCandidates": 0
+    },
+    {
+      "sourceId": "source-igi-education",
+      "createdDocuments": 1,
+      "duplicateDocuments": 0,
+      "insertedCandidates": 0,
+      "duplicateCandidates": 0
+    },
+    {
+      "sourceId": "source-journal-of-gemmology",
+      "createdDocuments": 1,
+      "duplicateDocuments": 0,
+      "insertedCandidates": 0,
+      "duplicateCandidates": 0
+    }
+  ],
+  "candidatesByDomain": [
+    {
+      "domain": "CRYSTAL_GEMOLOGY",
+      "sourceCount": 4,
+      "sources": [
+        "source-gia-gem-encyclopedia",
+        "source-gemdat-gemstone-pages",
+        "source-igi-education",
+        "source-journal-of-gemmology"
+      ]
+    },
+    {
+      "domain": "CRYSTAL_VISUAL_PROPERTIES",
+      "sourceCount": 3,
+      "sources": [
+        "source-gia-gem-encyclopedia",
+        "source-gemdat-gemstone-pages",
+        "source-britannica-symbolism"
+      ]
+    },
+    {
+      "domain": "CRYSTAL_CULTURAL_SYMBOLISM",
+      "sourceCount": 3,
+      "sources": [
+        "source-gia-gem-encyclopedia",
+        "source-american-gem-society",
+        "source-britannica-symbolism"
+      ]
+    },
+    {
+      "domain": "COLOR_THEORY",
+      "sourceCount": 0,
+      "sources": []
+    },
+    {
+      "domain": "JEWELRY_DESIGN",
+      "sourceCount": 1,
+      "sources": [
+        "source-ganoksin-bench-articles"
+      ]
+    },
+    {
+      "domain": "COMPOSITION",
+      "sourceCount": 1,
+      "sources": [
+        "source-ganoksin-bench-articles"
+      ]
+    },
+    {
+      "domain": "PROPORTION",
+      "sourceCount": 1,
+      "sources": [
+        "source-ganoksin-bench-articles"
+      ]
+    },
+    {
+      "domain": "FOCAL",
+      "sourceCount": 0,
+      "sources": []
+    },
+    {
+      "domain": "TRANSITION",
+      "sourceCount": 0,
+      "sources": []
+    },
+    {
+      "domain": "MATERIAL_COMPATIBILITY",
+      "sourceCount": 4,
+      "sources": [
+        "source-gia-gem-encyclopedia",
+        "source-gemdat-gemstone-pages",
+        "source-igi-education",
+        "source-ganoksin-bench-articles"
+      ]
+    },
+    {
+      "domain": "NEGATIVE_RULE",
+      "sourceCount": 2,
+      "sources": [
+        "source-gia-gem-encyclopedia",
+        "source-gemdat-gemstone-pages"
+      ]
+    },
+    {
+      "domain": "STYLE",
+      "sourceCount": 0,
+      "sources": []
+    },
+    {
+      "domain": "WUXING",
+      "sourceCount": 1,
+      "sources": [
+        "source-britannica-symbolism"
+      ]
+    },
+    {
+      "domain": "WUXING_CRYSTAL_ASSOCIATION",
+      "sourceCount": 0,
+      "sources": []
+    },
+    {
+      "domain": "ZODIAC",
+      "sourceCount": 2,
+      "sources": [
+        "source-britannica-symbolism",
+        "source-gia-gem-encyclopedia"
+      ]
+    },
+    {
+      "domain": "ZODIAC_CRYSTAL_ASSOCIATION",
+      "sourceCount": 2,
+      "sources": [
+        "source-gia-gem-encyclopedia",
+        "source-american-gem-society"
+      ]
+    },
+    {
+      "domain": "TAROT",
+      "sourceCount": 0,
+      "sources": []
+    },
+    {
+      "domain": "TAROT_SYMBOLISM",
+      "sourceCount": 0,
+      "sources": []
+    },
+    {
+      "domain": "TAROT_CRYSTAL_ASSOCIATION",
+      "sourceCount": 0,
+      "sources": []
+    },
+    {
+      "domain": "MARKET_OBSERVATION",
+      "sourceCount": 0,
+      "sources": []
+    }
+  ],
+  "coverageGaps": [
+    {
+      "domain": "CRYSTAL_GEMOLOGY",
+      "target": 60,
+      "current": 0,
+      "missing": 60
+    },
+    {
+      "domain": "CRYSTAL_VISUAL_PROPERTIES",
+      "target": 60,
+      "current": 0,
+      "missing": 60
+    },
+    {
+      "domain": "CRYSTAL_CULTURAL_SYMBOLISM",
+      "target": 60,
+      "current": 0,
+      "missing": 60
+    },
+    {
+      "domain": "COLOR_THEORY",
+      "target": 100,
+      "current": 0,
+      "missing": 100
+    },
+    {
+      "domain": "JEWELRY_DESIGN",
+      "target": 200,
+      "current": 0,
+      "missing": 200
+    },
+    {
+      "domain": "COMPOSITION",
+      "target": 40,
+      "current": 0,
+      "missing": 40
+    },
+    {
+      "domain": "PROPORTION",
+      "target": 40,
+      "current": 0,
+      "missing": 40
+    },
+    {
+      "domain": "FOCAL",
+      "target": 30,
+      "current": 0,
+      "missing": 30
+    },
+    {
+      "domain": "TRANSITION",
+      "target": 30,
+      "current": 0,
+      "missing": 30
+    },
+    {
+      "domain": "MATERIAL_COMPATIBILITY",
+      "target": 200,
+      "current": 0,
+      "missing": 200
+    },
+    {
+      "domain": "NEGATIVE_RULE",
+      "target": 50,
+      "current": 0,
+      "missing": 50
+    },
+    {
+      "domain": "STYLE",
+      "target": 100,
+      "current": 0,
+      "missing": 100
+    },
+    {
+      "domain": "WUXING",
+      "target": 25,
+      "current": 0,
+      "missing": 25
+    },
+    {
+      "domain": "WUXING_CRYSTAL_ASSOCIATION",
+      "target": 60,
+      "current": 0,
+      "missing": 60
+    },
+    {
+      "domain": "ZODIAC",
+      "target": 36,
+      "current": 0,
+      "missing": 36
+    },
+    {
+      "domain": "ZODIAC_CRYSTAL_ASSOCIATION",
+      "target": 24,
+      "current": 0,
+      "missing": 24
+    },
+    {
+      "domain": "TAROT",
+      "target": 78,
+      "current": 0,
+      "missing": 78
+    },
+    {
+      "domain": "TAROT_SYMBOLISM",
+      "target": 78,
+      "current": 0,
+      "missing": 78
+    },
+    {
+      "domain": "TAROT_CRYSTAL_ASSOCIATION",
+      "target": 22,
+      "current": 0,
+      "missing": 22
+    },
+    {
+      "domain": "MARKET_OBSERVATION",
+      "target": 40,
+      "current": 0,
+      "missing": 40
+    }
+  ]
+}
