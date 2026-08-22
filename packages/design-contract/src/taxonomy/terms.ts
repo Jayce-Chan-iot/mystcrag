@@ -1,6 +1,6 @@
 import { TaxonomyTermSchema, type TaxonomyTerm, type TaxonomyTermInput } from "../schemas/taxonomy.schema";
 
-export const TAXONOMY_VERSION = "taxonomy-2026-08-v2";
+export const TAXONOMY_VERSION = "taxonomy-2026-08-v3";
 
 const RAW_TERMS: readonly TaxonomyTermInput[] = [
   // COLOR
@@ -90,6 +90,84 @@ const RAW_TERMS: readonly TaxonomyTermInput[] = [
   { id: "material:sterling-silver", domain: "MATERIAL", displayName: { zh: "纯银", en: "Sterling silver" }, aliases: ["sterling-silver", "925-silver", "silver", "银", "纯银"] },
   { id: "material:gold", domain: "MATERIAL", displayName: { zh: "黄金", en: "Gold" }, aliases: ["yellow-gold", "黄金"] },
 
+  // MATERIAL — specific crystals (acquisition round 1, task book §13)
+  // Quartz family
+  { id: "material:amethyst", domain: "MATERIAL", displayName: { zh: "紫水晶", en: "Amethyst" }, aliases: ["amethyst", "紫水晶", "紫晶"], parentId: "material:quartz" },
+  { id: "material:citrine", domain: "MATERIAL", displayName: { zh: "黄水晶", en: "Citrine" }, aliases: ["citrine", "黄水晶", "黄晶"], parentId: "material:quartz" },
+  { id: "material:rose-quartz", domain: "MATERIAL", displayName: { zh: "粉水晶", en: "Rose quartz" }, aliases: ["rose-quartz", "粉晶", "粉水晶", "玫瑰水晶", "芙蓉石"], parentId: "material:quartz" },
+  { id: "material:smoky-quartz", domain: "MATERIAL", displayName: { zh: "茶水晶", en: "Smoky quartz" }, aliases: ["smoky-quartz", "茶晶", "茶水晶", "烟晶", "烟水晶"], parentId: "material:quartz" },
+  { id: "material:clear-quartz", domain: "MATERIAL", displayName: { zh: "白水晶", en: "Clear quartz" }, aliases: ["clear-quartz", "rock-crystal", "白水晶", "无色水晶"], parentId: "material:quartz" },
+  { id: "material:rutilated-quartz", domain: "MATERIAL", displayName: { zh: "发晶", en: "Rutilated quartz" }, aliases: ["rutilated-quartz", "rutilated", "发晶", "金发晶", "钛晶"], parentId: "material:quartz" },
+  { id: "material:phantom-quartz", domain: "MATERIAL", displayName: { zh: "幽灵水晶", en: "Phantom quartz" }, aliases: ["phantom-quartz", "幽灵水晶", "绿幽灵", "异象水晶"], parentId: "material:quartz" },
+  { id: "material:strawberry-quartz", domain: "MATERIAL", displayName: { zh: "草莓水晶", en: "Strawberry quartz" }, aliases: ["strawberry-quartz", "草莓水晶", "草莓晶"], parentId: "material:quartz" },
+  { id: "material:ametrine", domain: "MATERIAL", displayName: { zh: "紫黄晶", en: "Ametrine" }, aliases: ["ametrine", "紫黄晶"], parentId: "material:quartz" },
+  { id: "material:prasiolite", domain: "MATERIAL", displayName: { zh: "绿水晶", en: "Prasiolite" }, aliases: ["prasiolite", "green-quartz", "绿水晶"], parentId: "material:quartz" },
+  // Chalcedony family
+  { id: "material:carnelian", domain: "MATERIAL", displayName: { zh: "红玉髓", en: "Carnelian" }, aliases: ["carnelian", "红玉髓", "红玛瑙"], parentId: "material:chalcedony" },
+  { id: "material:chrysoprase", domain: "MATERIAL", displayName: { zh: "绿玉髓", en: "Chrysoprase" }, aliases: ["chrysoprase", "绿玉髓", "澳洲玉"], parentId: "material:chalcedony" },
+  { id: "material:onyx", domain: "MATERIAL", displayName: { zh: "缟玛瑙", en: "Onyx" }, aliases: ["onyx", "黑玛瑙", "缟玛瑙"], parentId: "material:chalcedony" },
+  { id: "material:sardonyx", domain: "MATERIAL", displayName: { zh: "红缟玛瑙", en: "Sardonyx" }, aliases: ["sardonyx", "红缟玛瑙"], parentId: "material:chalcedony" },
+  { id: "material:bloodstone", domain: "MATERIAL", displayName: { zh: "血玉髓", en: "Bloodstone" }, aliases: ["bloodstone", "heliotrope", "血玉髓"], parentId: "material:chalcedony" },
+  { id: "material:jasper", domain: "MATERIAL", displayName: { zh: "碧玉", en: "Jasper" }, aliases: ["jasper", "碧石", "碧玉"], parentId: "material:chalcedony" },
+  { id: "material:moss-agate", domain: "MATERIAL", displayName: { zh: "苔玛瑙", en: "Moss agate" }, aliases: ["moss-agate", "苔纹玛瑙", "苔藓玛瑙"], parentId: "material:agate" },
+  { id: "material:blue-lace-agate", domain: "MATERIAL", displayName: { zh: "蓝纹玛瑙", en: "Blue lace agate" }, aliases: ["blue-lace-agate", "蓝纹玛瑙"], parentId: "material:agate" },
+  // Beryl family
+  { id: "material:aquamarine", domain: "MATERIAL", displayName: { zh: "海蓝宝石", en: "Aquamarine" }, aliases: ["aquamarine", "海蓝宝石", "海蓝宝", "蓝晶"], parentId: "material:beryl" },
+  { id: "material:emerald", domain: "MATERIAL", displayName: { zh: "祖母绿", en: "Emerald" }, aliases: ["emerald", "祖母绿"], parentId: "material:beryl" },
+  { id: "material:morganite", domain: "MATERIAL", displayName: { zh: "摩根石", en: "Morganite" }, aliases: ["morganite", "摩根石", "粉绿柱石"], parentId: "material:beryl" },
+  { id: "material:heliodor", domain: "MATERIAL", displayName: { zh: "金绿柱石", en: "Heliodor" }, aliases: ["heliodor", "golden-beryl", "金绿柱石"], parentId: "material:beryl" },
+  // Feldspar family
+  { id: "material:moonstone", domain: "MATERIAL", displayName: { zh: "月光石", en: "Moonstone" }, aliases: ["moonstone", "月光石", "月长石"], parentId: "material:feldspar" },
+  { id: "material:sunstone", domain: "MATERIAL", displayName: { zh: "太阳石", en: "Sunstone" }, aliases: ["sunstone", "太阳石", "日光石"], parentId: "material:feldspar" },
+  { id: "material:labradorite", domain: "MATERIAL", displayName: { zh: "拉长石", en: "Labradorite" }, aliases: ["labradorite", "拉长石", "光谱石"], parentId: "material:feldspar" },
+  { id: "material:amazonite", domain: "MATERIAL", displayName: { zh: "天河石", en: "Amazonite" }, aliases: ["amazonite", "amazonstone", "天河石"], parentId: "material:feldspar" },
+  // Garnet group
+  { id: "material:almandine", domain: "MATERIAL", displayName: { zh: "铁铝榴石", en: "Almandine" }, aliases: ["almandine", "铁铝榴石", "紫牙乌"], parentId: "material:garnet" },
+  { id: "material:pyrope", domain: "MATERIAL", displayName: { zh: "镁铝榴石", en: "Pyrope" }, aliases: ["pyrope", "镁铝榴石"], parentId: "material:garnet" },
+  { id: "material:spessartine", domain: "MATERIAL", displayName: { zh: "锰铝榴石", en: "Spessartine" }, aliases: ["spessartine", "spessartite", "锰铝榴石", "芬达石"], parentId: "material:garnet" },
+  { id: "material:hessonite", domain: "MATERIAL", displayName: { zh: "桂榴石", en: "Hessonite" }, aliases: ["hessonite", "桂榴石", "钙铝榴石"], parentId: "material:garnet" },
+  // Tourmaline
+  { id: "material:black-tourmaline", domain: "MATERIAL", displayName: { zh: "黑碧玺", en: "Black tourmaline" }, aliases: ["black-tourmaline", "schorl", "黑碧玺", "黑电气石"], parentId: "material:tourmaline" },
+  { id: "material:watermelon-tourmaline", domain: "MATERIAL", displayName: { zh: "西瓜碧玺", en: "Watermelon tourmaline" }, aliases: ["watermelon-tourmaline", "西瓜碧玺"], parentId: "material:tourmaline" },
+  { id: "material:rubellite", domain: "MATERIAL", displayName: { zh: "红碧玺", en: "Rubellite" }, aliases: ["rubellite", "红碧玺"], parentId: "material:tourmaline" },
+  { id: "material:indicolite", domain: "MATERIAL", displayName: { zh: "蓝碧玺", en: "Indicolite" }, aliases: ["indicolite", "蓝碧玺"], parentId: "material:tourmaline" },
+  // Organic
+  { id: "material:pearl", domain: "MATERIAL", displayName: { zh: "珍珠", en: "Pearl" }, aliases: ["pearl", "珍珠"] },
+  { id: "material:amber", domain: "MATERIAL", displayName: { zh: "琥珀", en: "Amber" }, aliases: ["amber", "琥珀", "蜜蜡"] },
+  { id: "material:jet", domain: "MATERIAL", displayName: { zh: "煤玉", en: "Jet" }, aliases: ["jet", "煤玉", "黑玉"] },
+  // Standalone minerals
+  { id: "material:peridot", domain: "MATERIAL", displayName: { zh: "橄榄石", en: "Peridot" }, aliases: ["peridot", "olivine", "橄榄石"] },
+  { id: "material:spinel", domain: "MATERIAL", displayName: { zh: "尖晶石", en: "Spinel" }, aliases: ["spinel", "尖晶石"] },
+  { id: "material:zircon", domain: "MATERIAL", displayName: { zh: "锆石", en: "Zircon" }, aliases: ["zircon", "锆石"] },
+  { id: "material:tanzanite", domain: "MATERIAL", displayName: { zh: "坦桑石", en: "Tanzanite" }, aliases: ["tanzanite", "zoisite", "坦桑石", "黝帘石"] },
+  { id: "material:iolite", domain: "MATERIAL", displayName: { zh: "堇青石", en: "Iolite" }, aliases: ["iolite", "cordierite", "堇青石"] },
+  { id: "material:kunzite", domain: "MATERIAL", displayName: { zh: "紫锂辉石", en: "Kunzite" }, aliases: ["kunzite", "spodumene", "锂辉石", "紫锂辉石"] },
+  { id: "material:apatite", domain: "MATERIAL", displayName: { zh: "磷灰石", en: "Apatite" }, aliases: ["apatite", "磷灰石"] },
+  { id: "material:turquoise", domain: "MATERIAL", displayName: { zh: "绿松石", en: "Turquoise" }, aliases: ["绿松石", "松石"] },
+  { id: "material:malachite", domain: "MATERIAL", displayName: { zh: "孔雀石", en: "Malachite" }, aliases: ["malachite", "孔雀石"] },
+  { id: "material:azurite", domain: "MATERIAL", displayName: { zh: "蓝铜矿", en: "Azurite" }, aliases: ["azurite", "蓝铜矿", "石青"] },
+  { id: "material:sodalite", domain: "MATERIAL", displayName: { zh: "方钠石", en: "Sodalite" }, aliases: ["sodalite", "方钠石"] },
+  { id: "material:serpentine", domain: "MATERIAL", displayName: { zh: "蛇纹石", en: "Serpentine" }, aliases: ["serpentine", "蛇纹石", "岫玉", "岫岩玉"] },
+  { id: "material:prehnite", domain: "MATERIAL", displayName: { zh: "葡萄石", en: "Prehnite" }, aliases: ["prehnite", "葡萄石"] },
+  { id: "material:chrysocolla", domain: "MATERIAL", displayName: { zh: "硅孔雀石", en: "Chrysocolla" }, aliases: ["chrysocolla", "硅孔雀石"] },
+  { id: "material:rhodochrosite", domain: "MATERIAL", displayName: { zh: "菱锰矿", en: "Rhodochrosite" }, aliases: ["rhodochrosite", "菱锰矿", "印加玫瑰"] },
+  { id: "material:larimar", domain: "MATERIAL", displayName: { zh: "拉利玛", en: "Larimar" }, aliases: ["larimar", "pectolite", "拉利玛", "针钠钙石"] },
+  { id: "material:charoite", domain: "MATERIAL", displayName: { zh: "查罗石", en: "Charoite" }, aliases: ["charoite", "查罗石", "紫龙晶"] },
+  { id: "material:sugilite", domain: "MATERIAL", displayName: { zh: "苏纪石", en: "Sugilite" }, aliases: ["sugilite", "苏纪石", "舒俱来"] },
+  { id: "material:howlite", domain: "MATERIAL", displayName: { zh: "白纹石", en: "Howlite" }, aliases: ["howlite", "白纹石"] },
+  { id: "material:unakite", domain: "MATERIAL", displayName: { zh: "绿帘花岗岩", en: "Unakite" }, aliases: ["unakite", "绿帘花岗岩"] },
+  { id: "material:kyanite", domain: "MATERIAL", displayName: { zh: "蓝晶石", en: "Kyanite" }, aliases: ["kyanite", "蓝晶石"] },
+  { id: "material:chrysoberyl", domain: "MATERIAL", displayName: { zh: "金绿宝石", en: "Chrysoberyl" }, aliases: ["chrysoberyl", "金绿宝石"] },
+  { id: "material:alexandrite", domain: "MATERIAL", displayName: { zh: "亚历山大变石", en: "Alexandrite" }, aliases: ["alexandrite", "亚历山大变石", "变石"], parentId: "material:chrysoberyl" },
+  { id: "material:danburite", domain: "MATERIAL", displayName: { zh: "赛黄晶", en: "Danburite" }, aliases: ["danburite", "赛黄晶"] },
+  { id: "material:lepidolite", domain: "MATERIAL", displayName: { zh: "锂云母", en: "Lepidolite" }, aliases: ["lepidolite", "锂云母"] },
+  { id: "material:opal", domain: "MATERIAL", displayName: { zh: "蛋白石", en: "Opal" }, aliases: ["opal", "蛋白石", "欧泊"] },
+  { id: "material:fire-opal", domain: "MATERIAL", displayName: { zh: "火欧泊", en: "Fire opal" }, aliases: ["fire-opal", "火欧泊"], parentId: "material:opal" },
+  { id: "material:tiger-eye", domain: "MATERIAL", displayName: { zh: "虎眼石", en: "Tiger's eye" }, aliases: ["tiger-eye", "tigers-eye", "虎眼石", "虎睛石"] },
+  { id: "material:hawk-eye", domain: "MATERIAL", displayName: { zh: "鹰眼石", en: "Hawk's eye" }, aliases: ["hawk-eye", "hawks-eye", "鹰眼石"] },
+  { id: "material:pietersite", domain: "MATERIAL", displayName: { zh: "彼得石", en: "Pietersite" }, aliases: ["pietersite", "彼得石"] },
+  { id: "material:selenite", domain: "MATERIAL", displayName: { zh: "透石膏", en: "Selenite" }, aliases: ["selenite", "satin-spar", "透石膏"] },
+
   // COMPOSITION_ROLE
   { id: "composition-role:main", domain: "COMPOSITION_ROLE", displayName: { zh: "主珠", en: "Main" }, aliases: ["main", "primary", "主材", "主珠"] },
   { id: "composition-role:accent", domain: "COMPOSITION_ROLE", displayName: { zh: "辅珠", en: "Accent" }, aliases: ["accent", "secondary", "辅材", "辅珠", "配珠"] },
@@ -109,6 +187,15 @@ const RAW_TERMS: readonly TaxonomyTermInput[] = [
   { id: "knowledge-domain:cultural-symbolism", domain: "KNOWLEDGE_DOMAIN", displayName: { zh: "文化象征", en: "Cultural symbolism" }, aliases: ["文化象征"] },
   { id: "knowledge-domain:tarot", domain: "KNOWLEDGE_DOMAIN", displayName: { zh: "塔罗知识", en: "Tarot" }, aliases: ["塔罗知识", "塔罗意象"] },
   { id: "knowledge-domain:market-observation", domain: "KNOWLEDGE_DOMAIN", displayName: { zh: "市场观察", en: "Market observation" }, aliases: ["市场观察"] },
+  { id: "knowledge-domain:crystal-gemology", domain: "KNOWLEDGE_DOMAIN", displayName: { zh: "水晶宝石学", en: "Crystal gemology" }, aliases: ["crystal-gemology"] },
+  { id: "knowledge-domain:crystal-visual-properties", domain: "KNOWLEDGE_DOMAIN", displayName: { zh: "水晶视觉属性", en: "Crystal visual properties" }, aliases: ["crystal-visual-properties"] },
+  { id: "knowledge-domain:crystal-cultural-symbolism", domain: "KNOWLEDGE_DOMAIN", displayName: { zh: "水晶文化寓意", en: "Crystal cultural symbolism" }, aliases: ["crystal-cultural-symbolism"] },
+  { id: "knowledge-domain:wuxing", domain: "KNOWLEDGE_DOMAIN", displayName: { zh: "五行", en: "Wuxing" }, aliases: ["wuxing", "five-phases"] },
+  { id: "knowledge-domain:wuxing-crystal-association", domain: "KNOWLEDGE_DOMAIN", displayName: { zh: "五行水晶关联", en: "Wuxing crystal association" }, aliases: ["wuxing-crystal-association"] },
+  { id: "knowledge-domain:zodiac", domain: "KNOWLEDGE_DOMAIN", displayName: { zh: "星座", en: "Zodiac" }, aliases: ["zodiac"] },
+  { id: "knowledge-domain:zodiac-crystal-association", domain: "KNOWLEDGE_DOMAIN", displayName: { zh: "星座水晶关联", en: "Zodiac crystal association" }, aliases: ["zodiac-crystal-association"] },
+  { id: "knowledge-domain:tarot-symbolism", domain: "KNOWLEDGE_DOMAIN", displayName: { zh: "塔罗象征", en: "Tarot symbolism" }, aliases: ["tarot-symbolism"] },
+  { id: "knowledge-domain:tarot-crystal-association", domain: "KNOWLEDGE_DOMAIN", displayName: { zh: "塔罗水晶关联", en: "Tarot crystal association" }, aliases: ["tarot-crystal-association"] },
 
   // CONTEXT_SOURCE
   { id: "context-source:questionnaire", domain: "CONTEXT_SOURCE", displayName: { zh: "问卷", en: "Questionnaire" }, aliases: ["questionnaire", "问卷"] },
@@ -151,9 +238,69 @@ const RAW_TERMS: readonly TaxonomyTermInput[] = [
   { id: "tarot:major-18-the-moon", domain: "TAROT", displayName: { zh: "月亮", en: "The Moon" }, aliases: ["the moon", "月亮"] },
   { id: "tarot:major-19-the-sun", domain: "TAROT", displayName: { zh: "太阳", en: "The Sun" }, aliases: ["the sun", "太阳"] },
   { id: "tarot:major-20-judgement", domain: "TAROT", displayName: { zh: "审判", en: "Judgement" }, aliases: ["judgement", "审判"] },
-  { id: "tarot:major-21-the-world", domain: "TAROT", displayName: { zh: "世界", en: "The World" }, aliases: ["the world", "世界"] }
+  { id: "tarot:major-21-the-world", domain: "TAROT", displayName: { zh: "世界", en: "The World" }, aliases: ["the world", "世界"] },
+
+  // WUXING — the five phases (task book §20: cultural/traditional semantics, never scientific)
+  { id: "wuxing:wood", domain: "WUXING", displayName: { zh: "木", en: "Wood" }, aliases: ["wood", "木", "甲", "乙"] },
+  { id: "wuxing:fire", domain: "WUXING", displayName: { zh: "火", en: "Fire" }, aliases: ["fire", "火", "丙", "丁"] },
+  { id: "wuxing:earth", domain: "WUXING", displayName: { zh: "土", en: "Earth" }, aliases: ["earth", "土", "戊", "己"] },
+  { id: "wuxing:metal", domain: "WUXING", displayName: { zh: "金", en: "Metal" }, aliases: ["metal", "庚", "辛"] },
+  { id: "wuxing:water", domain: "WUXING", displayName: { zh: "水", en: "Water" }, aliases: ["water", "水", "壬", "癸"] },
+
+  // ZODIAC — the twelve signs (cultural association semantics only)
+  { id: "zodiac:aries", domain: "ZODIAC", displayName: { zh: "白羊座", en: "Aries" }, aliases: ["aries", "白羊", "白羊座", "牡羊座"] },
+  { id: "zodiac:taurus", domain: "ZODIAC", displayName: { zh: "金牛座", en: "Taurus" }, aliases: ["taurus", "金牛", "金牛座"] },
+  { id: "zodiac:gemini", domain: "ZODIAC", displayName: { zh: "双子座", en: "Gemini" }, aliases: ["gemini", "双子", "双子座"] },
+  { id: "zodiac:cancer", domain: "ZODIAC", displayName: { zh: "巨蟹座", en: "Cancer" }, aliases: ["cancer", "巨蟹", "巨蟹座"] },
+  { id: "zodiac:leo", domain: "ZODIAC", displayName: { zh: "狮子座", en: "Leo" }, aliases: ["leo", "狮子", "狮子座"] },
+  { id: "zodiac:virgo", domain: "ZODIAC", displayName: { zh: "处女座", en: "Virgo" }, aliases: ["virgo", "处女", "处女座"] },
+  { id: "zodiac:libra", domain: "ZODIAC", displayName: { zh: "天秤座", en: "Libra" }, aliases: ["libra", "天秤", "天秤座", "天平座"] },
+  { id: "zodiac:scorpio", domain: "ZODIAC", displayName: { zh: "天蝎座", en: "Scorpio" }, aliases: ["scorpio", "天蝎", "天蝎座"] },
+  { id: "zodiac:sagittarius", domain: "ZODIAC", displayName: { zh: "射手座", en: "Sagittarius" }, aliases: ["sagittarius", "射手", "射手座", "人马座"] },
+  { id: "zodiac:capricorn", domain: "ZODIAC", displayName: { zh: "摩羯座", en: "Capricorn" }, aliases: ["capricorn", "摩羯", "摩羯座", "山羊座"] },
+  { id: "zodiac:aquarius", domain: "ZODIAC", displayName: { zh: "水瓶座", en: "Aquarius" }, aliases: ["aquarius", "水瓶", "水瓶座", "宝瓶座"] },
+  { id: "zodiac:pisces", domain: "ZODIAC", displayName: { zh: "双鱼座", en: "Pisces" }, aliases: ["pisces", "双鱼", "双鱼座"] }
 ];
 
-export const TAXONOMY_TERMS: readonly TaxonomyTerm[] = RAW_TERMS.map((term) =>
-  TaxonomyTermSchema.parse(term)
+// TAROT — the 56 minor arcana, generated (task book §16; card ids align with
+// the tarot-engine catalog format `wands-01` via aliases)
+const MINOR_SUITS = [
+  { id: "wands", zh: "权杖", en: "Wands" },
+  { id: "cups", zh: "圣杯", en: "Cups" },
+  { id: "swords", zh: "宝剑", en: "Swords" },
+  { id: "pentacles", zh: "星币", en: "Pentacles" }
+] as const;
+
+const MINOR_RANKS = [
+  { n: 1, zh: "王牌", en: "Ace" },
+  { n: 2, zh: "二", en: "Two" },
+  { n: 3, zh: "三", en: "Three" },
+  { n: 4, zh: "四", en: "Four" },
+  { n: 5, zh: "五", en: "Five" },
+  { n: 6, zh: "六", en: "Six" },
+  { n: 7, zh: "七", en: "Seven" },
+  { n: 8, zh: "八", en: "Eight" },
+  { n: 9, zh: "九", en: "Nine" },
+  { n: 10, zh: "十", en: "Ten" },
+  { n: 11, zh: "侍从", en: "Page" },
+  { n: 12, zh: "骑士", en: "Knight" },
+  { n: 13, zh: "皇后", en: "Queen" },
+  { n: 14, zh: "国王", en: "King" }
+] as const;
+
+const MINOR_ARCANA_TERMS: readonly TaxonomyTermInput[] = MINOR_SUITS.flatMap((suit) =>
+  MINOR_RANKS.map((rank) => ({
+    id: `tarot:minor-${suit.id}-${String(rank.n).padStart(2, "0")}`,
+    domain: "TAROT" as const,
+    displayName: { zh: `${suit.zh}${rank.zh}`, en: `${rank.en} of ${suit.en}` },
+    aliases: [
+      `${suit.id}-${String(rank.n).padStart(2, "0")}`,
+      `${rank.en.toLowerCase()} of ${suit.id}`,
+      `${suit.zh}${rank.zh}`
+    ]
+  }))
+);
+
+export const TAXONOMY_TERMS: readonly TaxonomyTerm[] = [...RAW_TERMS, ...MINOR_ARCANA_TERMS].map(
+  (term) => TaxonomyTermSchema.parse(term)
 );

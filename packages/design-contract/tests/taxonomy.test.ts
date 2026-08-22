@@ -129,3 +129,50 @@ test("domain schema, lookups, and per-domain listing behave correctly", () => {
   assert.ok(colors.every((term) => term.domain === "COLOR"));
   assert.ok(listTaxonomyTerms().length === TAXONOMY_TERMS.length);
 });
+
+test("acquisition round-1 crystal terms resolve", () => {
+  assert.equal(resolveTaxonomyId("紫水晶", "MATERIAL"), "material:amethyst");
+  assert.equal(resolveTaxonomyId("amethyst", "MATERIAL"), "material:amethyst");
+  assert.equal(resolveTaxonomyId("海蓝宝", "MATERIAL"), "material:aquamarine");
+  assert.equal(resolveTaxonomyId("舒俱来", "MATERIAL"), "material:sugilite");
+  assert.equal(resolveTaxonomyId("tiger-eye", "MATERIAL"), "material:tiger-eye");
+  const materialTerms = listTaxonomyTerms("MATERIAL");
+  assert.equal(materialTerms.filter((t) => !t.parentId).length >= 20, true);
+  assert.equal(materialTerms.length >= 88, true);
+});
+
+test("wuxing domain resolves five elements", () => {
+  assert.equal(resolveTaxonomyId("木", "WUXING"), "wuxing:wood");
+  assert.equal(resolveTaxonomyId("fire", "WUXING"), "wuxing:fire");
+  assert.equal(listTaxonomyTerms("WUXING").length, 5);
+});
+
+test("zodiac domain resolves twelve signs", () => {
+  assert.equal(resolveTaxonomyId("白羊座", "ZODIAC"), "zodiac:aries");
+  assert.equal(resolveTaxonomyId("Pisces", "ZODIAC"), "zodiac:pisces");
+  assert.equal(listTaxonomyTerms("ZODIAC").length, 12);
+});
+
+test("tarot minor arcana terms cover 56 cards", () => {
+  assert.equal(resolveTaxonomyId("权杖王牌", "TAROT"), "tarot:minor-wands-01");
+  assert.equal(resolveTaxonomyId("pentacles-07", "TAROT"), "tarot:minor-pentacles-07");
+  assert.equal(resolveTaxonomyId("圣杯骑士", "TAROT"), "tarot:minor-cups-12");
+  const tarotTerms = listTaxonomyTerms("TAROT");
+  assert.equal(tarotTerms.length, 78);
+});
+
+test("nine new knowledge-domain terms exist", () => {
+  for (const id of [
+    "knowledge-domain:crystal-gemology",
+    "knowledge-domain:crystal-visual-properties",
+    "knowledge-domain:crystal-cultural-symbolism",
+    "knowledge-domain:wuxing",
+    "knowledge-domain:wuxing-crystal-association",
+    "knowledge-domain:zodiac",
+    "knowledge-domain:zodiac-crystal-association",
+    "knowledge-domain:tarot-symbolism",
+    "knowledge-domain:tarot-crystal-association"
+  ]) {
+    assert.notEqual(resolveTaxonomyId(id, "KNOWLEDGE_DOMAIN"), null, `${id} should exist`);
+  }
+});

@@ -16,7 +16,9 @@ export const TaxonomyDomainSchema = z.enum([
   "CONTEXT_SOURCE",
   "SATURATION_LEVEL",
   "LIGHTNESS_LEVEL",
-  "TAROT"
+  "TAROT",
+  "WUXING",
+  "ZODIAC"
 ]);
 
 export type TaxonomyDomain = z.infer<typeof TaxonomyDomainSchema>;
@@ -35,7 +37,9 @@ const TAXONOMY_DOMAIN_PREFIXES: Record<TaxonomyDomain, string> = {
   CONTEXT_SOURCE: "context-source",
   SATURATION_LEVEL: "saturation-level",
   LIGHTNESS_LEVEL: "lightness-level",
-  TAROT: "tarot"
+  TAROT: "tarot",
+  WUXING: "wuxing",
+  ZODIAC: "zodiac"
 };
 
 export function taxonomyDomainPrefix(domain: TaxonomyDomain): string {
