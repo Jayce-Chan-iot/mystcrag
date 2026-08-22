@@ -105,6 +105,25 @@ export const SourceContentTypeSchema = z.enum([
 export const SourceCrawlStrategySchema = z.strictObject({
   maxPages: PositiveSafeIntegerSchema.max(1000).default(10),
   followLinks: z.boolean().default(false),
+  /**
+   * Batch B child-page discovery: an allowlist of path globs (e.g.
+   * "/gem-*.html"). When present, followed links must match at least one
+   * pattern; when absent, same-origin links are followed as before.
+   */
+  pathPatterns: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(200)
+        .regex(/^\/[A-Za-z0-9\-_.*/]*$/, "path patterns must be root-relative paths")
+    )
+    .min(1)
+    .max(16)
+    .optional(),
+  /** Discovery depth from the base URL; 1 means base + its direct children. */
+  maxDepth: PositiveSafeIntegerSchema.max(3).default(1),
   /** Recorded intent; the crawler always enforces robots.txt regardless. */
   respectRobots: z.boolean().default(true)
 });

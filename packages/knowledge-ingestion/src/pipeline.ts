@@ -6,6 +6,7 @@ import {
   type KnowledgeRepository,
   type StoredKnowledgeSource
 } from "@mystcrag/database";
+import { SourceCrawlStrategySchema } from "@mystcrag/design-contract";
 
 import { structuredRuleToSeed, type StructuredFeed } from "./extract/candidates.js";
 import { PatternExtractor } from "./extract/pattern-extractor.js";
@@ -89,14 +90,17 @@ export async function runIngestionPipeline(
       rules: document.rules
     }));
   } else if (source.sourceType === "STATIC_HTML" || source.sourceType === "BROWSER_AUTOMATION") {
-    const strategy = source.crawlStrategy;
-    const runMaxPages = options.maxPages ?? strategy?.maxPages ?? 10;
+    const strategy = SourceCrawlStrategySchema.safeParse(source.crawlStrategy ?? {});
+    const strategyData = strategy.success ? strategy.data : undefined;
+    const runMaxPages = options.maxPages ?? strategyData?.maxPages ?? 10;
     const maxPages =
-      strategy === undefined ? runMaxPages : Math.min(runMaxPages, strategy.maxPages);
+      strategyData === undefined ? runMaxPages : Math.min(runMaxPages, strategyData.maxPages);
     const documents = await fetchHtmlDocuments(source, {
       allowPrivateNetworks: options.allowPrivateNetworks,
       maxPages,
-      followLinks: strategy?.followLinks ?? source.sourceType === "STATIC_HTML",
+      followLinks: strategyData?.followLinks ?? source.sourceType === "STATIC_HTML",
+      pathPatterns: strategyData?.pathPatterns,
+      maxDepth: strategyData?.maxDepth,
       storageDir: options.crawlerStorageDir
     });
     pending = documents.map((document) => ({

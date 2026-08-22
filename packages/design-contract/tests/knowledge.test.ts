@@ -220,6 +220,58 @@ test("Q0 source registry rejects invalid category, review status, and crawl stra
   );
 });
 
+test("Batch B child-page discovery: pathPatterns allowlist and maxDepth parse with defaults", () => {
+  const parsed = KnowledgeSourceSchema.parse({
+    ...validSource,
+    crawlStrategy: {
+      followLinks: true,
+      pathPatterns: ["/gem-*.html", "/gemindex.php"],
+      maxDepth: 1
+    }
+  });
+  assert.deepEqual(parsed.crawlStrategy?.pathPatterns, ["/gem-*.html", "/gemindex.php"]);
+  assert.equal(parsed.crawlStrategy?.maxDepth, 1);
+
+  const defaults = KnowledgeSourceSchema.parse({
+    ...validSource,
+    crawlStrategy: { followLinks: true }
+  });
+  assert.equal(defaults.crawlStrategy?.pathPatterns, undefined);
+  assert.equal(defaults.crawlStrategy?.maxDepth, 1);
+
+  // An empty pattern list is a configuration error: it would discover nothing.
+  assert.equal(
+    KnowledgeSourceSchema.safeParse({
+      ...validSource,
+      crawlStrategy: { followLinks: true, pathPatterns: [] }
+    }).success,
+    false
+  );
+  // Depth is capped at 3: deeper crawling is a Round-3+ concern.
+  assert.equal(
+    KnowledgeSourceSchema.safeParse({
+      ...validSource,
+      crawlStrategy: { followLinks: true, maxDepth: 4 }
+    }).success,
+    false
+  );
+  assert.equal(
+    KnowledgeSourceSchema.safeParse({
+      ...validSource,
+      crawlStrategy: { followLinks: true, maxDepth: 0 }
+    }).success,
+    false
+  );
+  // Patterns must look like paths, not full URLs or query strings.
+  assert.equal(
+    KnowledgeSourceSchema.safeParse({
+      ...validSource,
+      crawlStrategy: { followLinks: true, pathPatterns: ["https://evil.example.com/*"] }
+    }).success,
+    false
+  );
+});
+
 test("Q0 source review transitions never allow direct DISCOVERED -> APPROVED", () => {
   assert.equal(SOURCE_REVIEW_TRANSITIONS.DISCOVERED.includes("APPROVED"), false);
   assert.equal(SOURCE_REVIEW_TRANSITIONS.NEEDS_REVIEW.includes("APPROVED"), true);
