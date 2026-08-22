@@ -355,7 +355,8 @@ Baseline 采集方式：bundle 数字来自干净单次构建（`rm -rf .next &&
 | Q1 | Semantic Embedding 升级（方案 B OpenAI 兼容 Provider + 熔断 fallback + 统一工厂 + 语义评测集，ADR-9 更新） | `c670622` |
 | Q2 | Knowledge Extraction 升级（9 类关系词表/Extractor 接口/证据溯源/标注句评测集，DEC-KNOWLEDGE-SYSTEM-011，§17.2） | `fc895a8` |
 | Q3 | Knowledge Admin / Review 后台（Admin API 10 端点 + fail-closed admin key，DEC-KNOWLEDGE-SYSTEM-012，§17.3） | `9c96d05` |
-| Q4 | Corpus Bootstrap ≥500 规则 + 知识分层（core/taxonomy-coverage/combination，taxonomy v2 TAROT 域，DEC-KNOWLEDGE-SYSTEM-013，§17.4） | 本次提交 |
+| Q4 | Corpus Bootstrap ≥500 规则 + 知识分层（core/taxonomy-coverage/combination，taxonomy v2 TAROT 域，DEC-KNOWLEDGE-SYSTEM-013，§17.4） | `2b2adba` |
+| Q5 | Design Quality Evaluation（golden set/eval:design 质量门禁，DEC-KNOWLEDGE-SYSTEM-014，§17.5） | 本次提交 |
 
 ### 17.2 Q2 Knowledge Extraction 升级
 
@@ -434,3 +435,30 @@ Baseline 采集方式：bundle 数字来自干净单次构建（`rm -rf .next &&
 - 覆盖矩阵（全部 11 类知识类型）：COLOR_THEORY（色环 mono/对比/明暗变奏 + 颜色→天然材质映射）、MATERIAL_COMPATIBILITY（配金属/家族渐变/软硬隔珠/最佳纹理呈现）、NEGATIVE_RULE（20 材质 avoid-exposure 保养 + 软硬相邻回避 + 12 情绪 forbidden-claims 合规护栏）、STYLE_RULE（8 风格 × 温度/纹理/光泽/透明度偏好 + 12 情绪材质/纹理偏好）、PROPORTION/COMPOSITION/TRANSITION/FOCAL（composition-role 全 5 角色含 pendant 补全）、CULTURAL_SYMBOLISM（13 色/20 材质/12 情绪/9 纹理/3 光泽/3 透明度象征）、TAROT（补全 22 majors 缺失的 13 张 suggests-palette/suggests-emotion）、MARKET_OBSERVATION（颜色/材质/风格/情绪/纹理观察层）
 
 **验收**：≥500 条且分层计数入测试；11 类知识类型全部有 bootstrap 增量；taxonomy 覆盖域（COLOR/MATERIAL/STYLE/EMOTION/TEXTURE/LUSTER/TRANSPARENCY/COMPOSITION_ROLE）每词条 ≥1 次作 subject；全语料零冲突组、零校验失败；`compileDecisionRules` 对 500+ 规则集确定性编译（同输入同输出、ruleSetVersion 稳定）；既有集成测试（import/发布/MCP/闭环）全部保持绿 + `pnpm validate`。
+
+### 17.5 Q5 Design Quality Evaluation（golden set / eval:design）
+
+**目标**：Q1/Q2 度量检索与抽取质量，Q5 把度量推进到最终产出——「知识 → 设计候选」整链路的设计质量。以 **golden set（标注场景集）+ `eval:design` 命令 + 质量门禁**建立可回归基线：语料、编译器或设计引擎任一环节退化，评估即红。
+
+**组合方式**：knowledge-core 新增 `@mystcrag/design-engine` 依赖（依赖方向合法：design-engine 保持纯引擎、不依赖 knowledge-core，eval 作为消费方组合两者，与 backend/mcp-server 组合方向一致）。评估输入为 Q4 的 510 条 fixture 语料（core + bootstrap），经 `compileDecisionRules`（`catalogFeasibilitySnapshotOf` 快照 + `contextFilter: true`，镜像生产 recommend 链路）编译后交给 `generateDesignCandidates`——全程无 DB、无网络、确定性。
+
+**Golden catalog（`src/eval/golden-catalog.ts`）**：≥18 条确定性产品 fixture，覆盖 10+ 材质（紫水晶/海蓝宝/月光石/黄水晶/黑曜石/粉晶/拉长石/石榴石/葡萄石/烟晶/银/金）、多色系、多风格、多情绪、6/8/10mm 直径与价位梯度，保证各偏好场景均有可命中目录。
+
+**Golden set（`src/eval/golden-set.ts`）**：≥12 场景，每场景 = RecommendationContext + 声明式期望。覆盖矩阵：单色偏好（冷静紫调）、风格偏好（bold/ethereal）、情绪偏好、预算受限、排除商品、必含商品、材质回避、小/大腕围几何、塔罗来源（the-star → hope/blue/white/ethereal）、多材质多样性、库存受限。期望类型：
+
+| 期望 | 语义 |
+| --- | --- |
+| `minOverallScore` | top 候选 overallScore 下限 |
+| `minPreferenceCoverage {kind, rate}` | top 候选对 context 偏好（color/style/emotion）的覆盖率下限 |
+| `hardViolationFree` | 全部候选零 HARD 违规 |
+| `budgetRespected` | 全部候选 materialCostMinor ≤ maxBudgetMinor |
+| `excludedAbsent` / `requiredPresent` | 排除商品不出现 / 必含商品必出现 |
+| `avoidedMaterialAbsent` | 回避材质不出现 |
+| `minCandidates` | 候选数量下限 |
+| `mustFireRules` | top 候选 trace.activeRuleIds 非空（证明已审核知识真实参与决策） |
+
+**评估器（`src/eval/design-eval.ts`，`runDesignQualityEval()` 纯函数）**：每场景独立编译（contextFilter）→ 生成 3 候选 → 逐条检查期望；聚合指标：scenarioPassRate、hardRuleSatisfaction（全候选零 HARD 违规占比）、meanOverallScore（各场景 top 候选均值）、五维子分均值、preferenceCoverageRate、candidateYield、determinismVerified（双跑逐字节一致）。`meetsGate` 门禁 = scenarioPassRate 100% && hardRuleSatisfaction 100% && candidateYield 100% && determinismVerified && meanOverallScore ≥ 85（基线实测 92.73，阈值留 ~8 分余量）。报告可 JSON 序列化，含逐场景期望明细。场景级 `minOverallScore` 阈值同样按实测校准（86.84–100 → 78–90）。
+
+**命令（`eval:design` → `benchmarks/design-eval.ts`）**：打印人类可读报告（场景 × 期望矩阵 + 聚合指标 + 门禁结论），门禁不过 exit 1，即 knowledge:eval 入口。
+
+**验收**：golden set ≥12 场景全绿并锁定阈值基线；**敏感性测试**——向语料注入一条 HARD 冲突规则后评估必须转红（防空洞评估）；确定性双跑一致；架构边界测试保持绿（design-engine 仍不依赖 knowledge-core）；既有测试全绿 + `pnpm validate`。

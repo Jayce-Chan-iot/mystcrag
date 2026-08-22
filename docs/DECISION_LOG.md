@@ -418,6 +418,24 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 
 ---
 
+### DEC-KNOWLEDGE-SYSTEM-014 — Golden-set design-quality evaluation with a calibrated quality gate (Knowledge Quality Phase Q5)
+
+- Date: 2026-08-22
+- Proposed by Agent: Knowledge Backend Agent
+- Affected modules: `packages/knowledge-core` (eval), `packages/design-engine` (consumed, unchanged)
+- Decision: The knowledge-quality phase gets its final measurement layer: a 12-scenario golden set (`src/eval/`) runs the full deterministic chain — fixture corpus (510 rules) → `compileDecisionRules` with the catalog feasibility snapshot and context filtering (mirroring the production recommend path) → `generateDesignCandidates` — and checks declarative expectations per scenario (score floors, preference coverage, hard-violation-free, budget/exclusion/requirement/avoidance respect, candidate yield, must-fire-rules). Aggregate metrics (scenario pass rate, hard-rule satisfaction, mean overall score, five sub-score means, preference coverage, candidate yield, byte-identical determinism across a double run) feed a `meetsGate` verdict; the `eval:design` command prints the matrix and exits 1 when the gate fails. Scenario thresholds and the gate's meanOverallScore floor (85) are calibrated against the observed baseline (92.73) with roughly eight points of headroom so legitimate corpus growth passes while real regressions trip. knowledge-core gains a dependency on `@mystcrag/design-engine` — the eval is a consumer composing compiler and engine, the same direction backend and mcp-server already use; design-engine itself still imports nothing beyond the contract.
+- Rationale: Q1/Q2 measured retrieval and extraction quality in isolation; nothing measured whether the knowledge actually improves the final designs. A golden set converts "the pipeline runs" into "the pipeline produces quality designs we will notice losing": any degradation in corpus, compiler, or engine turns the gate red. The sensitivity test (injecting one APPROVED HARD `conflicts-with` rule on `material:quartz`) proves the evaluation is not vacuous — it fails exactly when knowledge quality regresses. mustFireRules asserts the knowledge is load-bearing (44–69 rules fire per top candidate), and determinism double-runs guard the deterministic-pipeline contract end to end.
+- Rejected alternatives: locking exact scores as golden values (brittle against legitimate corpus growth; floors with headroom catch regressions without blocking curation); measuring only aggregate scores without per-scenario expectations (a catastrophic failure in one scenario could hide in the mean); hosting the eval in design-engine (architecturally forbidden — the engine must not depend on knowledge-core); hosting it in the backend (HTTP surface is the wrong home for a fixture-driven benchmark).
+- Contract impact: None. The eval report is a knowledge-core-internal type; no HTTP DTO or schema changes.
+- Database impact: None. The evaluation is fully in-process over fixtures; no DB, no network.
+- API impact: None.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-22
+- Implementation branch or commit: `feat/knowledge-quality`, Knowledge Quality Phase Q5 commit (knowledge-core 113/113 incl. DB integration and the design-eval suite; `pnpm validate` 15/15).
+
+---
+
 ## New decision template
 
 ### P3-NNN — Short decision title

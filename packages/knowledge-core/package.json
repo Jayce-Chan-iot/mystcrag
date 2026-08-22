@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "tsc --noEmit",
+    "eval:design": "tsx benchmarks/design-eval.ts",
     "lint": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
     "typecheck": "tsc --noEmit",
@@ -19,6 +20,7 @@
   "dependencies": {
     "@mystcrag/database": "workspace:*",
     "@mystcrag/design-contract": "workspace:*",
+    "@mystcrag/design-engine": "workspace:*",
     "zod": "^4.4.3"
   },
   "devDependencies": {

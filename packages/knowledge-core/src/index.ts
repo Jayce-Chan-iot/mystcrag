@@ -11,3 +11,7 @@ export * from "./review/review-service.js";
 export * from "./fixtures/knowledge-rules.js";
 export * from "./fixtures/knowledge-sources.js";
 export * from "./fixtures/source-registry-candidates.js";
+export * from "./fixtures/corpus-bootstrap.js";
+export * from "./eval/golden-catalog.js";
+export * from "./eval/golden-set.js";
+export * from "./eval/design-eval.js";
