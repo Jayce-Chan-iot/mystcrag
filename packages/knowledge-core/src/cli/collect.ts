@@ -43,9 +43,11 @@ export type CoverageReportSource = {
 };
 
 export type CoverageReportCandidateByDomain = {
+  /** The candidate's verbatim `knowledgeDomain`, e.g. "knowledge-domain:material-compatibility". */
   domain: string;
-  sourceCount: number;
-  sources: string[];
+  candidateCount: number;
+  /** Rule ids of the candidates in this domain. */
+  candidates: string[];
 };
 
 /** `collect` output: §27 coverage report after a real crawl (requires DB). */
@@ -62,10 +64,44 @@ export type CoverageReport = {
   review: ReviewPipelineSummary;
   sources: CoverageReportSource[];
   candidatesByDomain: CoverageReportCandidateByDomain[];
-  coverageGaps: CoverageAnalysisDomain[];
+  /** Static Round-1 target matrix, with `current`/`missing` attributed from this run's inserted candidates. */
+  coverageTargets: CoverageAnalysisDomain[];
 };
 
 const REPORT_DATE = "2026-08-22";
+
+/**
+ * Best-effort correspondence from a candidate's `knowledgeDomain` string to a
+ * Round-1 coverage-domain name. Coverage domains with no entry here (e.g.
+ * CRYSTAL_VISUAL_PROPERTIES) simply stay at their embedded `current` (0)
+ * until a candidate with a mapped domain is inserted. Exact mapping is a
+ * Round-2 design refinement; this covers every domain a pattern-extracted
+ * candidate can currently produce.
+ */
+const COVERAGE_BY_KNOWLEDGE_DOMAIN: Readonly<Record<string, string>> = {
+  "knowledge-domain:material-compatibility": "MATERIAL_COMPATIBILITY",
+  "knowledge-domain:negative-rule": "NEGATIVE_RULE",
+  "knowledge-domain:color-theory": "COLOR_THEORY",
+  "knowledge-domain:style-rule": "STYLE",
+  "knowledge-domain:composition-rule": "COMPOSITION",
+  "knowledge-domain:proportion-rule": "PROPORTION",
+  "knowledge-domain:focal-rule": "FOCAL",
+  "knowledge-domain:transition-rule": "TRANSITION",
+  "knowledge-domain:cultural-symbolism": "CRYSTAL_CULTURAL_SYMBOLISM",
+  "knowledge-domain:market-observation": "MARKET_OBSERVATION",
+  "knowledge-domain:wuxing": "WUXING",
+  "knowledge-domain:wuxing-crystal-association": "WUXING_CRYSTAL_ASSOCIATION",
+  "knowledge-domain:zodiac": "ZODIAC",
+  "knowledge-domain:zodiac-crystal-association": "ZODIAC_CRYSTAL_ASSOCIATION",
+  "knowledge-domain:tarot": "TAROT",
+  "knowledge-domain:tarot-symbolism": "TAROT_SYMBOLISM",
+  "knowledge-domain:tarot-crystal-association": "TAROT_CRYSTAL_ASSOCIATION",
+  "knowledge-domain:gemological-fact": "CRYSTAL_GEMOLOGY",
+  "knowledge-domain:scientific-fact": "CRYSTAL_GEMOLOGY",
+  "knowledge-domain:design-principle": "JEWELRY_DESIGN",
+  "knowledge-domain:design-heuristic": "JEWELRY_DESIGN",
+  "knowledge-domain:historical-tradition": "CRYSTAL_CULTURAL_SYMBOLISM"
+};
 
 function distinctSources(domains: readonly { sources: string[] }[]): string[] {
   return [...new Set(domains.flatMap((domain) => domain.sources))].sort();
@@ -151,21 +187,43 @@ export async function runCollectBatch(
     });
   }
 
+  const crawledIds = new Set(crawlable.map((source: StoredKnowledgeSource) => source.id));
   const review = await service.runReviewPipeline();
 
-  const crawledIds = new Set(crawlable.map((source: StoredKnowledgeSource) => source.id));
-  const candidatesByDomain: CoverageReportCandidateByDomain[] = COVERAGE_DOMAINS.map(
-    (domain) => {
-      const sources = domain.sources.filter((id) => crawledIds.has(id));
-      return { domain: domain.domain, sourceCount: sources.length, sources };
-    }
-  );
-  const coverageGaps: CoverageAnalysisDomain[] = COVERAGE_DOMAINS.map((domain) => ({
-    domain: domain.domain,
-    target: domain.target,
-    current: domain.current,
-    missing: domain.missing
-  }));
+  // Extractors insert ingested candidates directly at NEEDS_REVIEW, so the
+  // pipeline's NEW→EXTRACTED→classify flow never sees them. Fold this run's
+  // directly-inserted candidates into the summary so `review.needsReview`
+  // agrees with `candidatesInserted`.
+  const runCandidates = (
+    await repository.listRules({ status: "NEEDS_REVIEW", limit: 2000 })
+  ).filter((rule) => crawledIds.has(rule.sourceRefs[0]?.sourceId ?? rule.sourceId));
+  review.needsReview += runCandidates.length;
+
+  const byDomain = new Map<string, string[]>();
+  for (const rule of runCandidates) {
+    const ids = byDomain.get(rule.knowledgeDomain) ?? [];
+    ids.push(rule.id);
+    byDomain.set(rule.knowledgeDomain, ids);
+  }
+  const candidatesByDomain: CoverageReportCandidateByDomain[] = [...byDomain.entries()]
+    .map(([domain, candidates]) => ({ domain, candidateCount: candidates.length, candidates }))
+    .sort((a, b) => a.domain.localeCompare(b.domain));
+
+  const insertedByCoverageDomain = new Map<string, number>();
+  for (const rule of runCandidates) {
+    const coverage = COVERAGE_BY_KNOWLEDGE_DOMAIN[rule.knowledgeDomain];
+    if (coverage === undefined) continue;
+    insertedByCoverageDomain.set(coverage, (insertedByCoverageDomain.get(coverage) ?? 0) + 1);
+  }
+  const coverageTargets: CoverageAnalysisDomain[] = COVERAGE_DOMAINS.map((domain) => {
+    const current = insertedByCoverageDomain.get(domain.domain) ?? 0;
+    return {
+      domain: domain.domain,
+      target: domain.target,
+      current,
+      missing: Math.max(0, domain.target - current)
+    };
+  });
 
   return {
     reportId: `coverage-report-${REPORT_DATE}`,
@@ -180,6 +238,6 @@ export async function runCollectBatch(
     review,
     sources: sourceResults,
     candidatesByDomain,
-    coverageGaps
+    coverageTargets
   };
 }
