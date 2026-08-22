@@ -182,10 +182,17 @@ function resolveKnowledgeType(
       if (subjects.has("MATERIAL")) return "MATERIAL_COMPATIBILITY";
       if (subjects.has("STYLE")) return "STYLE_RULE";
       return null;
-    case "conflicts-with":
+    case "conflicts-with": {
+      const roles = subjects.get("COMPOSITION_ROLE") ?? [];
+      // "too many focal beads" (焦点/视觉重心/focal) is a design overload — a
+      // NEGATIVE_RULE, not a material-material conflict — even when a material
+      // is named alongside it (e.g. "Labradorite clashes with too many focal
+      // beads"). Check the focal signal before the material one.
+      if (roles.includes("composition-role:focal")) return "NEGATIVE_RULE";
       if (subjects.has("MATERIAL")) return "MATERIAL_COMPATIBILITY";
       if (subjects.has("COLOR")) return "COLOR_THEORY";
       return "NEGATIVE_RULE";
+    }
     case "avoid-exposure":
       return "NEGATIVE_RULE";
     case "care-instruction":
