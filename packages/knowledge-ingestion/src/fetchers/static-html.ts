@@ -19,12 +19,22 @@ export type FetchedHtmlDocument = {
   contentText: string;
 };
 
+/** Inline-block elements whose text Cheerio would otherwise glue together. */
+const BLOCK_TEXT_ELEMENTS = "th,td,tr,p,div,li,h1,h2,h3,h4,h5,h6,br,section,article,table";
+
 function extractDocument(url: string, $: CheerioRoot): FetchedHtmlDocument {
   const title =
     $("article h1").first().text().trim() ||
     $("main h1").first().text().trim() ||
     $("title").first().text().trim() ||
     url;
+  // Gem profile datasheets lay facts out in table cells; without a separator
+  // "Mohs Hardness</th><td>7" would read "Mohs Hardness7" and defeat every
+  // label-value extractor downstream. A trailing space per block element
+  // keeps cells, paragraphs, and headings word-separated.
+  $(BLOCK_TEXT_ELEMENTS).each((_, element) => {
+    $(element).append(" ");
+  });
   const contentText =
     $("article").first().text() ||
     $("main").first().text() ||

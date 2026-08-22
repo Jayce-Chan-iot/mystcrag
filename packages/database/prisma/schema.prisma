@@ -431,6 +431,7 @@ model KnowledgeRule {
   payload           Json
   conditions        Json              @default("{}")
   confidence        Float
+  claimType         String?           @map("claim_type")
   status            KnowledgeStatus   @default(NEW)
   fingerprint       String            @unique
   sourceRefs        Json              @map("source_refs")

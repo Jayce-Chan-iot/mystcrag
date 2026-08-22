@@ -280,7 +280,7 @@ test("Q0 source review transitions never allow direct DISCOVERED -> APPROVED", (
   assert.equal(SOURCE_REVIEW_TRANSITIONS.REJECTED.includes("NEEDS_REVIEW"), true);
 });
 
-test("the extraction relation vocabulary has exactly nine canonical relations (Q2)", () => {
+test("the extraction relation vocabulary has ten canonical relations (Q2 + Batch B)", () => {
   assert.deepEqual(ExtractionRelationSchema.options, [
     "pairs-well-with",
     "conflicts-with",
@@ -290,9 +290,17 @@ test("the extraction relation vocabulary has exactly nine canonical relations (Q
     "suits-style",
     "proportion-of",
     "transitions-to",
-    "trending-in"
+    "trending-in",
+    "has-property"
   ]);
   assert.equal(ExtractionRelationSchema.safeParse("mentioned-with").success, false);
+});
+
+test("has-property carries gem-profile facts and nothing else", () => {
+  assert.equal(isRelationAllowedForKnowledgeType("has-property", "CRYSTAL_GEMOLOGY"), true);
+  assert.equal(isRelationAllowedForKnowledgeType("has-property", "CRYSTAL_VISUAL_PROPERTIES"), true);
+  assert.equal(isRelationAllowedForKnowledgeType("has-property", "COLOR_THEORY"), false);
+  assert.equal(isRelationAllowedForKnowledgeType("has-property", "MATERIAL_COMPATIBILITY"), false);
 });
 
 test("every relation declares at least one allowed knowledge type and the matrix is total", () => {

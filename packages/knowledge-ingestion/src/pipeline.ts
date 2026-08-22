@@ -9,6 +9,7 @@ import {
 import { SourceCrawlStrategySchema } from "@mystcrag/design-contract";
 
 import { structuredRuleToSeed, type StructuredFeed } from "./extract/candidates.js";
+import { GemProfileExtractor } from "./extract/gem-profile-extractor.js";
 import { PatternExtractor } from "./extract/pattern-extractor.js";
 import { createSemanticExtractorFromEnv } from "./extract/semantic-extractor.js";
 import { StructuredExtractor } from "./extract/structured-extractor.js";
@@ -46,10 +47,11 @@ export type IngestionOptions = {
   crawlerStorageDir?: string;
   maxPages?: number;
   /**
-   * Extractor composition (Quality Phase Q2). Default: StructuredExtractor +
-   * PatternExtractor + env-configured SemanticExtractor. Structured documents
-   * run the `structured` extractors; free-text documents run the rest. A
-   * failing free-text extractor degrades to the remaining ones.
+   * Extractor composition (Quality Phase Q2, extended for Batch B). Default:
+   * StructuredExtractor + PatternExtractor + GemProfileExtractor +
+   * env-configured SemanticExtractor. Structured documents run the
+   * `structured` extractors; free-text documents run the rest. A failing
+   * free-text extractor degrades to the remaining ones.
    */
   extractors?: readonly KnowledgeExtractor[];
 };
@@ -117,6 +119,7 @@ export async function runIngestionPipeline(
   const extractors = options.extractors ?? [
     new StructuredExtractor(),
     new PatternExtractor(),
+    new GemProfileExtractor(),
     createSemanticExtractorFromEnv()
   ];
 

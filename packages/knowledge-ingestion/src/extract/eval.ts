@@ -29,14 +29,16 @@ const ALL_DOMAINS = [
   "knowledge-domain:negative-rule",
   "knowledge-domain:cultural-symbolism",
   "knowledge-domain:tarot",
-  "knowledge-domain:market-observation"
+  "knowledge-domain:market-observation",
+  "knowledge-domain:crystal-gemology",
+  "knowledge-domain:crystal-visual-properties"
 ];
 
-function inputForSentence(index: number, sentence: string): ExtractorInput {
+function inputForSentence(entry: LabeledSentence, index: number): ExtractorInput {
   return {
     documentId: `doc-eval-${index}`,
-    title: "Eval document",
-    contentText: sentence,
+    title: entry.title ?? "Eval document",
+    contentText: entry.sentence,
     fetchedAt: "2026-08-22T10:00:00.000Z",
     source: {
       sourceId: "source-eval",
@@ -69,6 +71,20 @@ export async function evaluateExtractor(
   extractor: KnowledgeExtractor,
   sentences: readonly LabeledSentence[]
 ): Promise<ExtractionEvalReport> {
+  return evaluateExtractors([extractor], sentences);
+}
+
+/**
+ * Scores an extractor composition exactly as the ingestion pipeline runs it:
+ * every extractor sees the same sentence, and the union of their candidates
+ * is the prediction. The deterministic stack (pattern + gem-profile) carries
+ * the F1 = 1.00 baseline; prose relations come from the pattern extractor,
+ * `has-property` datasheet lines from the gem-profile extractor.
+ */
+export async function evaluateExtractors(
+  extractors: readonly KnowledgeExtractor[],
+  sentences: readonly LabeledSentence[]
+): Promise<ExtractionEvalReport> {
   const perRelation = Object.fromEntries(
     ExtractionRelationSchema.options.map((relation) => [relation, emptyEntry()])
   ) as Record<ExtractionRelation, RelationEvalEntry>;
@@ -79,10 +95,13 @@ export async function evaluateExtractor(
   let negatives = 0;
 
   for (const [index, entry] of sentences.entries()) {
-    const candidates = await extractor.extract(inputForSentence(index, entry.sentence));
-    const predicted = new Set(
-      candidates.map((candidate) => `${candidate.relation}×${candidate.knowledgeType}`)
-    );
+    const input = inputForSentence(entry, index);
+    const predicted = new Set<string>();
+    for (const extractor of extractors) {
+      for (const candidate of await extractor.extract(input)) {
+        predicted.add(`${candidate.relation}×${candidate.knowledgeType}`);
+      }
+    }
     const expected = new Set(
       entry.expected === undefined
         ? []

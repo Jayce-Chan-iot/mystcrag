@@ -229,7 +229,8 @@ export const ExtractionRelationSchema = z.enum([
   "suits-style",
   "proportion-of",
   "transitions-to",
-  "trending-in"
+  "trending-in",
+  "has-property"
 ]);
 
 export const EXTRACTION_RELATION_ALLOWED_TYPES: Record<
@@ -260,7 +261,13 @@ export const EXTRACTION_RELATION_ALLOWED_TYPES: Record<
   "suits-style": ["STYLE_RULE", "CRYSTAL_VISUAL_PROPERTIES"],
   "proportion-of": ["PROPORTION_RULE", "COMPOSITION_RULE", "FOCAL_RULE"],
   "transitions-to": ["TRANSITION_RULE"],
-  "trending-in": ["MARKET_OBSERVATION"]
+  "trending-in": ["MARKET_OBSERVATION"],
+  /**
+   * Batch B gem profiles: deterministic physical/visual facts (Mohs hardness,
+   * crystal system, chemistry...) ride this relation and nothing else, so gem
+   * facts stay distinguishable from design/cultural assertions.
+   */
+  "has-property": ["CRYSTAL_GEMOLOGY", "CRYSTAL_VISUAL_PROPERTIES"]
 };
 
 export function isRelationAllowedForKnowledgeType(

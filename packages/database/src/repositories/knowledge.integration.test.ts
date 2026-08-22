@@ -137,6 +137,24 @@ test("knowledge storage lifecycle verification matrix", { skip: !databaseUrl }, 
     );
   });
 
+  await t.test("claimType survives insert and read-back (Batch B gem facts)", async () => {
+    await repository.insertRule(
+      ruleFixture("rule-claim-type", "source-color-book", "doc-ch3", "9".repeat(64), {
+        claimType: "GEMOLOGICAL_FACT"
+      })
+    );
+    const stored = await repository.getRule("rule-claim-type");
+    assert.equal(stored.claimType, "GEMOLOGICAL_FACT");
+
+    await repository.insertRule(
+      ruleFixture("rule-no-claim-type", "source-color-book", "doc-ch3", "8".repeat(64), {
+        subject: "color:violet"
+      })
+    );
+    const bare = await repository.getRule("rule-no-claim-type");
+    assert.equal(bare.claimType, undefined);
+  });
+
   await t.test("rules require resolvable provenance and unique fingerprints", async () => {
     await assert.rejects(
       repository.insertRule(ruleFixture("rule-broken", "source-color-book", "doc-missing", "c".repeat(64))),

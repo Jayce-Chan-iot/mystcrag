@@ -1,0 +1,9 @@
+{
+	"id": "RhqTA4xmfk3a9U8",
+	"json": "{\"id\":\"RhqTA4xmfk3a9U8\",\"url\":\"http://127.0.0.1:53873/index.html\",\"loadedUrl\":\"http://127.0.0.1:53873/index.html\",\"uniqueKey\":\"http://127.0.0.1:53873/index.html\",\"method\":\"GET\",\"noRetry\":false,\"retryCount\":0,\"errorMessages\":[],\"headers\":{},\"userData\":{\"__crawlee\":{\"state\":4}},\"handledAt\":\"2026-08-22T13:36:24.442Z\"}",
+	"method": "GET",
+	"orderNo": null,
+	"retryCount": 0,
+	"uniqueKey": "http://127.0.0.1:53873/index.html",
+	"url": "http://127.0.0.1:53873/index.html"
+}

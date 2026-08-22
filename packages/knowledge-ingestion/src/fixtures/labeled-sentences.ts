@@ -4,18 +4,24 @@ import type {
 } from "@mystcrag/design-contract";
 
 /**
- * Labeled sentence set for extraction quality regression (Quality Phase Q2).
- * 40 positives — at least three per canonical relation, bilingual — plus 10
+ * Labeled sentence set for extraction quality regression (Quality Phase Q2,
+ * extended for Batch B gem profiles).
+ * 44 positives — at least three per canonical relation, bilingual — plus 10
  * negatives (subjects or plain prose without any relation signal) that keep
- * precision honest. `bench:extraction` and tests/extraction-eval.test.ts run
- * extractors over this set; the pattern extractor's baseline is F1 = 1.00 by
- * construction (the set is authored against the pattern vocabulary), so any
- * drop below it is a regression, and the same set scores future semantic
- * extractors on identical ground truth.
+ * precision honest. Prose entries are scored against the pattern extractor;
+ * `has-property` entries carry the gem title plus the label-value datasheet
+ * line that the gem-profile extractor reads. `bench:extraction` and
+ * tests/extraction-eval.test.ts run extractors over this set; the
+ * deterministic stack's baseline is F1 = 1.00 by construction (the set is
+ * authored against the extractor vocabulary), so any drop below it is a
+ * regression, and the same set scores future semantic extractors on
+ * identical ground truth.
  */
 export type LabeledSentence = {
   id: string;
   sentence: string;
+  /** Document title for entries whose extractor resolves the subject from it. */
+  title?: string;
   expected?: { knowledgeType: KnowledgeType; relation: ExtractionRelation };
 };
 
@@ -69,6 +75,11 @@ export const LABELED_SENTENCES: readonly LabeledSentence[] = [
   { id: "ti-03", sentence: "Bridal bead pieces dominate wedding-season demand this year.", expected: { knowledgeType: "MARKET_OBSERVATION", relation: "trending-in" } },
   { id: "ti-04", sentence: "虎眼石手串的搜索量最近有明显上升趋势。", expected: { knowledgeType: "MARKET_OBSERVATION", relation: "trending-in" } },
   { id: "ti-05", sentence: "复古金色链条今年在婚庆市场很流行。", expected: { knowledgeType: "MARKET_OBSERVATION", relation: "trending-in" } },
+  // has-property — GemDat-style label-value datasheet lines (Batch B)
+  { id: "hp-01", title: "Amethyst gemstone information", sentence: "Mohs Hardness 7 Herve Nicolas Lazzarelli, Blue Chart Gem Identification (2010)", expected: { knowledgeType: "CRYSTAL_GEMOLOGY", relation: "has-property" } },
+  { id: "hp-02", title: "Aquamarine gemstone information", sentence: "Crystal System Hexagonal Ulrich Henn and Claudio C. Milisenda, Gemmological Tables (2004)", expected: { knowledgeType: "CRYSTAL_GEMOLOGY", relation: "has-property" } },
+  { id: "hp-03", title: "Amethyst gemstone information", sentence: "Chemical Formula SiO 2 Walter Schumann, Gemstones of the world (2001)", expected: { knowledgeType: "CRYSTAL_GEMOLOGY", relation: "has-property" } },
+  { id: "hp-04", title: "Amethyst gemstone information", sentence: "Transparency Transparent,Translucent Ulrich Henn and Claudio C. Milisenda, Gemmological Tables (2004)", expected: { knowledgeType: "CRYSTAL_VISUAL_PROPERTIES", relation: "has-property" } },
   // negatives: subjects or prose without any relation signal
   { id: "ng-01", sentence: "Purple amethyst and blue lapis sit quietly on the shelf." },
   { id: "ng-02", sentence: "今天天气很好。" },

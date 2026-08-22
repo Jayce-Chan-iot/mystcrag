@@ -156,6 +156,7 @@ function parseRule(row: {
   payload: unknown;
   conditions: unknown;
   confidence: number;
+  claimType: string | null;
   status: KnowledgeStatusValue;
   fingerprint: string;
   sourceRefs: unknown;
@@ -173,6 +174,7 @@ function parseRule(row: {
     payload: structuredClone(row.payload),
     conditions: structuredClone(row.conditions),
     confidence: row.confidence,
+    ...(row.claimType === null ? {} : { claimType: row.claimType }),
     status: row.status,
     sourceRefs: structuredClone(row.sourceRefs),
     version: row.version,
@@ -194,6 +196,7 @@ function parseRawRuleRow(row: Record<string, unknown>): StoredKnowledgeRule {
     payload: row.payload,
     conditions: row.conditions,
     confidence: Number(row.confidence),
+    claimType: row.claim_type === undefined || row.claim_type === null ? null : String(row.claim_type),
     status: row.status as KnowledgeStatusValue,
     fingerprint: String(row.fingerprint),
     sourceRefs: row.source_refs,
@@ -579,6 +582,7 @@ export class KnowledgeRepository {
           payload: toPrismaJson(rule.payload),
           conditions: toPrismaJson(rule.conditions),
           confidence: rule.confidence,
+          claimType: rule.claimType ?? null,
           status: rule.status,
           fingerprint: rule.fingerprint,
           sourceRefs: toPrismaJson(rule.sourceRefs),

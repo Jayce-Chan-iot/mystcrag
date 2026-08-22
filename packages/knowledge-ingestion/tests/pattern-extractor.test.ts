@@ -166,3 +166,28 @@ test("duplicate sentences collapse into one candidate via fingerprint", async ()
   const candidates = await extractor.extract(inputFor(`${sentence} ${sentence}`));
   assert.equal(candidates.length, 1);
 });
+
+test("every seed carries a claim type appropriate to its knowledge type (task book §12)", async () => {
+  const expectedClaimType: Record<string, string> = {
+    COLOR_THEORY: "DESIGN_PRINCIPLE",
+    MATERIAL_COMPATIBILITY: "DESIGN_HEURISTIC",
+    STYLE_RULE: "DESIGN_HEURISTIC",
+    PROPORTION_RULE: "DESIGN_PRINCIPLE",
+    COMPOSITION_RULE: "DESIGN_PRINCIPLE",
+    FOCAL_RULE: "DESIGN_PRINCIPLE",
+    TRANSITION_RULE: "DESIGN_PRINCIPLE",
+    NEGATIVE_RULE: "DESIGN_HEURISTIC",
+    CULTURAL_SYMBOLISM: "CULTURAL_SYMBOLISM",
+    MARKET_OBSERVATION: "MARKET_OBSERVATION"
+  };
+  const extractor = new PatternExtractor();
+  const candidates = await extractor.extract(
+    inputFor(RELATION_SENTENCES.map((entry) => entry.sentence).join(" "))
+  );
+  assert.ok(candidates.length >= 5);
+  for (const candidate of candidates) {
+    const expected = expectedClaimType[candidate.knowledgeType];
+    assert.ok(expected !== undefined, `${candidate.knowledgeType} must have a claim type mapping`);
+    assert.equal(candidate.claimType, expected);
+  }
+});

@@ -20,7 +20,9 @@ type FixtureServer = {
   close(): void;
 };
 
-async function startServer(routes: Record<string, { body: string; links: string[] }>): Promise<FixtureServer> {
+async function startServer(
+  routes: Record<string, { body?: string; links?: string[]; html?: string }>
+): Promise<FixtureServer> {
   const fetched: string[] = [];
   const server = http.createServer((request, response) => {
     const url = request.url ?? "/";
@@ -37,7 +39,9 @@ async function startServer(routes: Record<string, { body: string; links: string[
       return;
     }
     response.writeHead(200, { "content-type": "text/html" });
-    response.end(page(url, route.body, route.links));
+    response.end(
+      route.html ?? page(url, route.body ?? "", route.links ?? [])
+    );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -62,12 +66,12 @@ async function startServer(routes: Record<string, { body: string; links: string[
   };
 }
 
-function source(base: string, crawlStrategy: object): StoredKnowledgeSource {
+function source(base: string, crawlStrategy: object, path = "/gems/index.html"): StoredKnowledgeSource {
   return {
     id: "source-discovery-fixture",
     name: "Discovery fixture",
     sourceType: "STATIC_HTML",
-    baseUrl: `${base}/gems/index.html`,
+    baseUrl: `${base}${path}`,
     enabled: true,
     authorityScore: 0.7,
     allowedKnowledgeDomains: ["knowledge-domain:gemological-fact"],
@@ -155,6 +159,28 @@ test("without pathPatterns, same-origin discovery behaves as before", async () =
     });
     const paths = documents.map((document) => new URL(document.url).pathname);
     assert.equal(paths.includes("/articles/editorial.html"), true);
+  } finally {
+    rmSync(storageDir, { recursive: true, force: true });
+    server.close();
+  }
+});
+
+test("table cell text is space-separated so gem profile labels stay readable", async () => {
+  const server = await startServer({
+    "/gems/amethyst.html": {
+      html: `<!doctype html><html><head><title>Amethyst gemstone information</title></head><body><table class="gemshowtable"><tr><th>Mohs Hardness</th><td><span>7</span><a>Walter Schumann, Gemstones of the world (2001)</a></td></tr><tr><th>Crystal System</th><td><span>Trigonal</span><a>Ulrich Henn, Gemmological Tables (2004)</a></td></tr></table></body></html>`
+    }
+  });
+  const storageDir = mkdtempSync(`${tmpdir()}/mystcrag-discovery-`);
+  try {
+    const documents = await fetchHtmlDocuments(
+      source(server.base, { maxPages: 1, followLinks: false, respectRobots: true }, "/gems/amethyst.html"),
+      { allowPrivateNetworks: true, storageDir, maxPages: 1 }
+    );
+    const contentText = documents[0]?.contentText ?? "";
+    assert.match(contentText, /Mohs Hardness 7/);
+    assert.match(contentText, /Crystal System Trigonal/);
+    assert.equal(contentText.includes("Hardness7"), false);
   } finally {
     rmSync(storageDir, { recursive: true, force: true });
     server.close();

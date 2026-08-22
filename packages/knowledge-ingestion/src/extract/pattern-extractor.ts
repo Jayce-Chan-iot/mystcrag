@@ -4,6 +4,7 @@ import {
   isRelationAllowedForKnowledgeType,
   knowledgeDomainForType,
   listTaxonomyTerms,
+  type ClaimType,
   type ExtractionRelation,
   type JsonValue,
   type KnowledgeType,
@@ -97,7 +98,8 @@ const DEFAULT_SUBJECT_BY_RELATION: Record<ExtractionRelation, string> = {
   "suits-style": "general",
   "proportion-of": "strand",
   "transitions-to": "strand",
-  "trending-in": "market"
+  "trending-in": "market",
+  "has-property": "general"
 };
 
 function splitSentences(contentText: string): SentenceSpan[] {
@@ -165,6 +167,24 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Task book §12: claim grade per knowledge type. Color/composition laws are
+ * design principles; material pairing, care, and exposure cautions are
+ * heuristics; symbolism and market lines keep their cultural/market grade.
+ */
+const CLAIM_TYPE_BY_KNOWLEDGE_TYPE: Partial<Record<KnowledgeType, ClaimType>> = {
+  COLOR_THEORY: "DESIGN_PRINCIPLE",
+  MATERIAL_COMPATIBILITY: "DESIGN_HEURISTIC",
+  STYLE_RULE: "DESIGN_HEURISTIC",
+  PROPORTION_RULE: "DESIGN_PRINCIPLE",
+  COMPOSITION_RULE: "DESIGN_PRINCIPLE",
+  FOCAL_RULE: "DESIGN_PRINCIPLE",
+  TRANSITION_RULE: "DESIGN_PRINCIPLE",
+  NEGATIVE_RULE: "DESIGN_HEURISTIC",
+  CULTURAL_SYMBOLISM: "CULTURAL_SYMBOLISM",
+  MARKET_OBSERVATION: "MARKET_OBSERVATION"
+};
+
 function detectRelation(sentence: string): { relation: ExtractionRelation; base: number } | null {
   for (const entry of RELATION_PATTERNS) {
     if (entry.pattern.test(sentence)) return entry;
@@ -211,6 +231,10 @@ function resolveKnowledgeType(
       return "TRANSITION_RULE";
     case "trending-in":
       return "MARKET_OBSERVATION";
+    // Datasheet label-value facts belong to the gem-profile extractor; prose
+    // never claims has-property.
+    case "has-property":
+      return null;
   }
 }
 
@@ -284,6 +308,7 @@ export class PatternExtractor implements KnowledgeExtractor {
         payload: payload as JsonValue,
         conditions: {},
         confidence: confidenceFor(relationMatch.base, input.source.reliabilityLevel),
+        claimType: CLAIM_TYPE_BY_KNOWLEDGE_TYPE[knowledgeType],
         status: "NEEDS_REVIEW",
         sourceRefs: [
           { sourceId: input.source.sourceId, documentId: input.documentId }

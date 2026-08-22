@@ -72,7 +72,7 @@ test("source registry lifecycle (Q0.3)", { skip: !databaseUrl }, async () => {
       enabled: true,
       authorityScore: 0.92,
       crawlFrequency: "weekly",
-      crawlStrategy: { maxPages: 8, followLinks: true, respectRobots: true }
+      crawlStrategy: { maxPages: 8, followLinks: true, maxDepth: 1, respectRobots: true }
     });
     assert.equal(enabled.enabled, true);
     assert.equal(enabled.authorityScore, 0.92);

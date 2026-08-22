@@ -7,7 +7,8 @@ import {
   LABELED_SENTENCES,
   relationCoverage
 } from "../src/fixtures/labeled-sentences.js";
-import { evaluateExtractor } from "../src/extract/eval.js";
+import { evaluateExtractors } from "../src/extract/eval.js";
+import { GemProfileExtractor } from "../src/extract/gem-profile-extractor.js";
 import { PatternExtractor } from "../src/extract/pattern-extractor.js";
 
 test("the labeled sentence set meets the Q2 coverage contract", () => {
@@ -23,8 +24,11 @@ test("the labeled sentence set meets the Q2 coverage contract", () => {
   assert.ok(negatives.length >= 8, "at least 8 negative sentences for precision");
 });
 
-test("pattern extractor holds the F1=1.00 baseline on the labeled set", async () => {
-  const report = await evaluateExtractor(new PatternExtractor(), LABELED_SENTENCES);
+test("the deterministic stack (pattern + gem-profile) holds the F1=1.00 baseline on the labeled set", async () => {
+  const report = await evaluateExtractors(
+    [new PatternExtractor(), new GemProfileExtractor()],
+    LABELED_SENTENCES
+  );
   assert.equal(report.overall.truePositives, report.overall.expected);
   assert.equal(report.overall.falsePositives, 0);
   assert.equal(report.overall.falseNegatives, 0);
@@ -32,7 +36,10 @@ test("pattern extractor holds the F1=1.00 baseline on the labeled set", async ()
 });
 
 test("the eval report is structured per relation", async () => {
-  const report = await evaluateExtractor(new PatternExtractor(), LABELED_SENTENCES);
+  const report = await evaluateExtractors(
+    [new PatternExtractor(), new GemProfileExtractor()],
+    LABELED_SENTENCES
+  );
   for (const relation of ExtractionRelationSchema.options) {
     const entry = report.perRelation[relation];
     assert.ok(entry !== undefined, `${relation} must appear in the report`);
