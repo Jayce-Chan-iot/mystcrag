@@ -13,6 +13,7 @@
     "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "review:cli": "tsx src/cli/index.ts",
+    "knowledge:collect": "tsx src/cli/index.ts collect",
     "seed:sources": "tsx scripts/seed-sources.ts",
     "bench:retrieval": "tsx benchmarks/retrieval.benchmark.ts",
     "bench:semantic": "tsx benchmarks/semantic-eval.ts"
@@ -21,6 +22,7 @@
     "@mystcrag/database": "workspace:*",
     "@mystcrag/design-contract": "workspace:*",
     "@mystcrag/design-engine": "workspace:*",
+    "@mystcrag/knowledge-ingestion": "workspace:*",
     "zod": "^4.4.3"
   },
   "devDependencies": {

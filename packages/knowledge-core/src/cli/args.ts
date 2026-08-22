@@ -9,7 +9,8 @@ export type ReviewCliCommand =
   | { command: "reject"; ruleId: string }
   | { command: "supersede"; ruleId: string }
   | { command: "publish"; version: string }
-  | { command: "import-fixtures"; publishVersion?: string };
+  | { command: "import-fixtures"; publishVersion?: string }
+  | { command: "collect"; dryRun: boolean };
 
 const COMMANDS = new Set([
   "list",
@@ -20,7 +21,8 @@ const COMMANDS = new Set([
   "reject",
   "supersede",
   "publish",
-  "import-fixtures"
+  "import-fixtures",
+  "collect"
 ]);
 
 /**
@@ -70,6 +72,12 @@ export function parseReviewCliArgs(argv: readonly string[]): ReviewCliCommand | 
     if (rest.length === 2 && rest[0] === "--publish" && rest[1]!.length > 0) {
       return { command: "import-fixtures", publishVersion: rest[1]! };
     }
+    return null;
+  }
+
+  if (command === "collect") {
+    if (rest.length === 0) return { command: "collect", dryRun: false };
+    if (rest.length === 1 && rest[0] === "--dry-run") return { command: "collect", dryRun: true };
     return null;
   }
 

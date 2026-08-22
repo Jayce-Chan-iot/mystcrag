@@ -2,6 +2,7 @@ import { createPrismaClient, KnowledgeRepository } from "@mystcrag/database";
 
 import { KnowledgeReviewService, type ReviewQueueItem } from "../review/review-service.js";
 import { parseReviewCliArgs } from "./args.js";
+import { runCollectBatch, runCollectDryRun } from "./collect.js";
 
 const USAGE = `Usage: pnpm --filter @mystcrag/knowledge-core review:cli <command> [options]
 
@@ -15,8 +16,10 @@ Commands:
   supersede <ruleId>                       Supersede an approved or conflicted rule
   publish <version>                        Publish APPROVED rules as a knowledge version
   import-fixtures [--publish <version>]    Import the reviewed handbook corpus
+  collect [--dry-run]                      Crawl approved sources and emit a coverage report
 
-DATABASE_URL must point at the target PostgreSQL database.`;
+DATABASE_URL must point at the target PostgreSQL database (not required for
+the collect --dry-run command).`;
 
 function printQueueItem(item: ReviewQueueItem): void {
   const { rule, validation, evidence, extraction } = item;
@@ -49,6 +52,13 @@ export async function runReviewCli(argv: readonly string[]): Promise<number> {
   if (parsed === null) {
     console.error(USAGE);
     return 1;
+  }
+
+  // Coverage analysis runs with no database: emit the embedded-matrix report
+  // and return before any DATABASE_URL check or PrismaClient construction.
+  if (parsed.command === "collect" && parsed.dryRun) {
+    console.log(JSON.stringify(runCollectDryRun(), null, 2));
+    return 0;
   }
 
   const databaseUrl = process.env.DATABASE_URL;
@@ -124,6 +134,11 @@ export async function runReviewCli(argv: readonly string[]): Promise<number> {
         console.log(
           `published ${version.version} (${version.id}) status=${version.status} rules=${version.ruleCount}`
         );
+        return 0;
+      }
+      case "collect": {
+        const report = await runCollectBatch(database, repository, service);
+        console.log(JSON.stringify(report, null, 2));
         return 0;
       }
       case "import-fixtures": {
