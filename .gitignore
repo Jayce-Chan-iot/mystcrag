@@ -15,3 +15,6 @@ output/playwright/diy-v2-after/
 .DS_Store
 packages/database/generated/
 packages/*/storage/
+prototypes/
+output/playwright/partner-demo/
+outputs/partner-demo-20260818/
