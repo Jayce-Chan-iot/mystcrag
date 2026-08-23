@@ -35,6 +35,8 @@ export type IngestionRunResult = {
   createdDocuments: number;
   duplicateDocuments: number;
   insertedCandidates: number;
+  /** Same-fact candidates whose sourceRef was merged into an existing rule (§19). */
+  corroboratedCandidates: number;
   duplicateCandidates: number;
 };
 
@@ -92,8 +94,14 @@ export async function runIngestionPipeline(
       rules: document.rules
     }));
   } else if (source.sourceType === "STATIC_HTML" || source.sourceType === "BROWSER_AUTOMATION") {
-    const strategy = SourceCrawlStrategySchema.safeParse(source.crawlStrategy ?? {});
-    const strategyData = strategy.success ? strategy.data : undefined;
+    // An absent crawlStrategy must NOT parse as "all defaults": the schema
+    // defaults followLinks to false, which would silently disable discovery
+    // for legacy sources stored without a strategy row.
+    const strategy =
+      source.crawlStrategy === undefined || source.crawlStrategy === null
+        ? undefined
+        : SourceCrawlStrategySchema.safeParse(source.crawlStrategy);
+    const strategyData = strategy?.success ? strategy.data : undefined;
     const runMaxPages = options.maxPages ?? strategyData?.maxPages ?? 10;
     const maxPages =
       strategyData === undefined ? runMaxPages : Math.min(runMaxPages, strategyData.maxPages);
@@ -103,6 +111,7 @@ export async function runIngestionPipeline(
       followLinks: strategyData?.followLinks ?? source.sourceType === "STATIC_HTML",
       pathPatterns: strategyData?.pathPatterns,
       maxDepth: strategyData?.maxDepth,
+      seedPaths: strategyData?.seedPaths,
       storageDir: options.crawlerStorageDir
     });
     pending = documents.map((document) => ({
@@ -127,6 +136,7 @@ export async function runIngestionPipeline(
   let createdDocuments = 0;
   let duplicateDocuments = 0;
   let insertedCandidates = 0;
+  let corroboratedCandidates = 0;
   let duplicateCandidates = 0;
 
   for (const document of pending) {
@@ -192,7 +202,34 @@ export async function runIngestionPipeline(
           error instanceof PersistenceError &&
           error.code === "DUPLICATE_KNOWLEDGE"
         ) {
-          duplicateCandidates += 1;
+          // Task book §19: an independent source reporting the same value
+          // corroborates the existing rule instead of being dropped.
+          const ref = seed.sourceRefs[0];
+          let merged: Awaited<ReturnType<typeof options.repository.corroborateRule>> = null;
+          if (ref !== undefined) {
+            try {
+              merged = await options.repository.corroborateRule(
+                seed.fingerprint,
+                { sourceId: seed.sourceId, documentId: ref.documentId },
+                seedEvidence(seed)
+              );
+            } catch (corroborationError) {
+              if (
+                !(
+                  corroborationError instanceof PersistenceError &&
+                  corroborationError.code === "NOT_FOUND"
+                )
+              ) {
+                throw corroborationError;
+              }
+            }
+          }
+          if (merged !== null) {
+            corroboratedCandidates += 1;
+            candidateRuleIds.push(merged.id);
+          } else {
+            duplicateCandidates += 1;
+          }
         } else {
           throw error;
         }
@@ -217,8 +254,40 @@ export async function runIngestionPipeline(
     createdDocuments,
     duplicateDocuments,
     insertedCandidates,
+    corroboratedCandidates,
     duplicateCandidates
   };
+}
+
+/** Sentence-level evidence carried inside a seed's payload, if any (Q2). */
+function seedEvidence(seed: KnowledgeRuleSeed): ReadonlyArray<{
+  documentId: string;
+  sentence: string;
+  startOffset: number;
+  endOffset: number;
+}> | undefined {
+  const extraction = (seed.payload as { extraction?: { evidence?: unknown } }).extraction;
+  if (
+    typeof seed.payload !== "object" ||
+    seed.payload === null ||
+    Array.isArray(seed.payload) ||
+    typeof extraction !== "object" ||
+    extraction === null ||
+    !Array.isArray(extraction.evidence)
+  ) {
+    return undefined;
+  }
+  return extraction.evidence.filter(
+    (
+      entry
+    ): entry is { documentId: string; sentence: string; startOffset: number; endOffset: number } =>
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof (entry as { documentId?: unknown }).documentId === "string" &&
+      typeof (entry as { sentence?: unknown }).sentence === "string" &&
+      typeof (entry as { startOffset?: unknown }).startOffset === "number" &&
+      typeof (entry as { endOffset?: unknown }).endOffset === "number"
+  );
 }
 
 export function documentIdForContent(title: string, contentText: string): string {

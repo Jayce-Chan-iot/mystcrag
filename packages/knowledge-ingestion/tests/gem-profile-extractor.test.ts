@@ -146,3 +146,119 @@ test("candidates respect the source's allowed knowledge domains", async () => {
   );
   assert.equal(restricted.length, 0);
 });
+
+test("fingerprint identity includes the value so divergent facts stay separately reviewable", async () => {
+  const extractor = new GemProfileExtractor();
+  const agreed = await extractor.extract(
+    inputFor("Amethyst gemstone information", AMETHYST_CONTENT)
+  );
+  const divergent = await extractor.extract(
+    inputFor(
+      "Amethyst gemstone information",
+      AMETHYST_CONTENT.replace("Mohs Hardness 7", "Mohs Hardness 6")
+    )
+  );
+  const agreedHardness = agreed.find(
+    (candidate) => payloadOf(candidate).property === "mohsHardness"
+  );
+  const divergentHardness = divergent.find(
+    (candidate) => payloadOf(candidate).property === "mohsHardness"
+  );
+  assert.ok(agreedHardness !== undefined && divergentHardness !== undefined);
+  // Same value from a second source deduplicates onto one rule (corroboration);
+  // a diverging value keeps its own candidate so review sees the disagreement.
+  assert.notEqual(agreedHardness.fingerprint, divergentHardness.fingerprint);
+  assert.equal(payloadOf(agreedHardness).value, "7");
+  assert.equal(payloadOf(divergentHardness).value, "6");
+});
+
+// GIA gem pages lay the FACTS strip out as "Label: Value" runs.
+const GIA_SOURCE: ExtractorSourceContext = {
+  sourceId: "source-gia-gem-encyclopedia",
+  sourceCategory: "OFFICIAL",
+  reliabilityLevel: "HIGH",
+  allowedKnowledgeDomains: [
+    "knowledge-domain:crystal-gemology",
+    "knowledge-domain:crystal-visual-properties"
+  ]
+};
+
+const GIA_MOONSTONE_CONTENT = [
+  "Moonstone GIA Gem Encyclopedia",
+  "FACTS Mohs Hardness: 6.0 to 6.5 Chemistry: KAlSi3O8 Color: Colorless to White, Gray, Green, Peach, Brown Refractive index: 1.518 to 1.526 Birefringence: 0.05 to 0.008 Specific gravity: 2.58",
+  "Moonstone is a birthstone for June, along with pearl and alexandrite."
+].join(" ");
+
+test("GIA fact strips with colon separators become has-property candidates", async () => {
+  const extractor = new GemProfileExtractor();
+  const candidates = await extractor.extract(
+    inputFor("Moonstone Gem Encyclopedia", GIA_MOONSTONE_CONTENT, GIA_SOURCE)
+  );
+  const byProperty = new Map(candidates.map((candidate) => [payloadOf(candidate).property, candidate]));
+
+  const expected: Record<string, string> = {
+    mohsHardness: "6.0 to 6.5",
+    chemicalFormula: "KAlSi3O8",
+    refractiveIndex: "1.518 to 1.526",
+    specificGravity: "2.58"
+  };
+  for (const [property, value] of Object.entries(expected)) {
+    const candidate = byProperty.get(property);
+    assert.ok(candidate !== undefined, `${property} should be extracted from GIA text`);
+    assert.equal(payloadOf(candidate).value, value);
+    assert.equal(candidate.subject, "material:moonstone");
+    assert.equal(candidate.claimType, "GEMOLOGICAL_FACT");
+  }
+  const colour = byProperty.get("colour");
+  assert.ok(colour !== undefined, "GIA Color row maps to the colour property");
+  assert.ok(
+    (payloadOf(colour).value ?? "").startsWith("Colorless to White, Gray, Green, Peach, Brown"),
+    `colour value runs to the next label, got "${payloadOf(colour).value}"`
+  );
+});
+
+// Wikipedia infobox rows: "Mohs scale hardness 7", "Crystal system Trigonal".
+const WIKIPEDIA_SOURCE: ExtractorSourceContext = {
+  sourceId: "source-wikipedia-reference",
+  sourceCategory: "ACADEMIC",
+  reliabilityLevel: "HIGH",
+  allowedKnowledgeDomains: [
+    "knowledge-domain:crystal-gemology",
+    "knowledge-domain:crystal-visual-properties"
+  ]
+};
+
+const WIKIPEDIA_AMETHYST_CONTENT = [
+  "Amethyst",
+  "Category Amethyst: quartz variety Formula (repeating unit) SiO 2 Crystal system Trigonal",
+  "Color Purple, violet",
+  "Mohs scale hardness 7",
+  "Luster Vitreous",
+  "Specific gravity 2.65",
+  "Amethyst is the purple variety of quartz."
+].join(" ");
+
+test("Wikipedia infobox rows with lowercase labels become has-property candidates", async () => {
+  const extractor = new GemProfileExtractor();
+  const candidates = await extractor.extract(
+    inputFor("Amethyst", WIKIPEDIA_AMETHYST_CONTENT, WIKIPEDIA_SOURCE)
+  );
+  const byProperty = new Map(candidates.map((candidate) => [payloadOf(candidate).property, candidate]));
+
+  const expected: Record<string, string> = {
+    chemicalFormula: "SiO 2",
+    crystalSystem: "Trigonal",
+    mohsHardness: "7",
+    specificGravity: "2.65",
+    luster: "Vitreous"
+  };
+  for (const [property, value] of Object.entries(expected)) {
+    const candidate = byProperty.get(property);
+    assert.ok(candidate !== undefined, `${property} should be extracted from Wikipedia infobox text`);
+    assert.equal(payloadOf(candidate).value, value);
+    assert.equal(candidate.subject, "material:amethyst");
+  }
+  const colour = byProperty.get("colour");
+  assert.ok(colour !== undefined, "Wikipedia Color row maps to the colour property");
+  assert.equal(payloadOf(colour).value, "Purple, violet");
+});

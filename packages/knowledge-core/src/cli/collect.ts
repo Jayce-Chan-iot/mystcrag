@@ -1,7 +1,11 @@
 import type {
   DatabaseClient,
-  KnowledgeRepository,
-  StoredKnowledgeSource
+  KnowledgeRepository
+} from "@mystcrag/database";
+import {
+  KnowledgeCollectionRunRepository,
+  type CollectionRunError,
+  type CollectionRunSourceResult
 } from "@mystcrag/database";
 import type { IngestionRunResult } from "@mystcrag/knowledge-ingestion";
 
@@ -39,6 +43,8 @@ export type CoverageReportSource = {
   createdDocuments: number;
   duplicateDocuments: number;
   insertedCandidates: number;
+  /** Same-fact candidates merged into existing rules (task book §19 corroboration). */
+  corroboratedCandidates: number;
   duplicateCandidates: number;
 };
 
@@ -56,6 +62,8 @@ export type CoverageReport = {
   phase: "coverage-report";
   generatedAt: string;
   dryRun: false;
+  /** Id of the persisted CollectionRun row this crawl wrote (task book Track B). */
+  collectionRunId: string;
   sourcesCrawled: number;
   documentsAdded: number;
   documentsSkippedDuplicates: number;
@@ -78,7 +86,7 @@ const REPORT_DATE = "2026-08-22";
  * Round-2 design refinement; this covers every domain a pattern-extracted
  * candidate can currently produce.
  */
-const COVERAGE_BY_KNOWLEDGE_DOMAIN: Readonly<Record<string, string>> = {
+export const COVERAGE_BY_KNOWLEDGE_DOMAIN: Readonly<Record<string, string>> = {
   "knowledge-domain:material-compatibility": "MATERIAL_COMPATIBILITY",
   "knowledge-domain:negative-rule": "NEGATIVE_RULE",
   "knowledge-domain:color-theory": "COLOR_THEORY",
@@ -98,6 +106,8 @@ const COVERAGE_BY_KNOWLEDGE_DOMAIN: Readonly<Record<string, string>> = {
   "knowledge-domain:tarot-crystal-association": "TAROT_CRYSTAL_ASSOCIATION",
   "knowledge-domain:gemological-fact": "CRYSTAL_GEMOLOGY",
   "knowledge-domain:scientific-fact": "CRYSTAL_GEMOLOGY",
+  "knowledge-domain:crystal-gemology": "CRYSTAL_GEMOLOGY",
+  "knowledge-domain:crystal-visual-properties": "CRYSTAL_VISUAL_PROPERTIES",
   "knowledge-domain:design-principle": "JEWELRY_DESIGN",
   "knowledge-domain:design-heuristic": "JEWELRY_DESIGN",
   "knowledge-domain:historical-tradition": "CRYSTAL_CULTURAL_SYMBOLISM"
@@ -154,40 +164,154 @@ export function runCollectDryRun(): CoverageAnalysis {
 export async function runCollectBatch(
   database: DatabaseClient,
   repository: KnowledgeRepository,
-  service: KnowledgeReviewService
+  service: KnowledgeReviewService,
+  options?: {
+    /** SSRF guard escape hatch for local fixture servers; production keeps it off. */
+    allowPrivateNetworks?: boolean;
+    /** Optional temp directory for Crawlee's request storage. */
+    crawlerStorageDir?: string;
+  }
 ): Promise<CoverageReport> {
   // Deferred so the ingestion bundle (crawlee, fetchers) is only loaded when a
   // real crawl runs — `collect --dry-run` and every other CLI command stay
   // lightweight and DB-free.
   const { runIngestionPipeline } = await import("@mystcrag/knowledge-ingestion");
 
+  const collectionRuns = new KnowledgeCollectionRunRepository(database);
+  const startedRun = await collectionRuns.startRun({ startedAt: new Date() });
+
   const crawlable = await repository.listCrawlableSources();
 
   const sourceResults: CoverageReportSource[] = [];
+  const runSourceResults: CollectionRunSourceResult[] = [];
+  const runErrors: CollectionRunError[] = [];
   let documentsAdded = 0;
   let documentsSkippedDuplicates = 0;
   let candidatesInserted = 0;
   let candidatesSkippedDuplicates = 0;
+  let candidatesCorroborated = 0;
+  let sourcesCrawled = 0;
 
   for (const source of crawlable) {
-    const run: IngestionRunResult = await runIngestionPipeline(source, {
-      database,
-      repository
-    });
-    documentsAdded += run.createdDocuments;
-    documentsSkippedDuplicates += run.duplicateDocuments;
-    candidatesInserted += run.insertedCandidates;
-    candidatesSkippedDuplicates += run.duplicateCandidates;
-    sourceResults.push({
-      sourceId: run.sourceId,
-      createdDocuments: run.createdDocuments,
-      duplicateDocuments: run.duplicateDocuments,
-      insertedCandidates: run.insertedCandidates,
-      duplicateCandidates: run.duplicateCandidates
-    });
+    // One dead source (DNS failure, 5xx, robots block) must not void the whole
+    // batch: record the error on the CollectionRun and keep the other sources.
+    try {
+      const run: IngestionRunResult = await runIngestionPipeline(source, {
+        database,
+        repository,
+        ...(options?.allowPrivateNetworks === undefined
+          ? {}
+          : { allowPrivateNetworks: options.allowPrivateNetworks }),
+        ...(options?.crawlerStorageDir === undefined
+          ? {}
+          : { crawlerStorageDir: options.crawlerStorageDir })
+      });
+      documentsAdded += run.createdDocuments;
+      documentsSkippedDuplicates += run.duplicateDocuments;
+      candidatesInserted += run.insertedCandidates;
+      candidatesCorroborated += run.corroboratedCandidates;
+      candidatesSkippedDuplicates += run.duplicateCandidates;
+      sourcesCrawled += 1;
+      sourceResults.push({
+        sourceId: run.sourceId,
+        createdDocuments: run.createdDocuments,
+        duplicateDocuments: run.duplicateDocuments,
+        insertedCandidates: run.insertedCandidates,
+        corroboratedCandidates: run.corroboratedCandidates,
+        duplicateCandidates: run.duplicateCandidates
+      });
+      runSourceResults.push({
+        sourceId: run.sourceId,
+        documentsAdded: run.createdDocuments,
+        duplicateDocuments: run.duplicateDocuments,
+        candidatesInserted: run.insertedCandidates,
+        corroboratedCandidates: run.corroboratedCandidates,
+        duplicateCandidates: run.duplicateCandidates
+      });
+    } catch (error) {
+      runErrors.push({
+        sourceId: source.id,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
-  const crawledIds = new Set(crawlable.map((source: StoredKnowledgeSource) => source.id));
+  try {
+    const report = await buildCoverageReport(repository, service, {
+      startedRunId: startedRun.id,
+      sourcesCrawled,
+      documentsAdded,
+      documentsSkippedDuplicates,
+      candidatesInserted,
+      candidatesCorroborated,
+      candidatesSkippedDuplicates,
+      sourceResults,
+      runSourceResults,
+      runErrors
+    });
+    await collectionRuns.completeRun(startedRun.id, {
+      finishedAt: new Date(),
+      status: "COMPLETED",
+      sourcesCrawled,
+      documentsAdded,
+      documentDuplicates: documentsSkippedDuplicates,
+      candidatesInserted,
+      corroboratedCandidates: candidatesCorroborated,
+      candidateDuplicates: candidatesSkippedDuplicates,
+      needsReview: report.review.needsReview,
+      conflicts: report.review.conflicted,
+      errors: runErrors,
+      sourceResults: runSourceResults
+    });
+    return report;
+  } catch (error) {
+    // The crawl itself is done, so the counters are final even when the
+    // post-crawl classification fails; record what happened before rethrowing.
+    await collectionRuns
+      .completeRun(startedRun.id, {
+        finishedAt: new Date(),
+        status: "FAILED",
+        sourcesCrawled,
+        documentsAdded,
+        documentDuplicates: documentsSkippedDuplicates,
+        candidatesInserted,
+        corroboratedCandidates: candidatesCorroborated,
+        candidateDuplicates: candidatesSkippedDuplicates,
+        needsReview: 0,
+        conflicts: 0,
+        errors: [
+          ...runErrors,
+          {
+            sourceId: "collect-pipeline",
+            message: error instanceof Error ? error.message : String(error)
+          }
+        ],
+        sourceResults: runSourceResults
+      })
+      .catch(() => undefined);
+    throw error;
+  }
+}
+
+type CoverageReportInputs = {
+  startedRunId: string;
+  sourcesCrawled: number;
+  documentsAdded: number;
+  documentsSkippedDuplicates: number;
+  candidatesInserted: number;
+  candidatesCorroborated: number;
+  candidatesSkippedDuplicates: number;
+  sourceResults: CoverageReportSource[];
+  runSourceResults: CollectionRunSourceResult[];
+  runErrors: CollectionRunError[];
+};
+
+async function buildCoverageReport(
+  repository: KnowledgeRepository,
+  service: KnowledgeReviewService,
+  inputs: CoverageReportInputs
+): Promise<CoverageReport> {
+  const crawledIds = new Set(inputs.sourceResults.map((result) => result.sourceId));
 
   // Extractors insert ingested candidates directly at NEEDS_REVIEW, so the
   // pipeline's NEW→EXTRACTED→classify flow never sees them. Capture this run's
@@ -232,13 +356,14 @@ export async function runCollectBatch(
     phase: "coverage-report",
     generatedAt: new Date().toISOString(),
     dryRun: false,
-    sourcesCrawled: crawlable.length,
-    documentsAdded,
-    documentsSkippedDuplicates,
-    candidatesInserted,
-    candidatesSkippedDuplicates,
+    collectionRunId: inputs.startedRunId,
+    sourcesCrawled: inputs.sourcesCrawled,
+    documentsAdded: inputs.documentsAdded,
+    documentsSkippedDuplicates: inputs.documentsSkippedDuplicates,
+    candidatesInserted: inputs.candidatesInserted,
+    candidatesSkippedDuplicates: inputs.candidatesSkippedDuplicates,
     review,
-    sources: sourceResults,
+    sources: inputs.sourceResults,
     candidatesByDomain,
     coverageTargets
   };

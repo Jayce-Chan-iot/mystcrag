@@ -35,73 +35,96 @@ type GemProperty = {
 /**
  * Values end either at the next known label or where the inline reference
  * citation begins ("Walter Schumann, Gemstones of the world (2001)" — two
- * consecutive capitalized words after the value).
+ * consecutive capitalized words). A capitalized pair directly followed by
+ * "word:" is a GIA label sequence ("Brown Refractive index:"), not a
+ * citation, so the lookahead skips it and the value runs on to the label.
  */
-const CITE_LOOKAHEAD = String.raw`(?=\s+(?:[A-Z][a-z]+ [A-Z][a-z]+|Chemical Formula|Mohs Hardness|Specific Gravity|Crystal System|Refractive Index|Transparency|Colour|Tenacity|Fracture|Cleavage|Habit|Dispersion|Birefringence|Pleochroism|Lustre|Luster|Treatments|Synthetic|Physical Properties|Optical Properties|Crystallography|$))`;
+const CITE_LOOKAHEAD = String.raw`(?=\s+(?:[A-Z][a-z]+\b [A-Z][a-z]+\b(?!\s+[a-z]+\s*:)|Chemical Formula|Chemistry|Formula|Mohs Hardness|Mohs scale hardness|Specific Gravity|Specific gravity|Crystal System|Crystal system|Refractive Index|Refractive index|Birefringence|Transparency|Diaphaneity|Colour|Color|Lustre|Luster|Tenacity|Fracture|Cleavage|Habit|Dispersion|Pleochroism|Density|Treatments|Synthetic|Physical Properties|Optical Properties|Crystallography|$))`;
 
 const GEM_PROPERTIES: readonly GemProperty[] = [
   {
     key: "mineralFamily",
     labelPattern: /A variety or type of:/,
-    valuePattern: new RegExp(String.raw`^\s*([A-Z][A-Za-z'-]*(?: [A-Za-z'-]+)*?)${CITE_LOOKAHEAD}`),
+    valuePattern: new RegExp(String.raw`^\s*:?\s*([A-Z][A-Za-z'-]*(?: [A-Za-z'-]+)*?)${CITE_LOOKAHEAD}`),
     knowledgeType: "CRYSTAL_GEMOLOGY"
   },
   {
     key: "chemicalFormula",
-    labelPattern: /Chemical Formula/,
-    valuePattern: new RegExp(String.raw`^\s*([A-Za-z0-9()·]+(?: [A-Za-z0-9()·]+)*?)${CITE_LOOKAHEAD}`),
+    labelPattern: /Chemical Formula|Chemistry|Formula(?: \(repeating unit\))?/,
+    valuePattern: new RegExp(String.raw`^\s*:?\s*([A-Z0-9(][A-Za-z0-9()· ]*?)${CITE_LOOKAHEAD}`),
     knowledgeType: "CRYSTAL_GEMOLOGY"
   },
   {
     key: "mohsHardness",
-    labelPattern: /Mohs Hardness/,
-    valuePattern: /^\s*(\d+(?:\.\d+)?(?:\s*(?:-|–|to)\s*\d+(?:\.\d+)?)?)/,
+    labelPattern: /Mohs Hardness|Mohs scale hardness/i,
+    valuePattern: /^\s*:?\s*(\d+(?:\.\d+)?(?:\s*(?:-|–|to)\s*\d+(?:\.\d+)?)?)/,
     knowledgeType: "CRYSTAL_GEMOLOGY"
   },
   {
     key: "specificGravity",
-    labelPattern: /Specific Gravity/,
-    valuePattern: /^\s*(\d+(?:\.\d+)?(?:\s*(?:-|–|to)\s*\d+(?:\.\d+)?)?)/,
+    labelPattern: /Specific Gravity/i,
+    valuePattern: /^\s*:?\s*(\d+(?:\.\d+)?(?:\s*(?:-|–|to)\s*\d+(?:\.\d+)?)?)/,
     knowledgeType: "CRYSTAL_GEMOLOGY"
   },
   {
     key: "refractiveIndex",
-    labelPattern: /Refractive Index/,
-    valuePattern: /^\s*(\d\.\d{3}(?:\s*(?:-|–|to)\s*\d\.\d{3})?)/,
+    labelPattern: /Refractive Index/i,
+    valuePattern: /^\s*:?\s*(\d\.\d{3}(?:\s*(?:-|–|to)\s*\d\.\d{3})?)/,
     knowledgeType: "CRYSTAL_GEMOLOGY"
   },
   {
     key: "tenacity",
     labelPattern: /Tenacity/,
-    valuePattern: /^\s*([A-Za-z]+)/,
+    valuePattern: /^\s*:?\s*([A-Za-z]+)/,
     knowledgeType: "CRYSTAL_GEMOLOGY"
   },
   {
     key: "fracture",
     labelPattern: /Fracture/,
-    valuePattern: /^\s*([A-Za-z]+)/,
+    valuePattern: /^\s*:?\s*([A-Za-z]+)/,
     knowledgeType: "CRYSTAL_GEMOLOGY"
   },
   {
     key: "crystalSystem",
-    labelPattern: /Crystal System/,
+    labelPattern: /Crystal System/i,
     valuePattern:
-      /^\s*(Triclinic|Monoclinic|Orthorhombic|Tetragonal|Trigonal|Hexagonal|Cubic|Isometric|Amorphous)/i,
+      /^\s*:?\s*(Triclinic|Monoclinic|Orthorhombic|Tetragonal|Trigonal|Hexagonal|Cubic|Isometric|Amorphous)/i,
     knowledgeType: "CRYSTAL_GEMOLOGY"
   },
   {
+    key: "luster",
+    labelPattern: /Lustre|Luster/,
+    valuePattern: new RegExp(String.raw`^\s*:?\s*([A-Z][A-Za-z]*?)${CITE_LOOKAHEAD}`),
+    knowledgeType: "CRYSTAL_VISUAL_PROPERTIES"
+  },
+  {
     key: "colour",
-    labelPattern: /Colour \(General\)/,
-    valuePattern: new RegExp(String.raw`^\s*([A-Za-z,\- ]+?)${CITE_LOOKAHEAD}`),
+    labelPattern: /Colou?r(?: \(General\))?(?![A-Za-z])/,
+    valuePattern: new RegExp(String.raw`^\s*:?\s*([A-Z][A-Za-z,\- ]*?)${CITE_LOOKAHEAD}`),
     knowledgeType: "CRYSTAL_VISUAL_PROPERTIES"
   },
   {
     key: "transparency",
-    labelPattern: /Transparency/,
-    valuePattern: /^\s*((?:(?:Transparent|Translucent|Opaque)[a-z]*,?)+)/i,
+    labelPattern: /Transparency|Diaphaneity/i,
+    valuePattern: /^\s*:?\s*((?:(?:Transparent|Translucent|Opaque)[a-z]*,?)+)/i,
     knowledgeType: "CRYSTAL_VISUAL_PROPERTIES"
   }
 ];
+
+/** Atlas completeness denominators: the gemology facts a full profile carries. */
+export const GEMOLOGY_PROPERTY_KEYS: readonly string[] = [
+  "mineralFamily",
+  "chemicalFormula",
+  "mohsHardness",
+  "specificGravity",
+  "refractiveIndex",
+  "tenacity",
+  "fracture",
+  "crystalSystem"
+];
+
+/** Atlas completeness denominators: the visual facts a full profile carries. */
+export const VISUAL_PROPERTY_KEYS: readonly string[] = ["luster", "colour", "transparency"];
 
 /** Normalize for matching: lowercase, drop apostrophes, split on separators. */
 function normalizeForMatch(raw: string): string {
@@ -193,16 +216,18 @@ export class GemProfileExtractor implements KnowledgeExtractor {
           ]
         }
       };
-      // Identity fingerprint (type + subject + relation + property): the same
-      // fact from a second source deduplicates, and a diverging value surfaces
-      // as a reviewable conflict rather than a silent second rule.
+      // Identity includes the value (task book §19): an agreeing value from
+      // a second source deduplicates onto the same rule and merges its
+      // sourceRef (corroboration), while a diverging value keeps its own
+      // candidate so review sees the disagreement as a conflict.
       const fingerprint = createHash("sha256")
         .update(
           JSON.stringify({
             knowledgeType: property.knowledgeType,
             subject,
             relation: "has-property",
-            property: property.key
+            property: property.key,
+            value
           })
         )
         .digest("hex");

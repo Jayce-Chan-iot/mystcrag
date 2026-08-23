@@ -165,6 +165,63 @@ test("without pathPatterns, same-origin discovery behaves as before", async () =
   }
 });
 
+test("seedPaths enqueue explicit gem profiles the index page cannot reveal (JS-rendered grids)", async () => {
+  const server = await startServer({
+    "/gems/index.html": { body: "Gem grid rendered client-side; no static links" },
+    "/gems/amethyst.html": { body: "Mohs Hardness 7", links: [] },
+    "/gems/aquamarine.html": { body: "Mohs Hardness 7.5-8", links: [] }
+  });
+  const storageDir = mkdtempSync(`${tmpdir()}/mystcrag-discovery-`);
+  try {
+    const documents = await fetchHtmlDocuments(source(server.base, {}), {
+      allowPrivateNetworks: true,
+      storageDir,
+      maxPages: 10,
+      followLinks: false,
+      seedPaths: ["/gems/amethyst.html", "/gems/aquamarine.html"]
+    });
+    const urls = documents.map((document) => new URL(document.url).pathname).sort();
+    assert.deepEqual(urls, [
+      "/gems/amethyst.html",
+      "/gems/aquamarine.html",
+      "/gems/index.html"
+    ]);
+  } finally {
+    rmSync(storageDir, { recursive: true, force: true });
+    server.close();
+  }
+});
+
+test("seedPaths are bounded by maxPages like every other request", async () => {
+  const server = await startServer({
+    "/gems/index.html": { body: "Index" },
+    "/gems/amethyst.html": { body: "Profile", links: [] },
+    "/gems/aquamarine.html": { body: "Profile", links: [] },
+    "/gems/garnet.html": { body: "Profile", links: [] }
+  });
+  const storageDir = mkdtempSync(`${tmpdir()}/mystcrag-discovery-`);
+  try {
+    // maxConcurrency 2 lets at most one in-flight request slip past the
+    // maxRequestsPerCrawl counter (3 of 4 queued), but the queue never runs on.
+    const documents = await fetchHtmlDocuments(source(server.base, {}), {
+      allowPrivateNetworks: true,
+      storageDir,
+      maxPages: 2,
+      followLinks: false,
+      seedPaths: [
+        "/gems/amethyst.html",
+        "/gems/aquamarine.html",
+        "/gems/garnet.html"
+      ]
+    });
+    assert.equal(documents.length <= 3, true);
+    assert.equal(server.fetched.includes("/gems/garnet.html"), false);
+  } finally {
+    rmSync(storageDir, { recursive: true, force: true });
+    server.close();
+  }
+});
+
 test("table cell text is space-separated so gem profile labels stay readable", async () => {
   const server = await startServer({
     "/gems/amethyst.html": {

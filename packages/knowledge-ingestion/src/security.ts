@@ -32,6 +32,11 @@ const PRIVATE_HOSTNAME_PATTERNS = [
   /^\[?fd/i
 ];
 
+/** Shared with the fetcher proxy wiring: loopback/private hosts never crawl through an egress proxy. */
+export function isPrivateHostname(hostname: string): boolean {
+  return PRIVATE_HOSTNAME_PATTERNS.some((pattern) => pattern.test(hostname));
+}
+
 /**
  * SSRF guard (task book section 46): ingestion fetchers must refuse private,
  * loopback, and link-local targets. Tests against a local fixture server pass
@@ -47,13 +52,13 @@ export async function assertPublicUrl(
     throw new Error(`UNSUPPORTED_PROTOCOL: ${url.protocol}`);
   }
   const hostname = url.hostname.toLowerCase();
-  if (PRIVATE_HOSTNAME_PATTERNS.some((pattern) => pattern.test(hostname))) {
+  if (isPrivateHostname(hostname)) {
     throw new Error(`PRIVATE_NETWORK_BLOCKED: ${hostname}`);
   }
   try {
     const addresses = await lookup(hostname, { all: true });
     for (const { address } of addresses) {
-      if (PRIVATE_HOSTNAME_PATTERNS.some((pattern) => pattern.test(address))) {
+      if (isPrivateHostname(address)) {
         throw new Error(`PRIVATE_NETWORK_BLOCKED: ${hostname} resolves to ${address}`);
       }
     }

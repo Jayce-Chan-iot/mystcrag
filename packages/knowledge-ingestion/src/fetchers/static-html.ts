@@ -11,7 +11,8 @@ import {
 import type { StoredKnowledgeSource } from "@mystcrag/database";
 
 import { createRequestRateLimiter } from "../rate-limit.js";
-import { assertPublicUrl } from "../security.js";
+import { proxyConfigurationFromEnv, proxyUrlsFromEnv } from "./proxy.js";
+import { assertPublicUrl, isPrivateHostname } from "../security.js";
 
 export type FetchedHtmlDocument = {
   url: string;
@@ -82,6 +83,12 @@ export async function fetchHtmlDocuments(
     pathPatterns?: readonly string[];
     /** Discovery depth from the base URL (1 = base + direct children). */
     maxDepth?: number;
+    /**
+     * Explicit root-relative crawl targets enqueued directly alongside the base
+     * URL (Batch B taxonomy targeting). Seed requests are issued even without
+     * link discovery, because the profile index is JS-rendered.
+     */
+    seedPaths?: readonly string[];
     storageDir?: string;
   }
 ): Promise<FetchedHtmlDocument[]> {
@@ -95,7 +102,16 @@ export async function fetchHtmlDocuments(
 
   let robots: RobotsTxtFile | null = null;
   try {
-    robots = await RobotsTxtFile.find(source.baseUrl, undefined, { timeoutMillis: 10_000 });
+    // The robots.txt prefetch rides the egress proxy too: on hosts whose DNS
+    // is polluted (en.wikipedia.org resolves to unrelated blocked IPs without
+    // it) a direct fetch burns its full timeout, and Crawlee's per-request
+    // robots fetch would re-pay that on every single request.
+    const proxyUrl = isPrivateHostname(new URL(source.baseUrl).hostname)
+      ? undefined
+      : proxyUrlsFromEnv()[0];
+    robots = await RobotsTxtFile.find(source.baseUrl, proxyUrl, {
+      timeoutMillis: 10_000
+    });
   } catch {
     robots = null;
   }
@@ -112,8 +128,14 @@ export async function fetchHtmlDocuments(
 
   const requestQueue = await RequestQueue.open(`ingestion-${randomUUID()}`);
   await requestQueue.addRequest({ url: source.baseUrl });
+  for (const seedPath of options?.seedPaths ?? []) {
+    const seedUrl = new URL(seedPath, source.baseUrl).toString();
+    if (seedUrl === source.baseUrl) continue;
+    await requestQueue.addRequest({ url: seedUrl });
+  }
 
   const config = new Configuration({ systemInfoIntervalMillis: 3_600_000 });
+  const proxyConfiguration = proxyConfigurationFromEnv();
   const crawler = new CheerioCrawler(
     {
       requestQueue,
@@ -122,6 +144,9 @@ export async function fetchHtmlDocuments(
       maxConcurrency: 2,
       requestHandlerTimeoutSecs: 15,
       navigationTimeoutSecs: 15,
+      // Sources unreachable without the environment's egress proxy (curl
+      // honours HTTPS_PROXY; Node does not) connect through it when present.
+      ...(proxyConfiguration === undefined ? {} : { proxyConfiguration }),
       preNavigationHooks: limiter === null ? [] : [async () => void (await limiter.acquire())],
       async requestHandler({ request, $, enqueueLinks, log }) {
         const document = extractDocument(request.url, $);
@@ -143,6 +168,24 @@ export async function fetchHtmlDocuments(
     config
   );
 
+  // Pre-seed Crawlee's per-origin robots cache so no request ever triggers its
+  // internal robots.txt fetch — that fetch connects directly (no proxy) and on
+  // DNS-polluted hosts stalls for tens of seconds before failing per request.
+  // On prefetch failure an allow-all file preserves Crawlee's fail-open rule.
+  const baseUrlOrigin = new URL(source.baseUrl).origin;
+  const cachedRobots =
+    robots ??
+    RobotsTxtFile.from(`${baseUrlOrigin}/robots.txt`, "User-agent: *\nAllow: /");
+  (crawler as unknown as RobotsTxtCacheHolder).robotsTxtFileCache.add(
+    baseUrlOrigin,
+    cachedRobots
+  );
+
   await crawler.run();
   return [...documents.values()].sort((left, right) => (left.url < right.url ? -1 : 1));
 }
+
+/** Crawlee's per-origin robots cache is private in the typings but present on the instance. */
+type RobotsTxtCacheHolder = {
+  robotsTxtFileCache: { add(origin: string, file: RobotsTxtFile): void };
+};

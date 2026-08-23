@@ -27,6 +27,7 @@ function candidateRule(input: {
   sourceId?: string;
   knowledgeType?: KnowledgeRule["knowledgeType"];
   knowledgeDomain?: string;
+  claimType?: KnowledgeRule["claimType"];
 }) {
   const knowledgeType = input.knowledgeType ?? "COLOR_THEORY";
   const subject = input.subject ?? "color:blue";
@@ -47,6 +48,9 @@ function candidateRule(input: {
     payload,
     conditions: {},
     confidence: input.confidence ?? 0.9,
+    // External-source candidates must declare a claim grade before review
+    // (task book §12); a design claim needs no second source to validate.
+    claimType: input.claimType ?? "DESIGN_PRINCIPLE",
     status: input.status ?? "EXTRACTED",
     sourceRefs: [{ sourceId: input.sourceId ?? "source-review-test", documentId: "doc-review-test" }],
     version: 1,
@@ -197,6 +201,54 @@ test("knowledge review service runs the review chain end to end", { skip: !datab
     assert.equal((await repository.getRule("cand-invalid-subject")).status, "NEEDS_REVIEW");
   });
 
+  await t.test("runReviewPipeline merges canonically equal facts into one corroborated rule", async () => {
+    await repository.upsertSource({
+      id: "source-gemdat-test",
+      name: "GemDat test source",
+      sourceType: "STATIC_HTML",
+      authorityScore: 0.85,
+      allowedKnowledgeDomains: ["knowledge-domain:crystal-gemology"],
+      language: "en",
+      enabled: true
+    });
+    await repository.upsertSource({
+      id: "source-wiki-test",
+      name: "Wikipedia test source",
+      sourceType: "STATIC_HTML",
+      authorityScore: 0.9,
+      allowedKnowledgeDomains: ["knowledge-domain:crystal-gemology"],
+      language: "en",
+      enabled: true
+    });
+    const gemFact = (id: string, value: string, sourceId: string) =>
+      candidateRule({
+        id,
+        knowledgeType: "CRYSTAL_GEMOLOGY",
+        knowledgeDomain: "knowledge-domain:crystal-gemology",
+        subject: "material:agate",
+        relation: "has-property",
+        payload: { property: "mohsHardness", value },
+        confidence: 0.85,
+        claimType: "GEMOLOGICAL_FACT",
+        sourceId
+      });
+    // Same hardness fact, two sources, two surface formats (§19).
+    await repository.insertRule(gemFact("cand-gemdat-hardness", "6.5–7", "source-gemdat-test"));
+    await repository.insertRule(gemFact("cand-wiki-hardness", "6.5 to 7", "source-wiki-test"));
+
+    const summary = await review.runReviewPipeline();
+    assert.equal(summary.merged, 1);
+
+    const primary = await repository.getRule("cand-gemdat-hardness");
+    assert.equal(primary.status, "VALIDATED");
+    assert.equal(
+      primary.sourceRefs.length,
+      2,
+      "the corroborated primary accumulates both independent sources"
+    );
+    assert.equal((await repository.getRule("cand-wiki-hardness")).status, "SUPERSEDED");
+  });
+
   await t.test("runReviewPipeline marks divergent same-key candidates CONFLICTED and leaves APPROVED rules stable", async () => {
     await repository.insertRule(
       candidateRule({
@@ -310,10 +362,16 @@ test("knowledge review service runs the review chain end to end", { skip: !datab
       () => review.approveRule("cand-rejected"),
       (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT"
     );
+    // cand-conflict-b was already superseded in the previous step; a retired
+    // rule has no outgoing transitions left.
     await assert.rejects(
-      () => review.supersedeRule("cand-auto-validated"),
+      () => review.supersedeRule("cand-conflict-b"),
       (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT"
     );
+    // Superseding a live candidate is a legal retirement path (§19 merge retires
+    // secondaries the same way).
+    const retired = await review.supersedeRule("cand-auto-validated");
+    assert.equal(retired.status, "SUPERSEDED");
   });
 
   await database.$disconnect();

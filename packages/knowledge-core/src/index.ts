@@ -1,5 +1,6 @@
 export * from "./knowledge-core.js";
 export * from "./admin/source-admin.js";
+export * from "./console/console-service.js";
 export * from "./search/embedding-provider.js";
 export * from "./search/embedding-factory.js";
 export * from "./search/semantic-embedding.js";

@@ -257,6 +257,122 @@ test("E2E-1 automatic knowledge ingestion across three source types", { skip: !d
         /PRIVATE_NETWORK_BLOCKED/
       );
     });
+
+    await t.test("a second source corroborating the same gem fact merges its sourceRef", async () => {
+      const gemProfileServer = http.createServer((request, response) => {
+        const url = request.url ?? "/";
+        if (url === "/robots.txt") {
+          response.writeHead(200, { "content-type": "text/plain" });
+          response.end("User-agent: *\nAllow: /\n");
+          return;
+        }
+        const flavour =
+          url === "/gemdat/amethyst.html"
+            ? "gemdat"
+            : url === "/gia/amethyst.html"
+              ? "gia"
+              : url === "/wiki/amethyst.html"
+                ? "wiki"
+                : "divergent";
+        response.writeHead(200, { "content-type": "text/html" });
+        response.end(
+          `<!doctype html><html><head><title>Amethyst gemstone information</title></head><body><article>` +
+            `<p>Mohs Hardness ${flavour === "divergent" ? "6" : "7"} ${flavour} citation text</p>` +
+            `<p>Crystal System Trigonal ${flavour} citation text</p>` +
+            `</article></body></html>`
+        );
+      });
+      await new Promise<void>((resolve) => gemProfileServer.listen(0, "127.0.0.1", resolve));
+      const gemAddress = gemProfileServer.address();
+      assert.ok(gemAddress !== null && typeof gemAddress === "object");
+      const gemBase = `http://127.0.0.1:${gemAddress.port}`;
+
+      try {
+        const crystalDomains = [
+          "knowledge-domain:crystal-gemology",
+          "knowledge-domain:crystal-visual-properties"
+        ];
+        const gemdatSource = await repository.upsertSource({
+          id: "source-e2e-gemdat",
+          name: "GemDat fixture",
+          sourceType: "STATIC_HTML",
+          baseUrl: `${gemBase}/gemdat/amethyst.html`,
+          authorityScore: 0.75,
+          allowedKnowledgeDomains: crystalDomains,
+          language: "en",
+          enabled: true
+        });
+        const giaSource = await repository.upsertSource({
+          id: "source-e2e-gia",
+          name: "GIA fixture",
+          sourceType: "STATIC_HTML",
+          baseUrl: `${gemBase}/gia/amethyst.html`,
+          authorityScore: 0.95,
+          allowedKnowledgeDomains: crystalDomains,
+          language: "en",
+          enabled: true
+        });
+        const wikiSource = await repository.upsertSource({
+          id: "source-e2e-wiki",
+          name: "Wikipedia fixture",
+          sourceType: "STATIC_HTML",
+          baseUrl: `${gemBase}/wiki/amethyst.html`,
+          authorityScore: 0.75,
+          allowedKnowledgeDomains: crystalDomains,
+          language: "en",
+          enabled: true
+        });
+        const divergentSource = await repository.upsertSource({
+          id: "source-e2e-divergent",
+          name: "Divergent fixture",
+          sourceType: "STATIC_HTML",
+          baseUrl: `${gemBase}/divergent/amethyst.html`,
+          authorityScore: 0.75,
+          allowedKnowledgeDomains: crystalDomains,
+          language: "en",
+          enabled: true
+        });
+
+        const firstRun = await runIngestionPipeline(gemdatSource, options);
+        assert.ok(firstRun.insertedCandidates >= 2);
+        const corroboratedRun = await runIngestionPipeline(giaSource, options);
+        const thirdRun = await runIngestionPipeline(wikiSource, options);
+        const divergentRun = await runIngestionPipeline(divergentSource, options);
+        assert.ok(divergentRun.insertedCandidates >= 1);
+
+        const allRules = await repository.listRules({ limit: 2000 });
+        const hardnessRules = allRules.filter((rule) => {
+          const payload = rule.payload as { property?: string };
+          return rule.relation === "has-property" && payload.property === "mohsHardness";
+        });
+        assert.equal(
+          hardnessRules.length,
+          2,
+          "agreeing sources merge onto one rule; the divergent value stays separate"
+        );
+        const agreeing = hardnessRules.find((rule) => {
+          const payload = rule.payload as { value?: string };
+          return payload.value === "7";
+        });
+        assert.ok(agreeing !== undefined);
+        assert.deepEqual(
+          (agreeing.sourceRefs.map((ref) => ref.sourceId) as string[]).sort(),
+          ["source-e2e-gemdat", "source-e2e-gia", "source-e2e-wiki"],
+          "three independent sources corroborate one rule (task book §19)"
+        );
+        const divergent = hardnessRules.find((rule) => {
+          const payload = rule.payload as { value?: string };
+          return payload.value === "6";
+        });
+        assert.ok(divergent !== undefined);
+        assert.equal(divergent.sourceRefs.length, 1);
+        assert.ok(corroboratedRun.insertedCandidates >= 0);
+        assert.ok(thirdRun.insertedCandidates >= 0);
+      } finally {
+        gemProfileServer.close();
+        gemProfileServer.closeAllConnections();
+      }
+    });
   } finally {
     await database.$disconnect();
     server.close();

@@ -19,6 +19,8 @@ import { KNOWLEDGE_CORPUS_FIXTURES } from "../fixtures/corpus-bootstrap.js";
 import {
   classifyCandidate,
   detectRuleConflicts,
+  isExternalRule,
+  planCorroborationMerges,
   validateKnowledgeRuleCandidate,
   type KnowledgeConflictGroup,
   type KnowledgeRuleValidation
@@ -31,6 +33,8 @@ export type ReviewPipelineSummary = {
   validated: number;
   needsReview: number;
   conflicted: number;
+  /** §19 corroboration merges: canonical-equal duplicates folded into one rule. */
+  merged: number;
 };
 
 export type ReviewEvidence = {
@@ -111,7 +115,8 @@ export class KnowledgeReviewService {
       extracted: 0,
       validated: 0,
       needsReview: 0,
-      conflicted: 0
+      conflicted: 0,
+      merged: 0
     };
 
     const fresh = await this.repository.listRules({ status: "NEW", limit: LIST_LIMIT });
@@ -119,6 +124,12 @@ export class KnowledgeReviewService {
       await this.repository.transitionRule(rule.id, "EXTRACTED");
       summary.extracted += 1;
     }
+
+    // §19 corroboration runs before classification so the merged primary's
+    // accumulated sourceRefs are visible to classifyCandidate: a high-
+    // confidence FACT claim reported by two sources in different surface
+    // formats auto-validates instead of parking as two single-source rules.
+    summary.merged = await this.mergeCorroborations();
 
     const extracted = await this.repository.listRules({ status: "EXTRACTED", limit: LIST_LIMIT });
     for (const rule of extracted) {
@@ -133,6 +144,27 @@ export class KnowledgeReviewService {
 
     summary.conflicted = await this.markCandidateConflicts();
     return summary;
+  }
+
+  /**
+   * §19 corroboration merge over the candidate pool (EXTRACTED, VALIDATED,
+   * NEEDS_REVIEW, CONFLICTED — never APPROVED / REJECTED / SUPERSEDED): each
+   * plan folds a secondary's sourceRefs and sentence evidence into the primary
+   * and retires the secondary to SUPERSEDED. Idempotent per pair.
+   */
+  private async mergeCorroborations(): Promise<number> {
+    const rules: StoredKnowledgeRule[] = [];
+    for (const status of [...CANDIDATE_STATUSES, "EXTRACTED", "CONFLICTED"] as const) {
+      rules.push(...(await this.repository.listRules({ status, limit: LIST_LIMIT })));
+    }
+    let merged = 0;
+    for (const plan of planCorroborationMerges(rules)) {
+      for (const secondary of plan.secondaries) {
+        await this.repository.mergeCorroboratingRules(plan.primary.id, secondary.id);
+        merged += 1;
+      }
+    }
+    return merged;
   }
 
   private async classify(rule: StoredKnowledgeRule): Promise<"VALIDATED" | "NEEDS_REVIEW"> {
@@ -197,11 +229,33 @@ export class KnowledgeReviewService {
         sourceCounts.enabled += 1;
       }
     }
+    const documents = await this.repository.countDocuments();
+    const allRules = await this.repository.listAllRules();
+    const candidateStatuses = new Set([
+      "NEW",
+      "EXTRACTED",
+      "VALIDATED",
+      "NEEDS_REVIEW",
+      "CONFLICTED"
+    ]);
+    let externalCandidates = 0;
+    let externalApprovedRules = 0;
+    for (const rule of allRules) {
+      if (!isExternalRule(rule)) continue;
+      if (candidateStatuses.has(rule.status)) {
+        externalCandidates += 1;
+      } else if (rule.status === "APPROVED") {
+        externalApprovedRules += 1;
+      }
+    }
     const conflictGroups = await this.detectConflicts();
     const latest = await this.repository.getLatestPublishedVersion();
     return {
       rules: ruleCounts,
       sources: sourceCounts,
+      documents,
+      externalCandidates,
+      externalApprovedRules,
       conflictGroups: conflictGroups.length,
       latestVersion:
         latest === null
@@ -289,6 +343,17 @@ export class KnowledgeReviewService {
 
   async supersedeRule(id: string): Promise<StoredKnowledgeRule> {
     return this.repository.transitionRule(id, "SUPERSEDED");
+  }
+
+  /**
+   * Console V1 review "Edit": a reviewer may adjust a candidate's confidence
+   * and claimType before approving. Everything else stays immutable.
+   */
+  async editRule(
+    id: string,
+    changes: { confidence?: number; claimType?: string | null }
+  ): Promise<StoredKnowledgeRule> {
+    return this.repository.updateRuleReview(id, changes);
   }
 
   async publishVersion(version: string): Promise<StoredKnowledgeVersion> {

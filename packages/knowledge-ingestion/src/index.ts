@@ -1,6 +1,7 @@
 export * from "./extract/candidates.js";
 export * from "./extract/eval.js";
 export * from "./extract/extractor.js";
+export * from "./extract/gem-profile-extractor.js";
 export * from "./extract/pattern-extractor.js";
 export * from "./extract/semantic-extractor.js";
 export * from "./extract/structured-extractor.js";

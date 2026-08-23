@@ -58,6 +58,7 @@ function fakeRepository(init: {
   sources?: StoredKnowledgeSource[];
   latestVersion?: StoredKnowledgeVersion | null;
   ruleCounts?: Record<string, number>;
+  documents?: number;
   reviewTransitions?: Record<string, StoredKnowledgeSource>;
 }): KnowledgeRepository {
   const rules = new Map((init.rules ?? []).map((entry) => [entry.id, entry]));
@@ -68,6 +69,8 @@ function fakeRepository(init: {
       [...rules.values()].filter(
         (entry) => filter?.status === undefined || entry.status === filter.status
       ),
+    listAllRules: async () => [...rules.values()],
+    countDocuments: async () => init.documents ?? 0,
     countRulesByStatus: async () =>
       init.ruleCounts ?? {
         NEW: 0,
@@ -201,6 +204,7 @@ test("listReviewQueue surfaces extraction evidence for reviewable candidates", a
 
 test("getAdminOverview aggregates rule counts, source counts, conflicts, and version", async () => {
   const repository = fakeRepository({
+    documents: 128,
     ruleCounts: {
       NEW: 1,
       EXTRACTED: 2,
@@ -233,9 +237,45 @@ test("getAdminOverview aggregates rule counts, source counts, conflicts, and ver
   assert.equal(overview.sources.NEEDS_REVIEW, 1);
   assert.equal(overview.sources.DISCOVERED, 1);
   assert.equal(overview.sources.enabled, 1);
+  assert.equal(overview.documents, 128);
+  assert.equal(overview.externalCandidates, 0);
+  assert.equal(overview.externalApprovedRules, 0);
   assert.equal(overview.conflictGroups, 0);
   assert.equal(overview.latestVersion?.version, "2026-08-v1");
   assert.equal(overview.latestVersion?.publishedAt, "2026-08-21T10:00:00.000Z");
+});
+
+test("getAdminOverview separates external acquisition from the fixture baseline", async () => {
+  const repository = fakeRepository({
+    documents: 3,
+    rules: [
+      rule({ id: "rule-external-review", status: "NEEDS_REVIEW", sourceRefs: [{ sourceId: "source-gia", documentId: "doc-a" }], sourceId: "source-gia" }),
+      rule({ id: "rule-external-approved", status: "APPROVED", sourceRefs: [{ sourceId: "source-gia", documentId: "doc-a" }], sourceId: "source-gia" }),
+      rule({ id: "rule-external-rejected", status: "REJECTED", sourceRefs: [{ sourceId: "source-gia", documentId: "doc-a" }], sourceId: "source-gia" }),
+      rule({
+        id: "rule-corroborated",
+        status: "APPROVED",
+        sourceRefs: [
+          { sourceId: "source-gia", documentId: "doc-a" },
+          { sourceId: "source-fixture-handbook", documentId: "doc-fixture" }
+        ],
+        sourceId: "source-gia"
+      }),
+      rule({
+        id: "rule-fixture",
+        status: "NEEDS_REVIEW",
+        sourceRefs: [{ sourceId: "source-fixture-handbook", documentId: "doc-fixture" }],
+        sourceId: "source-fixture-handbook"
+      })
+    ]
+  });
+  const service = new KnowledgeReviewService({ database: {} as never, repository });
+  const overview = await service.getAdminOverview();
+  assert.equal(overview.documents, 3);
+  // Candidate statuses count; REJECTED does not; fixture-only rules never count.
+  assert.equal(overview.externalCandidates, 1);
+  // Direct external approval plus the corroborated merge that kept a fixture ref.
+  assert.equal(overview.externalApprovedRules, 2);
 });
 
 test("getAdminOverview reports a null latest version before any publish", async () => {
