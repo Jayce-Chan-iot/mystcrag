@@ -448,6 +448,31 @@ model KnowledgeRule {
   @@map("knowledge_rules")
 }
 
+/// One row per `knowledge:collect` execution (Knowledge Console V1): written
+/// RUNNING when the crawl starts, updated to COMPLETED/FAILED when it ends, so
+/// the console's Collection Runs page tracks real runs instead of committed
+/// JSON reports.
+model KnowledgeCollectionRun {
+  id                     String    @id @default(cuid())
+  status                 String    @default("RUNNING")
+  startedAt              DateTime  @map("started_at")
+  finishedAt             DateTime? @map("finished_at")
+  sourcesCrawled         Int       @default(0) @map("sources_crawled")
+  documentsAdded         Int       @default(0) @map("documents_added")
+  documentDuplicates     Int       @default(0) @map("document_duplicates")
+  candidatesInserted     Int       @default(0) @map("candidates_inserted")
+  corroboratedCandidates Int       @default(0) @map("corroborated_candidates")
+  candidateDuplicates    Int       @default(0) @map("candidate_duplicates")
+  needsReview            Int       @default(0) @map("needs_review")
+  conflicts              Int       @default(0) @map("conflicts")
+  errors                 Json      @default("[]") @map("errors")
+  sourceResults          Json      @default("[]") @map("source_results")
+  createdAt              DateTime  @default(now()) @map("created_at")
+
+  @@index([startedAt])
+  @@map("knowledge_collection_runs")
+}
+
 model KnowledgeVersion {
   id          String                  @id
   version     String                  @unique
