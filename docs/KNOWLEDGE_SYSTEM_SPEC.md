@@ -463,3 +463,52 @@ Baseline 采集方式：bundle 数字来自干净单次构建（`rm -rf .next &&
 **命令（`eval:design` → `benchmarks/design-eval.ts`）**：打印人类可读报告（场景 × 期望矩阵 + 聚合指标 + 门禁结论），门禁不过 exit 1，即 knowledge:eval 入口。
 
 **验收**：golden set ≥12 场景全绿并锁定阈值基线；**敏感性测试**——向语料注入一条 HARD 冲突规则后评估必须转红（防空洞评估）；确定性双跑一致；架构边界测试保持绿（design-engine 仍不依赖 knowledge-core）；既有测试全绿 + `pnpm validate`。
+
+## 18. Knowledge Acquisition + Console V1（Batch B 阶段，2026-08）
+
+本阶段双轨并行，不重新设计 Knowledge Architecture（§17 体系不变），全部建立在现有 PostgreSQL + knowledge-core + Admin API 之上。
+
+### 18.1 §19 Corroboration（来源互证合并）
+
+**问题**：同一宝石学事实（如摩氏硬度 6.5–7）会被不同来源以不同表面格式（"6.5–7" vs "6.5 to 7"、"Cubic" vs "Isometric"、"SiO 2" vs "SiO2 (silicon dioxide)"）各产出一条候选——指纹不同不判重，各持单源证据，永远无法满足「高置信 FACT 需 ≥2 独立来源」的自动校验门槛；且曾被误判为冲突。
+
+**机制（三层）**：
+
+1. **值规范化**（`knowledge-core/src/review/rules.ts` `canonicalPropertyValue(property, rawValue)`）：数值/区间统一为 `<min> to <max>`（剥尾零，破折号≈"to"）；`chemicalFormula` 去括注/空格后小写；`crystalSystem` 同义词归一（isometric→cubic）；逗号列表按集合比较；源页注释（"IMA status …"后缀）剥离。规范相等的值是互证不是冲突——`detectRuleConflicts` 以 `(knowledgeType, subject, relation, property)` 分组后按规范化值判分歧，has-property 规则的不同 property 是不同事实。
+2. **合并规划**（`planCorroborationMerges(rules)` 纯函数）：候选池（EXTRACTED/VALIDATED/NEEDS_REVIEW/CONFLICTED，**永不**含 APPROVED/REJECTED/SUPERSEDED）内，按 `分组键 + 规范化值` 聚桶；桶内 ≥2 条且 ≥2 个独立 sourceId 才成 plan（同源自述不算互证）。primary 选取：置信度优先 → 最短原始值（最干净）→ 稳定 id 序；其余为 secondaries。真分歧值不入任何 plan，留给人工冲突审核。
+3. **持久化合并**（`knowledge.repository.ts` `mergeCorroboratingRules(primaryId, secondaryId)`）：secondary 的 sourceRefs 与句级证据折叠进 primary（primary 保留自身值与指纹，证据上限 20 条），secondary 转 SUPERSEDED；按 sourceRef 幂等（重复合并为 no-op）。
+
+**接线**：`KnowledgeReviewService.runReviewPipeline()` 在 NEW→EXTRACTED 之后、分类之前执行 `mergeCorroborations()`——合并后的 primary 带累计 sourceRefs 参与分类，高置信 FACT 双源即可自动 VALIDATED。Pipeline 摘要与 `KnowledgeAdminPipelineResponseSchema` 新增 `merged` 计数。ingestion 期指纹级同值合并（`corroborateRule`）不变，两层互补。
+
+### 18.2 CollectionRun 持久化（Console V1 第 6 页后端）
+
+`knowledge:collect` 每次运行落库一行（迁移 `20260822140000_add_knowledge_collection_runs`，repository `KnowledgeCollectionRunRepository`）：`startedAt/finishedAt/status(RUNNING|COMPLETED|FAILED)/sourcesCrawled/documentsAdded/documentDuplicates/candidatesInserted/corroboratedCandidates/candidateDuplicates/needsReview/conflicts/errors[]/sourceResults[]`。单源失败（DNS/5xx/robots）记录 error 不中止批次；采集后分类失败则按 FAILED 落库计数后 rethrow。
+
+### 18.3 Admin API 新增端点（前缀 `/api/admin/knowledge`，同一 X-Admin-Key fail-closed 鉴权）
+
+| 方法/路径 | 用途 |
+| --- | --- |
+| `GET /console/coverage` | 按 domain 的 target/current/missing/percentage + 已覆盖/缺失 taxonomy 词表 |
+| `GET /console/sources-stats` | 来源产出统计（documents/candidates/approvedRules/yield=validCandidates/documents/lastFetch/failureCount） |
+| `GET /console/atlas` / `GET /console/atlas/:crystalId` | Crystal Atlas 列表（宝石学/视觉/文化完整度、关联数、冲突数）与详情（属性/关系/来源） |
+| `GET /console/collection-runs?limit=` | 最近采集运行记录（Date→ISO 由服务层转换后经 `validateResponse` 校验） |
+| `POST /rules/:ruleId/edit` | 审核前调整候选 confidence / claimType（Console Review 页 Edit 操作） |
+
+计算服务：`knowledge-core/src/console/console-service.ts`（`KnowledgeConsoleService`）——coverage/atlas/来源统计全部为读实时 DB 的纯函数投影，**committed JSON report 不是生产真相**；coverage 来自 DB 规则 + taxonomy + Round-1 target 配置。
+
+### 18.4 Batch B 采集目标（Track A）
+
+Crystal Core Knowledge 优先：覆盖 taxonomy ≥60 种常见 crystal/material，每材料至少尝试 canonical identity / mineral family / chemical composition / Mohs hardness / crystal system / typical color / transparency / luster / treatments / care / imitations / visual characteristics。SCIENTIFIC_FACT / GEMOLOGICAL_FACT 高置信知识要求 ≥2 独立专业来源（§18.1 互证机制支撑）。对 APPROVED Source 实施受限 child-page discovery（allowlisted path patterns + maxDepth + maxPages，仅发现具体 gemstone profile，禁止全站无限爬取）。KPI：≥60 taxonomy 覆盖、≥100 真实 Documents、≥150 新外部 Candidates、≥80 evidence-backed reviewed Rules（bootstrap 不计）。
+
+### 18.5 Console V1 前端（Track B）
+
+`apps/frontend/app/admin/knowledge` 六页（Overview / Coverage / Sources / Review / Crystal Atlas / Collection Runs），消费 §18.3 端点，遵循现有 Mystcrag 视觉系统（ivory/cream + purple accent、高信息密度），desktop/tablet/mobile 基本可用。安全边界：Browser → Next server（server-side 持有 KNOWLEDGE_ADMIN_KEY）→ Admin API；admin key 与 DATABASE_URL 严禁进 Client Bundle。写操作全部走既有 Review Service / Admin API，前端不直连 DB。
+
+**实现（2026-08 落地）**：
+
+- **后端接线**：`apps/backend/src/index.ts` 读取 `KNOWLEDGE_ADMIN_API_KEY`（≥16 字符），装配 `KnowledgeAdminApplicationService`（review/source-admin/console 三服务共享同一 `KnowledgeRepository`）并注册 admin 路由；key 缺失时不注册（fail-closed，CLI 依旧可用）。
+- **前端服务端客户端**：`apps/frontend/src/features/admin-knowledge/admin-api.ts`（`createKnowledgeAdminClient`）——仅被 Server Component / Server Action 引用，从 `MYSTCRAG_KNOWLEDGE_ADMIN_KEY`（回退 `KNOWLEDGE_ADMIN_API_KEY`）取 key，以 `x-admin-key` 请求 Backend；响应经 design-contract schema 二次校验；错误统一映射 `KnowledgeConsoleError{code,message,status}`（含 NOT_CONFIGURED/NETWORK_ERROR）。
+- **访问控制**：`admin-auth.ts` + 登录页（`/admin/knowledge/login`）。管理员输入 key，服务端 sha256 + `timingSafeEqual` 校验后签发 httpOnly/sameSite=strict/8h 会话 cookie（cookie 存 key 摘要，非明文）；每个页面（`requireConsoleAccess`）与每个 Server Action（`requireAdminSession`）独立复验，未配置 key 时页面 fail-closed。key 永不出现在 client bundle（无 `NEXT_PUBLIC_` 前缀、无 client import 路径）。
+- **写操作**：`actions.ts` Server Actions（approve/reject/supersede/edit 规则、review/enable/disable 来源、运行审核管道、发布版本）→ Admin API → 既有 Review/Source 服务，`revalidatePath` 刷新六页；无任何前端直连 DB 路径。
+- **页面**：Overview（八项统计卡 + 管道运行/发布版本 + 领域覆盖表/图）、Coverage（领域矩阵可展开 covered/missing taxonomy 词条）、Sources（13 列产出表 + enable/disable + approve/reject + yield 图）、Review（状态筛选 + 完整证据（来源/文档/抽取句子）+ payload + Approve/Edit/Reject/Supersede + 冲突组）、Atlas（列表完整度 + 详情属性/关系/来源）、Collection Runs（趋势图 + 运行明细含分来源结果与错误）。图表仅 Recharts（coverage/source yield/collection trend），其余为服务端渲染表格。
+- **测试**：`admin-auth.test.ts`（key 解析/timing-safe 校验/fail-closed）、`admin-api.test.ts`（fetcher 注入：请求头/路径/schema 校验/错误映射/无 key 零请求）、`knowledge-core/tests/console-e2e.integration.test.ts`（任务书闭环：本地 fixture 源爬取 → 候选 NEEDS_REVIEW 且 Overview/queue 可见完整证据 → approve → Overview 外部批准数更新；同时断言 coverage/source stats/atlas/CollectionRun 反映实时 DB）。后端 admin 路由鉴权（无 key/短 key/错 key 403）已有 24 项路由测试覆盖。
