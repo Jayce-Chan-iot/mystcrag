@@ -108,7 +108,10 @@ export const SourceCrawlStrategySchema = z.strictObject({
   /**
    * Batch B child-page discovery: an allowlist of path globs (e.g.
    * "/gem-*.html"). When present, followed links must match at least one
-   * pattern; when absent, same-origin links are followed as before.
+   * pattern; when absent, same-origin links are followed as before. Explicit
+   * exact paths (one per taxonomy target) are also allowed, so the Batch B
+   * crystal crawl lists its ~84 gem profile pages instead of crawling the
+   * whole index alphabetically.
    */
   pathPatterns: z
     .array(
@@ -117,10 +120,36 @@ export const SourceCrawlStrategySchema = z.strictObject({
         .trim()
         .min(1)
         .max(200)
-        .regex(/^\/[A-Za-z0-9\-_.*/]*$/, "path patterns must be root-relative paths")
+        .regex(
+          /^\/[A-Za-z0-9\-_.*/'()]*$/,
+          "path patterns must be root-relative paths"
+        )
     )
     .min(1)
-    .max(16)
+    .max(128)
+    .optional(),
+  /**
+   * Batch B explicit crawl targets: exact root-relative paths enqueued
+   * directly alongside the base URL. Used when a source's profile index is
+   * JS-rendered (GIA's gem grid) so link discovery cannot see the targets;
+   * the seed list is bounded exactly like pathPatterns. Parentheses and
+   * apostrophes are part of the grammar because Wikipedia canonical titles
+   * use them ("Morganite_(gem)", "Tiger's_eye").
+   */
+  seedPaths: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(200)
+        .regex(
+          /^\/[A-Za-z0-9\-_.*/'()]*$/,
+          "seed paths must be root-relative paths"
+        )
+    )
+    .min(1)
+    .max(128)
     .optional(),
   /** Discovery depth from the base URL; 1 means base + its direct children. */
   maxDepth: PositiveSafeIntegerSchema.max(3).default(1),

@@ -272,6 +272,75 @@ test("Batch B child-page discovery: pathPatterns allowlist and maxDepth parse wi
   );
 });
 
+test("Batch B taxonomy targeting: an explicit allowlist of gem profile paths parses up to 128 entries", () => {
+  const explicitPaths = Array.from({ length: 84 }, (_, index) => `/gem-${100 + index}.html`);
+  const parsed = KnowledgeSourceSchema.safeParse({
+    ...validSource,
+    crawlStrategy: { followLinks: true, pathPatterns: explicitPaths, maxDepth: 1 }
+  });
+  assert.equal(parsed.success, true);
+  assert.equal(parsed.success && parsed.data.crawlStrategy?.pathPatterns?.length, 84);
+
+  const overLimit = Array.from({ length: 129 }, (_, index) => `/gem-${100 + index}.html`);
+  assert.equal(
+    KnowledgeSourceSchema.safeParse({
+      ...validSource,
+      crawlStrategy: { followLinks: true, pathPatterns: overLimit }
+    }).success,
+    false
+  );
+});
+
+test("Batch B seed paths: an explicit crawl-target list parses with path validation", () => {
+  const parsed = KnowledgeSourceSchema.parse({
+    ...validSource,
+    crawlStrategy: {
+      followLinks: false,
+      seedPaths: ["/moonstone", "/amethyst", "/rose-quartz"],
+      maxPages: 30
+    }
+  });
+  assert.deepEqual(parsed.crawlStrategy?.seedPaths, ["/moonstone", "/amethyst", "/rose-quartz"]);
+
+  // Seed paths share the path grammar of pathPatterns: root-relative only.
+  assert.equal(
+    KnowledgeSourceSchema.safeParse({
+      ...validSource,
+      crawlStrategy: { followLinks: false, seedPaths: ["https://evil.example.com/gem"] }
+    }).success,
+    false
+  );
+  assert.equal(
+    KnowledgeSourceSchema.safeParse({
+      ...validSource,
+      crawlStrategy: { followLinks: false, seedPaths: [] }
+    }).success,
+    false
+  );
+  const overLimit = Array.from({ length: 129 }, (_, index) => `/gem-${100 + index}.html`);
+  assert.equal(
+    KnowledgeSourceSchema.safeParse({
+      ...validSource,
+      crawlStrategy: { followLinks: false, seedPaths: overLimit }
+    }).success,
+    false
+  );
+});
+
+test("path grammar accepts Wikipedia canonical titles with parentheses and apostrophes", () => {
+  const parsed = KnowledgeSourceSchema.parse({
+    ...validSource,
+    crawlStrategy: {
+      followLinks: false,
+      seedPaths: ["/wiki/Morganite_(gem)", "/wiki/Tiger's_eye"]
+    }
+  });
+  assert.deepEqual(parsed.crawlStrategy?.seedPaths, [
+    "/wiki/Morganite_(gem)",
+    "/wiki/Tiger's_eye"
+  ]);
+});
+
 test("Q0 source review transitions never allow direct DISCOVERED -> APPROVED", () => {
   assert.equal(SOURCE_REVIEW_TRANSITIONS.DISCOVERED.includes("APPROVED"), false);
   assert.equal(SOURCE_REVIEW_TRANSITIONS.NEEDS_REVIEW.includes("APPROVED"), true);

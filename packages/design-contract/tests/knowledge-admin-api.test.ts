@@ -22,6 +22,7 @@ const queueItem = {
   knowledgeDomain: "knowledge-domain:color-theory",
   subject: "color:purple",
   relation: "pairs-well-with",
+  claimType: null,
   confidence: 0.72,
   validation: { valid: true, issues: [] },
   evidence: [
@@ -109,6 +110,9 @@ test("overview counts every rule and source status explicitly", () => {
       DISABLED: 0,
       enabled: 3
     },
+    documents: 128,
+    externalCandidates: 446,
+    externalApprovedRules: 96,
     conflictGroups: 7,
     latestVersion: {
       id: "kv-2026-08-v1",
@@ -128,6 +132,13 @@ test("overview counts every rule and source status explicitly", () => {
   );
   const missingStatus = { ...overview, rules: { ...overview.rules, NEW: undefined } };
   assert.equal(KnowledgeAdminOverviewResponseSchema.safeParse(missingStatus).success, false);
+  assert.equal(
+    KnowledgeAdminOverviewResponseSchema.safeParse({
+      ...overview,
+      documents: undefined
+    }).success,
+    false
+  );
   assert.equal(
     KnowledgeAdminOverviewResponseSchema.safeParse({
       ...overview,

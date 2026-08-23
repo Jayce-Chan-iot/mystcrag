@@ -8,6 +8,7 @@ import {
 } from "./component.schema";
 import { JsonValueSchema } from "./json.schema";
 import {
+  ClaimTypeSchema,
   ExtractionMetadataSchema,
   KnowledgeSourceTypeSchema,
   KnowledgeStatusSchema,
@@ -59,6 +60,12 @@ export const KnowledgeAdminVersionSummarySchema = z.strictObject({
 export const KnowledgeAdminOverviewResponseSchema = z.strictObject({
   rules: KnowledgeAdminRuleCountsSchema,
   sources: KnowledgeAdminSourceCountsSchema,
+  /** Total stored knowledge documents across all sources (Console V1 overview). */
+  documents: NonNegativeIntegerSchema,
+  /** External (non-fixture) rules still in a candidate status. */
+  externalCandidates: NonNegativeIntegerSchema,
+  /** APPROVED rules carrying at least one external source ref (Batch B KPI). */
+  externalApprovedRules: NonNegativeIntegerSchema,
   conflictGroups: NonNegativeIntegerSchema,
   latestVersion: KnowledgeAdminVersionSummarySchema.nullable()
 });
@@ -90,6 +97,7 @@ export const KnowledgeAdminQueueItemSchema = z.strictObject({
   knowledgeDomain: TaxonomyRefSchema("KNOWLEDGE_DOMAIN"),
   subject: IdentifierSchema,
   relation: IdentifierSchema,
+  claimType: ClaimTypeSchema.nullable(),
   confidence: z.number().min(0).max(1),
   validation: z.strictObject({
     valid: z.boolean(),
@@ -129,7 +137,8 @@ export const KnowledgeAdminPipelineResponseSchema = z.strictObject({
   extracted: NonNegativeIntegerSchema,
   validated: NonNegativeIntegerSchema,
   needsReview: NonNegativeIntegerSchema,
-  conflicted: NonNegativeIntegerSchema
+  conflicted: NonNegativeIntegerSchema,
+  merged: NonNegativeIntegerSchema
 });
 
 export const KnowledgeAdminRuleActionParamsSchema = z.strictObject({
@@ -233,4 +242,180 @@ export type KnowledgeAdminSourceQueueResponse = z.infer<
 >;
 export type KnowledgeAdminSourceMutationResponse = z.infer<
   typeof KnowledgeAdminSourceMutationResponseSchema
+>;
+
+/**
+ * Knowledge Console V1 DTOs (Track B). Coverage, source yield, the crystal
+ * atlas, and collection runs all read the live database — never a committed
+ * JSON report — and project exactly the fields the console pages render.
+ */
+export const KnowledgeAdminCoverageTermSchema = z.strictObject({
+  id: IdentifierSchema,
+  displayName: z.strictObject({
+    zh: NonEmptyTextSchema,
+    en: NonEmptyTextSchema
+  })
+});
+
+export const KnowledgeAdminCoverageDomainSchema = z.strictObject({
+  domain: NonEmptyTextSchema,
+  target: NonNegativeIntegerSchema,
+  current: NonNegativeIntegerSchema,
+  missing: NonNegativeIntegerSchema,
+  percentage: z.number().min(0).max(1),
+  coveredTaxonomyTerms: z.array(KnowledgeAdminCoverageTermSchema),
+  missingTaxonomyTerms: z.array(KnowledgeAdminCoverageTermSchema)
+});
+
+export const KnowledgeAdminCoverageResponseSchema = z.strictObject({
+  domains: z.array(KnowledgeAdminCoverageDomainSchema)
+});
+
+export const KnowledgeAdminSourceStatsItemSchema = z.strictObject({
+  sourceId: IdentifierSchema,
+  name: NonEmptyTextSchema,
+  sourceType: KnowledgeSourceTypeSchema,
+  sourceCategory: SourceCategorySchema,
+  authorityScore: z.number().min(0).max(1),
+  reliabilityLevel: SourceReliabilitySchema,
+  reviewStatus: SourceReviewStatusSchema,
+  enabled: z.boolean(),
+  documents: NonNegativeIntegerSchema,
+  candidateCount: NonNegativeIntegerSchema,
+  approvedRuleCount: NonNegativeIntegerSchema,
+  lastFetch: IsoDateTimeSchema.nullable(),
+  failureCount: NonNegativeIntegerSchema,
+  yield: z.number().min(0)
+});
+
+export const KnowledgeAdminSourceStatsResponseSchema = z.strictObject({
+  items: z.array(KnowledgeAdminSourceStatsItemSchema),
+  total: NonNegativeIntegerSchema
+});
+
+export const KnowledgeAdminAtlasRowSchema = z.strictObject({
+  crystalId: IdentifierSchema,
+  displayName: z.strictObject({
+    zh: NonEmptyTextSchema,
+    en: NonEmptyTextSchema
+  }),
+  gemologyCompleteness: z.number().min(0).max(1),
+  visualCompleteness: z.number().min(0).max(1),
+  culturalCompleteness: z.number().min(0).max(1),
+  associationCount: NonNegativeIntegerSchema,
+  conflictCount: NonNegativeIntegerSchema
+});
+
+export const KnowledgeAdminAtlasResponseSchema = z.strictObject({
+  items: z.array(KnowledgeAdminAtlasRowSchema),
+  total: NonNegativeIntegerSchema
+});
+
+export const KnowledgeAdminAtlasDetailPropertySchema = z.strictObject({
+  property: NonEmptyTextSchema,
+  value: NonEmptyTextSchema,
+  knowledgeDomain: TaxonomyRefSchema("KNOWLEDGE_DOMAIN"),
+  ruleId: IdentifierSchema,
+  status: KnowledgeStatusSchema,
+  confidence: z.number().min(0).max(1),
+  sourceIds: z.array(IdentifierSchema)
+});
+
+export const KnowledgeAdminAtlasDetailRelationSchema = z.strictObject({
+  relation: IdentifierSchema,
+  knowledgeDomain: TaxonomyRefSchema("KNOWLEDGE_DOMAIN"),
+  ruleId: IdentifierSchema,
+  status: KnowledgeStatusSchema,
+  confidence: z.number().min(0).max(1),
+  payload: JsonValueSchema,
+  sourceIds: z.array(IdentifierSchema)
+});
+
+export const KnowledgeAdminAtlasDetailResponseSchema = z.strictObject({
+  row: KnowledgeAdminAtlasRowSchema,
+  properties: z.array(KnowledgeAdminAtlasDetailPropertySchema),
+  relations: z.array(KnowledgeAdminAtlasDetailRelationSchema),
+  sources: z.array(
+    z.strictObject({
+      sourceId: IdentifierSchema,
+      ruleCount: NonNegativeIntegerSchema
+    })
+  )
+});
+
+export const KnowledgeAdminAtlasDetailParamsSchema = z.strictObject({
+  crystalId: IdentifierSchema
+});
+
+export const KnowledgeAdminCollectionRunErrorSchema = z.strictObject({
+  sourceId: NonEmptyTextSchema,
+  message: NonEmptyTextSchema
+});
+
+export const KnowledgeAdminCollectionRunSourceResultSchema = z.strictObject({
+  sourceId: NonEmptyTextSchema,
+  documentsAdded: NonNegativeIntegerSchema,
+  duplicateDocuments: NonNegativeIntegerSchema,
+  candidatesInserted: NonNegativeIntegerSchema,
+  corroboratedCandidates: NonNegativeIntegerSchema,
+  duplicateCandidates: NonNegativeIntegerSchema
+});
+
+export const KnowledgeAdminCollectionRunSchema = z.strictObject({
+  id: IdentifierSchema,
+  status: z.enum(["RUNNING", "COMPLETED", "FAILED"]),
+  startedAt: IsoDateTimeSchema,
+  finishedAt: IsoDateTimeSchema.nullable(),
+  sourcesCrawled: NonNegativeIntegerSchema,
+  documentsAdded: NonNegativeIntegerSchema,
+  documentDuplicates: NonNegativeIntegerSchema,
+  candidatesInserted: NonNegativeIntegerSchema,
+  corroboratedCandidates: NonNegativeIntegerSchema,
+  candidateDuplicates: NonNegativeIntegerSchema,
+  needsReview: NonNegativeIntegerSchema,
+  conflicts: NonNegativeIntegerSchema,
+  errors: z.array(KnowledgeAdminCollectionRunErrorSchema),
+  sourceResults: z.array(KnowledgeAdminCollectionRunSourceResultSchema)
+});
+
+export const KnowledgeAdminCollectionRunsResponseSchema = z.strictObject({
+  items: z.array(KnowledgeAdminCollectionRunSchema),
+  total: NonNegativeIntegerSchema
+});
+
+export const KnowledgeAdminEditRuleRequestSchema = z
+  .strictObject({
+    confidence: z.number().min(0).max(1).optional(),
+    claimType: ClaimTypeSchema.nullable().optional()
+  })
+  .refine(
+    (request) => request.confidence !== undefined || request.claimType !== undefined,
+    { message: "At least one of confidence or claimType is required" }
+  );
+
+export const KnowledgeAdminEditRuleResponseSchema = z.strictObject({
+  ruleId: IdentifierSchema,
+  status: KnowledgeStatusSchema,
+  confidence: z.number().min(0).max(1),
+  claimType: ClaimTypeSchema.nullable()
+});
+
+export type KnowledgeAdminCoverageResponse = z.infer<
+  typeof KnowledgeAdminCoverageResponseSchema
+>;
+export type KnowledgeAdminCoverageDomain = z.infer<
+  typeof KnowledgeAdminCoverageDomainSchema
+>;
+export type KnowledgeAdminSourceStatsResponse = z.infer<
+  typeof KnowledgeAdminSourceStatsResponseSchema
+>;
+export type KnowledgeAdminAtlasResponse = z.infer<typeof KnowledgeAdminAtlasResponseSchema>;
+export type KnowledgeAdminAtlasDetailResponse = z.infer<
+  typeof KnowledgeAdminAtlasDetailResponseSchema
+>;
+export type KnowledgeAdminCollectionRunsResponse = z.infer<
+  typeof KnowledgeAdminCollectionRunsResponseSchema
+>;
+export type KnowledgeAdminEditRuleResponse = z.infer<
+  typeof KnowledgeAdminEditRuleResponseSchema
 >;
