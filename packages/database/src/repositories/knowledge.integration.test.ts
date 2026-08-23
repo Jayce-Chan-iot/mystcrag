@@ -297,5 +297,102 @@ test("knowledge storage lifecycle verification matrix", { skip: !databaseUrl }, 
     assert.equal(none.length, 0);
   });
 
+  await t.test("candidate rules may be superseded directly and corroborations merge", async () => {
+    await repository.upsertSource(sourceFixture("source-gemdat", {
+      name: "GemDat gemstone pages",
+      allowedKnowledgeDomains: ["knowledge-domain:crystal-gemology"]
+    }));
+    await repository.upsertSource(sourceFixture("source-wikipedia", {
+      name: "Wikipedia reference",
+      allowedKnowledgeDomains: ["knowledge-domain:crystal-gemology"]
+    }));
+    await repository.upsertDocument(
+      documentFixture("doc-agate-gemdat", "source-gemdat", "3".repeat(64))
+    );
+    await repository.upsertDocument(
+      documentFixture("doc-agate-wiki", "source-wikipedia", "4".repeat(64))
+    );
+
+    const gemRule = (
+      id: string,
+      sourceId: string,
+      documentId: string,
+      value: string,
+      fingerprint: string,
+      status: "NEEDS_REVIEW" | "CONFLICTED" = "NEEDS_REVIEW"
+    ) =>
+      ruleFixture(id, sourceId, documentId, fingerprint, {
+        knowledgeType: "CRYSTAL_GEMOLOGY",
+        knowledgeDomain: "knowledge-domain:crystal-gemology",
+        subject: "material:agate",
+        relation: "has-property",
+        payload: {
+          property: "mohsHardness",
+          value,
+          extraction: {
+            extractor: "gem-profile-extractor-v1",
+            method: "label-table",
+            evidence: [
+              {
+                documentId,
+                sentence: `Mohs Hardness: ${value}`,
+                startOffset: 0,
+                endOffset: 20
+              }
+            ]
+          }
+        },
+        claimType: "GEMOLOGICAL_FACT",
+        confidence: 0.9,
+        status,
+        sourceRefs: [{ sourceId, documentId }]
+      } as Partial<KnowledgeRule>);
+
+    // The console Review page offers Supersede on queue items, so a
+    // NEEDS_REVIEW rule must transition there without a REJECTED hop.
+    const primary = await repository.insertRule(
+      gemRule("rule-agate-mohs-gemdat", "source-gemdat", "doc-agate-gemdat", "6.5–7", "5".repeat(64))
+    );
+    assert.equal(primary.status, "NEEDS_REVIEW");
+    const superseded = await repository.transitionRule(primary.id, "SUPERSEDED");
+    assert.equal(superseded.status, "SUPERSEDED");
+
+    // Corroboration merge: a canonically equal fact from a second source folds
+    // its sourceRef + evidence into the primary and retires the duplicate.
+    const keep = await repository.insertRule(
+      gemRule("rule-agate-mohs-keep", "source-gemdat", "doc-agate-gemdat", "6.5–7", "6".repeat(64))
+    );
+    assert.equal(keep.status, "NEEDS_REVIEW");
+
+    const duplicate = await repository.insertRule(
+      gemRule("rule-agate-mohs-wiki", "source-wikipedia", "doc-agate-wiki", "6.5 to 7", "7".repeat(64), "CONFLICTED")
+    );
+
+    const merged = await repository.mergeCorroboratingRules(keep.id, duplicate.id);
+    assert.equal(merged.id, keep.id);
+    assert.equal(merged.sourceRefs.length, 2);
+    assert.deepEqual(
+      merged.sourceRefs.map((ref) => ref.sourceId).sort(),
+      ["source-gemdat", "source-wikipedia"]
+    );
+
+    const retired = await repository.getRule(duplicate.id);
+    assert.equal(retired.status, "SUPERSEDED");
+
+    // The secondary's sentence evidence is preserved on the merged rule.
+    const evidence = (merged.payload as { extraction?: { evidence?: Array<{ documentId: string }> } })
+      .extraction?.evidence ?? [];
+    assert.ok(evidence.some((entry) => entry.documentId === "doc-agate-wiki"));
+
+    // Merging is idempotent per sourceRef: the same ref twice is a no-op.
+    const again = await repository.mergeCorroboratingRules(keep.id, duplicate.id);
+    assert.equal(again.sourceRefs.length, 2);
+
+    await assert.rejects(
+      repository.mergeCorroboratingRules(keep.id, "rule-missing"),
+      (error: unknown) => error instanceof PersistenceError && error.code === "NOT_FOUND"
+    );
+  });
+
   await prisma.$disconnect();
 });

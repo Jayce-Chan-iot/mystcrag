@@ -25,10 +25,10 @@ export type KnowledgeStatusValue =
   | "SUPERSEDED";
 
 const ALLOWED_KNOWLEDGE_TRANSITIONS: Record<KnowledgeStatusValue, readonly KnowledgeStatusValue[]> = {
-  NEW: ["EXTRACTED", "REJECTED"],
-  EXTRACTED: ["VALIDATED", "NEEDS_REVIEW", "REJECTED"],
-  VALIDATED: ["NEEDS_REVIEW", "APPROVED", "REJECTED"],
-  NEEDS_REVIEW: ["APPROVED", "REJECTED", "CONFLICTED"],
+  NEW: ["EXTRACTED", "REJECTED", "SUPERSEDED"],
+  EXTRACTED: ["VALIDATED", "NEEDS_REVIEW", "REJECTED", "SUPERSEDED"],
+  VALIDATED: ["NEEDS_REVIEW", "APPROVED", "REJECTED", "SUPERSEDED"],
+  NEEDS_REVIEW: ["APPROVED", "REJECTED", "CONFLICTED", "SUPERSEDED"],
   APPROVED: ["SUPERSEDED", "CONFLICTED"],
   CONFLICTED: ["NEEDS_REVIEW", "SUPERSEDED"],
   REJECTED: ["SUPERSEDED"],
@@ -603,6 +603,197 @@ export class KnowledgeRepository {
     return parseRule(row);
   }
 
+  /**
+   * Console V1 review "Edit": a reviewer may adjust a candidate's confidence
+   * and claimType classification before approving. Payload, subject, relation,
+   * and evidence stay immutable — they carry the fact's identity (fingerprint)
+   * and its provenance, which a review edit must never rewrite.
+   */
+  async updateRuleReview(
+    id: string,
+    changes: { confidence?: number; claimType?: string | null }
+  ): Promise<StoredKnowledgeRule> {
+    if (changes.confidence !== undefined) {
+      if (!Number.isFinite(changes.confidence) || changes.confidence < 0 || changes.confidence > 1) {
+        throw new PersistenceError(
+          "VALIDATION_ERROR",
+          "confidence must be a number between 0 and 1"
+        );
+      }
+    }
+    if (changes.confidence === undefined && changes.claimType === undefined) {
+      throw new PersistenceError(
+        "VALIDATION_ERROR",
+        "At least one of confidence or claimType is required"
+      );
+    }
+    try {
+      const row = await this.prisma.knowledgeRule.update({
+        where: { id },
+        data: {
+          ...(changes.confidence === undefined ? {} : { confidence: changes.confidence }),
+          ...(changes.claimType === undefined ? {} : { claimType: changes.claimType })
+        }
+      });
+      return parseRule(row);
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  /**
+   * Task book §19 corroboration: when an ingest run extracts a fact whose
+   * fingerprint already exists (an independent source reported the same
+   * value), the new sourceRef is merged into the existing rule instead of
+   * being dropped, so high-confidence FACT claims accumulate their ≥2
+   * independent sources on one reviewable rule. Sentence evidence from the
+   * corroborating document is appended to the payload's extraction block.
+   * Returns null when the ref is already recorded (a true duplicate).
+   */
+  async corroborateRule(
+    fingerprint: string,
+    ref: { sourceId: string; documentId?: string },
+    evidence?: ReadonlyArray<{
+      documentId: string;
+      sentence: string;
+      startOffset: number;
+      endOffset: number;
+    }>
+  ): Promise<StoredKnowledgeRule | null> {
+    try {
+      const row = await this.prisma.knowledgeRule.findUnique({ where: { fingerprint } });
+      if (row === null) {
+        throw new PersistenceError(
+          "NOT_FOUND",
+          `Knowledge rule with fingerprint ${fingerprint} was not found`
+        );
+      }
+      const rule = parseRule(row);
+      const alreadyRecorded = rule.sourceRefs.some(
+        (existing) =>
+          existing.sourceId === ref.sourceId && existing.documentId === ref.documentId
+      );
+      if (alreadyRecorded) {
+        return null;
+      }
+
+      let payload = rule.payload;
+      if (evidence !== undefined && evidence.length > 0) {
+        const extraction = (payload as { extraction?: { evidence?: unknown[] } }).extraction;
+        if (
+          typeof payload === "object" &&
+          payload !== null &&
+          !Array.isArray(payload) &&
+          typeof extraction === "object" &&
+          extraction !== null &&
+          Array.isArray(extraction.evidence)
+        ) {
+          const merged: unknown[] = [...extraction.evidence, ...evidence].slice(0, 20);
+          payload = {
+            ...(payload as Record<string, unknown>),
+            extraction: { ...extraction, evidence: merged }
+          } as typeof payload;
+        }
+      }
+
+      const updated = await this.prisma.knowledgeRule.update({
+        where: { id: rule.id },
+        data: {
+          sourceRefs: toPrismaJson([...rule.sourceRefs, ref]),
+          payload: toPrismaJson(payload)
+        }
+      });
+      return parseRule(updated);
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  /**
+   * Console V1 / §19 corroboration merge: two candidate rules that assert the
+   * same fact in different surface formats ("6.5–7" vs "6.5 to 7") are one
+   * reviewable fact reported by two sources. The secondary's sourceRef and
+   * sentence evidence fold into the primary (which keeps its own value and
+   * fingerprint), and the secondary retires to SUPERSEDED. Idempotent per
+   * sourceRef: re-merging an already-merged pair is a no-op.
+   */
+  async mergeCorroboratingRules(
+    primaryId: string,
+    secondaryId: string
+  ): Promise<StoredKnowledgeRule> {
+    try {
+      const primaryRow = await this.prisma.knowledgeRule.findUnique({ where: { id: primaryId } });
+      if (primaryRow === null) {
+        throw new PersistenceError("NOT_FOUND", `Knowledge rule ${primaryId} was not found`);
+      }
+      const secondaryRow = await this.prisma.knowledgeRule.findUnique({ where: { id: secondaryId } });
+      if (secondaryRow === null) {
+        throw new PersistenceError("NOT_FOUND", `Knowledge rule ${secondaryId} was not found`);
+      }
+      const primary = parseRule(primaryRow);
+      const secondary = parseRule(secondaryRow);
+
+      const alreadyRecorded = secondary.sourceRefs.every((ref) =>
+        primary.sourceRefs.some(
+          (existing) =>
+            existing.sourceId === ref.sourceId && existing.documentId === ref.documentId
+        )
+      );
+      if (alreadyRecorded) {
+        if (secondary.status !== "SUPERSEDED") {
+          await this.transitionRule(secondaryId, "SUPERSEDED");
+        }
+        return primary;
+      }
+
+      const mergedRefs = [
+        ...primary.sourceRefs,
+        ...secondary.sourceRefs.filter(
+          (ref) =>
+            !primary.sourceRefs.some(
+              (existing) =>
+                existing.sourceId === ref.sourceId && existing.documentId === ref.documentId
+            )
+        )
+      ];
+
+      let payload = primary.payload;
+      const secondaryEvidence = (secondary.payload as { extraction?: { evidence?: unknown[] } })
+        .extraction?.evidence;
+      if (Array.isArray(secondaryEvidence) && secondaryEvidence.length > 0) {
+        const extraction = (payload as { extraction?: { evidence?: unknown[] } }).extraction;
+        if (
+          typeof payload === "object" &&
+          payload !== null &&
+          !Array.isArray(payload) &&
+          typeof extraction === "object" &&
+          extraction !== null &&
+          Array.isArray(extraction.evidence)
+        ) {
+          payload = {
+            ...(payload as Record<string, unknown>),
+            extraction: {
+              ...extraction,
+              evidence: [...extraction.evidence, ...secondaryEvidence].slice(0, 20)
+            }
+          } as typeof payload;
+        }
+      }
+
+      await this.transitionRule(secondaryId, "SUPERSEDED");
+      const updated = await this.prisma.knowledgeRule.update({
+        where: { id: primaryId },
+        data: {
+          sourceRefs: toPrismaJson(mergedRefs),
+          payload: toPrismaJson(payload)
+        }
+      });
+      return parseRule(updated);
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
   async transitionRule(id: string, next: KnowledgeStatusValue): Promise<StoredKnowledgeRule> {
     try {
       const current = await this.prisma.knowledgeRule.findUnique({ where: { id } });
@@ -663,6 +854,49 @@ export class KnowledgeRepository {
     };
     for (const group of groups) {
       counts[group.status as KnowledgeStatusValue] = group._count._all;
+    }
+    return counts;
+  }
+
+  /**
+   * Console V1 coverage/atlas input: every rule in one read. The console
+   * computes domain coverage and per-crystal completeness in memory, so a
+   * cap here would silently under-report coverage. Round-1 scale is hundreds
+   * to low thousands of rows; revisit if the corpus grows past that.
+   */
+  async listAllRules(): Promise<StoredKnowledgeRule[]> {
+    const rows = await this.prisma.knowledgeRule.findMany({
+      orderBy: [{ subject: "asc" }, { id: "asc" }]
+    });
+    return rows.map(parseRule);
+  }
+
+  /** Console V1 overview: total stored knowledge documents. */
+  async countDocuments(): Promise<number> {
+    return this.prisma.knowledgeDocument.count();
+  }
+
+  /** Console V1 source stats: document count per source id. */
+  async countDocumentsBySource(): Promise<Record<string, number>> {
+    const groups = await this.prisma.knowledgeDocument.groupBy({
+      by: ["sourceId"],
+      _count: { _all: true }
+    });
+    const counts: Record<string, number> = {};
+    for (const group of groups) {
+      counts[group.sourceId] = group._count._all;
+    }
+    return counts;
+  }
+
+  /** Console V1 source stats: consecutive fetch failures per source id. */
+  async listSourceFailureCounts(): Promise<Record<string, number>> {
+    const rows = await this.prisma.knowledgeSource.findMany({
+      select: { id: true, consecutiveFailures: true }
+    });
+    const counts: Record<string, number> = {};
+    for (const row of rows) {
+      counts[row.id] = row.consecutiveFailures;
     }
     return counts;
   }

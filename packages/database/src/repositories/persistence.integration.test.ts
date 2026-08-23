@@ -22,7 +22,8 @@ const migrationNames = [
   "20260821100000_add_design_decision_traces",
   "20260821120000_add_knowledge_usage_events",
   "20260822090000_source_registry_v2",
-  "20260822120000_knowledge_rule_claim_type"
+  "20260822120000_knowledge_rule_claim_type",
+  "20260822140000_add_knowledge_collection_runs"
 ];
 
 function nextRevision(
