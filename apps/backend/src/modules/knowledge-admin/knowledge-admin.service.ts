@@ -1,6 +1,13 @@
 import { PersistenceError } from "@mystcrag/database";
 import {
+  KnowledgeAdminAtlasDetailParamsSchema,
+  KnowledgeAdminAtlasDetailResponseSchema,
+  KnowledgeAdminAtlasResponseSchema,
+  KnowledgeAdminCollectionRunsResponseSchema,
   KnowledgeAdminConflictsResponseSchema,
+  KnowledgeAdminCoverageResponseSchema,
+  KnowledgeAdminEditRuleRequestSchema,
+  KnowledgeAdminEditRuleResponseSchema,
   KnowledgeAdminOverviewResponseSchema,
   KnowledgeAdminPipelineResponseSchema,
   KnowledgeAdminPublishVersionResponseSchema,
@@ -8,7 +15,13 @@ import {
   KnowledgeAdminRuleActionResponseSchema,
   KnowledgeAdminSourceMutationResponseSchema,
   KnowledgeAdminSourceQueueResponseSchema,
+  KnowledgeAdminSourceStatsResponseSchema,
+  type KnowledgeAdminAtlasDetailResponse,
+  type KnowledgeAdminAtlasResponse,
+  type KnowledgeAdminCollectionRunsResponse,
   type KnowledgeAdminConflictsResponse,
+  type KnowledgeAdminCoverageResponse,
+  type KnowledgeAdminEditRuleResponse,
   type KnowledgeAdminOverview,
   type KnowledgeAdminPipelineResponse,
   type KnowledgeAdminPublishVersionResponse,
@@ -16,10 +29,12 @@ import {
   type KnowledgeAdminRuleActionResponse,
   type KnowledgeAdminSourceMutationResponse,
   type KnowledgeAdminSourceQueueResponse,
+  type KnowledgeAdminSourceStatsResponse,
   type KnowledgeStatus,
   type SourceReviewStatus
 } from "@mystcrag/design-contract";
 import {
+  KnowledgeConsoleService,
   KnowledgeSourceAdminService,
   KnowledgeReviewService,
   type ReviewQueueItem
@@ -33,6 +48,11 @@ export type ReviewQueueFilter = {
   limit?: number;
 };
 
+export type EditRuleInput = {
+  confidence?: number;
+  claimType?: string | null;
+};
+
 export type SourcePolicyInput = {
   allowedKnowledgeDomains?: readonly string[];
   maxRequestsPerMinute?: number;
@@ -41,6 +61,7 @@ export type SourcePolicyInput = {
 export type KnowledgeAdminServiceDependencies = {
   reviewService: KnowledgeReviewService;
   sourceAdminService: KnowledgeSourceAdminService;
+  consoleService?: KnowledgeConsoleService;
 };
 
 function mapPersistenceError(error: unknown): DomainApiError {
@@ -71,6 +92,7 @@ function projectQueueItem(item: ReviewQueueItem): unknown {
     knowledgeDomain: rule.knowledgeDomain,
     subject: rule.subject,
     relation: rule.relation,
+    claimType: rule.claimType ?? null,
     confidence: rule.confidence,
     validation,
     evidence: evidence.map((entry) => ({
@@ -97,10 +119,112 @@ function projectQueueItem(item: ReviewQueueItem): unknown {
 export class KnowledgeAdminApplicationService {
   private readonly reviewService: KnowledgeReviewService;
   private readonly sourceAdminService: KnowledgeSourceAdminService;
+  private readonly consoleService: KnowledgeConsoleService | null;
 
   constructor(dependencies: KnowledgeAdminServiceDependencies) {
     this.reviewService = dependencies.reviewService;
     this.sourceAdminService = dependencies.sourceAdminService;
+    this.consoleService = dependencies.consoleService ?? null;
+  }
+
+  private requireConsoleService(): KnowledgeConsoleService {
+    if (this.consoleService === null) {
+      throw new DomainApiError(
+        "NOT_FOUND",
+        "Knowledge console is not enabled for this deployment."
+      );
+    }
+    return this.consoleService;
+  }
+
+  async getCoverage(): Promise<KnowledgeAdminCoverageResponse> {
+    try {
+      const domains = await this.requireConsoleService().getCoverage();
+      return validateResponse(KnowledgeAdminCoverageResponseSchema, { domains });
+    } catch (error) {
+      throw mapPersistenceError(error);
+    }
+  }
+
+  async getSourceStats(): Promise<KnowledgeAdminSourceStatsResponse> {
+    try {
+      const items = await this.requireConsoleService().getSourceStats();
+      return validateResponse(KnowledgeAdminSourceStatsResponseSchema, {
+        items,
+        total: items.length
+      });
+    } catch (error) {
+      throw mapPersistenceError(error);
+    }
+  }
+
+  async getCrystalAtlas(): Promise<KnowledgeAdminAtlasResponse> {
+    try {
+      const items = await this.requireConsoleService().getCrystalAtlas();
+      return validateResponse(KnowledgeAdminAtlasResponseSchema, {
+        items,
+        total: items.length
+      });
+    } catch (error) {
+      throw mapPersistenceError(error);
+    }
+  }
+
+  async getCrystalAtlasDetail(crystalId: string): Promise<KnowledgeAdminAtlasDetailResponse> {
+    try {
+      const detail = await this.requireConsoleService().getCrystalAtlasDetail(crystalId);
+      if (detail === null) {
+        throw new DomainApiError("NOT_FOUND", `Crystal ${crystalId} was not found.`);
+      }
+      return validateResponse(KnowledgeAdminAtlasDetailResponseSchema, detail);
+    } catch (error) {
+      throw mapPersistenceError(error);
+    }
+  }
+
+  async listCollectionRuns(limit?: number): Promise<KnowledgeAdminCollectionRunsResponse> {
+    try {
+      const runs = await this.requireConsoleService().listCollectionRuns(limit);
+      const items = runs.map((run) => ({
+        id: run.id,
+        status: run.status,
+        startedAt: run.startedAt.toISOString(),
+        finishedAt: run.finishedAt === null ? null : run.finishedAt.toISOString(),
+        sourcesCrawled: run.sourcesCrawled,
+        documentsAdded: run.documentsAdded,
+        documentDuplicates: run.documentDuplicates,
+        candidatesInserted: run.candidatesInserted,
+        corroboratedCandidates: run.corroboratedCandidates,
+        candidateDuplicates: run.candidateDuplicates,
+        needsReview: run.needsReview,
+        conflicts: run.conflicts,
+        errors: run.errors,
+        sourceResults: run.sourceResults
+      }));
+      return validateResponse(KnowledgeAdminCollectionRunsResponseSchema, {
+        items,
+        total: items.length
+      });
+    } catch (error) {
+      throw mapPersistenceError(error);
+    }
+  }
+
+  async editRule(ruleId: string, input: EditRuleInput): Promise<KnowledgeAdminEditRuleResponse> {
+    try {
+      const rule = await this.reviewService.editRule(ruleId, {
+        ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
+        ...(input.claimType === undefined ? {} : { claimType: input.claimType })
+      });
+      return validateResponse(KnowledgeAdminEditRuleResponseSchema, {
+        ruleId: rule.id,
+        status: rule.status,
+        confidence: rule.confidence,
+        claimType: rule.claimType ?? null
+      });
+    } catch (error) {
+      throw mapPersistenceError(error);
+    }
   }
 
   async getOverview(): Promise<KnowledgeAdminOverview> {

@@ -1,6 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 
 import {
+  KnowledgeAdminAtlasDetailParamsSchema,
+  KnowledgeAdminEditRuleRequestSchema,
   KnowledgeAdminPublishVersionRequestSchema,
   KnowledgeAdminReviewSourceRequestSchema,
   KnowledgeAdminRuleActionParamsSchema,
@@ -119,6 +121,54 @@ export function registerKnowledgeAdminRoutes(
 
   app.get("/api/admin/knowledge/overview", (request, reply) =>
     handleAdmin(request, reply, () => service.getOverview())
+  );
+
+  app.get("/api/admin/knowledge/console/coverage", (request, reply) =>
+    handleAdmin(request, reply, () => service.getCoverage())
+  );
+
+  app.get("/api/admin/knowledge/console/sources-stats", (request, reply) =>
+    handleAdmin(request, reply, () => service.getSourceStats())
+  );
+
+  app.get("/api/admin/knowledge/console/atlas", (request, reply) =>
+    handleAdmin(request, reply, () => service.getCrystalAtlas())
+  );
+
+  app.get<{ Params: { crystalId: string } }>(
+    "/api/admin/knowledge/console/atlas/:crystalId",
+    (request, reply) =>
+      handleAdmin(request, reply, () => {
+        const params = validateRequest(
+          KnowledgeAdminAtlasDetailParamsSchema,
+          request.params
+        );
+        return service.getCrystalAtlasDetail(params.crystalId);
+      })
+  );
+
+  app.get("/api/admin/knowledge/console/collection-runs", (request, reply) =>
+    handleAdmin(request, reply, () =>
+      service.listCollectionRuns(
+        parseQueueLimit((request.query as Record<string, unknown>).limit)
+      )
+    )
+  );
+
+  app.post<{ Params: { ruleId: string } }>(
+    "/api/admin/knowledge/rules/:ruleId/edit",
+    (request, reply) =>
+      handleAdmin(request, reply, () => {
+        const params = validateRequest(
+          KnowledgeAdminRuleActionParamsSchema,
+          request.params
+        );
+        const input = validateRequest(
+          KnowledgeAdminEditRuleRequestSchema,
+          request.body
+        );
+        return service.editRule(params.ruleId, input);
+      })
   );
 
   app.get("/api/admin/knowledge/review-queue", (request, reply) =>
