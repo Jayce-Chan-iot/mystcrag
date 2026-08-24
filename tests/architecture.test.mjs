@@ -61,6 +61,19 @@ async function matchingFiles(roots, pattern, excluded = new Set()) {
   return matches;
 }
 
+const stripImportStatements = (source) =>
+  source.replace(/^[ \t]*import\b[\s\S]*?from\s+["'][^"']*["'];?/gm, "");
+
+async function matchingDeclarations(roots, pattern) {
+  const files = (await Promise.all(roots.map(sourceFiles))).flat();
+  const matches = [];
+  for (const file of files) {
+    const source = stripImportStatements(await readFile(file, "utf8"));
+    if (pattern.test(source)) matches.push(file);
+  }
+  return matches;
+}
+
 test("frontend cannot import server-only contract or database modules", async () => {
   const matches = await matchingFiles(
     ["apps/frontend"],
@@ -186,16 +199,49 @@ test("shared contract dependency direction stays application-independent", async
 });
 
 test("Design Contract is the only public Tarot schema authority", async () => {
-  const duplicateDefinitions = await matchingFiles(
-    ["packages/tarot-engine"],
-    /export const Tarot(?:Theme|SpreadType|Slot|Orientation)Schema\s*=\s*z\.enum/
-  );
-  assertNoMatches(duplicateDefinitions);
+  const canonicalFile = "packages/design-contract/src/schemas/tarot.schema.ts";
 
-  const designContractManifest = JSON.parse(
+  const schemaNames = [
+    "TarotThemeSchema",
+    "TarotSpreadTypeSchema",
+    "TarotSlotSchema",
+    "TarotOrientationSchema"
+  ];
+
+  for (const schemaName of schemaNames) {
+    const definitions = await matchingFiles(
+      ["apps", "packages"],
+      new RegExp(`(?:export\\s+)?const\\s+${schemaName}\\s*=`)
+    );
+
+    assert.deepEqual(
+      definitions,
+      [canonicalFile],
+      `${schemaName} must have exactly one definition in Design Contract`
+    );
+  }
+
+  const localDeclarations = await matchingDeclarations(
+    ["packages/tarot-engine"],
+    /(?:export\s+)?(?:type|interface|class|const)\s+Tarot(?:Theme|SpreadType|Slot|Orientation)(?:Schema)?\b/
+  );
+  assertNoMatches(localDeclarations);
+
+  const tarotManifest = JSON.parse(
+    await readFile("packages/tarot-engine/package.json", "utf8")
+  );
+  assert.equal(
+    tarotManifest.dependencies?.["@mystcrag/design-contract"],
+    "workspace:*"
+  );
+
+  const contractManifest = JSON.parse(
     await readFile("packages/design-contract/package.json", "utf8")
   );
-  assert.equal(designContractManifest.dependencies?.["@mystcrag/tarot-engine"], undefined);
+  assert.equal(
+    contractManifest.dependencies?.["@mystcrag/tarot-engine"],
+    undefined
+  );
 });
 
 test("pnpm dev isolates each app's documented environment", () => {
