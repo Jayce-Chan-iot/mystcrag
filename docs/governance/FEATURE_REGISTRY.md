@@ -11,7 +11,7 @@ Status vocabulary: `ACTIVE` is mounted and backed by a runtime path; `PARTIAL` i
 | FEAT-005 | 3D bracelet preview/editor | package renderer and frontend wrapper | Three Engine + `ThreeBraceletPreview` | THREE | EXPERIMENTAL | Intentionally absent from production DIY; TASK-3D-001 |
 | FEAT-006 | Sequence-only editor | test-mounted component | `BraceletSequenceEditor` | FRONTEND | DORMANT | Assign product role or retire; TASK-FE-001 |
 | FEAT-007 | Crystal library | `/crystal-library` | frontend library feature + catalog APIs/data | FRONTEND | ACTIVE | Component is large; no duplicate authority identified |
-| FEAT-008 | Gallery/publication | `/gallery`, design publish/list APIs | frontend gallery + Design API publication store | FRONTEND | ACTIVE | Community module shell is not composition root |
+| FEAT-008 | Personal design gallery | `/gallery`, design list/clone/delete/export APIs | frontend gallery + Design Application Service | FRONTEND | ACTIVE | The route lists only the signed actor's designs; it is not a public community feed |
 | FEAT-009 | Profile/design/order history | `/profile`, design/order list APIs | frontend profile + Design API | FRONTEND | ACTIVE | Identity remains development-grade |
 | FEAT-010 | Save/clone/delete/publish design | Design APIs | `DesignApplicationService` | BACKEND | ACTIVE | Thin legacy wrappers are uncomposed |
 | FEAT-011 | Pricing/inventory checks | Design price/save/order flows | backend application service + database repositories | BACKEND | ACTIVE | Thin wrapper classes add no current policy |
@@ -28,6 +28,7 @@ Status vocabulary: `ACTIVE` is mounted and backed by a runtime path; `PARTIAL` i
 | FEAT-022 | Cart and payment | none | none | BACKEND | PLANNED | Direct immutable order creation only |
 | FEAT-023 | Product analytics dashboard | none | none | SOL | PLANNED | Do not confuse with KnowledgeUsageEvent |
 | FEAT-024 | Legacy grouped-design import | package compatibility exports/migration | Design Contract migration + AI/Three legacy adapters | CONTRACT | LEGACY | Usage proof and sunset decision; TASK-COMPAT-001 |
+| FEAT-025 | Community publication and discovery | backend design publish boundary only | Publication Service + Publication Repository | BACKEND | PARTIAL | Publish is backend-only; no frontend publish action, public listing/feed, share flow, or unpublish UI |
 
 ## Registration rule
 

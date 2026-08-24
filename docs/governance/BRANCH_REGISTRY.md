@@ -3,6 +3,7 @@
 **Observed:** 2026-08-24
 **Open pull requests:** none
 **Remote drift:** local `main` at `1a34c16` was 22 commits ahead of `origin/main`
+**Governance drift:** audit branch starts at `7649f59`, two commits ahead of local `main`; baseline freeze is pending
 **Phase 0 action:** inventory only; no branch/worktree deletion, pruning, rename, push, or merge
 
 Status meanings: `ACTIVE` current task; `PROTECTED` integration baseline; `MERGED_RETAINED` reachable from baseline but retained; `SNAPSHOT` intentional recovery point; `INVESTIGATE_UNMERGED` not reachable from baseline; `LIVE_WORKTREE` attached to a real path; `PRUNABLE_REGISTRATION` Git metadata points to a missing temporary path.
@@ -11,7 +12,8 @@ Status meanings: `ACTIVE` current task; `PROTECTED` integration baseline; `MERGE
 
 | Branch | Head | Status | Worktree / action |
 | --- | --- | --- | --- |
-| `task/gov-001-repository-governance` | `1a34c16` at creation | ACTIVE | root workspace; TASK-GOV-001 |
+| `task/audit-001-baseline-planning` | `7649f59` at creation | ACTIVE | root workspace; TASK-AUDIT-001; audit/planning documents only |
+| `task/gov-001-repository-governance` | `7649f59` | MERGED_RETAINED | TASK-GOV-001 and TASK-REPO-001 complete; branch retained pending TASK-REPO-002 |
 | `main` | `1a34c16` | PROTECTED | publish/sync is a separate owner action |
 
 ## Combined-product snapshots and integration branches

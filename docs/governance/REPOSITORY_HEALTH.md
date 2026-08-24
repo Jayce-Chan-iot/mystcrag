@@ -1,61 +1,48 @@
 # Repository Health
 
-**Score:** 79 / 100
-**Baseline:** combined original UI + knowledge/database at local commit `1a34c16`
-**Assessment date:** 2026-08-24
+**Score:** 77 / 100<br>
+**Observed product commit:** local `main` at `1a34c16`<br>
+**Assessment date:** 2026-08-24<br>
+**Baseline:** `NOT READY`
 
-The repository is locally demonstrable and well tested, with clear core package boundaries. Its largest risks are ambiguous lifecycle ownership, contract collisions, development-grade identity, and accumulated evidence/branch artifacts—not loss of the original UI.
+The codebase has a credible, tested MVP core. The score is held below the dispatch threshold by governance drift from `main`, two shared-contract collisions, the absence of production identity, and the lack of a reproducible authenticated browser gate.
 
 ## Scorecard
 
 | Dimension | Score | Evidence |
 | --- | ---: | --- |
-| Architecture boundaries | 17 / 20 | Strong workspace separation and root architecture tests; some application/persistence layering is concentrated |
-| Contract consistency | 11 / 15 | DesignV1 and projections are canonical; Tarot enums duplicate and AI candidate naming collides |
-| Feature/canonical clarity | 11 / 15 | Production 2D path is clear; dormant sequence/3D paths, wrappers and module shells were unlabeled before this registry |
-| Tests and validation | 18 / 20 | Broad module tests, architecture tests and prior PostgreSQL/browser evidence; some status claims in historical reports are stale |
-| Repository hygiene | 10 / 15 | TASK-REPO-001 removed 285 duplicate/reproducible evidence files (40.93 MiB) and added retention ignores; stale branch/worktree metadata remains |
-| Documentation/governance | 9 / 10 | Extensive controlling specs plus this governance baseline; some older architecture/status docs need refresh |
-| Operational/security readiness | 3 / 5 | Repeatable scripts and server-only knowledge admin boundary; production identity/payment/deployment hardening is incomplete |
+| Architecture | 17 / 20 | Clear monorepo boundaries, independent Bracelet Engine and canonical Design Contract; large application services and dormant paths concentrate risk. |
+| Module ownership | 9 / 10 | All current modules have an explicit owner; cross-module integration still depends on governance reaching `main`. |
+| Duplicate implementation | 10 / 15 | Renderers are complementary and correctly classified; Tarot public enums and AI candidate naming are unresolved duplicates/collisions. |
+| Type / contract consistency | 8 / 10 | `DesignV1` consumer uniqueness is architecture-tested; two cross-module contract conflicts remain. |
+| Testability | 8 / 10 | Broad unit, architecture and real PostgreSQL coverage; no automated authenticated browser suite. |
+| Build / CI health | 9 / 10 | Install, lint, typecheck, tests, build and PostgreSQL checks pass; CI lacks browser E2E. |
+| Maintainability | 7 / 10 | Four files exceed roughly 900 lines; some wrappers, shells and compatibility paths need lifecycle decisions. |
+| Agent collaboration safety | 6 / 10 | Candidate has strong locks/DAG rules, but protected `main` lacks those commits and no baseline is frozen. |
+| Documentation | 3 / 5 | Controlling docs are extensive; catalog seed counts and architecture/3D status contain known contradictions. |
+| **Total** | **77 / 100** | Evidence-backed current score; not a production-readiness certification. |
 
-## P0 — stop-the-line
+## Priority summary
 
-No P0 was established by static Phase 0 evidence. This does not certify production security or commercial readiness.
+P0: integrate governance into `main`, resolve Tarot and AI candidate contract authority, then freeze and replay-validate a candidate baseline.
 
-## P1 — next cleanup wave
+P1: production identity/session, reproducible authenticated E2E, current-document reconciliation, and lifecycle decisions for dormant/experimental code.
 
-1. Consolidate shared Tarot enum/schema authority without weakening Tarot-private invariants.
-2. Resolve the two incompatible `AiDesignCandidateSchema` meanings.
-3. Decide the lifecycle of dormant sequence and 3D frontend paths; do not present tested code as production-mounted.
-4. Prove and clean uncomposed backend service wrappers and metadata-only module shells.
-5. Decide whether the dormant `DesignTemplate` persistence model is adopted or migrated away.
-6. Wire or retire the documented empty/loading assets and align export beads with visible photographic assets.
-7. Replace development identity with a production auth/session design before commercial release.
-
-## P2 — maintainability and hygiene
-
-- Split oversized orchestration/UI files along tested behavior boundaries.
-- Decide the retirement horizon of explicit AI/Three/design migration compatibility surfaces.
-- Audit the unattributed root crystal image.
-- Refresh stale technical architecture and autonomous-state documents.
-- Review and then remove redundant merged branches and prunable worktree registrations.
-- Keep new raw browser screenshots and traces ignored; promote only reviewed references into `docs/ui-references/` or a release evidence set.
-- Expand `packages/ui` only for genuinely repeated primitives; do not create abstraction for its own sake.
+P2: split concentration hotspots, review branch/worktree metadata, and retire justified compatibility/asset divergence.
 
 ## Strengths to preserve
 
-- The original product UI is mounted and remains the frontend baseline.
-- Knowledge and database capabilities are additive packages/services rather than a UI replacement.
-- Shared Design Contract and public/internal projection boundaries are architecture-tested.
-- Bracelet geometry is isolated from renderer technology.
-- Database writes use repositories and immutable revision/order snapshot concepts.
-- Tarot avoids deterministic-fortune claims and protects unrevealed card state.
-- Knowledge admin is server-key gated and knowledge usage is observable.
+- Original product UI remains mounted; Knowledge/Database additions did not replace it.
+- Design revisions and order snapshots have immutable persistence behavior.
+- Actor-scoped repositories enforce owner isolation after authentication.
+- Bracelet geometry is renderer-independent and shared with Three Engine.
+- Mock API and signed-test authentication fail closed in production.
+- MVP positioning remains 2.5D-first; experimental 3D is not misclassified as a release blocker.
 
-## Exit targets
+## Score exit targets
 
-- 80+: all P1 contract/lifecycle findings decided; no unowned production-adjacent code.
-- 85+: single evidence policy, branch/worktree registry cleaned, stale controlling docs refreshed.
-- 90+: production identity/security/deployment gates verified, plus sustained dependency and reachability checks.
+- 80+: governance and shared-contract P0 tasks integrated into a frozen candidate.
+- 85+: authenticated E2E gate and controlling-document reconciliation complete.
+- 90+: production identity/security/deployment and commercial order flow verified.
 
-Scores change only with evidence in merged tasks; deleting files alone does not improve the score.
+The score changes only with integrated evidence, not with planning claims.

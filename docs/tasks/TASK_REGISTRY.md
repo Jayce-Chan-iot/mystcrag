@@ -7,6 +7,7 @@ One task equals one accountable owner, one branch, one writable path set, and on
 | Task | Owner | Branch | Status | Writable paths | Forbidden paths |
 | --- | --- | --- | --- | --- | --- |
 | TASK-GOV-001 | SOL | `task/gov-001-repository-governance` | DONE | `AGENTS.md`, `docs/INDEX.md`, `docs/governance/**`, `docs/tasks/**`, Phase 0 plan | `apps/**`, `packages/**`, Prisma, branches/worktrees, pre-existing user changes |
+| TASK-AUDIT-001 | SOL | `task/audit-001-baseline-planning` | REVIEW | `docs/INDEX.md`, `docs/governance/CURRENT_REPOSITORY_MAP.md`, `docs/governance/FEATURE_REGISTRY.md`, `docs/governance/CANONICAL_COMPONENTS.md`, `docs/governance/MODULE_OWNERS.md`, `docs/governance/REPOSITORY_HEALTH.md`, `docs/governance/BRANCH_REGISTRY.md`, `docs/governance/BASELINE_VALIDATION.md`, `docs/tasks/TASK_REGISTRY.md`, `docs/CURRENT_PRODUCT_STATUS.md`, `docs/NEXT_PHASE_BACKLOG.md`, `docs/FEATURE-*_PLAN.md`, `docs/TASK_DISPATCH_PACKAGE.md` | `apps/**`, `packages/**`, Prisma, root/runtime configuration, tests, generated output, pre-existing user changes and untracked files |
 
 No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROGRESS` only after its owner creates the registered branch/worktree and records exact writable paths.
 
@@ -20,10 +21,12 @@ No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROG
 
 | Task | Owner | Priority | Dependency | Proposed branch | Scope/status |
 | --- | --- | ---: | --- | --- | --- |
-| TASK-CONTRACT-001 | CONTRACT | P1 | TASK-GOV-001 | `task/contract-001-tarot-schema-authority` | READY: make Design Contract the shared Tarot enum authority |
-| TASK-TAROT-001 | TAROT | P1 | TASK-CONTRACT-001 | `task/tarot-001-consume-shared-contract` | BACKLOG: consume shared enums while retaining private draw validation |
-| TASK-AI-001 | AI | P1 | TASK-GOV-001 | `task/ai-001-candidate-contract-decision` | READY: name and document canonical AI provider candidate |
-| TASK-BE-003 | BACKEND | P1 | TASK-AI-001 | `task/be-003-ai-candidate-boundary` | BACKLOG: rename/project backend local candidate boundary |
+| TASK-BASELINE-001 | SOL | P0 | TASK-AUDIT-001 review + Product Owner approval | `task/baseline-001-governance-integration` | BACKLOG: integrate the complete governance/audit candidate into protected local `main` without partial registries |
+| TASK-CONTRACT-001 | CONTRACT | P0 | TASK-BASELINE-001 | `task/contract-001-tarot-schema-authority` | BACKLOG: make Design Contract the shared Tarot enum authority |
+| TASK-TAROT-001 | TAROT | P0 | TASK-CONTRACT-001 | `task/tarot-001-consume-shared-contract` | BACKLOG: consume shared enums while retaining private draw validation |
+| TASK-AI-001 | AI | P0 | TASK-BASELINE-001 | `task/ai-001-candidate-contract-decision` | BACKLOG: name and document canonical AI provider candidate |
+| TASK-BE-003 | BACKEND | P0 | TASK-AI-001 | `task/be-003-ai-candidate-boundary` | BACKLOG: rename/project backend local candidate boundary |
+| TASK-BASELINE-002 | QA | P0 | TASK-TAROT-001, TASK-BE-003 | `task/baseline-002-freeze-validation` | BACKLOG: nominate candidate and replay install/lint/typecheck/test/build/PostgreSQL/isolated signed-test browser smoke |
 | TASK-FE-001 | FRONTEND | P1 | TASK-GOV-001 | `task/fe-001-dormant-editor-lifecycle` | READY: decide `BraceletSequenceEditor` lifecycle |
 | TASK-3D-001 | THREE | P1 | TASK-GOV-001 | `task/3d-001-production-readiness-decision` | READY: evidence-based 3D mount/experimental decision |
 | TASK-BE-001 | BACKEND | P1 | TASK-GOV-001 | `task/be-001-service-wrapper-cleanup` | READY: prove/retire or justify uncomposed wrappers |
@@ -32,10 +35,15 @@ No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROG
 | TASK-COMPAT-001 | SOL | P2 | TASK-CONTRACT-001, TASK-AI-001 | `task/compat-001-legacy-surface-audit` | BACKLOG: usage proof and retirement plan for explicit legacy exports |
 | TASK-ASSET-001 | ASSET | P1 | TASK-GOV-001 | `task/asset-001-orphan-resource-decision` | READY: wire/remove state assets and resolve raw crystal image provenance |
 | TASK-ASSET-002 | FRONTEND | P1 | TASK-ASSET-001 | `task/asset-002-export-visual-parity` | BACKLOG: align canvas export with photographic visible beads |
-| TASK-REPO-001 | QA | P1 | TASK-GOV-001 | `task/repo-001-evidence-retention` | DONE: removed 285 duplicate/reproducible files (40.93 MiB), retained cited/current evidence, and added ignore policy |
 | TASK-REPO-002 | SOL | P2 | TASK-REPO-001 | `task/repo-002-branch-worktree-cleanup` | BACKLOG: review unique commits and clean branch/worktree metadata |
 | TASK-DOC-001 | SOL | P2 | all P1 decisions | `task/doc-001-current-architecture-refresh` | BACKLOG: update stale controlling architecture/status statements |
-| TASK-AUTH-001 | BACKEND | P1 | explicit product security spec | `task/auth-001-production-identity` | BLOCKED: requires approved production identity/session provider design |
+| TASK-AUTH-001 | SOL | P0 | TASK-BASELINE-002 + Product Owner provider/topology inputs | `task/auth-001-identity-contract` | BLOCKED: freeze production identity/session contract; `CONTRACT_REQUIRES_IMPLEMENTATION_VALIDATION` |
+| TASK-AUTH-002 | SOL | P0 | TASK-AUTH-001 | `task/auth-002-dependency-baseline` | BACKLOG: single-writer dependency/configuration baseline |
+| TASK-AUTH-003 | DATABASE | P0 | TASK-AUTH-002 | `task/auth-003-identity-persistence` | BACKLOG: external identity mapping and idempotent User provisioning |
+| TASK-AUTH-004 | BACKEND | P0 | TASK-AUTH-003 | `task/auth-004-backend-provider` | BACKLOG: production verifier and authenticated actor composition |
+| TASK-AUTH-005 | FRONTEND | P0 | TASK-AUTH-002 | `task/auth-005-frontend-session` | BACKLOG: login/session/logout UX; may parallel AUTH-003/004 on disjoint paths |
+| TASK-AUTH-006 | QA | P0 | TASK-AUTH-004, TASK-AUTH-005 | `task/auth-006-security-e2e` | BACKLOG: isolated security, two-user and protected full-loop E2E gate |
+| TASK-AUTH-007 | SOL | P0 | TASK-AUTH-006 | `task/auth-007-final-integration` | BACKLOG: acceptance review, documentation reconciliation and integration |
 
 ## Acceptance gates
 
@@ -46,6 +54,14 @@ No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROG
 - Mark duplicate/dormant/unused code and resources with evidence and confidence.
 - Modify no runtime code, schema, branch metadata, or unrelated user file.
 - Pass path/link checks, architecture tests, workspace validation, and final diff review.
+
+### TASK-BASELINE-001 / TASK-BASELINE-002 — integrate and freeze
+
+- Integrate the complete governance/audit candidate; `main` must never contain partial or contradictory registries.
+- Resolve both P0 contract DAGs before nominating the freeze candidate.
+- Candidate worktree has no unexplained change and every controlling registry names the same commit/code state.
+- Frozen install, lint, typecheck, tests, build, fresh PostgreSQL verification and isolated signed-test authenticated browser smoke pass.
+- Product Owner records and approves the exact baseline commit before Feature tasks become `READY`.
 
 ### TASK-CONTRACT-001 / TASK-TAROT-001 — Tarot contract authority
 
@@ -123,10 +139,12 @@ No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROG
 
 ### TASK-AUTH-001 — production identity
 
-- Approved threat model and identity/session provider specification exists first.
-- Protected APIs use production-verifiable identity, authorization and session expiry/revocation.
-- Development/test actor paths cannot be enabled accidentally in production.
-- Security, privacy, API, deployment and operational recovery docs are updated and verified.
+- TASK-AUTH-001 through TASK-AUTH-007 use the exact scopes, dependencies and measurable gates in `docs/TASK_DISPATCH_PACKAGE.md`.
+- Approved threat model, identity provider and browser session topology exist before dependency or implementation tasks.
+- Protected APIs use production-verifiable identity, collision-safe internal actor mapping, authorization and expiry/revocation.
+- Reusable credentials never enter browser storage/client bundles; development/test actor paths cannot be enabled in production.
+- Security, privacy, API, database, deployment, rollback and operational recovery docs match the integrated code.
+- Only TASK-AUTH-007 may record `FEATURE ACCEPTANCE: PASS` after isolated desktop/mobile E2E and two-user isolation pass.
 
 ## Task transition rules
 

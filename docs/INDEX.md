@@ -11,6 +11,7 @@ Repository governance entry points:
 - Feature and ownership registries: `governance/FEATURE_REGISTRY.md`, `governance/MODULE_OWNERS.md`
 - Canonical implementations and duplicate audit: `governance/CANONICAL_COMPONENTS.md`, `governance/DUPLICATE_CODE_AUDIT.md`
 - Branches, health, and active tasks: `governance/BRANCH_REGISTRY.md`, `governance/REPOSITORY_HEALTH.md`, `tasks/TASK_REGISTRY.md`
+- Current audit and planning handoff: `governance/BASELINE_VALIDATION.md`, `CURRENT_PRODUCT_STATUS.md`, `NEXT_PHASE_BACKLOG.md`, `FEATURE-018_PLAN.md`, `TASK_DISPATCH_PACKAGE.md`
 - QA/output evidence retention: `governance/QA_EVIDENCE_RETENTION.md`
 
 | Task | Controlling documents |

@@ -1,6 +1,7 @@
 # Current Repository Map
 
-**Baseline:** local `main` commit `1a34c16`, audited on 2026-08-24
+**Observed product baseline:** local `main` commit `1a34c16`, audited on 2026-08-24<br>
+**Governance candidate:** `7649f59` plus TASK-AUDIT-001 documentation; not integrated into `main`
 **Scope:** tracked repository plus current branch/worktree metadata
 **Method:** workspace manifests, import boundaries, route registrations, Prisma schema, tests, asset references, Git branches, and worktrees
 
@@ -10,7 +11,7 @@ This is the current-state map after combining the original UI with the knowledge
 
 - pnpm 11 + Turborepo monorepo; 16 workspace projects including the root.
 - 4 deployable applications, 11 shared packages, root architecture/lifecycle tests, and operational scripts.
-- Approximate tracked source footprint: `apps/` 351 files, `packages/` 300 files, `scripts/` 78 files, `tests/` 3 files, `docs/` 94 files before this governance task.
+- Current tracked footprint after TASK-REPO-001: `apps/` 297 files, `packages/` 300 files, `scripts/` 27 files, `tests/` 3 files, and `docs/` 106 files before TASK-AUDIT-001 output.
 - Module-local tests: approximately 28 application tests and 66 package tests, plus root architecture and Tarot lifecycle tests.
 - Generated or build directories (`.next`, `dist`, Prisma generated client) are ignored and are not sources of truth.
 
@@ -46,7 +47,7 @@ Applications do not import other applications. The public design contract remain
 
 | Application | Current responsibility | Runtime status | Main dependencies |
 | --- | --- | --- | --- |
-| `apps/frontend` | Next.js UI: home, AI questionnaire/results, DIY editor, library, gallery, profile, Tarot, knowledge admin | Production MVP | Bracelet, Design Contract, Three, UI |
+| `apps/frontend` | Next.js UI: home, AI questionnaire/results, DIY editor, library, personal gallery, profile, Tarot, knowledge admin | Production MVP | Bracelet, Design Contract, Three, UI |
 | `apps/backend` | Fastify APIs, auth boundary, design/recommendation orchestration, pricing/inventory/order, Tarot and knowledge admin | Production MVP; commercial auth is development-grade | AI, Context, DB, Contract, Design, Knowledge, Tarot |
 | `apps/knowledge-worker` | Knowledge collection/review/maintenance job entry point | Active operational worker | DB, Contract, Knowledge Core/Ingestion |
 | `apps/mcp-server` | MCP tools for knowledge retrieval and design operations | Active integration service | Context, DB, Contract, Design, Knowledge |
@@ -90,7 +91,7 @@ The `user`, `crystal`, `community`, and `order` module descriptors are registere
 
 ## Persistence map
 
-The Prisma schema owns 17 models:
+The Prisma schema owns 21 models:
 
 - Identity/catalog: `User`, `Crystal`, `DesignTemplate`, `MaterialProduct`, `AccessoryProduct`, `InventorySnapshot`, `PricingRule`.
 - Design/commerce: `Design`, `DesignRevision`, `DesignDecisionTrace`, `DesignPublication`, `Order`, `OrderDesignSnapshot`.
@@ -103,6 +104,7 @@ The Prisma schema owns 17 models:
 
 - No open GitHub pull requests were present at audit time.
 - Local `main` was 22 commits ahead of `origin/main`; publishing remains a separate owner action.
+- The governance candidate is two commits ahead of local `main`; therefore `main` does not yet contain the task registry, canonical registry, or expanded root governance rules.
 - Most historical branches are merged but retained. Six old branches are unmerged and require provenance review.
 - Three non-root worktrees are live; multiple `/private/tmp` worktree registrations are prunable but untouched.
 - Pre-existing user changes in `apps/frontend/next-env.d.ts`, `docs/audit/`, and `docs/progress/` are explicitly outside TASK-GOV-001.
