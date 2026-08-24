@@ -21,7 +21,7 @@ The rerun also updated a persisted design from revision 1 to 2, accepted the Bac
 - Compiled Backend `dist/index.js` on `127.0.0.1:4402`, real repository and signed development test identity.
 - Optimized Next.js 16.2.10 production build on `127.0.0.1:3402`, Mock disabled.
 - Headed Chromium at `1440x1000` and `390x844`.
-- Curated screenshots and trace: `output/playwright/qa-rerun/`.
+- Curated screenshots: `output/playwright/qa-rerun/`. The reproducible raw Playwright trace was removed by TASK-REPO-001 on 2026-08-24; the original trace remains recoverable from Git history at parent commit `c1262f3`.
 
 ## Independent 33-item acceptance matrix
 

@@ -49,6 +49,8 @@
 
 ## 验收截图
 
+> 2026-08-24 证据保留说明：以下原始截图与后续 `docs/ui-references/` 和自动化截图集重复，已由 TASK-REPO-001 从当前工作树移除；可从清理前提交 `c1262f3` 恢复。本验收结论和文件名索引保留。
+
 - `06-diy-direct-after.png`：DIY 首页入口直达设计器
 - `07-repeated-delete-after.png`：连续删除和实时价格
 - `12-mobile-connected-after.png`：手机端收缩成串

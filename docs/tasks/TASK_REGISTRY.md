@@ -10,6 +10,12 @@ One task equals one accountable owner, one branch, one writable path set, and on
 
 No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROGRESS` only after its owner creates the registered branch/worktree and records exact writable paths.
 
+## Completed cleanup task
+
+| Task | Owner | Branch | Status | Writable paths | Forbidden paths |
+| --- | --- | --- | --- | --- | --- |
+| TASK-REPO-001 | QA | `task/repo-001-evidence-retention` | DONE | tracked QA/output evidence under `artifacts/**`, `output/playwright/**`, `outputs/**`, `qa-captures-*/**`, `apps/frontend/qa-captures/**`, frontend root QA PNGs, `scripts/ui-qa/artifacts/**`, `scripts/ui-qa/qa-captures-final/**`; `.gitignore`; `docs/QA_PHASE_3_REPORT.md`; governance/task/plan docs | runtime source, `apps/frontend/public/**`, `docs/ui-references/**`, knowledge coverage JSON, current spreadsheet deliverables, user files and other worktrees |
+
 ## Cleanup backlog
 
 | Task | Owner | Priority | Dependency | Proposed branch | Scope/status |
@@ -26,7 +32,7 @@ No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROG
 | TASK-COMPAT-001 | SOL | P2 | TASK-CONTRACT-001, TASK-AI-001 | `task/compat-001-legacy-surface-audit` | BACKLOG: usage proof and retirement plan for explicit legacy exports |
 | TASK-ASSET-001 | ASSET | P1 | TASK-GOV-001 | `task/asset-001-orphan-resource-decision` | READY: wire/remove state assets and resolve raw crystal image provenance |
 | TASK-ASSET-002 | FRONTEND | P1 | TASK-ASSET-001 | `task/asset-002-export-visual-parity` | BACKLOG: align canvas export with photographic visible beads |
-| TASK-REPO-001 | QA | P1 | TASK-GOV-001 | `task/repo-001-evidence-retention` | READY: hash/classify/archive duplicate QA/output evidence |
+| TASK-REPO-001 | QA | P1 | TASK-GOV-001 | `task/repo-001-evidence-retention` | DONE: removed 285 duplicate/reproducible files (40.93 MiB), retained cited/current evidence, and added ignore policy |
 | TASK-REPO-002 | SOL | P2 | TASK-REPO-001 | `task/repo-002-branch-worktree-cleanup` | BACKLOG: review unique commits and clean branch/worktree metadata |
 | TASK-DOC-001 | SOL | P2 | all P1 decisions | `task/doc-001-current-architecture-refresh` | BACKLOG: update stale controlling architecture/status statements |
 | TASK-AUTH-001 | BACKEND | P1 | explicit product security spec | `task/auth-001-production-identity` | BLOCKED: requires approved production identity/session provider design |

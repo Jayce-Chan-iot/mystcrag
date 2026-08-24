@@ -1,6 +1,6 @@
 # Repository Health
 
-**Score:** 74 / 100
+**Score:** 79 / 100
 **Baseline:** combined original UI + knowledge/database at local commit `1a34c16`
 **Assessment date:** 2026-08-24
 
@@ -14,7 +14,7 @@ The repository is locally demonstrable and well tested, with clear core package 
 | Contract consistency | 11 / 15 | DesignV1 and projections are canonical; Tarot enums duplicate and AI candidate naming collides |
 | Feature/canonical clarity | 11 / 15 | Production 2D path is clear; dormant sequence/3D paths, wrappers and module shells were unlabeled before this registry |
 | Tests and validation | 18 / 20 | Broad module tests, architecture tests and prior PostgreSQL/browser evidence; some status claims in historical reports are stale |
-| Repository hygiene | 5 / 15 | At least 301 tracked QA/output files (~56 MB) spread across many locations; stale branch/worktree metadata |
+| Repository hygiene | 10 / 15 | TASK-REPO-001 removed 285 duplicate/reproducible evidence files (40.93 MiB) and added retention ignores; stale branch/worktree metadata remains |
 | Documentation/governance | 9 / 10 | Extensive controlling specs plus this governance baseline; some older architecture/status docs need refresh |
 | Operational/security readiness | 3 / 5 | Repeatable scripts and server-only knowledge admin boundary; production identity/payment/deployment hardening is incomplete |
 
@@ -30,8 +30,7 @@ No P0 was established by static Phase 0 evidence. This does not certify producti
 4. Prove and clean uncomposed backend service wrappers and metadata-only module shells.
 5. Decide whether the dormant `DesignTemplate` persistence model is adopted or migrated away.
 6. Wire or retire the documented empty/loading assets and align export beads with visible photographic assets.
-7. Consolidate raw QA/output evidence and define retention before removing any cited artifact.
-8. Replace development identity with a production auth/session design before commercial release.
+7. Replace development identity with a production auth/session design before commercial release.
 
 ## P2 — maintainability and hygiene
 
@@ -40,6 +39,7 @@ No P0 was established by static Phase 0 evidence. This does not certify producti
 - Audit the unattributed root crystal image.
 - Refresh stale technical architecture and autonomous-state documents.
 - Review and then remove redundant merged branches and prunable worktree registrations.
+- Keep new raw browser screenshots and traces ignored; promote only reviewed references into `docs/ui-references/` or a release evidence set.
 - Expand `packages/ui` only for genuinely repeated primitives; do not create abstraction for its own sake.
 
 ## Strengths to preserve

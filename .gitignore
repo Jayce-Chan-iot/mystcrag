@@ -18,3 +18,13 @@ packages/*/storage/
 prototypes/
 output/playwright/partner-demo/
 outputs/partner-demo-20260818/
+
+# Generated QA/browser evidence. Commit only curated references under docs/ui-references.
+artifacts/
+qa-captures-*/
+apps/frontend/qa-captures/
+apps/frontend/qa-*.png
+apps/frontend/home-qa*.png
+scripts/ui-qa/artifacts/
+scripts/ui-qa/qa-captures*/
+output/playwright/
