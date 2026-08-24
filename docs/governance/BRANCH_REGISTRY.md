@@ -17,8 +17,8 @@ Status meanings: `ACTIVE` current task; `PROTECTED` integration baseline; `MERGE
 | `task/gov-001-repository-governance` | `7649f59` | MERGED_RETAINED | TASK-GOV-001 and TASK-REPO-001 complete; branch retained pending TASK-REPO-002 |
 | `task/base-002-tarot-canonical-schema` | `be5646b` | MERGED_RETAINED | BASE-002 done; retained, no push |
 | `task/base-003-ai-candidate-concepts` | `8d31f28` | MERGED_RETAINED | BASE-003 done; retained, no push |
-| `task/base-004-freeze-baseline` | final freeze commit | ACTIVE | `.worktrees/base-004-freeze-baseline`; validation complete, tag/integration pending this record |
-| `main` | `8d31f28` before final documentation-only freeze commit | PROTECTED | P0 code integrated; final tag target is recorded by the annotated tag; publish/sync is separate |
+| `task/base-004-freeze-baseline` | annotated baseline tag target | MERGED_RETAINED | `.worktrees/base-004-freeze-baseline`; BASE-004 done; retained, no push |
+| `main` | annotated baseline tag target | PROTECTED | P0 code and freeze record integrated; exact commit is recorded by `baseline/v0.1.0-20260825`; publish/sync is separate |
 
 ## Combined-product snapshots and integration branches
 
