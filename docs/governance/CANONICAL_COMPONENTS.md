@@ -20,10 +20,11 @@ Consult this registry before introducing another schema, renderer, service, stor
 | 3D scene descriptor | `packages/three-engine/src/runtime/scene-descriptor.ts` | Three renderer/interactions | Legacy `BraceletConfiguration` is compatibility-only |
 | 3D rendering | `BraceletCanvas` -> `BraceletScene`, loaded by `LazyBraceletScene` | Experimental frontend wrapper/demo | Not production-mounted as of baseline |
 | Deterministic design rules | `packages/design-engine` | Backend, Knowledge Core, MCP | Do not recreate allocation/scoring in routes |
-| AI provider candidate | `packages/ai-agent/src/schemas/ai-design-candidate.schema.ts` | AI adapters/providers | Backend has a different local schema with same name; decision required |
+| AI provider bead-layout candidate | `AiBeadLayoutCandidateSchema` in AI Agent (`FROZEN_TARGET`, BASE-003 pending) | AI providers, compliance and DesignV1 conversion | Current `AiDesignCandidateSchema` is the pre-migration name; no compatibility alias is authorized after all private-workspace consumers migrate |
+| Backend catalog generation draft | `CatalogDesignGenerationDraftSchema` in backend Design Application Service (`FROZEN_TARGET`, BASE-003 pending) | AI recommendation adapter, Tarot generation and mock adapter | Backend's current route-local `AiDesignCandidateSchema` is not an AI provider contract and must be renamed in place, not moved into Design Contract |
 | Recommendation context | `packages/context-resolver` plus Design Contract context schemas | Backend/MCP/Tarot | UI form state is input, not canonical context |
-| Tarot public DTOs | `packages/design-contract/src/schemas/tarot.schema.ts` | Backend, DB projections, frontend | Tarot Engine should own private draw invariants only |
-| Tarot deck/draw mechanics | `packages/tarot-engine` | Backend Tarot service | Public enum copies require consolidation |
+| `CANONICAL_TAROT_SCHEMA` public values/DTOs | `packages/design-contract/src/schemas/tarot.schema.ts` | Backend, DB projections, AI copy, frontend and Tarot Engine | SOL decision frozen: theme/spread/slot/orientation have one definition here; BASE-002 removes the Tarot Engine copies |
+| Tarot deck/draw mechanics | `packages/tarot-engine` | Backend Tarot service | Owns cards, private draw state, selection/reveal and signal invariants; it consumes but does not redefine public Tarot values |
 | Knowledge ingestion | `packages/knowledge-ingestion` | Worker/Knowledge Core | Backend should orchestrate, not fetch external sources directly |
 | Knowledge retrieval/review/compiler | `packages/knowledge-core` | Backend, worker, MCP, recommendation | Fixtures are seed/evaluation data, not a second production authority |
 | Product visual asset mapping | `apps/frontend/src/features/design/model/visual-assets.ts` | frontend product visuals | `crystal-bead-base.png` remains export-only divergence pending asset task |
@@ -49,3 +50,18 @@ Only the last two currently require a lifecycle decision. Collapsing all rendere
 ## Canonical change rule
 
 A canonical replacement needs an approved task that names the old and new authority, migrates every production consumer, updates contract/architecture tests, and records the lifecycle change here. Adding a second implementation does not make it canonical.
+
+## Frozen P0 schema decisions
+
+### `CANONICAL_TAROT_SCHEMA`
+
+`TarotThemeSchema`, `TarotSpreadTypeSchema`, `TarotSlotSchema`, `TarotOrientationSchema` and their inferred public types are owned only by Design Contract. Tarot Engine may use these values inside its private validators but may not define or re-export alternative runtime schemas. There is no current external engine import requiring a compatibility re-export.
+
+### AI candidate concepts
+
+The two existing schemas are not the same domain concept:
+
+- `AiBeadLayoutCandidateSchema`: untrusted/provider-produced creative proposal with a complete, contiguous physical bead sequence; it is validated and compliance-checked before server enrichment.
+- `CatalogDesignGenerationDraftSchema`: backend-internal, catalog-selected generation draft containing material/accessory product IDs and provider/Tarot provenance; it is parsed immediately before authoritative `DesignV1` assembly.
+
+Neither schema belongs in Design Contract. The first is AI-owned; the second is backend-owned. BASE-003 must eliminate the ambiguous `AiDesignCandidateSchema` identifier from runtime source after atomically migrating all consumers.

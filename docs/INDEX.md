@@ -12,6 +12,7 @@ Repository governance entry points:
 - Canonical implementations and duplicate audit: `governance/CANONICAL_COMPONENTS.md`, `governance/DUPLICATE_CODE_AUDIT.md`
 - Branches, health, and active tasks: `governance/BRANCH_REGISTRY.md`, `governance/REPOSITORY_HEALTH.md`, `tasks/TASK_REGISTRY.md`
 - Current audit and planning handoff: `governance/BASELINE_VALIDATION.md`, `CURRENT_PRODUCT_STATUS.md`, `NEXT_PHASE_BACKLOG.md`, `FEATURE-018_PLAN.md`, `TASK_DISPATCH_PACKAGE.md`
+- P0 baseline closure: `P0_BASELINE_CLOSURE_DISPATCH.md`, `superpowers/plans/2026-08-24-p0-schema-closure.md`
 - QA/output evidence retention: `governance/QA_EVIDENCE_RETENTION.md`
 
 | Task | Controlling documents |

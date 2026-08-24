@@ -2,9 +2,9 @@
 
 **Observed:** 2026-08-24
 **Open pull requests:** none
-**Remote drift:** local `main` at `1a34c16` was 22 commits ahead of `origin/main`
-**Governance drift:** audit branch starts at `7649f59`, two commits ahead of local `main`; baseline freeze is pending
-**Phase 0 action:** inventory only; no branch/worktree deletion, pruning, rename, push, or merge
+**Remote drift:** no push performed; local `main` remains ahead of `origin/main`
+**Governance drift:** CLOSED at integration anchor `4e7cdcb`; schema consolidation and baseline freeze remain pending
+**Phase 0 action:** reviewed local fast-forward integration only; no branch/worktree deletion, pruning, rename or push
 
 Status meanings: `ACTIVE` current task; `PROTECTED` integration baseline; `MERGED_RETAINED` reachable from baseline but retained; `SNAPSHOT` intentional recovery point; `INVESTIGATE_UNMERGED` not reachable from baseline; `LIVE_WORKTREE` attached to a real path; `PRUNABLE_REGISTRATION` Git metadata points to a missing temporary path.
 
@@ -15,13 +15,13 @@ Status meanings: `ACTIVE` current task; `PROTECTED` integration baseline; `MERGE
 | `task/baseline-001-governance-integration` | `74fca1f` at creation | ACTIVE | `.worktrees/baseline-001`; TASK-BASELINE-001; governance integration and P0 dispatch planning only |
 | `task/audit-001-baseline-planning` | `74fca1f` | MERGED_RETAINED | root workspace; TASK-AUDIT-001 in review; user changes remain outside its commit |
 | `task/gov-001-repository-governance` | `7649f59` | MERGED_RETAINED | TASK-GOV-001 and TASK-REPO-001 complete; branch retained pending TASK-REPO-002 |
-| `main` | `1a34c16` | PROTECTED | publish/sync is a separate owner action |
+| `main` | governance integration anchor `4e7cdcb` plus current P0 planning handoff | PROTECTED | governance is effective; BASE-002/003/004 remain before freeze; publish/sync is separate |
 
 ## Combined-product snapshots and integration branches
 
 | Branch | Head | Reachability/status | Notes |
 | --- | --- | --- | --- |
-| `codex/original-ui-knowledge-integration` | `1a34c16` | MERGED_RETAINED + LIVE_WORKTREE | `.worktrees/tarot-guided-integration`; same baseline as main |
+| `codex/original-ui-knowledge-integration` | `1a34c16` | MERGED_RETAINED + LIVE_WORKTREE | `.worktrees/tarot-guided-integration`; pre-governance product anchor, no longer same head as main |
 | `codex/original-ui-snapshot-20260824` | `270abd9` | SNAPSHOT, merged | Preserve until cleanup task confirms recovery policy |
 | `codex/pre-combined-main-20260824` | `9cfe75c` | SNAPSHOT, merged | Pre-combination recovery point |
 | `codex/pre-knowledge-merge-20260824` | `a265590` | SNAPSHOT, merged | Pre-knowledge recovery point |

@@ -8,7 +8,7 @@ One task equals one accountable owner, one branch, one writable path set, and on
 | --- | --- | --- | --- | --- | --- |
 | TASK-GOV-001 | SOL | `task/gov-001-repository-governance` | DONE | `AGENTS.md`, `docs/INDEX.md`, `docs/governance/**`, `docs/tasks/**`, Phase 0 plan | `apps/**`, `packages/**`, Prisma, branches/worktrees, pre-existing user changes |
 | TASK-AUDIT-001 | SOL | `task/audit-001-baseline-planning` | REVIEW | `docs/INDEX.md`, `docs/governance/CURRENT_REPOSITORY_MAP.md`, `docs/governance/FEATURE_REGISTRY.md`, `docs/governance/CANONICAL_COMPONENTS.md`, `docs/governance/MODULE_OWNERS.md`, `docs/governance/REPOSITORY_HEALTH.md`, `docs/governance/BRANCH_REGISTRY.md`, `docs/governance/BASELINE_VALIDATION.md`, `docs/tasks/TASK_REGISTRY.md`, `docs/CURRENT_PRODUCT_STATUS.md`, `docs/NEXT_PHASE_BACKLOG.md`, `docs/FEATURE-*_PLAN.md`, `docs/TASK_DISPATCH_PACKAGE.md` | `apps/**`, `packages/**`, Prisma, root/runtime configuration, tests, generated output, pre-existing user changes and untracked files |
-| TASK-BASELINE-001 | SOL | `task/baseline-001-governance-integration` | IN_PROGRESS | `docs/INDEX.md`, `docs/governance/BRANCH_REGISTRY.md`, `docs/governance/CANONICAL_COMPONENTS.md`, `docs/governance/BASELINE_VALIDATION.md`, `docs/tasks/TASK_REGISTRY.md`, `docs/P0_BASELINE_CLOSURE_DISPATCH.md`, `docs/superpowers/plans/2026-08-24-p0-schema-closure.md` | `apps/**`, `packages/**`, Prisma, root/runtime configuration, tests, generated output, QA evidence, pre-existing user changes and FEAT-018 implementation |
+| TASK-BASELINE-001 | SOL | `task/baseline-001-governance-integration` | IN_PROGRESS | `docs/INDEX.md`, `docs/governance/BRANCH_REGISTRY.md`, `docs/governance/CANONICAL_COMPONENTS.md`, `docs/governance/DUPLICATE_CODE_AUDIT.md`, `docs/governance/BASELINE_VALIDATION.md`, `docs/governance/REPOSITORY_HEALTH.md`, `docs/tasks/TASK_REGISTRY.md`, `docs/P0_BASELINE_CLOSURE_DISPATCH.md`, `docs/superpowers/plans/2026-08-24-p0-schema-closure.md` | `apps/**`, `packages/**`, Prisma, root/runtime configuration, tests, generated output, QA evidence, pre-existing user changes and FEAT-018 implementation |
 
 No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROGRESS` only after its owner creates the registered branch/worktree and records exact writable paths.
 
@@ -18,26 +18,36 @@ No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROG
 | --- | --- | --- | --- | --- | --- |
 | TASK-REPO-001 | QA | `task/repo-001-evidence-retention` | DONE | tracked QA/output evidence under `artifacts/**`, `output/playwright/**`, `outputs/**`, `qa-captures-*/**`, `apps/frontend/qa-captures/**`, frontend root QA PNGs, `scripts/ui-qa/artifacts/**`, `scripts/ui-qa/qa-captures-final/**`; `.gitignore`; `docs/QA_PHASE_3_REPORT.md`; governance/task/plan docs | runtime source, `apps/frontend/public/**`, `docs/ui-references/**`, knowledge coverage JSON, current spreadsheet deliverables, user files and other worktrees |
 
+## P0 baseline closure queue
+
+The complete worker specifications and exact migration sequence are frozen in `docs/P0_BASELINE_CLOSURE_DISPATCH.md`. `BASE-002` and `BASE-003` are deliberately serial.
+
+| Task | Owner | Branch | Status | Writable paths | Forbidden paths |
+| --- | --- | --- | --- | --- | --- |
+| BASE-002 | GLM | `task/base-002-tarot-canonical-schema` | READY | Tarot Engine manifest/source/tests; `pnpm-lock.yaml`; exact architecture test named in dispatch package | apps, database, Design Contract definitions, Prisma, unrelated packages/docs, AI candidate code, FEAT-018 |
+| BASE-003 | GLM | `task/base-003-ai-candidate-concepts` | BLOCKED by BASE-002 merge | AI Agent schema/adapters/agents/tests; backend design generation schema/adapter/tests; exact controlling AI docs and architecture test named in dispatch package | Tarot, Prisma, public API/DesignV1 schemas, unrelated refactors, FEAT-018 |
+| BASE-004 | SOL | `task/base-004-freeze-baseline` | BLOCKED by BASE-003 merge | integration-only conflict resolution, governance/task/health/baseline records, validation evidence, annotated baseline tag | new behavior, schema redesign, test deletion/skip, config bypass, P1/P2 or FEAT-018 implementation |
+
 ## Cleanup backlog
 
 | Task | Owner | Priority | Dependency | Proposed branch | Scope/status |
 | --- | --- | ---: | --- | --- | --- |
-| TASK-CONTRACT-001 | CONTRACT | P0 | TASK-BASELINE-001 | `task/contract-001-tarot-schema-authority` | BACKLOG: make Design Contract the shared Tarot enum authority |
-| TASK-TAROT-001 | TAROT | P0 | TASK-CONTRACT-001 | `task/tarot-001-consume-shared-contract` | BACKLOG: consume shared enums while retaining private draw validation |
-| TASK-AI-001 | AI | P0 | TASK-BASELINE-001 | `task/ai-001-candidate-contract-decision` | BACKLOG: name and document canonical AI provider candidate |
-| TASK-BE-003 | BACKEND | P0 | TASK-AI-001 | `task/be-003-ai-candidate-boundary` | BACKLOG: rename/project backend local candidate boundary |
-| TASK-BASELINE-002 | QA | P0 | TASK-TAROT-001, TASK-BE-003 | `task/baseline-002-freeze-validation` | BACKLOG: nominate candidate and replay install/lint/typecheck/test/build/PostgreSQL/isolated signed-test browser smoke |
+| TASK-CONTRACT-001 | CONTRACT | P0 | superseded by SOL decision | `task/contract-001-tarot-schema-authority` | CANCELLED: contract decision folded into TASK-BASELINE-001; implementation is BASE-002 |
+| TASK-TAROT-001 | TAROT | P0 | superseded by BASE-002 | `task/tarot-001-consume-shared-contract` | CANCELLED: duplicate implementation scope |
+| TASK-AI-001 | AI | P0 | superseded by SOL decision | `task/ai-001-candidate-contract-decision` | CANCELLED: contract decision folded into TASK-BASELINE-001; implementation is BASE-003 |
+| TASK-BE-003 | BACKEND | P0 | superseded by BASE-003 | `task/be-003-ai-candidate-boundary` | CANCELLED: duplicate implementation scope |
+| TASK-BASELINE-002 | QA | P0 | superseded by BASE-004 | `task/baseline-002-freeze-validation` | CANCELLED: renamed to avoid collision with BASE-002 |
 | TASK-FE-001 | FRONTEND | P1 | TASK-GOV-001 | `task/fe-001-dormant-editor-lifecycle` | READY: decide `BraceletSequenceEditor` lifecycle |
 | TASK-3D-001 | THREE | P1 | TASK-GOV-001 | `task/3d-001-production-readiness-decision` | READY: evidence-based 3D mount/experimental decision |
 | TASK-BE-001 | BACKEND | P1 | TASK-GOV-001 | `task/be-001-service-wrapper-cleanup` | READY: prove/retire or justify uncomposed wrappers |
 | TASK-BE-002 | BACKEND | P1 | TASK-BE-001 | `task/be-002-module-boundary-cleanup` | BACKLOG: implement or retire metadata-only module shells |
 | TASK-DB-001 | DATABASE | P1 | TASK-GOV-001 | `task/db-001-design-template-lifecycle` | READY: adopt or migrate dormant `DesignTemplate` model |
-| TASK-COMPAT-001 | SOL | P2 | TASK-CONTRACT-001, TASK-AI-001 | `task/compat-001-legacy-surface-audit` | BACKLOG: usage proof and retirement plan for explicit legacy exports |
+| TASK-COMPAT-001 | SOL | P2 | BASE-003 | `task/compat-001-legacy-surface-audit` | BACKLOG: usage proof and retirement plan for remaining explicit legacy exports |
 | TASK-ASSET-001 | ASSET | P1 | TASK-GOV-001 | `task/asset-001-orphan-resource-decision` | READY: wire/remove state assets and resolve raw crystal image provenance |
 | TASK-ASSET-002 | FRONTEND | P1 | TASK-ASSET-001 | `task/asset-002-export-visual-parity` | BACKLOG: align canvas export with photographic visible beads |
 | TASK-REPO-002 | SOL | P2 | TASK-REPO-001 | `task/repo-002-branch-worktree-cleanup` | BACKLOG: review unique commits and clean branch/worktree metadata |
 | TASK-DOC-001 | SOL | P2 | all P1 decisions | `task/doc-001-current-architecture-refresh` | BACKLOG: update stale controlling architecture/status statements |
-| TASK-AUTH-001 | SOL | P0 | TASK-BASELINE-002 + Product Owner provider/topology inputs | `task/auth-001-identity-contract` | BLOCKED: freeze production identity/session contract; `CONTRACT_REQUIRES_IMPLEMENTATION_VALIDATION` |
+| TASK-AUTH-001 | SOL | P0 | BASE-004 + Product Owner provider/topology inputs | `task/auth-001-identity-contract` | BLOCKED: freeze production identity/session contract; `CONTRACT_REQUIRES_IMPLEMENTATION_VALIDATION` |
 | TASK-AUTH-002 | SOL | P0 | TASK-AUTH-001 | `task/auth-002-dependency-baseline` | BACKLOG: single-writer dependency/configuration baseline |
 | TASK-AUTH-003 | DATABASE | P0 | TASK-AUTH-002 | `task/auth-003-identity-persistence` | BACKLOG: external identity mapping and idempotent User provisioning |
 | TASK-AUTH-004 | BACKEND | P0 | TASK-AUTH-003 | `task/auth-004-backend-provider` | BACKLOG: production verifier and authenticated actor composition |
@@ -55,7 +65,7 @@ No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROG
 - Modify no runtime code, schema, branch metadata, or unrelated user file.
 - Pass path/link checks, architecture tests, workspace validation, and final diff review.
 
-### TASK-BASELINE-001 / TASK-BASELINE-002 — integrate and freeze
+### TASK-BASELINE-001 / BASE-004 — integrate and freeze
 
 - Integrate the complete governance/audit candidate; `main` must never contain partial or contradictory registries.
 - Resolve both P0 contract DAGs before nominating the freeze candidate.
@@ -63,14 +73,14 @@ No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROG
 - Frozen install, lint, typecheck, tests, build, fresh PostgreSQL verification and isolated signed-test authenticated browser smoke pass.
 - Product Owner records and approves the exact baseline commit before Feature tasks become `READY`.
 
-### TASK-CONTRACT-001 / TASK-TAROT-001 — Tarot contract authority
+### BASE-002 — Tarot contract authority
 
 - Shared public enums have exactly one definition source.
 - Tarot Engine retains deck integrity, private state, slot-order, uniqueness, and reveal invariants.
 - Backend, frontend, database and Tarot tests compile and pass with no unsafe casts.
 - Contract and Tarot specs describe public versus private ownership.
 
-### TASK-AI-001 / TASK-BE-003 — AI candidate boundaries
+### BASE-003 — AI candidate boundaries
 
 - The positional AI candidate and backend product-selection/provider result receive unambiguous names and roles.
 - No two incompatible schemas export the same conceptual name.

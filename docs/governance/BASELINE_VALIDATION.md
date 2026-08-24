@@ -2,29 +2,29 @@
 
 **Audit task:** TASK-AUDIT-001<br>
 **Observed:** 2026-08-24<br>
-**Product commit:** local `main` at `1a34c16`<br>
-**Governance candidate:** `7649f59` plus this documentation task<br>
+**Original product commit:** local `main` at `1a34c16`<br>
+**Governance integration anchor:** `4e7cdcb` on local `main`; final P0 planning head is recorded at handoff<br>
 **Decision:** `NOT READY`
 
 ## Executive decision
 
-The product repository is buildable and its core design/persistence boundaries are substantially real. It is not yet a safe frozen baseline for parallel Feature delivery because the effective `main` branch does not contain the governance controls, two cross-module public contract ambiguities remain, and no candidate commit has been nominated and replay-validated after those fixes.
+The product repository is buildable and its core design/persistence boundaries are substantially real. Governance is now integrated into local `main`, but the repository is not yet a safe frozen baseline because two cross-module schema conflicts still require worker implementation and no post-fix candidate has been replay-validated.
 
-Governance result: **FAIL for effective `main`**. The governance candidate itself passes the structural rule review, but it has not been integrated into the protected branch and therefore cannot govern new work.
+Governance result: **PASS on local `main`**. The exact linear chain `c1262f3 -> 7649f59 -> 74fca1f -> 4e7cdcb` was reviewed and fast-forwarded. It contains governance/audit documentation plus the separately registered recoverable QA-evidence cleanup; it contains no business source, Prisma change, runtime asset change, `apps/frontend/next-env.d.ts`, `docs/audit/`, or `docs/progress/`.
 
 ## Governance validation
 
 | Check | Result | Evidence / required action |
 | --- | --- | --- |
-| Root agent rules cover the repository | CONDITIONAL PASS | Candidate `AGENTS.md` defines task registration, exact path locks, branch ownership, forbidden overlap, contract-first changes and handoff checks. Local `main` still has the earlier minimal rules. |
-| One task, one owner, one branch, one writable set | PASS ON CANDIDATE | `TASK_REGISTRY.md` is the lock authority; status transitions and exact writable paths are explicit. |
-| Integration-only main and no unrelated refactors | PASS ON CANDIDATE | Root rules and branch registry prohibit feature work on `main`, unrelated cleanup and destructive branch actions. |
+| Root agent rules cover the repository | PASS | Local `main` now defines task registration, exact path locks, branch ownership, forbidden overlap, contract-first changes and handoff checks. |
+| One task, one owner, one branch, one writable set | PASS | `TASK_REGISTRY.md` is the lock authority; status transitions and exact writable paths are explicit. |
+| Integration-only main and no unrelated refactors | PASS | Root rules and branch registry prohibit feature work on `main`, unrelated cleanup and destructive branch actions. |
 | SOL review/integration role | PASS | Module ownership and task transitions reserve architecture, cross-module contract and integration decisions for SOL. |
 | Repository map matches code | PASS AFTER CORRECTION | 16 workspace projects, 4 apps, 11 packages, 20 frontend page routes, 21 Prisma models and the actual package dependency graph were scanned. Counts and gallery semantics were corrected. |
 | Feature registry matches production composition | PASS AFTER CORRECTION | Personal gallery is separated from backend-only community publication; FEAT-025 was registered. |
-| Canonical components are singular | FAIL | Tarot public enums are defined in both Design Contract and Tarot Engine. `AiDesignCandidateSchema` names two incompatible concepts in AI and backend boundaries. |
+| Canonical components are singular | FAIL / CONTRACT FROZEN | Tarot and AI meanings are decided in `CANONICAL_COMPONENTS.md`, but BASE-002 and BASE-003 have not migrated the code. |
 | Module ownership is complete | PASS | Frontend, backend, database, AI, Bracelet, Three, Tarot, Knowledge, Context, Design Engine, assets, QA, integration and governance have owners. Shared files still require exact task locks. |
-| Parallel-agent safety is enforceable | FAIL ON MAIN | Candidate controls are adequate, but the protected branch lacks them and no frozen post-conflict candidate exists. |
+| Parallel-agent safety is enforceable | PASS FOR REGISTERED WORK | Governance is on `main`; BASE-002 and BASE-003 remain serial and have disjoint frozen scopes. Baseline Feature dispatch remains blocked. |
 
 ## Repository health evidence
 
@@ -62,12 +62,12 @@ Both must be resolved contract-first with consumer compilation and behavior test
 
 ## Baseline blockers
 
-### P0 — must be closed before parallel Feature work
+### P0 — must be closed before Feature work
 
-1. Integrate the governance candidate into local `main` through an owner-reviewed integration task; do not cherry-pick partial registries.
-2. Complete TASK-CONTRACT-001 and TASK-TAROT-001 so public Tarot schemas have one authority.
-3. Complete TASK-AI-001 and TASK-BE-003 so AI candidate concepts have unambiguous names and one tested conversion boundary.
-4. Nominate the resulting commit as the baseline candidate and rerun install, lint, typecheck, test, build, PostgreSQL verification and a clean authenticated browser smoke in isolated runtime output.
+1. Human-dispatch and merge BASE-002 so Design Contract is the only runtime authority for public Tarot values.
+2. Only after BASE-002 reaches `main`, human-dispatch and merge BASE-003 so the two AI/backend domain concepts have unambiguous names.
+3. Run BASE-004 on the resulting `main`: frozen install, lint, typecheck, unit/integration tests, build, Prisma/PostgreSQL verification and the repository's available browser smoke.
+4. Re-audit, record `BASELINE STATUS: READY`, and create the annotated tag only if every gate passes.
 
 ### P1 — high value, not a freeze blocker after P0 closes
 
@@ -86,7 +86,7 @@ Both must be resolved contract-first with consumer compilation and behavior test
 
 The baseline becomes `READY` only when all conditions are true:
 
-- P0 tasks are `DONE` and their exact commits are integrated into local `main`.
+- BASE-002, BASE-003 and BASE-004 are `DONE` and their exact commits are integrated into local `main`.
 - `git status` contains no unexplained changes in the candidate worktree.
 - Registries and controlling contracts describe the same candidate code.
 - Required validation is green on the candidate commit, including an isolated authenticated E2E smoke.
