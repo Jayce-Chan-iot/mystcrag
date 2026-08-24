@@ -4,8 +4,17 @@ This index routes current work. Historical phase reports are retained for eviden
 
 Always read `PROJECT_CONTEXT.md`, `CODING_STANDARD.md`, and the task-specific documents below.
 
+Repository governance entry points:
+
+- Current repository map: `governance/CURRENT_REPOSITORY_MAP.md`
+- Target structure: `governance/TARGET_REPOSITORY_STRUCTURE.md`
+- Feature and ownership registries: `governance/FEATURE_REGISTRY.md`, `governance/MODULE_OWNERS.md`
+- Canonical implementations and duplicate audit: `governance/CANONICAL_COMPONENTS.md`, `governance/DUPLICATE_CODE_AUDIT.md`
+- Branches, health, and active tasks: `governance/BRANCH_REGISTRY.md`, `governance/REPOSITORY_HEALTH.md`, `tasks/TASK_REGISTRY.md`
+
 | Task | Controlling documents |
 | --- | --- |
+| Repository governance / cleanup | `governance/CURRENT_REPOSITORY_MAP.md`, `governance/TARGET_REPOSITORY_STRUCTURE.md`, `governance/MODULE_OWNERS.md`, `tasks/TASK_REGISTRY.md` |
 | Product / MVP | `PRODUCT_REQUIREMENT.md`, `MVP_DEVELOPMENT_PLAN.md`, `UI_DESIGN_SYSTEM.md` |
 | Frontend / interaction | `UI_DESIGN_SYSTEM.md`, `INTERACTION_TEST_PLAN.md`, `API_SPECIFICATION.md` |
 | UI reference implementation | `UI_REFERENCE_AND_ASSET_MANIFEST.md`, `AGENT_FULL_UI_REBUILD_AND_QA_PROMPT.md`, `UI_DESIGN_SYSTEM.md`, `INTERACTION_TEST_PLAN.md` |

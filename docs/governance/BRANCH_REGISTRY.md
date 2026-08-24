@@ -1,0 +1,74 @@
+# Branch Registry
+
+**Observed:** 2026-08-24
+**Open pull requests:** none
+**Remote drift:** local `main` at `1a34c16` was 22 commits ahead of `origin/main`
+**Phase 0 action:** inventory only; no branch/worktree deletion, pruning, rename, push, or merge
+
+Status meanings: `ACTIVE` current task; `PROTECTED` integration baseline; `MERGED_RETAINED` reachable from baseline but retained; `SNAPSHOT` intentional recovery point; `INVESTIGATE_UNMERGED` not reachable from baseline; `LIVE_WORKTREE` attached to a real path; `PRUNABLE_REGISTRATION` Git metadata points to a missing temporary path.
+
+## Active and protected
+
+| Branch | Head | Status | Worktree / action |
+| --- | --- | --- | --- |
+| `task/gov-001-repository-governance` | `1a34c16` at creation | ACTIVE | root workspace; TASK-GOV-001 |
+| `main` | `1a34c16` | PROTECTED | publish/sync is a separate owner action |
+
+## Combined-product snapshots and integration branches
+
+| Branch | Head | Reachability/status | Notes |
+| --- | --- | --- | --- |
+| `codex/original-ui-knowledge-integration` | `1a34c16` | MERGED_RETAINED + LIVE_WORKTREE | `.worktrees/tarot-guided-integration`; same baseline as main |
+| `codex/original-ui-snapshot-20260824` | `270abd9` | SNAPSHOT, merged | Preserve until cleanup task confirms recovery policy |
+| `codex/pre-combined-main-20260824` | `9cfe75c` | SNAPSHOT, merged | Pre-combination recovery point |
+| `codex/pre-knowledge-merge-20260824` | `a265590` | SNAPSHOT, merged | Pre-knowledge recovery point |
+| `codex/pre-main-integration-20260824` | `9df1760` | SNAPSHOT, merged | Historical integration point |
+| `codex/pre-original-ui-knowledge-handoff-20260824` | `9cfe75c` | SNAPSHOT, merged | Duplicates another snapshot head |
+| `codex/pre-original-ui-snapshot-20260824` | `cfadf2f` | SNAPSHOT, merged | Historical original UI point |
+| `codex/tarot-guided-integration` | `cfadf2f` | MERGED_RETAINED | Same head as a snapshot branch |
+| `codex/diy-v2-bracelet-engine` | `a265590` | MERGED_RETAINED | Tracks remote; same head as pre-knowledge snapshot |
+| `codex/publish-latest-updates` | `1535df8` | MERGED_RETAINED | Tracks remote |
+
+## Historical merged delivery branches
+
+| Branch | Head | Status/worktree |
+| --- | --- | --- |
+| `backup/qa-rerun-pre-sync` | `8ae159a` | MERGED_RETAINED |
+| `chore/phase-3-5-remediation-coordination` | `07fa144` | MERGED_RETAINED |
+| `feature/ai-recommendation` | `3a7e1b4` | MERGED_RETAINED; PRUNABLE_REGISTRATION |
+| `feature/backend-design-api` | `9697528` | MERGED_RETAINED |
+| `feature/frontend-ai-flow` | `4ec0a8c` | MERGED_RETAINED; LIVE_WORKTREE at sibling project path |
+| `feature/three-bracelet-scene` | `f222c97` | MERGED_RETAINED |
+| `fix/backend-auth-boundary` | `bed42a5` | MERGED_RETAINED; LIVE_WORKTREE at sibling project path |
+| `fix/frontend-three-integration` | `7c77504` | MERGED_RETAINED; PRUNABLE_REGISTRATION |
+| `fix/mvp-browser-integration` | `12ab21f` | MERGED_RETAINED; PRUNABLE_REGISTRATION |
+| `fix/postgres-verification` | `218dcb5` | MERGED_RETAINED; PRUNABLE_REGISTRATION |
+| `fix/product-ux-review` | `4fdafd4` | MERGED_RETAINED; PRUNABLE_REGISTRATION |
+| `fix/qa-backend-production-start` | `66b2a89` | MERGED_RETAINED; PRUNABLE_REGISTRATION |
+| `fix/qa-distinct-recommendations` | `d273040` | MERGED_RETAINED; PRUNABLE_REGISTRATION |
+| `fix/qa-prisma-generate` | `db0cb97` | MERGED_RETAINED; PRUNABLE_REGISTRATION |
+| `review/final-integration` | `e3e107a` | MERGED_RETAINED; PRUNABLE_REGISTRATION |
+| `test/mvp-integration-rerun` | `82fa1e4` | MERGED_RETAINED; PRUNABLE_REGISTRATION |
+
+## Unmerged branches requiring provenance review
+
+| Branch | Head | Status | Required evidence before action |
+| --- | --- | --- | --- |
+| `backup/backend-auth-pre-rebase-acd4df8` | `acd4df8` | INVESTIGATE_UNMERGED | Compare unique commits with merged auth boundary |
+| `backup/browser-pre-cleanup` | `1402ab1` | INVESTIGATE_UNMERGED | Compare browser QA evidence/fixes |
+| `backup/postgres-pre-cleanup` | `d923f06` | INVESTIGATE_UNMERGED | Compare migrations and verification evidence |
+| `backup/three-pre-cleanup` | `210010a` | INVESTIGATE_UNMERGED | Compare 3D contracts/renderer changes |
+| `chore/phase-3-parallel-workflow` | `c5166ce` | INVESTIGATE_UNMERGED | Identify governance-only unique commits |
+| `test/mvp-integration` | `0bb60a4` | INVESTIGATE_UNMERGED | Compare with rerun and final QA baseline |
+
+## Detached/prunable metadata
+
+Git also records a detached temporary QA worktree at `/private/tmp/mystcrag-qa-fresh-final` plus the missing temporary paths listed above. They are metadata-cleanup candidates, not permission to run `git worktree prune` during Phase 0.
+
+## Branch policy going forward
+
+- New work uses `task/<task-id>-<slug>` and must match one task registry row.
+- `main` is integration-only; no feature work begins directly on it.
+- Snapshot/backup branches require an expiry reason and cleanup task.
+- Branch deletion requires TASK-REPO-002, unique-commit review, owner confirmation, and confirmation that no live worktree uses it.
+- Remote publication, force update, and branch pruning are external-state changes and remain user-authorized actions.
