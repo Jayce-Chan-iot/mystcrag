@@ -1,13 +1,11 @@
-import { TAROT_CARD_CATALOG, tarotCardById } from "./card-catalog";
-import { requiredSlotsForSpread } from "./spreads";
 import type {
-  PrivateDrawState,
-  RandomSource,
-  RevealedTarotCard,
   TarotOrientation,
   TarotSlot,
-  TarotSpreadType,
-} from "./types";
+  TarotSpreadType
+} from "@mystcrag/design-contract";
+import { TAROT_CARD_CATALOG, tarotCardById } from "./card-catalog";
+import { requiredSlotsForSpread } from "./spreads";
+import type { PrivateDrawState, RandomSource, RevealedTarotCard } from "./types";
 
 const checkedRandomInt = (random: RandomSource, maxExclusive: number): number => {
   const value = random.nextInt(maxExclusive);

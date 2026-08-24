@@ -185,6 +185,19 @@ test("shared contract dependency direction stays application-independent", async
   assertNoMatches(forbidden);
 });
 
+test("Design Contract is the only public Tarot schema authority", async () => {
+  const duplicateDefinitions = await matchingFiles(
+    ["packages/tarot-engine"],
+    /export const Tarot(?:Theme|SpreadType|Slot|Orientation)Schema\s*=\s*z\.enum/
+  );
+  assertNoMatches(duplicateDefinitions);
+
+  const designContractManifest = JSON.parse(
+    await readFile("packages/design-contract/package.json", "utf8")
+  );
+  assert.equal(designContractManifest.dependencies?.["@mystcrag/tarot-engine"], undefined);
+});
+
 test("pnpm dev isolates each app's documented environment", () => {
   const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   const result = spawnSync(pnpmCommand, ["exec", "turbo", "run", "dev", "--dry=json"], {

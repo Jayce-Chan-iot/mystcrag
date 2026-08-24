@@ -385,6 +385,9 @@ importers:
 
   packages/tarot-engine:
     dependencies:
+      '@mystcrag/design-contract':
+        specifier: workspace:*
+        version: link:../design-contract
       zod:
         specifier: ^4.4.3
         version: 4.4.3

@@ -17,8 +17,4 @@ export {
   PublicDrawStateSchema,
   RevealedTarotCardSchema,
   TarotCardDefinitionSchema,
-  TarotOrientationSchema,
-  TarotSlotSchema,
-  TarotSpreadTypeSchema,
-  TarotThemeSchema,
 } from "./types";
