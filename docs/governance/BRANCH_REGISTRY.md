@@ -3,7 +3,7 @@
 **Observed:** 2026-08-24
 **Open pull requests:** none
 **Remote drift:** no push performed; local `main` remains ahead of `origin/main`
-**Governance drift:** CLOSED at integration anchor `4e7cdcb`; schema consolidation and baseline freeze remain pending
+**Governance drift:** CLOSED by TASK-BASELINE-001; schema consolidation and baseline freeze remain pending
 **Phase 0 action:** reviewed local fast-forward integration only; no branch/worktree deletion, pruning, rename or push
 
 Status meanings: `ACTIVE` current task; `PROTECTED` integration baseline; `MERGED_RETAINED` reachable from baseline but retained; `SNAPSHOT` intentional recovery point; `INVESTIGATE_UNMERGED` not reachable from baseline; `LIVE_WORKTREE` attached to a real path; `PRUNABLE_REGISTRATION` Git metadata points to a missing temporary path.
@@ -12,8 +12,8 @@ Status meanings: `ACTIVE` current task; `PROTECTED` integration baseline; `MERGE
 
 | Branch | Head | Status | Worktree / action |
 | --- | --- | --- | --- |
-| `task/baseline-001-governance-integration` | `74fca1f` at creation | ACTIVE | `.worktrees/baseline-001`; TASK-BASELINE-001; governance integration and P0 dispatch planning only |
-| `task/audit-001-baseline-planning` | `74fca1f` | MERGED_RETAINED | root workspace; TASK-AUDIT-001 in review; user changes remain outside its commit |
+| `task/baseline-001-governance-integration` | closure handoff descendant of `2d1b5ed` | MERGED_RETAINED | `.worktrees/baseline-001`; TASK-BASELINE-001 done; branch retained, no push |
+| `task/audit-001-baseline-planning` | `74fca1f` | MERGED_RETAINED | root workspace; TASK-AUDIT-001 done; user changes remain outside its commit |
 | `task/gov-001-repository-governance` | `7649f59` | MERGED_RETAINED | TASK-GOV-001 and TASK-REPO-001 complete; branch retained pending TASK-REPO-002 |
 | `main` | governance integration anchor `4e7cdcb` plus current P0 planning handoff | PROTECTED | governance is effective; BASE-002/003/004 remain before freeze; publish/sync is separate |
 
