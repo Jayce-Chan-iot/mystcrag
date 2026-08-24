@@ -3,6 +3,7 @@ import { z } from "zod";
 import { BeadShapeSchema } from "./bead.schema";
 import { IdentifierSchema, MillimeterSchema, MinorAmountSchema } from "./component.schema";
 import { CurrencySchema } from "./metadata.schema";
+import { VisualProfileSchema } from "./visual-profile.schema";
 
 export const ListCatalogMaterialsQuerySchema = z.strictObject({
   currency: CurrencySchema.default("CNY")
@@ -15,7 +16,7 @@ export const CatalogMaterialProductSchema = z.strictObject({
   crystalId: IdentifierSchema,
   crystalNameCn: z.string().trim().min(1).max(120),
   crystalNameEn: z.string().trim().min(1).max(120),
-  mineralName: z.string().trim().min(1).max(120),
+  mineralName: z.string().trim().min(1).max(120).default("Unknown"),
   colorTags: z.array(IdentifierSchema).max(20),
   visualTags: z.array(IdentifierSchema).max(30),
   styleTags: z.array(IdentifierSchema).max(30),
@@ -24,11 +25,13 @@ export const CatalogMaterialProductSchema = z.strictObject({
   materialKey: IdentifierSchema,
   shape: BeadShapeSchema,
   diameterMm: MillimeterSchema.positive(),
+  lengthAlongStringMm: MillimeterSchema.positive().optional(),
+  visualProfile: VisualProfileSchema.optional(),
   modelAssetKey: IdentifierSchema,
   textureAssetKey: IdentifierSchema,
   currency: CurrencySchema,
   unitPriceMinor: MinorAmountSchema,
-  availableQuantity: z.number().int().min(0)
+  availableQuantity: z.number().int().min(0).default(0)
 });
 
 export const CatalogAccessoryProductSchema = z.strictObject({
@@ -45,7 +48,7 @@ export const CatalogAccessoryProductSchema = z.strictObject({
 
 export const ListCatalogMaterialsResponseSchema = z.strictObject({
   materials: z.array(CatalogMaterialProductSchema),
-  accessories: z.array(CatalogAccessoryProductSchema).max(100)
+  accessories: z.array(CatalogAccessoryProductSchema).max(100).default([])
 });
 
 export type CatalogMaterialProduct = z.infer<typeof CatalogMaterialProductSchema>;

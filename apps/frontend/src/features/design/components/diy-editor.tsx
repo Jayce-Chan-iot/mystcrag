@@ -3,6 +3,7 @@
 import type {
   CatalogMaterialProduct,
   CreateOrderFromDesignResponse,
+  MaterialSuggestion,
   PublicDesignV1,
   UpdateDesignOperation,
   UpdateDesignRequest
@@ -18,7 +19,8 @@ import {
   createOperationsRequest,
   createRemoveRequest,
   createReplaceRequest,
-  designApi
+  designApi,
+  invertOperations
 } from "../../../lib/api/design-api";
 import {
   hasOverBudgetAcceptance,
@@ -78,6 +80,13 @@ const COLOR_TAG_LABELS: Record<string, string> = {
   yellow: "黄色"
 };
 
+const LAYOUT_STRATEGY_LABELS: Record<string, string> = {
+  SYMMETRIC_BALANCE: "对称平衡",
+  CENTER_FOCAL: "中心聚焦",
+  REPEAT_RHYTHM: "重复韵律",
+  LOW_CONTRAST_FLOW: "低对比渐变"
+};
+
 export function responseNotice(
   warningCodes: readonly string[]
 ): FrontendErrorCode | null {
@@ -104,6 +113,13 @@ export function DiyEditor({ designId }: { designId: string }) {
   const [isSaving, setIsSaving] = React.useState(false);
   const [isOrdering, setIsOrdering] = React.useState(false);
   const [isExporting, setIsExporting] = React.useState(false);
+  const [isSuggesting, setIsSuggesting] = React.useState(false);
+  const [isOptimizing, setIsOptimizing] = React.useState(false);
+  const [suggestionState, setSuggestionState] = React.useState<{
+    componentId: string;
+    beadProductId: string;
+    items: MaterialSuggestion[];
+  } | null>(null);
   const [savedAt, setSavedAt] = React.useState<string | null>(null);
   const [order, setOrder] = React.useState<CreateOrderFromDesignResponse | null>(null);
   const [undoStack, setUndoStack] = React.useState<Array<{ undo: UpdateDesignOperation[]; redo: UpdateDesignOperation[] }>>([]);
@@ -155,6 +171,13 @@ export function DiyEditor({ designId }: { designId: string }) {
   }
 
   const selectedBead = design.beads.find((bead) => bead.componentId === selectedComponentId);
+  const suggestions =
+    suggestionState &&
+    selectedBead &&
+    suggestionState.componentId === selectedBead.componentId &&
+    suggestionState.beadProductId === selectedBead.beadProductId
+      ? suggestionState.items
+      : [];
   const braceletFit = evaluateBraceletFit(design);
   const selectedMaterial = selectedBead
     ? catalogMaterials.find((material) => material.beadProductId === selectedBead.beadProductId)
@@ -311,6 +334,9 @@ export function DiyEditor({ designId }: { designId: string }) {
       materialKey: material.materialKey,
       shape: material.shape,
       diameterMm: material.diameterMm,
+      ...(material.lengthAlongStringMm === undefined || material.lengthAlongStringMm === null
+        ? {}
+        : { lengthAlongStringMm: material.lengthAlongStringMm }),
       modelAssetKey: material.modelAssetKey,
       textureAssetKey: material.textureAssetKey,
       unitPriceMinor: material.unitPriceMinor
@@ -319,6 +345,57 @@ export function DiyEditor({ designId }: { designId: string }) {
       redo: [{ operation: "REPLACE_COMPONENT", componentId: selectedBead.componentId, replacement }],
       undo: [{ operation: "REPLACE_COMPONENT", componentId: selectedBead.componentId, replacement: selectedBead }]
     });
+  };
+
+  const loadSuggestions = async () => {
+    if (!selectedBead) return;
+    setIsSuggesting(true);
+    setNotice(null);
+    try {
+      const response = await designApi.suggestMaterials(selectedBead.beadProductId, design.currency);
+      setSuggestionState({
+        componentId: selectedBead.componentId,
+        beadProductId: selectedBead.beadProductId,
+        items: response.suggestions
+      });
+    } catch (error) {
+      setNotice(toFrontendApiError(error).code);
+    } finally {
+      setIsSuggesting(false);
+    }
+  };
+
+  const applySuggestion = async (beadProductId: string) => {
+    const material = catalogMaterials.find((item) => item.beadProductId === beadProductId);
+    if (material) await replaceSelected(material);
+  };
+
+  const optimizeDesign = async () => {
+    setIsOptimizing(true);
+    setNotice(null);
+    setEditMessage("");
+    try {
+      const lockedComponentIds = selectedBead ? [selectedBead.componentId] : [];
+      const response = await designApi.optimize(design, lockedComponentIds);
+      if (response.operations.length === 0) {
+        setEditMessage("当前设计已是引擎推荐布局。");
+        return;
+      }
+      const strategyLabel = LAYOUT_STRATEGY_LABELS[response.layoutStrategy] ?? response.layoutStrategy;
+      await applyUpdate(
+        createOperationsRequest(design, response.operations),
+        `已应用「${strategyLabel}」优化布局（综合 ${Math.round(response.score.overallScore)} 分），可撤销。`,
+        () => lockedComponentIds[0] ?? selectedComponentId,
+        {
+          redo: response.operations,
+          undo: invertOperations(design, response.operations)
+        }
+      );
+    } catch (error) {
+      setNotice(toFrontendApiError(error).code);
+    } finally {
+      setIsOptimizing(false);
+    }
   };
 
   const runHistory = async (direction: "undo" | "redo") => {
@@ -365,7 +442,9 @@ export function DiyEditor({ designId }: { designId: string }) {
     const protectedComponentId = design.accessories.find(
       (accessory) => accessory.placementMode === "ANCHORED"
     )?.anchorComponentId;
-    const keepComponentId = protectedComponentId ?? design.beads[0]?.componentId;
+    const keepComponentId = protectedComponentId && design.beads.some((bead) => bead.componentId === protectedComponentId)
+      ? protectedComponentId
+      : design.beads[0]?.componentId;
     const removableBeads = [...design.beads]
       .filter((bead) => bead.componentId !== keepComponentId)
       .sort((left, right) => right.positionIndex - left.positionIndex);
@@ -804,6 +883,33 @@ export function DiyEditor({ designId }: { designId: string }) {
                 <button className="min-h-11 rounded-xl border border-[var(--border)] text-sm disabled:opacity-35" disabled={isUpdating || undoStack.length === 0} onClick={() => void runHistory("undo")} type="button">↶ 撤销</button>
                 <button className="min-h-11 rounded-xl border border-[var(--border)] text-sm disabled:opacity-35" disabled={isUpdating || redoStack.length === 0} onClick={() => void runHistory("redo")} type="button">↷ 重做</button>
               </div>
+              <button
+                className="mt-2 min-h-11 w-full rounded-xl bg-[var(--accent-soft)] text-sm text-[var(--accent-deep)] transition hover:bg-[var(--accent)]/15 disabled:opacity-45"
+                disabled={isOptimizing || isUpdating}
+                onClick={() => void optimizeDesign()}
+                type="button"
+              >
+                {isOptimizing ? "引擎优化中…" : "一键优化布局"}
+              </button>
+            </section>
+
+            <section className="mt-5 border-t border-[var(--border)]/70 pt-5" aria-labelledby="desktop-suggestion-title">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="font-serif text-xl" id="desktop-suggestion-title">搭配建议</h2>
+                <button
+                  className="min-h-10 shrink-0 rounded-full border border-[var(--accent)] px-4 text-xs text-[var(--accent-deep)] transition hover:bg-[var(--accent-soft)] disabled:opacity-55"
+                  disabled={!selectedBead || isSuggesting}
+                  onClick={() => void loadSuggestions()}
+                  type="button"
+                >
+                  {isSuggesting ? "分析中…" : "获取建议"}
+                </button>
+              </div>
+              <SuggestionPanel
+                disabled={isUpdating}
+                onApply={(beadProductId) => void applySuggestion(beadProductId)}
+                suggestions={suggestions}
+              />
             </section>
 
             <section className="mt-5 flex min-h-0 flex-1 flex-col border-t border-[var(--border)]/70 pt-4" aria-labelledby="desktop-design-summary-title">
@@ -1072,13 +1178,6 @@ export function DiyEditor({ designId }: { designId: string }) {
           </section>
         </section>
 
-        {order ? (
-          <section className="mt-4 rounded-2xl border border-[var(--success)]/30 bg-white/70 p-5" aria-labelledby="order-snapshot-title" data-order-id={order.orderId}>
-            <h2 className="font-serif text-xl" id="order-snapshot-title">设计已确认，订单快照已生成（未接支付）</h2>
-            <p className="mt-2 text-sm text-[var(--muted)]">{order.orderId} · Revision {order.snapshot.design.revision} · {formatMinorAmount({ amountMinor: order.snapshot.design.pricing.totalPriceMinor, currency: order.snapshot.design.currency, locale: order.snapshot.design.locale })}</p>
-          </section>
-        ) : null}
-
         <details className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
           <summary className="min-h-11 cursor-pointer text-sm text-[var(--muted)]">查看选中珠子与设计说明</summary>
           <div className="grid gap-5 pt-4 md:grid-cols-2">
@@ -1095,8 +1194,34 @@ export function DiyEditor({ designId }: { designId: string }) {
                     <button className="min-h-11 rounded-xl border border-[var(--border)] text-sm disabled:opacity-35" disabled={isUpdating || selectedBead.positionIndex >= ringLength - 1} onClick={() => moveSelectedBy(1)} type="button">右移</button>
                     <button className="min-h-11 rounded-xl border border-[var(--danger)]/40 text-sm text-[var(--danger)] disabled:opacity-35" disabled={isUpdating || design.beads.length <= 1 || selectedAnchorsAccessory} onClick={() => void removeBead(selectedBead.componentId)} type="button">移除</button>
                   </div>
+                  <button
+                    className="mt-2 min-h-11 w-full rounded-xl bg-[var(--accent-soft)] text-sm text-[var(--accent-deep)] disabled:opacity-45"
+                    disabled={isOptimizing || isUpdating}
+                    onClick={() => void optimizeDesign()}
+                    type="button"
+                  >
+                    {isOptimizing ? "引擎优化中…" : "一键优化布局"}
+                  </button>
                 </div>
               ) : <p className="mt-3 text-sm text-[var(--muted)]">请选择一颗珠子。</p>}
+              <div className="mt-4 border-t border-[var(--border)]/70 pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="font-medium">搭配建议</h3>
+                  <button
+                    className="min-h-10 rounded-full border border-[var(--accent)] px-4 text-xs text-[var(--accent-deep)] disabled:opacity-55"
+                    disabled={!selectedBead || isSuggesting}
+                    onClick={() => void loadSuggestions()}
+                    type="button"
+                  >
+                    {isSuggesting ? "分析中…" : "获取建议"}
+                  </button>
+                </div>
+                <SuggestionPanel
+                  disabled={isUpdating}
+                  onApply={(beadProductId) => void applySuggestion(beadProductId)}
+                  suggestions={suggestions}
+                />
+              </div>
             </section>
             <section aria-labelledby="design-note-title">
               <h2 className="font-serif text-xl" id="design-note-title">设计说明 · {components.length} 个组件</h2>
@@ -1108,5 +1233,43 @@ export function DiyEditor({ designId }: { designId: string }) {
         </div>
       </div>
     </main>
+  );
+}
+
+function SuggestionPanel({
+  suggestions,
+  disabled,
+  onApply
+}: {
+  suggestions: readonly MaterialSuggestion[];
+  disabled: boolean;
+  onApply: (beadProductId: string) => void;
+}) {
+  if (suggestions.length === 0) {
+    return (
+      <p className="mt-2 text-xs leading-5 text-[var(--muted)]" data-suggestion-empty="true">
+        基于配色协调与已审核搭配规则，为选中珠子推荐搭档材料。
+      </p>
+    );
+  }
+  return (
+    <ul className="mt-3 space-y-2" data-suggestion-list="true" aria-label="搭配建议列表">
+      {suggestions.slice(0, 4).map((suggestion) => (
+        <li key={suggestion.material.beadProductId}>
+          <button
+            className="w-full rounded-xl border border-[var(--border)] bg-white/70 px-3 py-2 text-left transition hover:border-[var(--accent)] hover:bg-white disabled:cursor-wait disabled:opacity-45"
+            disabled={disabled}
+            onClick={() => onApply(suggestion.material.beadProductId)}
+            type="button"
+          >
+            <span className="flex items-center justify-between gap-2">
+              <span className="truncate text-sm font-medium">{suggestion.material.displayName}</span>
+              <span className="shrink-0 text-xs text-[var(--accent-deep)]">{Math.round(suggestion.score)} 分</span>
+            </span>
+            <span className="mt-1 block text-xs leading-5 text-[var(--muted)]">{suggestion.reason}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }

@@ -6,6 +6,10 @@
 
 The executable source is `packages/design-contract/src`. This document describes schema version `1.0.0`. Phase 2A creates the contract package without switching the existing AI, 3D, Backend, Frontend, or Prisma consumers.
 
+## Knowledge system schemas (additive)
+
+The knowledge-driven design system (see `docs/KNOWLEDGE_SYSTEM_SPEC.md`, approved as `DEC-KNOWLEDGE-SYSTEM-001`) extends this package with five additive schema families: versioned taxonomy vocabulary, `RecommendationContext`, `KnowledgeSource`/`KnowledgeDocument`/`KnowledgeRule`, machine-executable `DecisionRule`, and the sidecar `DesignDecisionTrace`. These families do not alter `DesignV1`: the design schema version remains `1.0.0`, decision traces live in their own persistence record, and the only DesignV1-facing additions are the optional `lengthAlongStringMm` bead/accessory field (falling back to `diameterMm`) and the `TAROT_GUIDED` design mode.
+
 ## Top-level DesignV1
 
 Wire JSON uses camelCase. Zod schemas infer TypeScript types.

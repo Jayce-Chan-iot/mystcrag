@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { GenerateDesignRequestSchema, PublicDesignV1Schema, type PublicDesignV1 } from "@mystcrag/design-contract";
+import { GenerateDesignRequestSchema, PublicDesignV1Schema, RecommendDesignRequestSchema, type PublicDesignV1 } from "@mystcrag/design-contract";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -24,7 +24,7 @@ import {
   INITIAL_ANSWERS,
   QUESTIONNAIRE_STEPS,
   toGenerateDesignRequest,
-  toGenerateDesignRequests,
+  toRecommendDesignRequest,
   validateQuestionnaireStep
 } from "../questionnaire/model/questionnaire";
 
@@ -62,31 +62,27 @@ test("questionnaire produces a shared Generate Design request DTO", () => {
   assert.equal(request.maxBudgetMinor, 89_900);
 });
 
-test("questionnaire derives three legal differentiated Backend generation requests", () => {
+test("questionnaire derives a single schema-valid recommend request for the deterministic engine", () => {
   const answers = { state: "quiet", color: "mist-blue", style: "minimal", budget: "entry", wrist: "155", culture: "landscape", excludedProductIds: ["product-quartz-round-10"], personalizationConsent: true };
-  const requests = toGenerateDesignRequests(answers);
-  assert.equal(requests.length, 3);
-  assert.equal(new Set(requests.map(({ requestId }) => requestId)).size, 3);
-  assert.equal(new Set(requests.map(({ styleTags }) => styleTags.at(-1))).size, 3);
-  for (const request of requests) {
-    assert.equal(GenerateDesignRequestSchema.safeParse(request).success, true);
-    assert.deepEqual(request.emotionTags, ["quiet"]);
-    assert.equal(request.styleTags.includes("minimal"), true);
-    assert.equal(request.styleTags.includes("landscape"), true);
-    assert.equal(request.colorTags.includes("mist-blue"), true);
-    assert.equal(request.maxBudgetMinor, 49_900);
-    assert.equal(request.wristCircumferenceMm, 155);
-    assert.deepEqual(request.excludedProductIds, ["product-quartz-round-10"]);
-    assert.equal(request.personalizationConsent, true);
-  }
+  const request = toRecommendDesignRequest(answers);
+  assert.equal(RecommendDesignRequestSchema.safeParse(request).success, true);
+  assert.deepEqual(request.emotionTags, ["quiet"]);
+  assert.equal(request.styleTags.includes("minimal"), true);
+  assert.equal(request.styleTags.includes("landscape"), true);
+  assert.equal(request.colorTags.includes("mist-blue"), true);
+  assert.equal(request.maxBudgetMinor, 49_900);
+  assert.equal(request.minBudgetMinor, 29_900);
+  assert.equal(request.wristCircumferenceMm, 155);
+  assert.deepEqual(request.excludedProductIds, ["product-quartz-round-10"]);
+  assert.equal(request.personalizationConsent, true);
 });
 
-test("questionnaire keeps successful AI candidates when another candidate fails", () => {
+test("questionnaire issues one recommend call instead of concurrent generate fan-out", () => {
   const source = readFileSync(new URL("../questionnaire/components/questionnaire-wizard.tsx", import.meta.url), "utf8");
-  assert.match(source, /Promise\.allSettled/);
-  assert.match(source, /response\.status === "fulfilled"/);
-  assert.match(source, /responses\.length === 0/);
-  assert.doesNotMatch(source, /await Promise\.all\(toGenerateDesignRequests/);
+  assert.match(source, /designApi\.recommend\(/);
+  assert.match(source, /response\.candidates\.length === 0/);
+  assert.doesNotMatch(source, /Promise\.allSettled/);
+  assert.doesNotMatch(source, /designApi\.generate/);
 });
 
 test("renders three schema-valid design choices and selects each by public designId", () => {

@@ -12,6 +12,7 @@ import {
   DeleteDesignResponseSchema,
   DesignV1Schema,
   type CatalogAccessoryProduct,
+  VisualProfileSchema,
   type CatalogMaterialProduct,
   toOrderSnapshot,
   toPublicDesign,
@@ -43,6 +44,12 @@ import {
 import { z } from "zod";
 
 import { DomainApiError } from "../../contracts/api-error.js";
+import {
+  NOOP_KNOWLEDGE_USAGE_RECORDER,
+  catalogVersionOfRows,
+  type KnowledgeUsageEvent,
+  type KnowledgeUsageRecorder
+} from "../../observability/knowledge-usage-recorder.js";
 
 export type CatalogProduct = {
   id: string;
@@ -62,6 +69,9 @@ export type CatalogProduct = {
   cultureTags?: string[];
   shape?: string;
   diameterMm?: number;
+  lengthAlongStringMm?: number | null;
+  holeDiameterMm?: number | null;
+  visualProfile?: unknown;
   materialKey?: string;
   accessoryType?: string;
   material?: string;
@@ -90,6 +100,8 @@ export type AvailableCatalogMaterialProduct = {
   cultureTags: string[];
   shape: string;
   diameterMm: number;
+  lengthAlongStringMm?: number | null;
+  visualProfile?: unknown;
   materialKey: string;
   modelAssetKey: string | null;
   textureAssetKey: string | null;
@@ -135,7 +147,7 @@ type StoredRevision = {
   createdAt: Date;
 };
 
-type DesignStore = {
+export type DesignStore = {
   createDesign(actorId: string, snapshot: DesignV1): Promise<StoredDesign>;
   getDesign(actorId: string, designId: string): Promise<StoredDesign>;
   getRevision(designId: string, revision: number): Promise<StoredRevision>;
@@ -151,7 +163,7 @@ type DesignStore = {
   saveDesign(actorId: string, designId: string, expectedRevision: number): Promise<StoredDesign>;
   softDeleteDesign(actorId: string, designId: string): Promise<void>;
 };
-type CatalogStore = {
+export type CatalogStore = {
   getCatalogProducts(productIds: readonly string[]): Promise<CatalogProduct[]>;
   listActiveCatalogProducts(
     currency: "CNY" | "TWD",
@@ -164,8 +176,8 @@ type CatalogStore = {
     currency: "CNY" | "TWD"
   ): Promise<AvailableCatalogAccessoryProduct[]>;
 };
-type PriceStore = { recalculateDesignPrice(input: unknown): Promise<DesignV1> };
-type InventoryStore = {
+export type PriceStore = { recalculateDesignPrice(input: unknown): Promise<DesignV1> };
+export type InventoryStore = {
   validateAvailability(requirements: ReadonlyMap<string, number>): Promise<void>;
 };
 type PublicationStore = {
@@ -304,11 +316,12 @@ export type DesignApplicationDependencies = {
   publications: PublicationStore;
   orders: OrderStore;
   generator: DesignGenerationAdapter;
+  usage?: KnowledgeUsageRecorder;
   now?: () => Date;
   createId?: (prefix: string) => string;
 };
 
-function quantitiesByProduct(design: DesignV1): Map<string, number> {
+export function quantitiesByProduct(design: DesignV1): Map<string, number> {
   const quantities = new Map<string, number>();
   for (const bead of design.beads) {
     quantities.set(bead.beadProductId, (quantities.get(bead.beadProductId) ?? 0) + 1);
@@ -322,7 +335,7 @@ function quantitiesByProduct(design: DesignV1): Map<string, number> {
   return quantities;
 }
 
-function rebuildDerived(input: DesignV1): DesignV1 {
+export function rebuildDerived(input: DesignV1): DesignV1 {
   const ring = [
     ...input.beads,
     ...input.accessories.filter((item) => item.placementMode === "INLINE")
@@ -458,7 +471,7 @@ export function deriveTarotDesignAuthorityId(
   return `tarot-design-${digest}`;
 }
 
-function hasSameCandidateAuthority(
+export function hasSameCandidateAuthority(
   existing: DesignV1,
   intended: DesignV1,
   designIdSeed: string
@@ -521,6 +534,9 @@ function buildGeneratedDesign(
     materialKey: z.string().min(1).parse(product.materialKey),
     shape: BeadShapeSchema.parse(product.shape),
     diameterMm: z.number().positive().parse(product.diameterMm),
+    ...(product.lengthAlongStringMm === null || product.lengthAlongStringMm === undefined
+      ? {}
+      : { lengthAlongStringMm: product.lengthAlongStringMm }),
     quantity: 1,
     role: positionIndex === 0 ? "FOCAL" : "MAIN",
     modelAssetKey: requireAsset(product.modelAssetKey, product.id, "modelAssetKey"),
@@ -795,11 +811,13 @@ export class DesignApplicationService implements DesignApiService {
   private readonly generator: DesignGenerationAdapter;
   private readonly now: () => Date;
   private readonly createId: (prefix: string) => string;
+  private readonly usage: KnowledgeUsageRecorder;
 
   constructor(private readonly dependencies: DesignApplicationDependencies) {
     this.generator = dependencies.generator;
     this.now = dependencies.now ?? (() => new Date());
     this.createId = dependencies.createId ?? ((prefix) => `${prefix}-${randomUUID()}`);
+    this.usage = dependencies.usage ?? NOOP_KNOWLEDGE_USAGE_RECORDER;
   }
 
   async generate(
@@ -867,6 +885,14 @@ export class DesignApplicationService implements DesignApiService {
     }
     try {
       const persisted = await this.dependencies.designs.createDesign(input.actorId, priced);
+      await this.usage.record([
+        this.designCreatedUsageEvent({
+          actorId: input.actorId,
+          design: persisted.snapshot,
+          source: input.designMode === "TAROT_GUIDED" ? "tarot" : "generate",
+          productCatalogVersion: catalogVersionOfRows(catalog)
+        })
+      ]);
       return {
         requestId: input.request.requestId,
         design: toPublicDesign(persisted.snapshot),
@@ -887,6 +913,36 @@ export class DesignApplicationService implements DesignApiService {
         warnings
       };
     }
+  }
+
+  private designCreatedUsageEvent(input: {
+    actorId: string;
+    design: DesignV1;
+    source: "generate" | "tarot";
+    productCatalogVersion?: string;
+  }): KnowledgeUsageEvent {
+    return {
+      eventType: "design.created",
+      actorId: input.actorId,
+      designId: input.design.designId,
+      revisionNumber: input.design.revision,
+      knowledgeVersion: input.design.provenance.knowledgeBaseVersion,
+      ...(input.productCatalogVersion === undefined
+        ? {}
+        : { productCatalogVersion: input.productCatalogVersion }),
+      payload: {
+        source: input.source,
+        designMode: input.design.designMode,
+        beadCount: input.design.beads.length,
+        totalPriceMinor: input.design.pricing.totalPriceMinor
+      }
+    };
+  }
+
+  private async currentCatalogVersion(currency: "CNY" | "TWD"): Promise<string> {
+    return catalogVersionOfRows(
+      await this.dependencies.catalog.listActiveCatalogProducts(currency)
+    );
   }
 
   async update(actorId: string, request: UpdateDesignRequest): Promise<UpdateDesignResponse> {
@@ -919,6 +975,23 @@ export class DesignApplicationService implements DesignApiService {
       next,
       request.operations.map(({ operation }) => operation).join(",")
     );
+    await this.usage.record([
+      {
+        eventType: "design.updated",
+        actorId,
+        designId: request.designId,
+        revisionNumber: persisted.currentRevision,
+        knowledgeVersion: persisted.snapshot.provenance.knowledgeBaseVersion,
+        productCatalogVersion: await this.currentCatalogVersion(next.currency),
+        payload: {
+          requestId: request.requestId,
+          operationTypes: request.operations.map(({ operation }) => operation),
+          previousRevision: request.expectedRevision,
+          beadCount: persisted.snapshot.beads.length,
+          totalPriceMinor: persisted.snapshot.pricing.totalPriceMinor
+        }
+      }
+    ]);
     return { requestId: request.requestId, design: toPublicDesign(persisted.snapshot), warnings };
   }
 
@@ -973,6 +1046,21 @@ export class DesignApplicationService implements DesignApiService {
       validated.designId,
       validated.revision
     );
+    await this.usage.record([
+      {
+        eventType: "design.saved",
+        actorId,
+        designId: validated.designId,
+        revisionNumber: validated.revision,
+        knowledgeVersion: saved.snapshot.provenance.knowledgeBaseVersion,
+        productCatalogVersion: await this.currentCatalogVersion(validated.currency),
+        payload: {
+          requestId: request.requestId,
+          designMode: saved.snapshot.designMode,
+          totalPriceMinor: saved.snapshot.pricing.totalPriceMinor
+        }
+      }
+    ]);
     return {
       requestId: request.requestId,
       design: toPublicDesign(saved.snapshot),
@@ -1101,6 +1189,12 @@ export class DesignApplicationService implements DesignApiService {
         materialKey: product.materialKey,
         shape: BeadShapeSchema.parse(product.shape),
         diameterMm: product.diameterMm,
+        ...(product.lengthAlongStringMm === null || product.lengthAlongStringMm === undefined
+          ? {}
+          : { lengthAlongStringMm: product.lengthAlongStringMm }),
+        ...(product.visualProfile
+          ? { visualProfile: VisualProfileSchema.parse(product.visualProfile) }
+          : {}),
         modelAssetKey: product.modelAssetKey,
         textureAssetKey: product.textureAssetKey,
         currency: product.currency,

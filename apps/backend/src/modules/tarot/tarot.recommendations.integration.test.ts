@@ -18,6 +18,7 @@ import {
 } from "@mystcrag/ai-agent/tarot";
 
 import { DomainApiError } from "../../contracts/api-error.js";
+import type { KnowledgeUsageEvent } from "../../observability/knowledge-usage-recorder.js";
 import {
   DesignApplicationService,
   type CatalogProduct,
@@ -65,6 +66,10 @@ function realCatalog(): AvailableCatalogMaterialProduct[] {
     cultureTags: [],
     shape: bead.shape,
     diameterMm: bead.diameterMm,
+    lengthAlongStringMm: null,
+    holeDiameterMm: null,
+    grade: null,
+    visualProfile: null,
     materialKey: bead.materialKey,
     modelAssetKey: bead.modelAssetKey,
     textureAssetKey: bead.textureAssetKey
@@ -82,6 +87,7 @@ function createRealRecommendationHarness(options: {
   questionEncryption?: TarotQuestionEncryptionPort;
   copy?: TarotRecommendationCopyPort;
   concurrentWinnerDesignId?: string;
+  stockQuantities?: ReadonlyMap<string, number>;
 } = {}) {
   const tarotRepository = new InMemoryTarotRepository();
   if (options.concurrentWinnerDesignId !== undefined) {
@@ -208,8 +214,16 @@ function createRealRecommendationHarness(options: {
     }
   };
 
+  const recordedUsageEvents: KnowledgeUsageEvent[] = [];
+  const usageRecorder = {
+    async record(events: readonly KnowledgeUsageEvent[]) {
+      recordedUsageEvents.push(...events.map((event) => ({ ...event })));
+    }
+  };
+
   const designService = new DesignApplicationService({
     designs: designStore,
+    usage: usageRecorder,
     catalog: {
       async getCatalogProducts(ids) {
         return cloneTestValue(catalogProducts.filter(({ id }) => ids.includes(id)));
@@ -303,6 +317,20 @@ function createRealRecommendationHarness(options: {
         return cloneTestValue(catalog);
       }
     },
+    ...(options.stockQuantities === undefined
+      ? {}
+      : {
+          stock: {
+            async getAvailableQuantities(productIds: readonly string[]) {
+              return new Map(
+                productIds.map((productId) => [
+                  productId,
+                  options.stockQuantities!.get(productId) ?? 0
+                ])
+              );
+            }
+          }
+        }),
     designGenerator: {
       async generateFromCandidate(input) {
         const candidate = input.candidate as { materialProductIds: string[] };
@@ -336,6 +364,7 @@ function createRealRecommendationHarness(options: {
     },
     questionEncryption: options.questionEncryption,
     copy: options.copy,
+    usage: usageRecorder,
     now: () => tarotTestNow
   });
 
@@ -347,6 +376,7 @@ function createRealRecommendationHarness(options: {
     designs,
     candidateSequences,
     generationRequests,
+    recordedUsageEvents,
     getCreateAttempts: () => createAttempts
   };
 }
@@ -452,6 +482,102 @@ test("real Design application service persists the exact three Tarot candidates 
   });
   assert.equal(storedSession.questionCiphertext, null);
   assert.equal(JSON.stringify(storedSession).includes(rawQuestion), false);
+});
+
+test("Tarot recommendations and session save record knowledge usage events", async () => {
+  const harness = createRealRecommendationHarness();
+  const revealed = await revealRealRecommendationSession(harness.tarotService);
+  const response = await harness.tarotService.recommendations(
+    actorId,
+    revealed.session.sessionId,
+    recommendationRequest(revealed.session.revision)
+  );
+
+  const recommendationEvents = harness.recordedUsageEvents.filter(
+    (event) => event.eventType === "recommendation.served"
+  );
+  assert.equal(recommendationEvents.length, 1);
+  assert.equal(recommendationEvents[0]!.actorId, actorId);
+  assert.equal(recommendationEvents[0]!.payload.source, "tarot");
+  assert.equal(recommendationEvents[0]!.payload.sessionId, revealed.session.sessionId);
+  assert.equal(recommendationEvents[0]!.knowledgeVersion, "tarot-design-rules-v1");
+  assert.deepEqual(
+    (recommendationEvents[0]!.payload.candidates as Array<{ rank: number; designId: string }>).map(
+      (candidate) => candidate.designId
+    ),
+    response.session.recommendations!.map((recommendation) => recommendation.design.designId)
+  );
+
+  const createdEvents = harness.recordedUsageEvents.filter(
+    (event) => event.eventType === "design.created"
+  );
+  assert.equal(createdEvents.length, 3);
+  assert.ok(
+    createdEvents.every(
+      (event) =>
+        event.payload.source === "tarot" && event.payload.designMode === "TAROT_GUIDED"
+    )
+  );
+
+  harness.recordedUsageEvents.length = 0;
+  const selectedDesignId = response.session.recommendations![1]!.design.designId;
+  const saved = await harness.tarotService.save(actorId, revealed.session.sessionId, {
+    requestId: "save-tarot-usage",
+    expectedRevision: revealed.session.revision + 1,
+    selectedDesignId
+  });
+  assert.equal(saved.session.status, "SAVED");
+
+  const savedEvents = harness.recordedUsageEvents.filter(
+    (event) => event.eventType === "tarot.session_saved"
+  );
+  assert.equal(savedEvents.length, 1);
+  assert.equal(savedEvents[0]!.actorId, actorId);
+  assert.equal(savedEvents[0]!.designId, selectedDesignId);
+  assert.equal(savedEvents[0]!.payload.sessionId, revealed.session.sessionId);
+  assert.equal(savedEvents[0]!.payload.selectedDesignId, selectedDesignId);
+});
+
+test("Tarot recommendations skip materials that cannot complete a bracelet from stock", async () => {
+  for (const [description, available] of [
+    ["zero stock", 0],
+    ["partial stock below wrap capacity", 5]
+  ] as const) {
+    const excludedProductId = "product-aquamarine-round-8";
+    const harness = createRealRecommendationHarness({
+      stockQuantities: new Map([
+        [excludedProductId, available],
+        ["product-moonstone-round-6", 100],
+        ["product-quartz-round-10", 100]
+      ])
+    });
+    const revealed = await revealRealRecommendationSession(harness.tarotService);
+    const response = await harness.tarotService.recommendations(
+      actorId,
+      revealed.session.sessionId,
+      recommendationRequest(revealed.session.revision)
+    );
+
+    assert.equal(response.session.recommendations!.length, 3, description);
+    assert.equal(harness.candidateSequences.size, 3, description);
+    for (const [designId, sequence] of harness.candidateSequences) {
+      assert.ok(designId);
+      assert.equal(sequence.includes(excludedProductId), false, description);
+      assert.ok(
+        sequence.every((productId) =>
+          ["product-moonstone-round-6", "product-quartz-round-10"].includes(productId)
+        ),
+        description
+      );
+    }
+    assert.equal(
+      new Set(
+        [...harness.candidateSequences.values()].map((sequence) => sequence.join("|"))
+      ).size,
+      3,
+      description
+    );
+  }
 });
 
 test("real TarotService stores only opt-in ciphertext and savedAt in the recommendation transaction", async () => {

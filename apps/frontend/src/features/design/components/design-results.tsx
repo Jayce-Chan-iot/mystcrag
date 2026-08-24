@@ -20,7 +20,25 @@ import { ComplianceNotice } from "./compliance-notice";
 const materialNames: Record<string, string> = {
   "crystal-aquamarine-material-v1": "海蓝宝",
   "crystal-moonstone-material-v1": "月光石",
-  "crystal-clear-quartz-material-v1": "白水晶"
+  "crystal-clear-quartz-material-v1": "白水晶",
+  "crystal-aquamarine": "海蓝宝",
+  "crystal-moonstone": "月光石",
+  "crystal-clear-quartz": "白水晶",
+  "crystal-amethyst": "紫水晶",
+  "crystal-rose-quartz": "粉水晶",
+  "crystal-citrine": "黄水晶",
+  "crystal-green-aventurine": "绿东陵石",
+  "crystal-tiger-eye": "虎眼石",
+  "crystal-lapis-lazuli": "青金石",
+  "crystal-garnet": "石榴石",
+  "crystal-labradorite": "拉长石",
+  "crystal-black-onyx": "黑玛瑙",
+  "crystal-smoky-quartz": "烟晶",
+  "crystal-sunstone": "日光石",
+  "crystal-amazonite": "天河石",
+  "crystal-fluorite": "萤石",
+  "crystal-red-agate": "红玛瑙",
+  "crystal-rhodonite": "蔷薇辉石"
 };
 
 export type BudgetStatus = "NO_BUDGET" | "UNDER_BUDGET" | "WITHIN_BUDGET" | "OVER_BUDGET";
@@ -96,7 +114,7 @@ export function DesignResults({ designId }: { designId: string }) {
             const selected = selectedDesignId === design.designId;
             const budgetStatus = getBudgetStatus(design.pricing.totalPriceMinor, budget);
             const acceptedOverBudget = acceptedOverBudgetIds.includes(design.designId);
-            const materialList = [...new Set(design.beads.map((bead) => materialNames[bead.materialKey] ?? bead.crystalId))].join(" · ");
+            const materialList = [...new Set(design.beads.map((bead) => materialNames[bead.materialKey] ?? materialNames[bead.crystalId] ?? bead.crystalId))].join(" · ");
             return <article className={`design-result-card flex min-h-0 min-w-0 flex-col rounded-[1.5rem] border bg-[var(--surface)] p-4 transition ${selected ? "border-[var(--accent-deep)] shadow-[0_18px_45px_rgb(76_56_93/0.13)] ring-1 ring-[var(--accent)]/20" : "border-[var(--border)]"}`} data-design-selected={selected} data-option-index={index + 1} key={design.designId}>
               <div className="flex items-center justify-between">
                 <span className={`rounded-full px-3 py-1 text-xs ${selected ? "bg-[var(--accent-deep)] text-white" : "bg-[var(--surface-soft)] text-[var(--muted)]"}`}>方案 {String(index + 1).padStart(2, "0")}</span>

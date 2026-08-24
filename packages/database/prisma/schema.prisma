@@ -85,6 +85,23 @@ enum DesignChangeType {
   AI_OPTIMIZED
 }
 
+enum KnowledgeStatus {
+  NEW
+  EXTRACTED
+  VALIDATED
+  NEEDS_REVIEW
+  APPROVED
+  REJECTED
+  CONFLICTED
+  SUPERSEDED
+}
+
+enum KnowledgeVersionStatus {
+  DRAFT
+  PUBLISHED
+  RETIRED
+}
+
 model User {
   id            String              @id @default(cuid())
   email         String?             @unique
@@ -164,11 +181,42 @@ model Design {
   owner                User                        @relation(fields: [ownerId], references: [id], onDelete: Restrict)
   revisions            DesignRevision[]
   publications         DesignPublication[]
+  decisionTraces       DesignDecisionTrace[]
   tarotRecommendations TarotDesignRecommendation[]
+  usageEvents          KnowledgeUsageEvent[]
 
   @@index([ownerId, updatedAt])
   @@index([status, deletedAt])
   @@map("designs")
+}
+
+model DesignDecisionTrace {
+  id             String   @id @default(cuid())
+  designId       String   @map("design_id")
+  revisionNumber Int      @map("revision_number")
+  trace          Json
+  createdAt      DateTime @default(now()) @map("created_at")
+  design         Design   @relation(fields: [designId], references: [id], onDelete: Restrict)
+
+  @@unique([designId, revisionNumber])
+  @@map("design_decision_traces")
+}
+
+model KnowledgeUsageEvent {
+  id                    String   @id @default(cuid())
+  eventType             String   @map("event_type")
+  actorId               String?  @map("actor_id")
+  designId              String?  @map("design_id")
+  revisionNumber        Int?     @map("revision_number")
+  knowledgeVersion      String?  @map("knowledge_version")
+  productCatalogVersion String?  @map("product_catalog_version")
+  payload               Json
+  createdAt             DateTime @default(now()) @map("created_at")
+  design                Design?  @relation(fields: [designId], references: [id], onDelete: Restrict)
+
+  @@index([eventType, createdAt])
+  @@index([designId, createdAt])
+  @@map("knowledge_usage_events")
 }
 
 model DesignRevision {
@@ -233,38 +281,42 @@ model Order {
 }
 
 model OrderDesignSnapshot {
-  id                 String   @id @default(cuid())
-  orderId            String   @unique @map("order_id")
-  schemaVersion      String   @map("schema_version")
-  designSnapshot     Json     @map("design_snapshot")
-  pricingSnapshot    Json     @map("pricing_snapshot")
-  productionSnapshot Json     @map("production_snapshot")
-  fulfillmentSnapshot Json    @map("fulfillment_snapshot")
-  currency           Currency
-  pricingRuleVersion String   @map("pricing_rule_version")
-  createdAt          DateTime @default(now()) @map("created_at")
-  order              Order    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  id                  String   @id @default(cuid())
+  orderId             String   @unique @map("order_id")
+  schemaVersion       String   @map("schema_version")
+  designSnapshot      Json     @map("design_snapshot")
+  pricingSnapshot     Json     @map("pricing_snapshot")
+  productionSnapshot  Json     @map("production_snapshot")
+  fulfillmentSnapshot Json     @map("fulfillment_snapshot")
+  currency            Currency
+  pricingRuleVersion  String   @map("pricing_rule_version")
+  createdAt           DateTime @default(now()) @map("created_at")
+  order               Order    @relation(fields: [orderId], references: [id], onDelete: Restrict)
 
   @@map("order_design_snapshots")
 }
 
 model MaterialProduct {
-  id              String   @id
-  crystalId       String   @map("crystal_id")
-  sku             String   @unique
-  name            String
-  shape           String
-  diameterMm      Float    @map("diameter_mm")
-  materialKey     String   @map("material_key")
-  modelAssetKey   String?  @map("model_asset_key")
-  textureAssetKey String?  @map("texture_asset_key")
-  currency        Currency
-  unitPriceMinor  BigInt   @map("unit_price_minor")
-  unitCostMinor   BigInt   @map("unit_cost_minor")
-  active          Boolean  @default(true)
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
-  crystal         Crystal  @relation(fields: [crystalId], references: [id], onDelete: Restrict)
+  id                  String   @id
+  crystalId           String   @map("crystal_id")
+  sku                 String   @unique
+  name                String
+  shape               String
+  diameterMm          Float    @map("diameter_mm")
+  lengthAlongStringMm Float?   @map("length_along_string_mm")
+  holeDiameterMm      Float?   @map("hole_diameter_mm")
+  grade               String?
+  visualProfile       Json?    @map("visual_profile")
+  materialKey         String   @map("material_key")
+  modelAssetKey       String?  @map("model_asset_key")
+  textureAssetKey     String?  @map("texture_asset_key")
+  currency            Currency
+  unitPriceMinor      BigInt   @map("unit_price_minor")
+  unitCostMinor       BigInt   @map("unit_cost_minor")
+  active              Boolean  @default(true)
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  crystal             Crystal  @relation(fields: [crystalId], references: [id], onDelete: Restrict)
 
   @@index([crystalId, active])
   @@index([currency, active])
@@ -272,20 +324,22 @@ model MaterialProduct {
 }
 
 model AccessoryProduct {
-  id              String   @id
-  sku             String   @unique
-  accessoryType   String   @map("accessory_type")
-  material        String
-  finish          String
-  dimensions      Json
-  modelAssetKey   String?  @map("model_asset_key")
-  textureAssetKey String?  @map("texture_asset_key")
-  currency        Currency
-  unitPriceMinor  BigInt   @map("unit_price_minor")
-  unitCostMinor   BigInt   @map("unit_cost_minor")
-  active          Boolean  @default(true)
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  id                  String   @id
+  sku                 String   @unique
+  accessoryType       String   @map("accessory_type")
+  material            String
+  finish              String
+  dimensions          Json
+  lengthAlongStringMm Float?   @map("length_along_string_mm")
+  visualProfile       Json?    @map("visual_profile")
+  modelAssetKey       String?  @map("model_asset_key")
+  textureAssetKey     String?  @map("texture_asset_key")
+  currency            Currency
+  unitPriceMinor      BigInt   @map("unit_price_minor")
+  unitCostMinor       BigInt   @map("unit_cost_minor")
+  active              Boolean  @default(true)
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
   @@index([currency, active])
   @@map("accessory_products")
@@ -316,6 +370,123 @@ model PricingRule {
   @@unique([version, currency])
   @@index([currency, active])
   @@map("pricing_rules")
+}
+
+model KnowledgeSource {
+  id                      String              @id
+  name                    String
+  sourceType              String              @map("source_type")
+  baseUrl                 String?             @map("base_url")
+  enabled                 Boolean             @default(false)
+  authorityScore          Float               @map("authority_score")
+  allowedKnowledgeDomains String[]            @map("allowed_knowledge_domains")
+  crawlFrequency          String?             @map("crawl_frequency")
+  language                String
+  rateLimit               Json?               @map("rate_limit")
+  legalNote               String?             @map("legal_note")
+  sourceCategory          String              @default("MANUAL") @map("source_category")
+  reliabilityLevel        String              @default("MEDIUM") @map("reliability_level")
+  countryOrRegion         String?             @map("country_or_region")
+  contentType             String              @default("OTHER") @map("content_type")
+  crawlStrategy           Json?               @map("crawl_strategy")
+  reviewStatus            String              @default("NEEDS_REVIEW") @map("review_status")
+  lastSuccessfulFetch     DateTime?           @map("last_successful_fetch")
+  lastFailure             Json?               @map("last_failure")
+  consecutiveFailures     Int                 @default(0) @map("consecutive_failures")
+  createdAt               DateTime            @default(now()) @map("created_at")
+  updatedAt               DateTime            @updatedAt @map("updated_at")
+  documents               KnowledgeDocument[]
+  rules                   KnowledgeRule[]
+
+  @@index([enabled])
+  @@index([reviewStatus, enabled])
+  @@map("knowledge_sources")
+}
+
+model KnowledgeDocument {
+  id            String          @id
+  sourceId      String          @map("source_id")
+  url           String
+  urlNormalized String          @map("url_normalized")
+  contentHash   String          @unique @map("content_hash")
+  title         String
+  contentText   String          @map("content_text")
+  fetchedAt     DateTime        @map("fetched_at")
+  parser        String
+  language      String
+  status        String          @default("FETCHED")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  source        KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+
+  @@index([sourceId])
+  @@index([sourceId, fetchedAt])
+  @@index([urlNormalized])
+  @@map("knowledge_documents")
+}
+
+model KnowledgeRule {
+  id                 String            @id
+  sourceId           String            @map("source_id")
+  knowledgeType      String            @map("knowledge_type")
+  knowledgeDomain    String            @map("knowledge_domain")
+  subject            String
+  relation           String
+  payload            Json
+  conditions         Json              @default("{}")
+  confidence         Float
+  claimType          String?           @map("claim_type")
+  status             KnowledgeStatus   @default(NEW)
+  fingerprint        String            @unique
+  sourceRefs         Json              @map("source_refs")
+  version            Int               @default(1)
+  knowledgeVersionId String?           @map("knowledge_version_id")
+  createdAt          DateTime          @default(now()) @map("created_at")
+  updatedAt          DateTime          @updatedAt @map("updated_at")
+  source             KnowledgeSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  knowledgeVersion   KnowledgeVersion? @relation(fields: [knowledgeVersionId], references: [id], onDelete: Restrict)
+
+  @@index([status, knowledgeDomain])
+  @@index([knowledgeVersionId])
+  @@index([subject, relation])
+  @@map("knowledge_rules")
+}
+
+/// One row per `knowledge:collect` execution (Knowledge Console V1): written
+/// RUNNING when the crawl starts, updated to COMPLETED/FAILED when it ends, so
+/// the console's Collection Runs page tracks real runs instead of committed
+/// JSON reports.
+model KnowledgeCollectionRun {
+  id                     String    @id @default(cuid())
+  status                 String    @default("RUNNING")
+  startedAt              DateTime  @map("started_at")
+  finishedAt             DateTime? @map("finished_at")
+  sourcesCrawled         Int       @default(0) @map("sources_crawled")
+  documentsAdded         Int       @default(0) @map("documents_added")
+  documentDuplicates     Int       @default(0) @map("document_duplicates")
+  candidatesInserted     Int       @default(0) @map("candidates_inserted")
+  corroboratedCandidates Int       @default(0) @map("corroborated_candidates")
+  candidateDuplicates    Int       @default(0) @map("candidate_duplicates")
+  needsReview            Int       @default(0) @map("needs_review")
+  conflicts              Int       @default(0) @map("conflicts")
+  errors                 Json      @default("[]") @map("errors")
+  sourceResults          Json      @default("[]") @map("source_results")
+  createdAt              DateTime  @default(now()) @map("created_at")
+
+  @@index([startedAt])
+  @@map("knowledge_collection_runs")
+}
+
+model KnowledgeVersion {
+  id          String                 @id
+  version     String                 @unique
+  status      KnowledgeVersionStatus @default(DRAFT)
+  ruleCount   Int                    @default(0) @map("rule_count")
+  publishedAt DateTime?              @map("published_at")
+  createdAt   DateTime               @default(now()) @map("created_at")
+  rules       KnowledgeRule[]
+
+  @@index([status])
+  @@map("knowledge_versions")
 }
 
 model TarotSession {

@@ -23,5 +23,6 @@ export type {
   TarotDesignReader,
   TarotPreferencePort,
   TarotQuestionEncryptionPort,
-  TarotRecommendationCopyPort
+  TarotRecommendationCopyPort,
+  TarotStockPort
 } from "./tarot.types.js";

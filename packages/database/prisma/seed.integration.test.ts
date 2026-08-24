@@ -25,17 +25,41 @@ test("repeated seed preserves the expected PostgreSQL fixture set", { skip: !dat
     };
     assert.deepEqual(counts, {
       users: 1,
-      crystals: 18,
-      materialProducts: 36,
-      accessoryProducts: 2,
+      crystals: 20,
+      materialProducts: 96,
+      accessoryProducts: 4,
       pricingRules: 2,
-      inventorySnapshots: 38,
+      inventorySnapshots: 100,
       designs: 3,
       designRevisions: 4,
       publications: 1,
       orders: 1,
       orderSnapshots: 1
     });
+
+    // Product V2 backfill: every seeded material product carries string length,
+    // hole diameter, grade, and a taxonomy-validated visual profile.
+    const products = await prisma.materialProduct.findMany();
+    assert.equal(products.length, 96);
+    for (const product of products) {
+      assert.ok(product.lengthAlongStringMm !== null && product.lengthAlongStringMm > 0);
+      assert.ok(product.holeDiameterMm !== null && product.holeDiameterMm > 0);
+      assert.ok(product.grade !== null && product.grade.length > 0);
+      assert.ok(product.visualProfile !== null);
+    }
+
+    // Partial out-of-stock and low-stock SKUs exist (E2E-3 pre-condition).
+    const latestInventory = await prisma.inventorySnapshot.findMany({
+      where: { sourceVersion: "seed-2026-08-v2" }
+    });
+    const outOfStock = latestInventory.filter((row) => row.availableQuantity === 0);
+    const lowStock = latestInventory.filter((row) => row.availableQuantity === 5);
+    assert.equal(outOfStock.length, 9);
+    const outOfStockIds = new Set(outOfStock.map((row) => row.productId));
+    assert.equal(outOfStockIds.has("product-moonstone-round-10"), true);
+    assert.equal(outOfStockIds.has("product-garnet-faceted-8"), true);
+    assert.equal(outOfStockIds.has("product-pendant-drop-silver-8"), true);
+    assert.equal(lowStock.length, 2);
 
     const designs = await prisma.design.findMany({ orderBy: { id: "asc" } });
     for (const design of designs) {

@@ -33,3 +33,5 @@ export const DesignMetadataSchema = z.strictObject({
 
 export type DesignMode = z.infer<typeof DesignModeSchema>;
 export type DesignMetadata = z.infer<typeof DesignMetadataSchema>;
+export type Currency = z.infer<typeof CurrencySchema>;
+export type Locale = z.infer<typeof LocaleSchema>;

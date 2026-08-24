@@ -508,6 +508,10 @@ const recommendationCatalog = (): AvailableCatalogMaterialProduct[] => {
     cultureTags: [],
     shape: bead.shape,
     diameterMm: bead.diameterMm,
+    lengthAlongStringMm: null,
+    holeDiameterMm: null,
+    grade: null,
+    visualProfile: null,
     materialKey: bead.materialKey,
     modelAssetKey: bead.modelAssetKey,
     textureAssetKey: bead.textureAssetKey

@@ -1,18 +1,27 @@
 import { createApp } from "./app.js";
 import {
   DesignRepository,
+  KnowledgeRepository,
+  KnowledgeUsageEventRepository,
   ProductRepository,
   TarotSessionRepositoryImpl,
   createPrismaClient
 } from "@mystcrag/database";
 import { NodeCryptoRandomSource } from "@mystcrag/tarot-engine";
+import {
+  KnowledgeConsoleService,
+  KnowledgeReviewService,
+  KnowledgeSourceAdminService
+} from "@mystcrag/knowledge-core";
+import { KnowledgeAdminApplicationService } from "./modules/knowledge-admin/knowledge-admin.service.js";
+import { TarotAiRecommendationCopyPort, TarotService } from "./modules/tarot/tarot.service.js";
 import { TarotCopyService } from "@mystcrag/ai-agent/tarot";
 import { createAuthProviderFromEnvironment } from "./auth/auth-provider.factory.js";
-import { createDesignApplicationService } from "./modules/design/design.service.js";
+import { knowledgeUsageRecorderFromRepository } from "./observability/knowledge-usage-recorder.js";
 import {
-  TarotAiRecommendationCopyPort,
-  TarotService
-} from "./modules/tarot/tarot.service.js";
+  createDesignApplicationService,
+  createRecommendationApplicationService
+} from "./modules/design/design.service.js";
 import { createTarotQuestionEncryptionFromEnvironment } from "./modules/tarot/tarot-question-encryption.js";
 
 const defaultPort = 4000;
@@ -26,8 +35,24 @@ await database.$connect();
 const designRepository = new DesignRepository(database);
 const productRepository = new ProductRepository(database);
 const designApplicationService = createDesignApplicationService(database);
+
+// Knowledge Console V1: the admin API is only exposed when an operator
+// configures KNOWLEDGE_ADMIN_API_KEY (fail closed in createApp otherwise).
+// The key never leaves the server; the Console frontend proxies through it.
+const knowledgeAdminApiKey = process.env.KNOWLEDGE_ADMIN_API_KEY;
+let knowledgeAdminService: KnowledgeAdminApplicationService | undefined;
+if (knowledgeAdminApiKey) {
+  const knowledgeRepository = new KnowledgeRepository(database);
+  knowledgeAdminService = new KnowledgeAdminApplicationService({
+    reviewService: new KnowledgeReviewService({ database, repository: knowledgeRepository }),
+    sourceAdminService: new KnowledgeSourceAdminService({ repository: knowledgeRepository }),
+    consoleService: new KnowledgeConsoleService({ database, repository: knowledgeRepository })
+  });
+}
+
 const app = createApp({
   designService: designApplicationService,
+  recommendationService: createRecommendationApplicationService(database),
   tarotService: new TarotService({
     repository: new TarotSessionRepositoryImpl(database),
     random: new NodeCryptoRandomSource(),
@@ -44,12 +69,15 @@ const app = createApp({
     designGenerator: designApplicationService,
     copy: new TarotAiRecommendationCopyPort(new TarotCopyService()),
     questionEncryption: tarotQuestionEncryption,
+    usage: knowledgeUsageRecorderFromRepository(new KnowledgeUsageEventRepository(database)),
     preferences: {
       async getDesignPreferences() {
         return undefined;
       }
     }
   }),
+  knowledgeAdminService,
+  ...(knowledgeAdminApiKey === undefined ? {} : { knowledgeAdminApiKey }),
   authProvider
 });
 app.addHook("onClose", async () => database.$disconnect());

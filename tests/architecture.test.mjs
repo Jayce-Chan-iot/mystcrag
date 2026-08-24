@@ -12,8 +12,13 @@ const requiredPaths = [
   "packages/design-contract/tests",
   "packages/ai-agent/src/adapters",
   "packages/three-engine/src/adapters",
+  "packages/knowledge-core/src",
+  "packages/context-resolver/src",
+  "packages/design-engine/src",
   "apps/backend/src/modules/design",
   "apps/frontend/src/features/design",
+  "apps/mcp-server/src",
+  "apps/knowledge-worker/src",
   "packages/ai-agent/emotion-agent",
   "packages/ai-agent/crystal-agent",
   "packages/ai-agent/design-agent",
@@ -59,7 +64,52 @@ async function matchingFiles(roots, pattern, excluded = new Set()) {
 test("frontend cannot import server-only contract or database modules", async () => {
   const matches = await matchingFiles(
     ["apps/frontend"],
-    /from\s+["'](?:@mystcrag\/design-contract\/internal|@mystcrag\/database)["']/
+    /from\s+["'](?:@mystcrag\/design-contract\/internal|@mystcrag\/database|@mystcrag\/knowledge-core|@mystcrag\/knowledge-ingestion|@mystcrag\/design-engine|@mystcrag\/context-resolver)["']/
+  );
+  assertNoMatches(matches);
+});
+
+test("design-engine stays a pure deterministic engine over the contract", async () => {
+  const matches = await matchingFiles(
+    ["packages/design-engine"],
+    /from\s+["'](?:@mystcrag\/database|@mystcrag\/knowledge-core|@mystcrag\/knowledge-ingestion|@mystcrag\/bracelet-engine|@mystcrag\/ai-agent|@mystcrag\/tarot-engine|@mystcrag\/context-resolver)["']/
+  );
+  assertNoMatches(matches);
+});
+
+test("context-resolver only depends on the contract and tarot-engine", async () => {
+  const matches = await matchingFiles(
+    ["packages/context-resolver"],
+    /from\s+["'](?:@mystcrag\/database|@mystcrag\/knowledge-core|@mystcrag\/knowledge-ingestion|@mystcrag\/design-engine|@mystcrag\/bracelet-engine|@mystcrag\/ai-agent)["']/
+  );
+  assertNoMatches(matches);
+});
+
+test("mcp-server projects knowledge-core and design-engine without business copies", async () => {
+  const matches = await matchingFiles(
+    ["apps/mcp-server"],
+    /from\s+["'](?:@mystcrag\/knowledge-ingestion|@mystcrag\/knowledge-worker|@mystcrag\/ai-agent|@mystcrag\/bracelet-engine|@mystcrag\/tarot-engine|@mystcrag\/ui|@mystcrag\/three-engine)["']/
+  );
+  assertNoMatches(matches);
+});
+
+test("mcp-server touches Prisma only inside its composition root", async () => {
+  const files = await sourceFiles("apps/mcp-server/src");
+  const violations = [];
+  for (const file of files) {
+    if (path.basename(file) === "runtime.ts") continue;
+    const content = await readFile(file, "utf8");
+    if (/createPrismaClient|@prisma\/client|PrismaClient/.test(content)) {
+      violations.push(file);
+    }
+  }
+  assertNoMatches(violations);
+});
+
+test("ai-agent cannot import the database package", async () => {
+  const matches = await matchingFiles(
+    ["packages/ai-agent"],
+    /from\s+["'](?:@prisma\/client|@mystcrag\/database)["']/
   );
   assertNoMatches(matches);
 });
@@ -70,7 +120,9 @@ test("backend HTTP boundary does not expose Prisma or database package types", a
     "apps/backend/src/modules/design/design.service.ts",
     "apps/backend/src/modules/design/inventory.service.ts",
     "apps/backend/src/modules/design/pricing.service.ts",
-    "apps/backend/src/modules/order/order.service.ts"
+    "apps/backend/src/modules/design/recommendation.service.ts",
+    "apps/backend/src/modules/order/order.service.ts",
+    "apps/backend/src/observability/knowledge-usage-recorder.ts"
   ]);
   const matches = await matchingFiles(
     [
@@ -78,6 +130,7 @@ test("backend HTTP boundary does not expose Prisma or database package types", a
       "apps/backend/src/modules/community",
       "apps/backend/src/modules/design",
       "apps/backend/src/modules/order",
+      "apps/backend/src/observability",
       "apps/backend/src/validation"
     ],
     /from\s+["'](?:@prisma\/client|@mystcrag\/database)["']/,

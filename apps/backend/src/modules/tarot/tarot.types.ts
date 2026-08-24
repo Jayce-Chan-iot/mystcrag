@@ -34,6 +34,12 @@ export interface TarotCatalogPort {
   ): Promise<readonly AvailableCatalogMaterialProduct[]>;
 }
 
+export interface TarotStockPort {
+  getAvailableQuantities(
+    productIds: readonly string[]
+  ): Promise<ReadonlyMap<string, number>>;
+}
+
 export interface TarotDesignPreferences {
   readonly wristCircumferenceMm?: number;
   readonly budget?: {

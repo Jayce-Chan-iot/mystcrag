@@ -1,0 +1,172 @@
+{
+  "reportId": "coverage-report-2026-08-22",
+  "phase": "coverage-report",
+  "generatedAt": "2026-08-22T10:16:38.528Z",
+  "dryRun": false,
+  "sourcesCrawled": 3,
+  "documentsAdded": 21,
+  "documentsSkippedDuplicates": 2,
+  "candidatesInserted": 2,
+  "candidatesSkippedDuplicates": 2,
+  "review": {
+    "extracted": 0,
+    "validated": 0,
+    "needsReview": 2,
+    "conflicted": 0
+  },
+  "sources": [
+    {
+      "sourceId": "source-cie-color-standards",
+      "createdDocuments": 11,
+      "duplicateDocuments": 1,
+      "insertedCandidates": 0,
+      "duplicateCandidates": 0
+    },
+    {
+      "sourceId": "source-color-matters-education",
+      "createdDocuments": 9,
+      "duplicateDocuments": 1,
+      "insertedCandidates": 2,
+      "duplicateCandidates": 0
+    },
+    {
+      "sourceId": "source-pantone-trend-reports",
+      "createdDocuments": 1,
+      "duplicateDocuments": 0,
+      "insertedCandidates": 0,
+      "duplicateCandidates": 2
+    }
+  ],
+  "candidatesByDomain": [
+    {
+      "domain": "knowledge-domain:color-theory",
+      "candidateCount": 2,
+      "candidates": [
+        "cand-b298c6bb27f58b1cc14466f7",
+        "cand-de640df9366e7ea368b8d439"
+      ]
+    }
+  ],
+  "coverageTargets": [
+    {
+      "domain": "CRYSTAL_GEMOLOGY",
+      "target": 60,
+      "current": 0,
+      "missing": 60
+    },
+    {
+      "domain": "CRYSTAL_VISUAL_PROPERTIES",
+      "target": 60,
+      "current": 0,
+      "missing": 60
+    },
+    {
+      "domain": "CRYSTAL_CULTURAL_SYMBOLISM",
+      "target": 60,
+      "current": 0,
+      "missing": 60
+    },
+    {
+      "domain": "COLOR_THEORY",
+      "target": 100,
+      "current": 2,
+      "missing": 98
+    },
+    {
+      "domain": "JEWELRY_DESIGN",
+      "target": 200,
+      "current": 0,
+      "missing": 200
+    },
+    {
+      "domain": "COMPOSITION",
+      "target": 40,
+      "current": 0,
+      "missing": 40
+    },
+    {
+      "domain": "PROPORTION",
+      "target": 40,
+      "current": 0,
+      "missing": 40
+    },
+    {
+      "domain": "FOCAL",
+      "target": 30,
+      "current": 0,
+      "missing": 30
+    },
+    {
+      "domain": "TRANSITION",
+      "target": 30,
+      "current": 0,
+      "missing": 30
+    },
+    {
+      "domain": "MATERIAL_COMPATIBILITY",
+      "target": 200,
+      "current": 0,
+      "missing": 200
+    },
+    {
+      "domain": "NEGATIVE_RULE",
+      "target": 50,
+      "current": 0,
+      "missing": 50
+    },
+    {
+      "domain": "STYLE",
+      "target": 100,
+      "current": 0,
+      "missing": 100
+    },
+    {
+      "domain": "WUXING",
+      "target": 25,
+      "current": 0,
+      "missing": 25
+    },
+    {
+      "domain": "WUXING_CRYSTAL_ASSOCIATION",
+      "target": 60,
+      "current": 0,
+      "missing": 60
+    },
+    {
+      "domain": "ZODIAC",
+      "target": 36,
+      "current": 0,
+      "missing": 36
+    },
+    {
+      "domain": "ZODIAC_CRYSTAL_ASSOCIATION",
+      "target": 24,
+      "current": 0,
+      "missing": 24
+    },
+    {
+      "domain": "TAROT",
+      "target": 78,
+      "current": 0,
+      "missing": 78
+    },
+    {
+      "domain": "TAROT_SYMBOLISM",
+      "target": 78,
+      "current": 0,
+      "missing": 78
+    },
+    {
+      "domain": "TAROT_CRYSTAL_ASSOCIATION",
+      "target": 22,
+      "current": 0,
+      "missing": 22
+    },
+    {
+      "domain": "MARKET_OBSERVATION",
+      "target": 40,
+      "current": 0,
+      "missing": 40
+    }
+  ]
+}

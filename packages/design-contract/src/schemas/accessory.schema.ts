@@ -8,6 +8,7 @@ import {
   NonNegativeSafeIntegerSchema,
   PositionIndexSchema
 } from "./component.schema";
+import { LengthAlongStringSchema } from "./visual-profile.schema";
 
 export const AccessoryTypeSchema = z.enum(["SPACER", "PENDANT", "METAL_PART", "CONNECTOR"]);
 
@@ -29,6 +30,7 @@ const AccessoryBaseShape = {
   material: IdentifierSchema,
   finish: IdentifierSchema,
   dimensions: AccessoryDimensionsSchema,
+  lengthAlongStringMm: LengthAlongStringSchema.optional(),
   quantity: z.literal(1),
   unitPriceMinor: MinorAmountSchema,
   modelAssetKey: IdentifierSchema,

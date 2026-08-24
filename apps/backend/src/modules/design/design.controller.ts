@@ -29,7 +29,7 @@ function withoutInjectedOwnerId(input: unknown): unknown {
   return safeInput;
 }
 
-function mapError(error: unknown, ownerScoped: boolean): DomainApiError {
+export function mapError(error: unknown, ownerScoped: boolean): DomainApiError {
   if (error instanceof DomainApiError) {
     if (error.code === "NOT_FOUND" && ownerScoped) {
       return new DomainApiError("FORBIDDEN", "You do not have access to this resource.");

@@ -37,7 +37,9 @@ function ringComponents(design: PublicDesignV1): RingComponent[] {
 }
 
 function componentLengthMm(component: RingComponent): number {
-  return component.kind === "BEAD" ? component.diameterMm : inlineAccessoryLengthMm(component);
+  return component.kind === "BEAD"
+    ? component.lengthAlongStringMm ?? component.diameterMm
+    : inlineAccessoryLengthMm(component);
 }
 
 export function connectedRingRadiusPercent(circumferenceMm: number) {

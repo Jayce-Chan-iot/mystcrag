@@ -15,7 +15,7 @@
     "lint": "prisma validate",
     "db:seed": "tsx prisma/seed.ts",
     "db:verify-seed": "tsx --test prisma/seed.integration.test.ts",
-    "db:test": "tsx --test src/**/*.test.ts",
+    "db:test": "tsx --test --test-concurrency=1 src/**/*.test.ts",
     "test": "tsx --test src/**/*.unit.test.ts",
     "typecheck": "tsc --noEmit"
   },

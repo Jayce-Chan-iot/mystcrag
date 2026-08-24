@@ -1,0 +1,313 @@
+{
+  "reportId": "knowledge-coverage-matrix-2026-08-22",
+  "generatedAt": "2026-08-22",
+  "phase": "Real Knowledge Acquisition Run — Phase 1 (audit & source verification)",
+  "corpusBaseline": {
+    "publishedVersion": "kb-quality-phase-final",
+    "totalRules": 510,
+    "curatedInternal": 116,
+    "bootstrapGenerated": 394,
+    "externalEvidenceBacked": 0,
+    "note": "bootstrapGenerated 不计入本轮 KPI；curatedInternal 全部锚定内部 fixture source（source-fixture-handbook / source-fixture-market），无外部 evidence。"
+  },
+  "domains": [
+    {
+      "domain": "CRYSTAL_GEMOLOGY",
+      "target": 60,
+      "targetUnit": "crystal entries (name/mineral family/chemistry/Mohs/crystal system/treatments/imitations)",
+      "current": 0,
+      "curatedInternal": 0,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 60,
+      "sourceCount": 5,
+      "sources": ["source-gia-gem-encyclopedia", "source-gemdat-gemstone-pages", "source-igi-education", "source-journal-of-gemmology", "source-mohs-hardness-chart"]
+    },
+    {
+      "domain": "CRYSTAL_VISUAL_PROPERTIES",
+      "target": 60,
+      "targetUnit": "crystal entries (typical colors/transparency/luster/visual characteristics)",
+      "current": 0,
+      "curatedInternal": 0,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 60,
+      "sourceCount": 3,
+      "sources": ["source-gia-gem-encyclopedia", "source-gemdat-gemstone-pages", "source-britannica-symbolism"]
+    },
+    {
+      "domain": "CRYSTAL_CULTURAL_SYMBOLISM",
+      "target": 60,
+      "targetUnit": "crystal entries with sourced traditional/modern symbolism",
+      "current": 0,
+      "curatedInternal": 7,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 60,
+      "sourceCount": 4,
+      "sources": ["source-gia-gem-encyclopedia", "source-american-gem-society", "source-crystal-bible-lore", "source-britannica-symbolism"]
+    },
+    {
+      "domain": "COLOR_THEORY",
+      "target": 100,
+      "targetUnit": "executable color rules (hue/saturation/lightness/temperature/harmony/visual weight)",
+      "current": 0,
+      "curatedInternal": 26,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 100,
+      "sourceCount": 4,
+      "sources": ["source-color-matters-education", "source-cie-color-standards", "source-munsell-color-education", "source-pantone-trend-reports"]
+    },
+    {
+      "domain": "JEWELRY_DESIGN",
+      "target": 200,
+      "targetUnit": "aggregate design rules (incl. subdomains below)",
+      "current": 0,
+      "curatedInternal": 0,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 200,
+      "sourceCount": 7,
+      "sources": ["source-vam-jewellery-gallery", "source-met-heilbrunn-jewelry", "source-ganoksin-bench-articles", "source-art-jewelry-forum", "source-rijksmuseum-jewelry", "source-bijuturu-design-proportions", "source-itten-art-of-color"]
+    },
+    {
+      "domain": "COMPOSITION",
+      "target": 40,
+      "targetUnit": "composition rules (primary/secondary/accent, symmetry, rhythm, negative space)",
+      "current": 0,
+      "curatedInternal": 5,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 40,
+      "sourceCount": 5,
+      "sources": ["source-vam-jewellery-gallery", "source-art-jewelry-forum", "source-itten-art-of-color", "source-bijuturu-design-proportions", "source-ganoksin-bench-articles"]
+    },
+    {
+      "domain": "PROPORTION",
+      "target": 40,
+      "targetUnit": "proportion rules (bead size hierarchy, color proportion, metal spacer usage)",
+      "current": 0,
+      "curatedInternal": 11,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 40,
+      "sourceCount": 4,
+      "sources": ["source-bijuturu-design-proportions", "source-ganoksin-bench-articles", "source-met-heilbrunn-jewelry", "source-vam-jewellery-gallery"]
+    },
+    {
+      "domain": "FOCAL",
+      "target": 30,
+      "targetUnit": "focal point rules (focal emphasis, multi-focal overload, accent placement)",
+      "current": 0,
+      "curatedInternal": 3,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 30,
+      "sourceCount": 4,
+      "sources": ["source-bijuturu-design-proportions", "source-art-jewelry-forum", "source-itten-art-of-color", "source-vam-jewellery-gallery"]
+    },
+    {
+      "domain": "TRANSITION",
+      "target": 30,
+      "targetUnit": "transition rules (gradation, texture/color transition, transparent-opaque combination)",
+      "current": 0,
+      "curatedInternal": 4,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 30,
+      "sourceCount": 3,
+      "sources": ["source-bijuturu-design-proportions", "source-itten-art-of-color", "source-vam-jewellery-gallery"]
+    },
+    {
+      "domain": "MATERIAL_COMPATIBILITY",
+      "target": 200,
+      "targetUnit": "compatibility relations (hardness/durability/care/stringing wear)",
+      "current": 0,
+      "curatedInternal": 18,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 200,
+      "sourceCount": 6,
+      "sources": ["source-gia-gem-encyclopedia", "source-gemdat-gemstone-pages", "source-mohs-hardness-chart", "source-stringing-wear-notes", "source-igi-education", "source-ganoksin-bench-articles"]
+    },
+    {
+      "domain": "NEGATIVE_RULE",
+      "target": 50,
+      "targetUnit": "avoid rules (avoid-exposure, overload, conflict combinations)",
+      "current": 0,
+      "curatedInternal": 13,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 50,
+      "sourceCount": 4,
+      "sources": ["source-stringing-wear-notes", "source-gia-gem-encyclopedia", "source-gemdat-gemstone-pages", "source-bijuturu-design-proportions"]
+    },
+    {
+      "domain": "STYLE",
+      "target": 100,
+      "targetUnit": "style rules (period styles, contemporary styles, style-material fit)",
+      "current": 0,
+      "curatedInternal": 13,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 100,
+      "sourceCount": 5,
+      "sources": ["source-vam-jewellery-gallery", "source-met-heilbrunn-jewelry", "source-rijksmuseum-jewelry", "source-art-jewelry-forum", "source-pantone-trend-reports"]
+    },
+    {
+      "domain": "WUXING",
+      "target": 25,
+      "targetUnit": "complete five-element system (5 elements, generating/controlling cycles, color/direction/season correspondences)",
+      "current": 0,
+      "curatedInternal": 0,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 25,
+      "sourceCount": 3,
+      "sources": ["source-ctext-wuxing-classics", "source-wikipedia-reference", "source-britannica-symbolism"]
+    },
+    {
+      "domain": "WUXING_CRYSTAL_ASSOCIATION",
+      "target": 60,
+      "targetUnit": "crystal-wuxing associations with tradition/source separation (conflicts preserved)",
+      "current": 0,
+      "curatedInternal": 0,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 60,
+      "sourceCount": 2,
+      "sources": ["source-fengsuihk-wuxing-crystals", "source-wikipedia-reference"]
+    },
+    {
+      "domain": "ZODIAC",
+      "target": 36,
+      "targetUnit": "complete 12-sign system (element/planet/symbolism/traditional themes)",
+      "current": 0,
+      "curatedInternal": 0,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 36,
+      "sourceCount": 3,
+      "sources": ["source-britannica-symbolism", "source-wikipedia-reference", "source-gia-gem-encyclopedia"]
+    },
+    {
+      "domain": "ZODIAC_CRYSTAL_ASSOCIATION",
+      "target": 24,
+      "targetUnit": "zodiac-crystal associations (primary + alternate, cultural claimType)",
+      "current": 0,
+      "curatedInternal": 0,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 24,
+      "sourceCount": 3,
+      "sources": ["source-astrologyic-zodiac-stones", "source-gia-gem-encyclopedia", "source-american-gem-society"]
+    },
+    {
+      "domain": "TAROT",
+      "target": 78,
+      "targetUnit": "complete 78-card system (22 major + 56 minor; identity/upright/reversed keywords)",
+      "current": 0,
+      "curatedInternal": 9,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 78,
+      "sourceCount": 3,
+      "sources": ["source-pictorial-key-tarot", "source-wikisource-pictorial-key", "source-bnf-tarot-marseille"]
+    },
+    {
+      "domain": "TAROT_SYMBOLISM",
+      "target": 78,
+      "targetUnit": "per-card symbolism/emotion/visual motifs/color tendencies",
+      "current": 0,
+      "curatedInternal": 0,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 78,
+      "sourceCount": 4,
+      "sources": ["source-pictorial-key-tarot", "source-wikisource-pictorial-key", "source-bnf-tarot-marseille", "source-met-tarot-cards"]
+    },
+    {
+      "domain": "TAROT_CRYSTAL_ASSOCIATION",
+      "target": 22,
+      "targetUnit": "major-arcana to crystal/material associations (semantic-intent mediated)",
+      "current": 0,
+      "curatedInternal": 0,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 22,
+      "sourceCount": 2,
+      "sources": ["source-pictorial-key-tarot", "source-crystal-bible-lore"]
+    },
+    {
+      "domain": "MARKET_OBSERVATION",
+      "target": 40,
+      "targetUnit": "trend/preference signals (aggregate, no user content)",
+      "current": 0,
+      "curatedInternal": 7,
+      "approved": 0,
+      "needsReview": 0,
+      "missing": 40,
+      "sourceCount": 4,
+      "sources": ["source-pantone-trend-reports", "source-usgs-mineral-commodity", "source-reddit-r-crystals", "source-reddit-r-beadwork"]
+    }
+  ],
+  "taxonomyGaps": [
+    {
+      "domain": "MATERIAL",
+      "currentTerms": 20,
+      "gap": "仅有科级词条（quartz/agate/jade 等 20 个），缺少具体水晶词条（amethyst、citrine、rose-quartz 等）。第一轮需新增 60-80 个具体词条。",
+      "blocking": true
+    },
+    {
+      "domain": "TAROT",
+      "currentTerms": 22,
+      "gap": "仅 22 张大阿尔卡纳，缺少 56 张小阿尔卡纳词条。",
+      "blocking": true
+    },
+    {
+      "domain": "WUXING",
+      "currentTerms": 0,
+      "gap": "域不存在：需新增 WUXING taxonomy（WOOD/FIRE/EARTH/METAL/WATER + 生克关系承载方式）。",
+      "blocking": true
+    },
+    {
+      "domain": "ZODIAC",
+      "currentTerms": 0,
+      "gap": "域不存在：需新增 ZODIAC taxonomy（12 星座词条）。",
+      "blocking": true
+    }
+  ],
+  "schemaGaps": [
+    {
+      "item": "claimType 字段",
+      "detail": "KnowledgeRuleSchema 无 claimType。需新增 10 类枚举：SCIENTIFIC_FACT / GEMOLOGICAL_FACT / DESIGN_PRINCIPLE / DESIGN_HEURISTIC / CULTURAL_SYMBOLISM / HISTORICAL_TRADITION / WUXING_ASSOCIATION / ASTROLOGY_ASSOCIATION / TAROT_ASSOCIATION / MARKET_OBSERVATION。",
+      "blocking": true
+    },
+    {
+      "item": "知识域映射",
+      "detail": "KNOWLEDGE_DOMAIN_BY_TYPE 现有 11 类；缺 WUXING / WUXING_CRYSTAL_ASSOCIATION / ZODIAC / ZODIAC_CRYSTAL_ASSOCIATION / TAROT_SYMBOLISM / TAROT_CRYSTAL_ASSOCIATION / CRYSTAL_GEMOLOGY / CRYSTAL_VISUAL_PROPERTIES / CRYSTAL_CULTURAL_SYMBOLISM。",
+      "blocking": true
+    },
+    {
+      "item": "cross-source verification",
+      "detail": "SCIENTIFIC/GEMOLOGICAL_FACT 高置信需 ≥2 独立来源；现 review 规则无此校验。",
+      "blocking": false
+    },
+    {
+      "item": "knowledge:collect 编排命令",
+      "detail": "现只有 review:cli run-pipeline（单源）；缺 coverage analysis → crawl → extract → … → report 的编排入口。",
+      "blocking": false
+    }
+  ],
+  "acceptanceTargets": {
+    "round1": {
+      "approvedRealSources": "20+ (本轮建议 23)",
+      "realDocuments": "100+ (预计 200-300)",
+      "crystalMaterialEntries": "60+",
+      "externalCandidates": "300+ (预计 500-900)",
+      "humanApprovedExternalRules": "100+",
+      "provenanceAndEvidence": "全部 rule 携带 sourceRef + documentId + evidence + claimType + confidence"
+    }
+  }
+}

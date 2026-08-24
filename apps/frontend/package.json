@@ -5,18 +5,21 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
+    "start": "next start",
     "lint": "eslint . --max-warnings=0",
     "test": "tsx --test src/**/*.test.tsx",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@antv/g6": "^5.1.1",
     "@mystcrag/bracelet-engine": "workspace:*",
     "@mystcrag/design-contract": "workspace:*",
     "@mystcrag/three-engine": "workspace:*",
     "@mystcrag/ui": "workspace:*",
     "next": "^16.2.10",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",

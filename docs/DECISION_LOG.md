@@ -20,6 +20,22 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 
 ## Decisions
 
+### DEC-KNOWLEDGE-SYSTEM-001 — Approve the knowledge-driven design system architecture
+
+- Date: 2026-08-20
+- Proposed by Agent: Chief Architect (EPIC 0 audit)
+- Affected modules: `packages/design-contract`, `packages/ai-agent`, `packages/database`, `apps/backend`, `apps/frontend`, plus planned `packages/knowledge-core`, `packages/design-engine`, `packages/knowledge-ingestion`, `apps/knowledge-worker`, `apps/mcp-server`, `packages/tarot-engine`
+- Decision: Adopt the knowledge-driven design system architecture recorded in `docs/KNOWLEDGE_SYSTEM_SPEC.md`. The authoritative ADR list (ADR-1 through ADR-13) is section 15 of that specification: DesignV1 stays unchanged with decision traces in a sidecar table; `ai-agent` narrows to an explanation layer while a deterministic `design-engine` owns composition; taxonomy ships as a versioned fixture in `design-contract`; knowledge storage uses PostgreSQL + pgvector (no ChromaDB); the job queue uses pg-boss (no Redis); ingestion uses Crawlee; rule evaluation spikes `json-rules-engine`; color math uses Culori; MCP uses the official TypeScript SDK behind a dedicated `apps/mcp-server`; tarot enters the pipeline as a soft `RecommendationContext` source (P6) instead of a dedicated scoring engine.
+- Rationale: The task book requires an explainable, testable, deterministic design chain (Context → Knowledge → Decision Rules → Design Engine → DesignV1) without a mandatory LLM, without a parallel design contract, and without duplicate infrastructure. The repository audit confirmed the existing contracts, repositories, and geometry kernel can be extended in place.
+- Rejected alternatives: A parallel `DesignPlan` schema; embedding decision traces inside `DesignV1`; ChromaDB/Redis/new vector stores; a tarot-specific design engine; a second test framework; frontend-bundled knowledge runtimes.
+- Contract impact: Additive only. New schema families (taxonomy, RecommendationContext, Knowledge, DecisionRule, DesignDecisionTrace) join `@mystcrag/design-contract`; optional `lengthAlongStringMm` on beads/accessories and the `TAROT_GUIDED` design mode remain the only DesignV1-facing additions. `schemaVersion` stays `1.0.0`.
+- Database impact: Incremental migrations only (Product V2 nullable columns, knowledge table family, `design_decision_traces`, tarot sessions). Existing rows and order snapshots remain untouched; `pgvector/pgvector:pg17` replaces the stock postgres image.
+- API impact: Existing routes unchanged. Planned additive routes: `/api/design/recommend|evaluate|optimize|suggest`, `/api/design/:id/trace`, `/api/knowledge/search`, and the six tarot session endpoints, all following the current Bearer + Zod + error-envelope conventions.
+- Approval status: `APPROVED`
+- Approved by: Project owner
+- Approval date: 2026-08-20
+- Implementation branch or commit: `feat/knowledge-system` worktree; EPIC 0 documents committed at `efec785`.
+
 ### DEC-MVP-2P5D-001 — Adopt the 2.5D editor as the MVP interaction target
 
 - Date: 2026-08-17
@@ -168,6 +184,78 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 
 ---
 
+### DEC-KNOWLEDGE-SYSTEM-002 — Rule Compiler semantics for Active Decision Rules
+
+- Date: 2026-08-21
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `packages/knowledge-core` (new `src/compiler/rule-compiler.ts` and `KnowledgeCore.compileActiveRules` facade), `packages/design-contract` (consumed `DecisionRuleSchema`)
+- Decision: The Rule Compiler compiles the published APPROVED knowledge version into Active Decision Rules as a pure deterministic function. Knowledge types map onto the task-book section 17 ladder as MATERIAL_COMPATIBILITY→P3, COLOR_THEORY→P4, STYLE_RULE→P5, CULTURAL_SYMBOLISM/TAROT→P6, structural composition types→P7, MARKET_OBSERVATION→P8. Within NEGATIVE_RULE, material-subject prohibitions compile as HARD P3 constraints while color-subject clashes stay SOFT P4. Rule weight = confidence × strongest cited source authority; sources below a 0.6 authority threshold are dropped. Conflict detection groups by (type, subject, relation, canonical applicability conditions): rules guarded by different conditions are complementary situations and both survive, while divergent unconditional rules on the same key resolve by priority, weight, confidence, then id. Context-driven subjects (`tarot:`/`style:`/`emotion:` prefixes) generate conditions on the `contextTaxonomyRefs` fact; all other subjects generate conditions on `designTaxonomyRefs`; authored rule conditions are preserved verbatim. `KnowledgeCore.compileActiveRules` caches context-free compiles per (knowledge version, catalog version, scope) with a 32-entry cap; context-scoped compiles always recompile.
+- Rationale: Task book section 18 requires the compile pipeline to be deterministic and to include relevance, credibility, status, context, feasibility, dedup, conflict, priority, and weight steps. Situation-aware conflict grouping preserves the curated handbook's style-conditional rule pairs (e.g. cool-harmony variants for ethereal vs modern styles) that naive (type, subject, relation) grouping would discard; it keeps the E2E-2 cold-start corpus above the 100-rule floor (94→≥100 compiled rules from the 116-rule fixture corpus).
+- Rejected alternatives: Reusing the review-chain `detectRuleConflicts` directly (payload-divergent groups ignore applicability conditions and over-drop complementary rules); priority derived from source authority; HARD color-level negative rules (over-constrains soft aesthetics guidance); caching context-scoped compiles (unbounded cache keyed by user context).
+- Contract impact: None. `DecisionRuleSchema` is consumed as-is; no schema changes.
+- Database impact: None. Reads use the existing knowledge repository production queries.
+- API impact: None yet. The compiled rule set feeds EPIC 9 design generation and the planned `/api/design/suggest` caching path.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-21
+- Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 8 Rule Compiler commit.
+
+---
+
+### DEC-KNOWLEDGE-SYSTEM-003 — Adopt json-rules-engine for condition evaluation with a typed scoring layer (ADR-6 spike outcome)
+
+- Date: 2026-08-21
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `packages/knowledge-core` (spike test `tests/engine-spike.test.ts`, `json-rules-engine` devDependency), planned `packages/design-engine` evaluation layer
+- Decision: Adopt `json-rules-engine@7` as the rule evaluation engine for the decision pipeline. The spike proves the full compiled fixture corpus (≥100 Active Decision Rules) loads and evaluates: facts gate firing (`designTaxonomyRefs`/`contextTaxonomyRefs`), `all`/`any`/`not` composites evaluate correctly, engine `priority` (inverted ladder rank: `8 - P{N}`) surfaces HARD rules ahead of SOFT guidance, and evaluation is deterministic across repeated runs. Two documented adaptations: (1) the engine requires the conditions root to be a single `all`/`any`/`not`/`condition` node, so bare compiled conditions are wrapped in a single-child `all` conjunction — semantically identical; (2) the engine emits binary events without weights, hardness, or knowledge provenance, so a Mystcrag typed scoring layer must join fired event rule ids back to the compiled rule set to compute `Σ SoftRuleScore` and verify 100% HARD satisfaction.
+- Rationale: Task book section 19 mandates spiking json-rules-engine before any custom engine and forbids rewriting a full rule engine for a small gap. The spike confirms the only gaps are the conditions-root wrap (one-line adapter) and weighted scoring (explicitly planned as the typed layer per spec ADR-6), so adoption is the cheapest correct path.
+- Rejected alternatives: Building a custom condition evaluator (forbidden without a failed spike); adopting the engine for scoring too (no weighted scoring support; events are binary); changing `DecisionRuleSchema` conditions to always wrap roots in `all` (pushes engine-specific shape into the contract; the wrap belongs to the evaluator adapter).
+- Contract impact: None. `DecisionRuleSchema` unchanged; the wrap is an evaluator-side adaptation.
+- Database impact: None.
+- API impact: None.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-21
+- Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 8 spike commit.
+
+---
+
+### DEC-KNOWLEDGE-SYSTEM-004 — Tarot worktree merge order and Context Resolver unification (EPIC 7)
+
+- Date: 2026-08-21
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `packages/context-resolver` (new), `packages/tarot-engine` (consumed), `packages/design-contract` (consumed), `apps/backend` tarot module (deferred to EPIC 9 wiring)
+- Decision: (1) **Merge order (spec §9 registration)**: the in-flight `tarot-guided-integration` branch (03e5ad7) was merged into the knowledge-system branch after EPIC 8 (02a46de) in commit 27fedd8. Preserved as-is per spec §9: the server-authoritative session model, `tarot-engine` pure engine (card catalog, draw session, spreads, deterministic RNG), TarotSession persistence, the backend tarot module with its 6 endpoints, question encryption, and the frontend tarot entry/results flow. The tarot-specific `scoreTarotMaterials` (40/25/15/10/10 weighted scoring) stays behind the runtime flag at this merge point and is not deleted; it retires when the design-engine path consumes the unified pipeline, so the merge stays reversible. (2) **Context Resolver design**: `packages/context-resolver` exposes three deterministic resolvers — `resolveQuestionnaireContext`/`resolveManualContext` (legacy raw tags normalized onto canonical taxonomy ids via `resolveTaxonomyId`; unknown tags are dropped as recorded issues, never fatal) and `resolveTarotContext` (knowledge TAROT-domain rules matched by subject take precedence and map into soft preferences only; uncovered cards fall back to `tarot-engine` design signals — tones from `designTags.colors`, emotions from card keywords; rule provenance lands in `contextWeights` as `confidence × TAROT_SOURCE_WEIGHT`). `mergeContexts` unifies 1–4 sources: source list deduplicated by `sourceType`, preferences/avoidances/hard-constraint id lists unioned with first-occurrence order, context weights keyed per source, and hard constraints taken from the first non-tarot source so tarot never overrides P0/P1/P2 hard constraints. Context ids are content-addressed (SHA-256 of the canonical input projection, 12-hex prefix) so identical inputs yield identical ids for downstream caching.
+- Rationale: Spec §9 explicitly requires the tarot worktree merge order to be registered in DECISION_LOG, and ADR-10 redirects tarot recommendation generation into the knowledge pipeline as soft preferences (never hard constraints, no deterministic fortune claims). Content-addressed context ids make `/api/design/recommend` responses cacheable and reproducible; taxonomy normalization keeps the resolver deterministic while tolerating legacy questionnaire values.
+- Rejected alternatives: Deleting `scoreTarotMaterials` at merge time (irreversible while EPIC 9 wiring is pending; violates "keep changes within the assigned module" until the replacement path lands); letting tarot sources set hard constraints (violates ADR-10 compliance red line); merging questionnaire and tarot as a single monolithic resolver (loses per-source weights and provenance); counter- or timestamp-based context ids (non-deterministic, breaks caching and replay).
+- Contract impact: None. The package consumes `RecommendationContextSchema` from `@mystcrag/design-contract` as-is; no schema changes.
+- Database impact: None.
+- API impact: None yet. The resolver feeds the planned `POST /api/design/recommend` endpoint (EPIC 9 design-engine integration).
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-21
+- Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 7 Context Resolver commit.
+
+---
+
+### DEC-KNOWLEDGE-SYSTEM-005 — Design Engine as a pure deterministic pipeline with the ADR-6 typed scoring layer (EPIC 9)
+
+- Date: 2026-08-21
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `packages/design-engine` (new), `packages/design-contract` (consumed), `tests/architecture.test.mjs` (boundary extensions)
+- Decision: `packages/design-engine` implements the spec §4.1 pipeline — Candidate Selection → Allocation → Quantity → Layout (all four contract strategies) → Scoring → Constraint Validation — as pure synchronous functions with zero I/O, no LLM calls, and a caller-supplied clock (`now` parameter) so generation is fully deterministic. Key mechanics: (1) **Rule set input is a structural subset** (`EngineRuleSet`: versions + `DecisionRule[]` from design-contract) so the engine never depends on knowledge-core, preserving the dependency graph (design-engine → design-contract + culori + json-rules-engine only); knowledge-core's `CompiledRuleSet` satisfies it structurally. (2) **ADR-6 typed scoring layer**: `evaluateRuleSet` runs compiled rules through json-rules-engine (spike's documented single-child `all` wrap; `priority = 8 - P{N}`), joins fired event rule ids back to the rule set, sums `Σ weight × confidence` over fired SOFT rules, and treats fired HARD rules with negative relations (`conflicts-with`, `avoid`, `forbidden-claims`) as violations. (3) **Scoring formula `design-score-v1`**: six contract sub-scores; color blends culori OKLCH pair harmony (canonical color taxonomy → representative hex fixture) with context color-preference coverage at 60/40; composition is strategy-native (mirror symmetry / focal centring / rhythm regularity / lightness monotonicity); constraint = 100 − 25×violations; overall = 0.22 color + 0.18 material + 0.15 style + 0.20 composition + 0.25 constraint. (4) **Layout**: SYMMETRIC_BALANCE builds mirrored wings from role pairs with odd-count leftovers clustered beside the focal (perfect palindromes are impossible with odd product counts); CENTER_FOCAL keeps a focal cluster central; REPEAT_RHYTHM inserts focals at regular intervals; LOW_CONTRAST_FLOW sorts by OKLCH lightness into a gradient. (5) **Quantity** fills the target inner circumference (62/38 main/accent share + top-up, bead length = `lengthAlongStringMm ?? diameterMm`, gap 0.4, elastic allowance 7) and trims under hard budgets accent-first, never below one bead per allocated product. (6) `generateDesignCandidates` returns the top 3 of the 4 strategy candidates ranked by overall score with strategy-order tiebreak; designIds and traceIds are content-addressed (SHA-256 of the canonical input projection) for cacheable `/api/design/recommend` responses. Architecture tests extended: frontend may not import design-engine/context-resolver; design-engine may not import database/knowledge-core/ingestion/bracelet-engine/ai-agent; context-resolver may not import database/knowledge-core/design-engine; ai-agent may not import the database package.
+- Rationale: Spec §4.3 fixes design-engine's module boundary (design-contract + culori) and ADR-2 reserves authoritative composition decisions for the engine while ai-agent narrows to explanation; ADR-6 requires the typed scoring layer on top of json-rules-engine's binary events; the test strategy demands same-input determinism (100 runs) and explicit score formulas ("no magic score"). The structural-subset rule set input decouples compile-time (knowledge-core) from evaluate-time (design-engine) so MCP and backend can reuse the engine without dragging Prisma.
+- Rejected alternatives: depending on knowledge-core for the `CompiledRuleSet` type (violates the dependency graph and would leak Prisma into mcp-server consumers); letting the engine own timestamps via `Date.now()` (breaks determinism and replay); perfect-palindrome symmetric layout (impossible with odd bead counts — honest mirror-pair construction with a small focal-adjacent asymmetric core instead); random or catalog-order candidate diversity (non-deterministic; strategy-based diversity instead); per-strategy quantity plans (duplicated fill logic with identical results).
+- Contract impact: None. Consumes `RecommendationContext`, `CatalogMaterialProduct` (as a Pick), `DecisionRule`, `BeadV1`, `BraceletV1`, `DesignScore`, `DesignDecisionTrace`, `LayoutStrategy` as-is; outputs contract-schema-valid beads and traces.
+- Database impact: None. Stock arrives as an injected `ReadonlyMap` snapshot; the engine never queries.
+- API impact: None yet. `generateDesignCandidates`/`evaluateDesignDraft` feed the planned `POST /api/design/recommend` and `/api/design/evaluate` endpoints (EPIC 10 backend wiring).
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-21
+- Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 9 design-engine commit.
+
+---
+
 ### DEC-TAROT-PREFERENCE-001 — Isolate saved Tarot design preferences behind a Backend port
 
 - Date: 2026-08-20
@@ -183,6 +271,168 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 - Approved by: Tarot integration task owner through binding review ruling
 - Approval date: 2026-08-20
 - Implementation branch or commit: `codex/tarot-guided-integration`; exact fix-round commit is recorded in the Task 5 report.
+
+---
+
+### DEC-KNOWLEDGE-SYSTEM-006 — Deterministic recommendation API with an immutable decision-trace sidecar and operation-script optimization (EPIC 10)
+
+- Date: 2026-08-21
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `apps/backend` (new `recommendation.service.ts`, `recommendation.controller.ts`, `recommendation.routes.ts`), `packages/design-contract` (new `recommendation-api.schema.ts`), `packages/database` (new `DesignDecisionTrace` model + repository + migration), `apps/frontend` (questionnaire wizard, DIY editor, design-api client)
+- Decision: The Backend gains a `RecommendationApplicationService` that orchestrates the EPIC 7–9 stack behind five authenticated endpoints: `POST /api/design/recommend` resolves a `RecommendationContext` (context-resolver), compiles active `APPROVED` rules (knowledge-core), generates at most three candidates (design-engine), re-prices through the authoritative `PriceStore`, validates inventory, persists each candidate as a revision-1 design, and appends a decision-trace sidecar row; `POST /api/design/evaluate` re-scores a persisted design and flags `traceStale` when later edits outdate its trace; `POST /api/design/optimize` regenerates a layout that preserves `lockedComponentIds` and returns a finite `ADD/MOVE/REMOVE/REPLACE_COMPONENT` operation script the client applies through the existing revisioned `POST /api/design/update` (so undo and the 50-step history stack keep working); `GET /api/design/:id/trace` returns the latest immutable trace; `GET /api/materials/:id/suggest` ranks at most eight partner materials by color harmony plus tag affinity. Traces live in the new `design_decision_traces` table — one immutable row per `(designId, revisionNumber)`, `JSONB` payload, update/delete rejected by trigger, restrictive design FK. Recommendation is idempotent: engine design IDs are content-addressed, an identical re-request returns the same persisted candidates, and a content-addressed ID colliding with an owner-edited design falls back to a fresh ID instead of failing. The frontend questionnaire wizard replaces its three concurrent `generate` fan-outs with one `recommend` call; the DIY editor adds a one-click optimize button (operations applied through the normal edit path with undo) and a selection-scoped material suggestion panel.
+- Rationale: Spec §7.1 (ADR-1 traceability) requires every generated design to carry an auditable record of which rules fired and why the layout was chosen, without polluting the public `DesignV1` contract; a sidecar table satisfies both. Returning optimization as an operation script keeps all mutations on the single revisioned, consent-guarded Update path — the server never silently overwrites a user's design. Content-addressed IDs make recommend cacheable and retry-safe, matching the idempotency discipline already used by orders and Tarot recommendations. One `recommend` call replaces three `generate` calls, cutting backend load and giving the client a deterministic, scored, ranked candidate list.
+- Rejected alternatives: persisting traces inside the `DesignV1` snapshot (mixes audit data into the public DTO and breaks schema compatibility for existing designs); letting optimize write a new revision server-side (bypasses optimistic-revision control, undo, and the user's explicit apply step); a recommendation-specific table duplicating design snapshots (the design already persists; the sidecar stores only decisions); keeping the three-way `generate` fan-out in the questionnaire (three independent LLM-free generations produce unranked duplicates, triple catalog/pricing work, and no score comparison); rebuilding material suggestions with an LLM call (deterministic color-harmony ranking is sufficient and stays free of I/O).
+- Contract impact: Additive. `@mystcrag/design-contract` exports the new `recommendation-api.schema.ts` DTOs (`RecommendDesignRequest/Response`, `EvaluateDesignRequest/Response`, `OptimizeDesignRequest/Response`, `DesignTraceResponse`, `MaterialSuggestResponse`, `RecommendedDesignCandidate`, `MaterialSuggestion`). Existing schemas are unchanged; all new schemas are `strictObject` and reuse the shared identifier, locale, currency, and minor-amount primitives.
+- Database impact: Additive. New `DesignDecisionTrace` Prisma model mapped to `design_decision_traces` with a unique `(designId, revisionNumber)` index, `JSONB` trace validated on read/write, immutability trigger, and `Restrict` design FK; migration `20260821100000_add_design_decision_traces`.
+- API impact: Additive. Five new authenticated, owner-scoped endpoints documented in `API_SPECIFICATION.md` (Design Recommendation API section). No existing route changes; stable error codes are reused (`CONFLICT` for stale revisions, `VALIDATION_ERROR` for unknown locked components, `NOT_FOUND`/`FORBIDDEN` ownership discipline).
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-21
+- Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 10 recommendation API commit.
+
+---
+
+### DEC-KNOWLEDGE-SYSTEM-007 — MCP server as a thin dual-transport projection over knowledge-core and design-engine (EPIC 11)
+
+- Date: 2026-08-21
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `apps/mcp-server` (new app: `src/tools.ts`, `src/server.ts`, `src/runtime.ts`, `src/index.ts`, `src/deps.ts`, `src/projection.ts`, `tests/tools.test.ts`), `tests/architecture.test.mjs`, `turbo.json`, `packages/database/src/mappers/catalog-mapper.ts` (shared `toContractCatalogMaterials`), `packages/knowledge-core/src/catalog.ts` (shared `catalogFeasibilitySnapshotOf`), `packages/design-engine/src/palette.ts` (`recommendPalettes`)
+- Decision: `@mystcrag/mcp-server` exposes exactly five tools — `search_knowledge`, `get_rules`, `get_material_compatibility`, `recommend_palette`, `evaluate_design` — on the official `@modelcontextprotocol/sdk` `McpServer` with Zod `strictObject` input schemas. Tools consume narrow dependency ports (`KnowledgeSearchPort`, `CatalogPort`, `StockPort`) so tests wire in-memory fakes; the composition root `src/runtime.ts` alone constructs Prisma (`createPrismaClient`), `KnowledgeCore` (with `HashEmbeddingProvider` so the vector channel matches the worker), `ProductRepository`, and `InventoryRepository`. Both transports ship in one entrypoint: stdio (default; all logs go to stderr so the JSON-RPC stream stays clean) and stateless Streamable HTTP (`POST /mcp`, one transport+server per request, no session id, DNS-rebinding-protected via the SDK's `createMcpExpressApp`). Rule responses use a public projection (`ruleId`, type, domain, subject, relation, confidence, summary) that hides fingerprints, source references, and version bookkeeping. `recommend_palette` delegates to the new pure `recommendPalettes` in design-engine (OKLCH pair harmony), and `evaluate_design` runs the same catalog→context→compile→evaluate pipeline as the Backend recommend API through shared `toContractCatalogMaterials` / `catalogFeasibilitySnapshotOf` helpers.
+- Rationale: Task book §36/37 and ADR-12 require official-SDK MCP exposure with zero business-logic duplication; ports keep the tool layer testable without a database, and the shared catalog mappers guarantee the MCP `evaluate_design` and the Backend `/api/design/recommend` see byte-identical catalog views (same `productCatalogVersion`). Resolves spec open question 3.2: both transports are supported — stdio for local/editor clients, stateless HTTP for containerized or remote clients — because the stateless pattern needs no session store and survives horizontal scaling.
+- Rejected alternatives: reimplementing retrieval/scoring inside the MCP layer (business copy, violates architecture tests); routing the Backend through MCP (ADR-12 explicitly forbids; adds a network hop and an LLM-client dependency the main chain must not have); stateful HTTP sessions (requires sticky routing and a session store for no current benefit); Fastify adapter (SDK 1.30 ships a first-party Express adapter with DNS-rebinding protection; Backend's Fastify stays untouched because MCP is a separate process).
+- Contract impact: None. `@mystcrag/design-contract` is unchanged; MCP input schemas are transport-local Zod schemas validated before any knowledge-core call.
+- Database impact: None. Read-only access to existing tables through existing repositories.
+- API impact: Additive, separate protocol. Documented in `API_SPECIFICATION.md` (MCP Knowledge Tools API section). No HTTP routes on the Backend change.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-21
+- Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 11 MCP server commit.
+
+---
+
+### DEC-KNOWLEDGE-SYSTEM-008 — Collect-only knowledge usage events on one append-only table (EPIC 12)
+
+- Date: 2026-08-21
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `packages/database` (`KnowledgeUsageEvent` model + migration `20260821120000_add_knowledge_usage_events`, `KnowledgeUsageEventRepository`), `apps/backend/src/observability/knowledge-usage-recorder.ts` (new), `apps/backend` design/recommendation/Tarot services (event emission), `tests/architecture.test.mjs` (observability boundary), `docker-compose.yml` + `.github/workflows/postgres-verification.yml` (pgvector image switch per spec §7.2)
+- Decision: observability is a single append-only `knowledge_usage_events` table with a closed event vocabulary — `recommendation.served`, `rule.fired`, `design.created|updated|saved|evaluated|optimized`, `tarot.session_saved`. Each row anchors optional actor/design/revision plus `knowledgeVersion` and the content-addressed `productCatalogVersion` and stores a typed JSONB payload. Emission happens inside the existing Backend services through an optional `KnowledgeUsageRecorder` port (NOOP default; the composition root adapts `KnowledgeUsageEventRepository`); `rule.fired` events are emitted per fired rule from recommend/evaluate/optimize so rule usage counts aggregate directly, while `GET /api/materials/:id/suggest` stays uninstrumented to keep the cacheable drag path at zero write amplification. A database trigger rejects updates and deletes, mirroring `design_decision_traces`. No read API ships with EPIC 12 — analysis is offline SQL per the task book's collect-only wording.
+- Rationale: task book §49–58/EPIC 12 asks for rule usage counts, recommendation outcomes, and apply/edit/save lifecycle signals as feedback data only; one table with a closed vocabulary keeps the schema simple, the payloads self-describing, and later analytics a pure SQL concern. Optional port wiring keeps every existing service test green without a database.
+- Rejected alternatives: per-event tables or an event-sourcing stream (schema sprawl for collect-only data); counters on `knowledge_rules` (mutable aggregation state, races under concurrency, loses design/actor context); instrumenting the MCP server (agent-facing read projections, not user behavior); emitting `rule.fired` from `suggest` (multiplies writes by ~8 partners per keystroke for near-zero analytical value).
+- Contract impact: None. `@mystcrag/design-contract` is unchanged; event shapes are Backend-internal.
+- Database impact: Additive migration `20260821120000_add_knowledge_usage_events` (table + immutability trigger + `(event_type, created_at)`/`(design_id, created_at)` indexes); `DATABASE_SCHEMA.md` updated.
+- API impact: None. All request/response DTOs are unchanged; events are a write-only side effect. `API_SPECIFICATION.md` documents the behavior.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-21
+- Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 12 observability commit.
+
+---
+
+### DEC-KNOWLEDGE-SYSTEM-009 — Tarot stock-capacity gate and the closed-loop E2E driver (EPIC 12 close-out)
+
+- Date: 2026-08-21
+- Proposed by Agent: Backend Agent
+- Affected modules: `apps/backend/src/modules/tarot` (`TarotStockPort`, wrap-capacity sellable filter, event version anchoring), `apps/backend/src/modules/design` (`design-api.service.ts` catalog-version anchoring on generate/update/save), `apps/backend/src/observability/knowledge-usage-recorder.ts` (`catalogVersionOfRows` shared helper), `apps/backend/src/index.ts` (stock port wiring), `scripts/closed-loop.mts` (E2E driver)
+- Decision: Tarot material selection now consumes a `TarotStockPort` (`InventoryRepository.getAvailableQuantities`) and filters candidates to materials whose available stock can complete the largest supported wrist on their own — `ceil(MAX_COMPLETION_MM / diameterMm)` beads. Because direction patterns repeat three or four materials around the wrist, requiring single-material wrap capacity guarantees every generated sequence passes downstream `validateAvailability` instead of failing mid-generation with `INVENTORY_CHANGED` on zero-stock or low-stock rows (the seed intentionally marks six SKUs out-of-stock and two low-stock). Knowledge usage events from every lifecycle path now anchor both `knowledgeVersion` and the content-addressed `productCatalogVersion`: recommendation candidates reuse the compiled catalog snapshot, while design generate/update/save and Tarot flows compute the version through one shared `catalogVersionOfRows` helper (shared mapper + hasher in the observability module), keeping design-module files free of direct `@mystcrag/database` imports per the architecture boundary test. The closed loop is verified by `scripts/closed-loop.mts`, a driver that boots nothing itself and walks the real HTTP + MCP + PostgreSQL surface: preflight, the design journey (recommend → trace → evaluate → optimize → update → save → order), the Tarot journey (create → select → reveal → recommend → save), MCP tool consistency against the database (rule counts, published-version anchoring, deterministic `evaluate_design` with Δ0.00 vs the backend), and observability validation (per-type event counts, actor anchoring, version completeness, immutability triggers). The driver truncates `knowledge_usage_events` at start so each run asserts its own events.
+- Rationale: the first closed-loop run failed exactly where unit fakes could not — the real seeded catalog contains deliberate stock holes, and the Tarot path selected a zero-stock SKU because sellability was previously a static catalog predicate. Wrap-capacity filtering is deterministic, needs no per-pattern quantity prediction, and degrades to the existing `INVENTORY_CHANGED` error when the catalog genuinely cannot field two materials. Version anchoring on every lifecycle event makes the collect-only table fully joinable to knowledge versions and catalog snapshots offline, closing the gap the first run exposed (18 rows missing `productCatalogVersion`).
+- Rejected alternatives: filtering only `stock > 0` (mirrors the design engine's hard filter but leaves low-stock rows that direction patterns over-consume, failing mid-generation); validating sufficiency after sequencing and retrying with more materials (nondeterministic retry surface for a collect-only epic); exempting lifecycle events from version anchoring (breaks offline joins for update/save analysis); per-service re-implementations of the catalog hash (architecture test forces one shared mapper).
+- Contract impact: None. `@mystcrag/design-contract` is unchanged.
+- Database impact: None. No schema change; observability rows simply carry the already-optional `productCatalogVersion`.
+- API impact: Behavioral only — `POST /api/tarot/sessions/:id/recommendations` skips materials below wrap capacity and returns `INVENTORY_CHANGED` when fewer than two qualify; documented in `API_SPECIFICATION.md`.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-21
+- Implementation branch or commit: `feat/knowledge-system` worktree, EPIC 12 closed-loop commit (47/47 driver checks green; `pnpm validate` 15/15).
+
+---
+
+### DEC-KNOWLEDGE-SYSTEM-010 — Human-gated source registry v2 with editorial classification and fetch-health tracking (Knowledge Quality Phase Q0)
+
+- Date: 2026-08-22
+- Proposed by Agent: Backend Agent
+- Affected modules: `packages/design-contract/src/schemas/knowledge.schema.ts` (source category/reliability/review/crawl-strategy schemas and transition table), `packages/database` (schema + `20260822090000_source_registry_v2` migration, repository methods `registerSourceCandidate`/`reviewSource`/`updateSourcePolicy`/`recordFetchOutcome`/`listCrawlableSources`), `packages/knowledge-ingestion` (`rate-limit.ts` request pacing, crawler `preNavigationHooks` wiring, pipeline honoring per-source `crawlStrategy`), `apps/knowledge-worker` (discover job iterates `listCrawlableSources`; fetch job records outcomes), `packages/knowledge-core` (36-candidate bootstrap registry + idempotent `seed:sources`)
+- Decision: Sources stop being a boolean `enabled` flag and become a two-dimensional editorial object: what the source IS (`sourceCategory` × `reliabilityLevel` × `contentType` × `countryOrRegion`) and whether humans have approved it (`reviewStatus` state machine DISCOVERED → NEEDS_REVIEW → APPROVED, with REJECTED/DISABLED as terminal review outcomes re-openable through NEEDS_REVIEW). Discovery or operator submission registers candidates (`registerSourceCandidate`) that are never APPROVED and never enabled; `reviewSource` enforces the transition table and rejects jumps like DISCOVERED → APPROVED. The worker's discover job iterates only `listCrawlableSources()` (APPROVED **and** enabled). Every fetch attempt records an outcome; three consecutive failures auto-disable the source while keeping its review status so an operator re-enables deliberately. Crawls honor per-source `rateLimit.maxRequestsPerMinute` through a serialized interval gate in `preNavigationHooks` and per-source `crawlStrategy.maxPages`/`followLinks` (robots.txt stays enforced unconditionally). The bootstrap registry seeds 36 curated candidates (all ten categories, forums and social platforms pinned to market-observation with authority ≤ 0.55) as NEEDS_REVIEW via an idempotent script.
+- Rationale: the knowledge system's answer quality is bounded by source trustworthiness; enabling a discovered source without review would let unvetted content reach APPROVED rules. Separating editorial classification from fetch mechanics (`sourceType`) lets review policy differ per category — GIA pages and Reddit threads are not peers — while the transition table keeps approval an explicit human act. Auto-disable with status preservation distinguishes "site is down" from "source was rejected" in the review queue. Rate limiting and robots enforcement are compliance requirements (task book section 46 / R11), and per-source strategies prevent one chatty source from dominating the crawl budget.
+- Rejected alternatives: auto-approving high-authorityScore sources (defeats the human gate; authority is an input to review, not a bypass); recording failures only on terminal retry exhaustion (pg-boss retries would hide transient health drift, and recovery must reset the counter at the first success); a global worker-wide rate limit (per-source limits are what robots/compliance pages publish); storing forum/social content as design rules (forums only feed market observation by schema-validated policy, not by convention).
+- Contract impact: `KnowledgeSourceSchema` gains optional-with-default fields (`sourceCategory`, `reliabilityLevel`, `contentType`, `reviewStatus`, `crawlStrategy`) and optional `countryOrRegion`/`lastSuccessfulFetch`/`lastFailure`; existing sources stay valid. New `KnowledgeSourceInput` type exposes the pre-default shape for registries/seed data.
+- Database impact: additive migration `20260822090000_source_registry_v2` adds nine columns plus `(review_status, enabled)` index; existing rows are grandfathered to APPROVED.
+- API impact: None yet — review operations ship as repository methods and the Q3 admin surface consumes them.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-22
+- Implementation branch or commit: `feat/knowledge-system`, Knowledge Quality Phase Q0 commit (database suite 56/56; `pnpm validate` green).
+
+---
+
+### DEC-KNOWLEDGE-SYSTEM-011 — Canonical nine-relation extraction with evidence traceability and a labeled eval set (Knowledge Quality Phase Q2)
+
+- Date: 2026-08-22
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `packages/design-contract/src/schemas/knowledge.schema.ts` (`ExtractionRelationSchema`, `EXTRACTION_RELATION_ALLOWED_TYPES`, `isRelationAllowedForKnowledgeType`, `ExtractionMethodSchema`, `ExtractionEvidenceSchema`, `ExtractionMetadataSchema`), `packages/knowledge-ingestion/src/extract/` (new `extractor.ts` interface + policy helpers, `pattern-extractor.ts`, `semantic-extractor.ts`, `structured-extractor.ts`, `eval.ts`; `candidates.ts` loses the old `mentioned-with` free-text path), `src/pipeline.ts` (extractor composition), `src/fixtures/labeled-sentences.ts` + `benchmarks/extraction-eval.ts` (`bench:extraction`), `.env.example` (`KNOWLEDGE_EXTRACTION_ENDPOINT/MODEL/API_KEY`)
+- Decision: free-text extraction stops emitting a single `mentioned-with` relation. A nine-relation canonical vocabulary (`pairs-well-with`, `conflicts-with`, `avoid-exposure`, `care-instruction`, `symbolizes`, `suits-style`, `proportion-of`, `transitions-to`, `trending-in`) is enforced in the contract as an enum plus a total relation × knowledgeType matrix covering all eleven knowledge types. Extraction becomes a pluggable `KnowledgeExtractor` interface (`id`, `method: structured|pattern|semantic`, `extract(input)`) with three implementations: `StructuredExtractor` (feed rules → NEW, semantics unchanged), `PatternExtractor` (sentence spans with char offsets, CJK-substring + ASCII word-boundary taxonomy subject matching with gem-compound color suppression — 紫 in 紫水晶 no longer surfaces color:purple —, first-match relation inference, reliability-weighted confidence capped at 0.85), and `SemanticExtractor` (OpenAI-compatible chat endpoint, dormant until `KNOWLEDGE_EXTRACTION_ENDPOINT` is set; strict Zod validation, vocabulary filtering, and a verbatim-evidence gate that discards any candidate whose quoted sentence cannot be located in the document). Pattern and semantic candidates are always NEEDS_REVIEW per the provenance rule. Fingerprints cover knowledge identity only (type, subject, relation, matched domains / LLM payload) — evidence offsets deliberately excluded so one repeated sentence stays one rule. The Q0 source policy is enforced at extraction time: FORUM/SOCIAL_OBSERVATION sources may only yield market-observation candidates, and every candidate's domain must be within the source's allowed domains. Quality is regression-locked by a 50-sentence labeled set (40 positives ≥3 per relation, 10 negatives) with `evaluateExtractor` computing per-relation precision/recall/F1; the pattern baseline is F1 = 1.00 on that set and a test pins it.
+- Rationale: the review queue (Q3) cannot scale on `mentioned-with` blobs — reviewers need typed relations and the exact supporting sentence to approve or reject quickly, and extraction quality needs a measurable baseline before semantic extraction lands. The verbatim-evidence gate is the hallucination firewall for LLM extraction: a model cannot smuggle knowledge into the corpus it cannot quote from the source document. Confidence scaling by source reliability keeps a LOW forum claim strictly below a HIGH gemology source even with identical phrasing.
+- Rejected alternatives: keeping `mentioned-with` and classifying later at review time (moves the hardest work onto humans, no measurable precision); free-form LLM relations per source (breaks compiler expectations and cross-source dedup); trusting LLM-claimed offsets (models hallucinate positions — offsets are recomputed by locating the quote server-side); storing evidence in a side table (payload JSON keeps candidates self-contained and schema-free for Q2's scope).
+- Contract impact: additive exports only (`ExtractionRelationSchema` et al.); existing `KnowledgeRuleSchema` and all stored rules remain valid — old `mentioned-with` rows keep their relation string, they merely stop being produced.
+- Database impact: None. No schema change; extraction metadata and evidence ride inside the existing `payload` JSONB column.
+- API impact: None. Extraction is internal to the ingestion pipeline.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-22
+- Implementation branch or commit: `feat/knowledge-quality`, Knowledge Quality Phase Q2 commit (ingestion 20/20 unit + 4/4 integration; design-contract 88/88; `bench:extraction` F1=1.00; `pnpm validate` 15/15).
+
+---
+
+### DEC-KNOWLEDGE-SYSTEM-012 — Knowledge Admin API with fail-closed admin key auth; CLI and HTTP share one review service (Knowledge Quality Phase Q3)
+
+- Date: 2026-08-22
+- Proposed by Agent: Knowledge System Agent
+- Affected modules: `packages/design-contract/src/schemas/knowledge-admin-api.schema.ts` (new: overview/queue/conflict/pipeline/rule-action/version/source-queue/mutation DTOs, all strict Zod objects with inferred type exports), `packages/database/src/repositories/knowledge.repository.ts` (`countRulesByStatus()` groupBy; `updateSourcePolicy` now also accepts `allowedKnowledgeDomains`), `packages/knowledge-core/src/review/review-service.ts` (`parseExtractionMetadata` lenient Q2 evidence surfacing; `ReviewQueueItem.extraction`; `ReviewEvidence.source` gains `sourceCategory`/`reliabilityLevel`; `getAdminOverview()`), `packages/knowledge-core/src/admin/source-admin.ts` (new `KnowledgeSourceAdminService`), `packages/knowledge-core/src/cli/index.ts` (prints evidence sentences), `apps/backend/src/modules/knowledge-admin/` (new service + routes), `apps/backend/src/app.ts` (`knowledgeAdminService`/`knowledgeAdminApiKey` options)
+- Decision: Open Question 3 is resolved as Admin API + CLI for V1; a web admin page stays deferred. The backend gains ten `/api/admin/knowledge/*` endpoints (overview, review queue with sentence-level extraction evidence, conflicts, pipeline run, rule approve/reject/supersede, publish version, source queue, source review, source enable, source policy) that delegate to the exact `KnowledgeReviewService`/`KnowledgeSourceAdminService` used by the CLI, so the two entrances cannot diverge. Authentication is a dedicated `X-Admin-Key` header checked with `timingSafeEqual` against `KNOWLEDGE_ADMIN_API_KEY`; the surface fails closed — `createApp` throws when the admin service is registered without a key of at least 16 chars, and every admin request with a missing or wrong key returns `403` while non-admin routes are untouched. Admin routes are excluded from the public `/api/modules` listing. Stored rows are never projected raw: the application service maps stored rules/sources to strict admin DTOs and re-parses every response through the contract schema before it leaves the backend. Overview rule counts come from a repository `groupBy` so dashboard numbers stay correct past the 2000-row list cap. Extraction evidence is surfaced leniently (`safeParse` → `null` on legacy or malformed payloads) so a bad extraction block can never hide a candidate from review.
+- Rationale: the review chain existed only through the CLI after EPIC 6; Q2's sentence-level evidence needed a first-class consumer, and Q0's source review machine had no operator surface at all. Reusing the same services for CLI and HTTP removes an entire class of "API behaves differently from CLI" bugs and keeps the backend module a thin, contract-validated projection. The dedicated admin key (rather than reusing user bearer auth) matches the operator-only blast radius of these endpoints — publishing versions and approving sources are editorial powers no end-user token should ever carry.
+- Rejected alternatives: a web admin page now (deferred by Open Question 3; the API-first surface lets a page consume it later without redesign); routing admin auth through the user `AuthProvider` (user tokens express ownership, not editorial authority; no role model exists in V1); a separate admin service process (would duplicate review logic the CLI already shares); counting statuses via `listRules(...).length` (silently wrong past the 2000-row cap).
+- Contract impact: additive exports only — a new schema module; no existing DTO changes.
+- Database impact: None. No migration; `countRulesByStatus` and the `updateSourcePolicy` extension are query-layer only.
+- API impact: new `## Knowledge Admin API` section in `API_SPECIFICATION.md` with the ten-route table, auth model, and error mapping.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-22
+- Implementation branch or commit: `feat/knowledge-quality`, Knowledge Quality Phase Q3 commit (design-contract 100/100; knowledge-core 95/95 incl. DB integration; database 56/56; backend 99/99; `pnpm validate` 15/15).
+
+---
+
+### DEC-KNOWLEDGE-SYSTEM-013 — Deterministic three-layer corpus bootstrap to 500+ APPROVED rules (Knowledge Quality Phase Q4)
+
+- Date: 2026-08-22
+- Proposed by Agent: Knowledge Backend Agent
+- Affected modules: `packages/knowledge-core` (fixtures, review service), `packages/design-contract` (taxonomy)
+- Decision: The reviewed corpus grows from the 116-rule handbook core to 510 rules via a deterministic bootstrap generator (`fixtures/corpus-bootstrap.ts`) that layers the corpus explicitly: `core` (the untouched human-reviewed handbook), `taxonomy-coverage` (every COLOR/MATERIAL/STYLE/EMOTION/TEXTURE/LUSTER/TRANSPARENCY/COMPOSITION_ROLE term acts as a subject at least once), and `combination` (cross-domain pairs plus the 13 tarot majors missing from core), recorded per rule in `payload.corpusLayer`. Generation is pure — no randomness, time, or environment reads — so the same taxonomy version yields byte-identical rules with fingerprints derived from the id (same scheme as core). The generator reads the core (knowledgeType, subject, relation) key set and skips any colliding key, and tests assert the full corpus introduces no divergent same-key groups beyond the 18 documented core groups and passes `validateKnowledgeRuleCandidate` for every generated rule. `importFixtureCorpus` now imports the combined corpus so the CLI and Admin publish chains automatically publish 500+ rules. Taxonomy is bumped to v2 with a TAROT domain and the 22 major arcana terms so tarot subjects resolve canonically. The `forbidden-claims` relation is exempted from the payload forbidden-phrase scan because those compliance-guardrail rules name the banned phrases by design.
+- Rationale: the 116-rule core was enough to prove the pipeline but too thin for retrieval and recommendation coverage; task book §17.4 requires ≥500 APPROVED rules with explicit layering. A deterministic generator (rather than bulk LLM extraction) keeps the corpus auditable and reproducible — reviewers verify the generator once, not 394 individual rules — and keeps Q2's human-review invariant intact because bootstrap rules are internal MANUAL-source content with the same validation gauntlet as core. Layering makes the trust structure explicit: consumers can weight `core` above generated layers later without a migration.
+- Rejected alternatives: bulk semantic extraction to fill the corpus (violates the Provenance iron rule that AI cannot be the final source; every candidate would need individual human review); hand-writing 394 rules (unreviewable volume, error-prone); relaxing conflict detection for bootstrap layers (would corrupt the deterministic compiler contract).
+- Contract impact: `TaxonomyDomainSchema` adds `TAROT`; `TAXONOMY_VERSION` bumps to `taxonomy-2026-08-v2` with 22 new terms. No rule schema changes — `corpusLayer` rides the existing free-form payload.
+- Database impact: None. The corpus ships as fixtures; fingerprint-unique insertion is idempotent.
+- API impact: None. Publishing via Admin API/CLI now yields 500+ rules with no endpoint changes.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-22
+- Implementation branch or commit: `feat/knowledge-quality`, Knowledge Quality Phase Q4 commit (knowledge-core 88/88 incl. corpus bootstrap suite; `pnpm validate` 15/15).
+
+---
+
+### DEC-KNOWLEDGE-SYSTEM-014 — Golden-set design-quality evaluation with a calibrated quality gate (Knowledge Quality Phase Q5)
+
+- Date: 2026-08-22
+- Proposed by Agent: Knowledge Backend Agent
+- Affected modules: `packages/knowledge-core` (eval), `packages/design-engine` (consumed, unchanged)
+- Decision: The knowledge-quality phase gets its final measurement layer: a 12-scenario golden set (`src/eval/`) runs the full deterministic chain — fixture corpus (510 rules) → `compileDecisionRules` with the catalog feasibility snapshot and context filtering (mirroring the production recommend path) → `generateDesignCandidates` — and checks declarative expectations per scenario (score floors, preference coverage, hard-violation-free, budget/exclusion/requirement/avoidance respect, candidate yield, must-fire-rules). Aggregate metrics (scenario pass rate, hard-rule satisfaction, mean overall score, five sub-score means, preference coverage, candidate yield, byte-identical determinism across a double run) feed a `meetsGate` verdict; the `eval:design` command prints the matrix and exits 1 when the gate fails. Scenario thresholds and the gate's meanOverallScore floor (85) are calibrated against the observed baseline (92.73) with roughly eight points of headroom so legitimate corpus growth passes while real regressions trip. knowledge-core gains a dependency on `@mystcrag/design-engine` — the eval is a consumer composing compiler and engine, the same direction backend and mcp-server already use; design-engine itself still imports nothing beyond the contract.
+- Rationale: Q1/Q2 measured retrieval and extraction quality in isolation; nothing measured whether the knowledge actually improves the final designs. A golden set converts "the pipeline runs" into "the pipeline produces quality designs we will notice losing": any degradation in corpus, compiler, or engine turns the gate red. The sensitivity test (injecting one APPROVED HARD `conflicts-with` rule on `material:quartz`) proves the evaluation is not vacuous — it fails exactly when knowledge quality regresses. mustFireRules asserts the knowledge is load-bearing (44–69 rules fire per top candidate), and determinism double-runs guard the deterministic-pipeline contract end to end.
+- Rejected alternatives: locking exact scores as golden values (brittle against legitimate corpus growth; floors with headroom catch regressions without blocking curation); measuring only aggregate scores without per-scenario expectations (a catastrophic failure in one scenario could hide in the mean); hosting the eval in design-engine (architecturally forbidden — the engine must not depend on knowledge-core); hosting it in the backend (HTTP surface is the wrong home for a fixture-driven benchmark).
+- Contract impact: None. The eval report is a knowledge-core-internal type; no HTTP DTO or schema changes.
+- Database impact: None. The evaluation is fully in-process over fixtures; no DB, no network.
+- API impact: None.
+- Approval status: `APPROVED`
+- Approved by: Autonomous Tech Lead
+- Approval date: 2026-08-22
+- Implementation branch or commit: `feat/knowledge-quality`, Knowledge Quality Phase Q5 commit (knowledge-core 113/113 incl. DB integration and the design-eval suite; `pnpm validate` 15/15).
 
 ---
 
