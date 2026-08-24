@@ -6,6 +6,7 @@ import {
   KnowledgeAdminCoverageResponseSchema,
   KnowledgeAdminEditRuleRequestSchema,
   KnowledgeAdminEditRuleResponseSchema,
+  KnowledgeAdminGraphResponseSchema,
   KnowledgeAdminOverviewResponseSchema,
   KnowledgeAdminPipelineResponseSchema,
   KnowledgeAdminPublishVersionResponseSchema,
@@ -20,6 +21,7 @@ import {
   type KnowledgeAdminConflictsResponse,
   type KnowledgeAdminCoverageResponse,
   type KnowledgeAdminEditRuleResponse,
+  type KnowledgeAdminGraphResponse,
   type KnowledgeAdminOverview,
   type KnowledgeAdminPipelineResponse,
   type KnowledgeAdminPublishVersionResponse,
@@ -150,6 +152,32 @@ export function createKnowledgeAdminClient(options: KnowledgeAdminClientOptions 
       const suffix = limit === undefined ? "" : `?limit=${encodeURIComponent(limit)}`;
       return knowledgeAdminFetch(`/console/collection-runs${suffix}`, (payload) =>
         KnowledgeAdminCollectionRunsResponseSchema.parse(payload), options
+      );
+    },
+    getKnowledgeGraph(query: {
+      node?: string;
+      domain?: string;
+      status?: KnowledgeStatus;
+      claimType?: string;
+      depth?: number;
+      limit?: number;
+      includeSynthetic?: boolean;
+    }): Promise<KnowledgeAdminGraphResponse> {
+      const params = new URLSearchParams();
+      if (query.node !== undefined && query.node !== "") params.set("node", query.node);
+      if (query.domain !== undefined && query.domain !== "") params.set("domain", query.domain);
+      if (query.status !== undefined) params.set("status", query.status);
+      if (query.claimType !== undefined && query.claimType !== "") {
+        params.set("claimType", query.claimType);
+      }
+      if (query.depth !== undefined) params.set("depth", String(query.depth));
+      if (query.limit !== undefined) params.set("limit", String(query.limit));
+      if (query.includeSynthetic !== undefined) {
+        params.set("includeSynthetic", String(query.includeSynthetic));
+      }
+      const suffix = params.size === 0 ? "" : `?${params.toString()}`;
+      return knowledgeAdminFetch(`/graph${suffix}`, (payload) =>
+        KnowledgeAdminGraphResponseSchema.parse(payload), options
       );
     },
     listReviewQueue(filter?: {

@@ -12,6 +12,7 @@ const NAV_ITEMS: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/admin/knowledge/sources", label: "数据源" },
   { href: "/admin/knowledge/review", label: "审核" },
   { href: "/admin/knowledge/atlas", label: "水晶图鉴" },
+  { href: "/admin/knowledge/graph", label: "关系图谱" },
   { href: "/admin/knowledge/runs", label: "采集记录" }
 ];
 

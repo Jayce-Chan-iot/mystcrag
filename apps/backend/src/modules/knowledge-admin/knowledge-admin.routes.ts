@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import {
   KnowledgeAdminAtlasDetailParamsSchema,
   KnowledgeAdminEditRuleRequestSchema,
+  KnowledgeAdminGraphQuerySchema,
   KnowledgeAdminPublishVersionRequestSchema,
   KnowledgeAdminReviewSourceRequestSchema,
   KnowledgeAdminRuleActionParamsSchema,
@@ -77,6 +78,29 @@ function parseSourceReviewStatusFilter(
   return parsed.data;
 }
 
+function parseGraphQuery(raw: unknown): z.infer<typeof KnowledgeAdminGraphQuerySchema> {
+  const input =
+    typeof raw === "object" && raw !== null
+      ? Object.fromEntries(
+          Object.entries(raw as Record<string, unknown>)
+            .filter(([, value]) => value !== "")
+            .map(([key, value]) =>
+              (key === "depth" || key === "limit") && typeof value === "string" && value !== ""
+                ? ([key, Number(value)] as const)
+                : ([key, value] as const)
+            )
+        )
+      : {};
+  const parsed = KnowledgeAdminGraphQuerySchema.safeParse(input);
+  if (!parsed.success) {
+    throw new DomainApiError(
+      "VALIDATION_ERROR",
+      "Invalid knowledge graph query parameters."
+    );
+  }
+  return parsed.data;
+}
+
 async function handleAdmin(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -121,6 +145,12 @@ export function registerKnowledgeAdminRoutes(
 
   app.get("/api/admin/knowledge/overview", (request, reply) =>
     handleAdmin(request, reply, () => service.getOverview())
+  );
+
+  app.get("/api/admin/knowledge/graph", (request, reply) =>
+    handleAdmin(request, reply, () =>
+      service.getKnowledgeGraph(parseGraphQuery(request.query))
+    )
   );
 
   app.get("/api/admin/knowledge/console/coverage", (request, reply) =>

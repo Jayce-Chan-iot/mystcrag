@@ -14,6 +14,7 @@ import { listTaxonomyTerms, type TaxonomyTerm } from "@mystcrag/design-contract"
 
 import { COVERAGE_BY_KNOWLEDGE_DOMAIN } from "../cli/collect.js";
 import { COVERAGE_DOMAINS } from "../cli/coverage-matrix.js";
+import { computeKnowledgeGraph, type ConsoleGraph, type ConsoleGraphQuery } from "./graph.js";
 import { detectRuleConflicts } from "../review/rules.js";
 
 /**
@@ -359,6 +360,11 @@ export class KnowledgeConsoleService {
 
   async listCollectionRuns(limit?: number): Promise<PersistedKnowledgeCollectionRun[]> {
     return this.collectionRuns.listRuns({ limit });
+  }
+
+  async getKnowledgeGraph(query: ConsoleGraphQuery = {}): Promise<ConsoleGraph> {
+    const rules = await this.repository.listAllRules();
+    return computeKnowledgeGraph(rules, query);
   }
 
   private loadTermsByCoverageDomain(): Promise<Map<string, readonly TaxonomyTerm[]>> {

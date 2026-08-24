@@ -8,6 +8,8 @@ import {
   KnowledgeAdminCoverageResponseSchema,
   KnowledgeAdminEditRuleRequestSchema,
   KnowledgeAdminEditRuleResponseSchema,
+  KnowledgeAdminGraphQuerySchema,
+  KnowledgeAdminGraphResponseSchema,
   KnowledgeAdminOverviewResponseSchema,
   KnowledgeAdminPipelineResponseSchema,
   KnowledgeAdminPublishVersionResponseSchema,
@@ -22,6 +24,8 @@ import {
   type KnowledgeAdminConflictsResponse,
   type KnowledgeAdminCoverageResponse,
   type KnowledgeAdminEditRuleResponse,
+  type KnowledgeAdminGraphQuery,
+  type KnowledgeAdminGraphResponse,
   type KnowledgeAdminOverview,
   type KnowledgeAdminPipelineResponse,
   type KnowledgeAdminPublishVersionResponse,
@@ -177,6 +181,15 @@ export class KnowledgeAdminApplicationService {
         throw new DomainApiError("NOT_FOUND", `Crystal ${crystalId} was not found.`);
       }
       return validateResponse(KnowledgeAdminAtlasDetailResponseSchema, detail);
+    } catch (error) {
+      throw mapPersistenceError(error);
+    }
+  }
+
+  async getKnowledgeGraph(query: KnowledgeAdminGraphQuery): Promise<KnowledgeAdminGraphResponse> {
+    try {
+      const graph = await this.requireConsoleService().getKnowledgeGraph(query);
+      return validateResponse(KnowledgeAdminGraphResponseSchema, graph);
     } catch (error) {
       throw mapPersistenceError(error);
     }

@@ -383,6 +383,64 @@ export const KnowledgeAdminCollectionRunsResponseSchema = z.strictObject({
   total: NonNegativeIntegerSchema
 });
 
+export const KnowledgeAdminGraphQuerySchema = z.strictObject({
+  node: NonEmptyTextSchema.optional(),
+  domain: NonEmptyTextSchema.optional(),
+  status: KnowledgeStatusSchema.optional(),
+  claimType: ClaimTypeSchema.optional(),
+  depth: PositiveSafeIntegerSchema.min(1).max(3).optional(),
+  limit: PositiveSafeIntegerSchema.min(1).max(2000).optional(),
+  includeSynthetic: z
+    .preprocess(
+      (value) => (value === "true" ? true : value === "false" ? false : value),
+      z.boolean()
+    )
+    .optional()
+});
+
+export const KnowledgeAdminGraphNodeSchema = z.strictObject({
+  id: NonEmptyTextSchema,
+  label: NonEmptyTextSchema,
+  domain: NonEmptyTextSchema,
+  status: KnowledgeStatusSchema,
+  metadata: z.strictObject({
+    isTaxonomyTerm: z.boolean(),
+    incidentEdges: NonNegativeIntegerSchema,
+    propertyCount: NonNegativeIntegerSchema,
+    knowledgeDomains: z.array(NonEmptyTextSchema)
+  })
+});
+
+export const KnowledgeAdminGraphEdgeSchema = z.strictObject({
+  id: IdentifierSchema,
+  source: NonEmptyTextSchema,
+  target: NonEmptyTextSchema,
+  relation: NonEmptyTextSchema,
+  claimType: ClaimTypeSchema.nullable(),
+  confidence: z.number().min(0).max(1),
+  status: KnowledgeStatusSchema,
+  sourceCount: NonNegativeIntegerSchema,
+  evidenceCount: NonNegativeIntegerSchema
+});
+
+export const KnowledgeAdminGraphStatsSchema = z.strictObject({
+  rulesConsidered: NonNegativeIntegerSchema,
+  edgesIncluded: NonNegativeIntegerSchema,
+  truncated: z.boolean(),
+  relations: z.array(
+    z.strictObject({
+      relation: NonEmptyTextSchema,
+      count: NonNegativeIntegerSchema
+    })
+  )
+});
+
+export const KnowledgeAdminGraphResponseSchema = z.strictObject({
+  nodes: z.array(KnowledgeAdminGraphNodeSchema),
+  edges: z.array(KnowledgeAdminGraphEdgeSchema),
+  stats: KnowledgeAdminGraphStatsSchema
+});
+
 export const KnowledgeAdminEditRuleRequestSchema = z
   .strictObject({
     confidence: z.number().min(0).max(1).optional(),
@@ -416,6 +474,10 @@ export type KnowledgeAdminAtlasDetailResponse = z.infer<
 export type KnowledgeAdminCollectionRunsResponse = z.infer<
   typeof KnowledgeAdminCollectionRunsResponseSchema
 >;
+export type KnowledgeAdminGraphQuery = z.infer<typeof KnowledgeAdminGraphQuerySchema>;
+export type KnowledgeAdminGraphNode = z.infer<typeof KnowledgeAdminGraphNodeSchema>;
+export type KnowledgeAdminGraphEdge = z.infer<typeof KnowledgeAdminGraphEdgeSchema>;
+export type KnowledgeAdminGraphResponse = z.infer<typeof KnowledgeAdminGraphResponseSchema>;
 export type KnowledgeAdminEditRuleResponse = z.infer<
   typeof KnowledgeAdminEditRuleResponseSchema
 >;
