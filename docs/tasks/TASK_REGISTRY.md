@@ -25,7 +25,7 @@ The complete worker specifications and exact migration sequence are frozen in `d
 | Task | Owner | Branch | Status | Writable paths | Forbidden paths |
 | --- | --- | --- | --- | --- | --- |
 | BASE-002 | GLM | `task/base-002-tarot-canonical-schema` | DONE | Tarot Engine manifest/source/tests; `pnpm-lock.yaml`; exact architecture test named in dispatch package | apps, database, Design Contract definitions, Prisma, unrelated packages/docs, AI candidate code, FEAT-018 |
-| BASE-003 | GLM | `task/base-003-ai-candidate-concepts` | READY | AI Agent schema/adapters/agents/tests; backend design generation schema/adapter/tests; exact controlling AI docs and architecture test named in dispatch package | Tarot, Prisma, public API/DesignV1 schemas, unrelated refactors, FEAT-018 |
+| BASE-003 | GLM | `task/base-003-ai-candidate-concepts` | IN_PROGRESS | AI Agent schema/adapters/agents/tests; backend design generation schema/adapter/tests; exact controlling AI docs and architecture test named in dispatch package | Tarot, Prisma, public API/DesignV1 schemas, unrelated refactors, FEAT-018 |
 | BASE-004 | SOL | `task/base-004-freeze-baseline` | BLOCKED by BASE-003 merge | integration-only conflict resolution, governance/task/health/baseline records, validation evidence, annotated baseline tag | new behavior, schema redesign, test deletion/skip, config bypass, P1/P2 or FEAT-018 implementation |
 
 Integration evidence: BASE-002 passed SOL review and post-merge validation and is reachable from local `main` at `be5646b418274fd93c905cd7d9482ee99824a6db`. BASE-003 may be claimed only from a new branch/worktree created from that main or a later descendant.
