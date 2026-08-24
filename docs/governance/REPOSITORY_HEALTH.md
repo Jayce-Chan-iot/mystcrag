@@ -1,34 +1,33 @@
 # Repository Health
 
-**Interim score:** 80 / 100<br>
-**Governance integration anchor:** local `main` includes `4e7cdcb`<br>
-**Assessment date:** 2026-08-24<br>
-**Baseline:** `NOT READY`
+**Frozen score:** 89 / 100<br>
+**Assessment date:** 2026-08-25<br>
+**Baseline:** `READY`<br>
+**Baseline reference:** annotated tag `baseline/v0.1.0-20260825`
 
-The codebase has a credible, tested MVP core and governance is now effective on local `main`. The score remains interim—not a frozen baseline score—because two shared-contract collisions, production identity and a reproducible authenticated browser gate remain open.
+The repository now has a validated P0 baseline: governance is effective, the two shared-schema conflicts are resolved, and the candidate passed workspace, fresh PostgreSQL, build, and isolated authenticated browser checks. Remaining identity/deployment and maintenance work is explicitly registered after the freeze boundary.
 
 ## Scorecard
 
 | Dimension | Score | Evidence |
 | --- | ---: | --- |
-| Architecture | 17 / 20 | Clear monorepo boundaries, independent Bracelet Engine and canonical Design Contract; large application services and dormant paths concentrate risk. |
-| Module ownership | 9 / 10 | All current modules have an explicit owner; cross-module integration still depends on governance reaching `main`. |
-| Duplicate implementation | 10 / 15 | Renderers are complementary and correctly classified; Tarot public enums and AI candidate naming are unresolved duplicates/collisions. |
-| Type / contract consistency | 8 / 10 | `DesignV1` consumer uniqueness is architecture-tested; two cross-module contract conflicts remain. |
-| Testability | 8 / 10 | Broad unit, architecture and real PostgreSQL coverage; no automated authenticated browser suite. |
-| Build / CI health | 9 / 10 | Install, lint, typecheck, tests, build and PostgreSQL checks pass; CI lacks browser E2E. |
-| Maintainability | 7 / 10 | Four files exceed roughly 900 lines; some wrappers, shells and compatibility paths need lifecycle decisions. |
-| Agent collaboration safety | 9 / 10 | Governance, exact locks and serial P0 DAG are on local `main`; the final baseline/tag is not frozen. |
-| Documentation | 3 / 5 | Controlling docs are extensive; catalog seed counts and architecture/3D status contain known contradictions. |
-| **Total** | **80 / 100** | Interim evidence-backed score after governance integration; BASE-004 must calculate the frozen score. |
+| Architecture | 17 / 20 | Clear monorepo boundaries, independent Bracelet Engine and canonical Design Contract; large application services and dormant paths still concentrate risk. |
+| Module ownership | 9 / 10 | All current modules have explicit owners and exact shared-path task locks. |
+| Duplicate implementation | 15 / 15 | Public Tarot schemas have one runtime authority; the two formerly ambiguous AI/backend concepts are distinctly named and architecture-tested. |
+| Type / contract consistency | 10 / 10 | Canonical Tarot and AI candidate boundaries are integrated; old AI identifiers and duplicate definitions are rejected by tests. |
+| Testability | 9 / 10 | Broad unit, architecture, real PostgreSQL, and isolated authenticated browser evidence; browser E2E is not yet a CI gate. |
+| Build / CI health | 9 / 10 | Frozen install, lint, typecheck, tests, build, Prisma and PostgreSQL checks pass; CI still lacks browser E2E. |
+| Maintainability | 7 / 10 | Four files exceed roughly 900 lines; wrappers, shells and compatibility paths need lifecycle decisions. |
+| Agent collaboration safety | 10 / 10 | Governance, exact locks, serial P0 DAG, clean candidate and annotated rollback tag define a reproducible handoff boundary. |
+| Documentation | 3 / 5 | Baseline/canonical records are reconciled; known catalog seed and architecture/3D status contradictions remain registered. |
+| **Total** | **89 / 100** | Evidence-backed frozen score after BASE-004. |
 
 ## Priority summary
 
-P0: implement BASE-002 then BASE-003 serially, then freeze and replay-validate through BASE-004.
-
-P1: production identity/session, reproducible authenticated E2E, current-document reconciliation, and lifecycle decisions for dormant/experimental code.
-
-P2: split concentration hotspots, review branch/worktree metadata, and retire justified compatibility/asset divergence.
+- Baseline P0: none.
+- FEAT-018 decision gate: identity provider, callback/deployment domain and browser session topology require Human Product Owner decisions before AUTH work.
+- P1: production identity/session, browser E2E in CI, current-document reconciliation, dormant/experimental lifecycle decisions and asset/export parity.
+- P2: compatibility review, concentration-hotspot splits and branch/worktree metadata cleanup.
 
 ## Strengths to preserve
 
@@ -38,11 +37,11 @@ P2: split concentration hotspots, review branch/worktree metadata, and retire ju
 - Bracelet geometry is renderer-independent and shared with Three Engine.
 - Mock API and signed-test authentication fail closed in production.
 - MVP positioning remains 2.5D-first; experimental 3D is not misclassified as a release blocker.
+- Contract authority is enforced by architecture tests, not documentation alone.
 
-## Score exit targets
+## Score interpretation
 
-- 80+: governance integrated with frozen schema decisions; still not a baseline until code migration and replay validation pass.
-- 85+: authenticated E2E gate and controlling-document reconciliation complete.
-- 90+: production identity/security/deployment and commercial order flow verified.
+- 85+: stable baseline with authenticated end-to-end evidence and reconciled controlling baseline contracts.
+- 90+: production identity/security/deployment plus commercial order flow must be verified.
 
 The score changes only with integrated evidence, not with planning claims.
