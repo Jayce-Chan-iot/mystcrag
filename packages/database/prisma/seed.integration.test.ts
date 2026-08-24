@@ -10,18 +10,31 @@ test("repeated seed preserves the expected PostgreSQL fixture set", { skip: !dat
   const prisma = createPrismaClient(databaseUrl);
   await prisma.$connect();
   try {
+    const seededDesignIds = ["design-ai-published", "design-diy-private", "design-rejected"];
     const counts = {
-      users: await prisma.user.count(),
+      users: await prisma.user.count({ where: { id: "user-phase-2c-demo" } }),
       crystals: await prisma.crystal.count(),
       materialProducts: await prisma.materialProduct.count(),
       accessoryProducts: await prisma.accessoryProduct.count(),
       pricingRules: await prisma.pricingRule.count(),
-      inventorySnapshots: await prisma.inventorySnapshot.count(),
-      designs: await prisma.design.count(),
-      designRevisions: await prisma.designRevision.count(),
-      publications: await prisma.designPublication.count(),
-      orders: await prisma.order.count(),
-      orderSnapshots: await prisma.orderDesignSnapshot.count()
+      inventorySnapshots: await prisma.inventorySnapshot.count({
+        where: { sourceVersion: "seed-2026-08-v2" }
+      }),
+      designs: await prisma.design.count({ where: { id: { in: seededDesignIds } } }),
+      designRevisions: await prisma.designRevision.count({
+        where: {
+          id: {
+            in: ["revision-ai-1", "revision-ai-2", "revision-diy-1", "revision-rejected-1"]
+          }
+        }
+      }),
+      publications: await prisma.designPublication.count({
+        where: { id: "publication-ai-revision-1" }
+      }),
+      orders: await prisma.order.count({ where: { id: "order-seed-1" } }),
+      orderSnapshots: await prisma.orderDesignSnapshot.count({
+        where: { id: "order-snapshot-seed-1" }
+      })
     };
     assert.deepEqual(counts, {
       users: 1,

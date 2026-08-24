@@ -453,20 +453,34 @@ async function seed() {
       data: { active: false }
     });
     await prisma.inventorySnapshot.deleteMany({ where: { sourceVersion: "seed-2026-07-v1" } });
-    await prisma.inventorySnapshot.createMany({
-      data: allProductIds.map((productId) => ({
-        productType: productId.startsWith("product-spacer") || productId.startsWith("product-pendant") ? "ACCESSORY" : "MATERIAL",
-        productId,
-        availableQuantity: OUT_OF_STOCK_PRODUCT_IDS.has(productId)
-          ? 0
-          : LOW_STOCK_PRODUCT_IDS.has(productId)
-            ? 5
-            : 100,
-        reservedQuantity: 0,
-        sourceVersion: INVENTORY_SOURCE_VERSION
-      })),
-      skipDuplicates: true
-    });
+    for (const productId of allProductIds) {
+      const productType =
+        productId.startsWith("product-spacer") || productId.startsWith("product-pendant")
+          ? "ACCESSORY"
+          : "MATERIAL";
+      const availableQuantity = OUT_OF_STOCK_PRODUCT_IDS.has(productId)
+        ? 0
+        : LOW_STOCK_PRODUCT_IDS.has(productId)
+          ? 5
+          : 100;
+      await prisma.inventorySnapshot.upsert({
+        where: {
+          productType_productId_sourceVersion: {
+            productType,
+            productId,
+            sourceVersion: INVENTORY_SOURCE_VERSION
+          }
+        },
+        create: {
+          productType,
+          productId,
+          availableQuantity,
+          reservedQuantity: 0,
+          sourceVersion: INVENTORY_SOURCE_VERSION
+        },
+        update: { availableQuantity, reservedQuantity: 0 }
+      });
+    }
 
     const designs = [publishedRevision2, diyDesign, rejectedDesign];
     for (const design of designs) {
