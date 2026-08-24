@@ -8,6 +8,7 @@ One task equals one accountable owner, one branch, one writable path set, and on
 | --- | --- | --- | --- | --- | --- |
 | TASK-GOV-001 | SOL | `task/gov-001-repository-governance` | DONE | `AGENTS.md`, `docs/INDEX.md`, `docs/governance/**`, `docs/tasks/**`, Phase 0 plan | `apps/**`, `packages/**`, Prisma, branches/worktrees, pre-existing user changes |
 | TASK-AUDIT-001 | SOL | `task/audit-001-baseline-planning` | REVIEW | `docs/INDEX.md`, `docs/governance/CURRENT_REPOSITORY_MAP.md`, `docs/governance/FEATURE_REGISTRY.md`, `docs/governance/CANONICAL_COMPONENTS.md`, `docs/governance/MODULE_OWNERS.md`, `docs/governance/REPOSITORY_HEALTH.md`, `docs/governance/BRANCH_REGISTRY.md`, `docs/governance/BASELINE_VALIDATION.md`, `docs/tasks/TASK_REGISTRY.md`, `docs/CURRENT_PRODUCT_STATUS.md`, `docs/NEXT_PHASE_BACKLOG.md`, `docs/FEATURE-*_PLAN.md`, `docs/TASK_DISPATCH_PACKAGE.md` | `apps/**`, `packages/**`, Prisma, root/runtime configuration, tests, generated output, pre-existing user changes and untracked files |
+| TASK-BASELINE-001 | SOL | `task/baseline-001-governance-integration` | IN_PROGRESS | `docs/INDEX.md`, `docs/governance/BRANCH_REGISTRY.md`, `docs/governance/CANONICAL_COMPONENTS.md`, `docs/governance/BASELINE_VALIDATION.md`, `docs/tasks/TASK_REGISTRY.md`, `docs/P0_BASELINE_CLOSURE_DISPATCH.md`, `docs/superpowers/plans/2026-08-24-p0-schema-closure.md` | `apps/**`, `packages/**`, Prisma, root/runtime configuration, tests, generated output, QA evidence, pre-existing user changes and FEAT-018 implementation |
 
 No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROGRESS` only after its owner creates the registered branch/worktree and records exact writable paths.
 
@@ -21,7 +22,6 @@ No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROG
 
 | Task | Owner | Priority | Dependency | Proposed branch | Scope/status |
 | --- | --- | ---: | --- | --- | --- |
-| TASK-BASELINE-001 | SOL | P0 | TASK-AUDIT-001 review + Product Owner approval | `task/baseline-001-governance-integration` | BACKLOG: integrate the complete governance/audit candidate into protected local `main` without partial registries |
 | TASK-CONTRACT-001 | CONTRACT | P0 | TASK-BASELINE-001 | `task/contract-001-tarot-schema-authority` | BACKLOG: make Design Contract the shared Tarot enum authority |
 | TASK-TAROT-001 | TAROT | P0 | TASK-CONTRACT-001 | `task/tarot-001-consume-shared-contract` | BACKLOG: consume shared enums while retaining private draw validation |
 | TASK-AI-001 | AI | P0 | TASK-BASELINE-001 | `task/ai-001-candidate-contract-decision` | BACKLOG: name and document canonical AI provider candidate |

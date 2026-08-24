@@ -12,7 +12,8 @@ Status meanings: `ACTIVE` current task; `PROTECTED` integration baseline; `MERGE
 
 | Branch | Head | Status | Worktree / action |
 | --- | --- | --- | --- |
-| `task/audit-001-baseline-planning` | `7649f59` at creation | ACTIVE | root workspace; TASK-AUDIT-001; audit/planning documents only |
+| `task/baseline-001-governance-integration` | `74fca1f` at creation | ACTIVE | `.worktrees/baseline-001`; TASK-BASELINE-001; governance integration and P0 dispatch planning only |
+| `task/audit-001-baseline-planning` | `74fca1f` | MERGED_RETAINED | root workspace; TASK-AUDIT-001 in review; user changes remain outside its commit |
 | `task/gov-001-repository-governance` | `7649f59` | MERGED_RETAINED | TASK-GOV-001 and TASK-REPO-001 complete; branch retained pending TASK-REPO-002 |
 | `main` | `1a34c16` | PROTECTED | publish/sync is a separate owner action |
 
