@@ -32,7 +32,7 @@ erDiagram
 | `DesignRevision` | Immutable history: `designId`, positive `revisionNumber`, `schemaVersion`, `snapshot`, `changeType`, `changeReason`, `createdBy`, `createdAt`. |
 | `DesignPublication` | Fixed-revision authorization: design/revision/actor IDs, non-private `visibility`, required consent, remix/display controls, status and publish/unpublish timestamps. |
 | `Order` | Transaction header: user, status, currency, `totalAmountMinor`, revision, timestamps. |
-| `OrderDesignSnapshot` | Immutable one-to-one order evidence: design/pricing/production JSON, currency, schema and pricing-rule versions, captured timestamp. |
+| `OrderDesignSnapshot` | Immutable one-to-one order evidence: design/pricing/production/fulfillment JSON, currency, schema and pricing-rule versions, captured timestamp. Fulfillment records requested, reserved, and backorder quantities. |
 | `Crystal` | Non-sellable knowledge record with mineral, visual/cultural, availability, and compliance reference data. |
 | `MaterialProduct` | Sellable bead: crystal, SKU, name, shape/diameter, material/model/texture keys, currency, price/cost minor units, active flag, timestamps. |
 | `AccessoryProduct` | Sellable accessory: SKU, type/material/finish/dimensions, model/texture keys, currency, price/cost minor units, active flag, timestamps. |
@@ -60,7 +60,7 @@ PostgreSQL stores `unitPriceMinor`, `unitCostMinor`, and `totalAmountMinor` as c
 
 ## JSON snapshot rules
 
-`Design.currentSnapshot` and `DesignRevision.snapshot` store complete `DesignV1`. `OrderDesignSnapshot` separately stores the complete priced design plus its `PricingV1` and `ProductionV1` children so transaction evidence is directly auditable. Every write and read uses the corresponding Zod schema. The structured `schemaVersion` must agree with the snapshot. Unknown major versions are rejected; supported old versions must pass an explicit Design Contract migration before storage. Prisma `JsonValue` does not leave repositories.
+`Design.currentSnapshot` and `DesignRevision.snapshot` store complete `DesignV1`. `OrderDesignSnapshot` separately stores the complete priced design plus its `PricingV1`, `ProductionV1`, and `OrderFulfillmentSnapshotV1` children so transaction evidence is directly auditable. A Tarot shortage sets the order to `AWAITING_RESTOCK` and uses a five-day advisory; other design modes remain inventory-blocking. Every write and read uses the corresponding Zod schema. The structured `schemaVersion` must agree with the snapshot. Unknown major versions are rejected; supported old versions must pass an explicit Design Contract migration before storage. Prisma `JsonValue` does not leave repositories.
 
 ## Revision lifecycle
 

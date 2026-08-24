@@ -1,7 +1,11 @@
 import {
+  CloneDesignResponseSchema,
   CreateOrderFromDesignRequestSchema,
   CreateOrderFromDesignResponseSchema,
+  DeleteDesignResponseSchema,
   ListCatalogMaterialsResponseSchema,
+  ListMyDesignsResponseSchema,
+  ListMyOrdersResponseSchema,
   GenerateDesignRequestSchema,
   GenerateDesignResponseSchema,
   PublicDesignV1Schema,
@@ -11,12 +15,16 @@ import {
   PriceDesignResponseSchema,
   UpdateDesignRequestSchema,
   UpdateDesignResponseSchema,
+  type CloneDesignResponse,
   type CreateOrderFromDesignRequest,
   type CreateOrderFromDesignResponse,
   type CatalogMaterialProduct,
+  type DeleteDesignResponse,
   type GenerateDesignRequest,
   type GenerateDesignResponse,
   type ListCatalogMaterialsResponse,
+  type ListMyDesignsResponse,
+  type ListMyOrdersResponse,
   type PublicDesignV1,
   type SaveDesignRequest,
   type SaveDesignResponse,
@@ -157,6 +165,7 @@ export function createDesignApiClient({
             crystalId: material.crystalId,
             crystalNameCn: material.name,
             crystalNameEn: material.id,
+            mineralName: "Quartz",
             colorTags: [material.id],
             materialKey: material.materialKey,
             shape: "ROUND",
@@ -164,8 +173,10 @@ export function createDesignApiClient({
             modelAssetKey: "sphere-round-8mm-v1",
             textureAssetKey: material.textureAssetKey,
             currency,
-            unitPriceMinor: material.unitPriceMinor
-          }))
+            unitPriceMinor: material.unitPriceMinor,
+            availableQuantity: 100
+          })),
+          accessories: []
         });
       }
       return callApi(
@@ -175,6 +186,20 @@ export function createDesignApiClient({
         fetcher,
         accessToken
       );
+    },
+
+    async listDesigns(): Promise<ListMyDesignsResponse> {
+      if (useMock) {
+        throw new FrontendApiError("VALIDATION_ERROR", "Mock mode does not fabricate design lists.");
+      }
+      return callApi("/api/designs", ListMyDesignsResponseSchema, { method: "GET" }, fetcher, accessToken);
+    },
+
+    async listOrders(): Promise<ListMyOrdersResponse> {
+      if (useMock) {
+        throw new FrontendApiError("VALIDATION_ERROR", "Mock mode does not fabricate order lists.");
+      }
+      return callApi("/api/orders", ListMyOrdersResponseSchema, { method: "GET" }, fetcher, accessToken);
     },
 
     async update(input: UpdateDesignRequest): Promise<UpdateDesignResponse> {
@@ -214,6 +239,32 @@ export function createDesignApiClient({
         return SaveDesignResponseSchema.parse({ requestId: request.requestId, design, warnings: [], savedAt: new Date().toISOString() });
       }
       return callApi("/api/design/save", SaveDesignResponseSchema, { body: request }, fetcher, accessToken);
+    },
+
+    async deleteDesign(designId: string, expectedRevision: number): Promise<DeleteDesignResponse> {
+      if (useMock) {
+        throw new FrontendApiError("VALIDATION_ERROR", "Mock mode does not fabricate design deletion.");
+      }
+      return callApi(
+        "/api/design/delete",
+        DeleteDesignResponseSchema,
+        { body: { requestId: requestId("delete"), designId, expectedRevision } },
+        fetcher,
+        accessToken
+      );
+    },
+
+    async cloneDesign(designId: string, expectedRevision: number): Promise<CloneDesignResponse> {
+      if (useMock) {
+        throw new FrontendApiError("VALIDATION_ERROR", "Mock mode does not fabricate design cloning.");
+      }
+      return callApi(
+        "/api/design/clone",
+        CloneDesignResponseSchema,
+        { body: { requestId: requestId("clone"), designId, expectedRevision } },
+        fetcher,
+        accessToken
+      );
     },
 
     async createOrder(design: PublicDesignV1): Promise<CreateOrderFromDesignResponse> {

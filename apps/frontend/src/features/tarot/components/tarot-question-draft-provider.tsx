@@ -2,7 +2,11 @@
 
 import { createContext, useContext, useState, type ReactNode } from "react";
 
-export type TarotQuestionDraft = Readonly<{ question: string; saveQuestion: boolean }>;
+export type TarotQuestionDraft = Readonly<{
+  question: string;
+  saveQuestion: boolean;
+  wristCircumferenceMm?: number;
+}>;
 
 export type TarotQuestionDraftStore = {
   get(sessionId: string): TarotQuestionDraft | undefined;

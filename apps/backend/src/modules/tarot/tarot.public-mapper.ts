@@ -94,10 +94,21 @@ async function recommendationDetails(
   const recommendations = await Promise.all(
     [...record.recommendations]
       .sort((left, right) => left.rank - right.rank)
-      .map(async ({ rank, designId }) => ({
-        rank,
-        design: toPublicDesign(await designReader.getOwnedDesign(actorId, designId))
-      }))
+      .map(async ({ rank, designId }) => {
+        const advisory = record.recommendationSnapshot?.fulfillmentAdvisories?.find((item) => item.rank === rank);
+        const fulfillment = advisory === undefined
+          ? { requiresRestock: false as const, estimatedRestockDays: 0 as const, affectedProductIds: [] as string[] }
+          : {
+              requiresRestock: advisory.requiresRestock,
+              estimatedRestockDays: advisory.estimatedRestockDays,
+              affectedProductIds: [...advisory.affectedProductIds]
+            };
+        return {
+          rank,
+          design: toPublicDesign(await designReader.getOwnedDesign(actorId, designId)),
+          fulfillment
+        };
+      })
   );
   return {
     interpretation: {

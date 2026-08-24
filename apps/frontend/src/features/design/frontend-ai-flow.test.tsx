@@ -11,11 +11,13 @@ import { FRONTEND_ERROR_CODES, FrontendApiError } from "../../lib/api/frontend-a
 import { MOCK_MATERIALS, mockGetDesignOptions, mockReplaceBead } from "../../lib/api/mock-design-api";
 import { BraceletPreview } from "./components/bracelet-preview";
 import { BraceletSequenceEditor } from "./components/bracelet-sequence-editor";
+import { DisplayTray } from "./components/display-tray";
 import { DIY_LAYOUT_CLASS } from "./components/diy-editor";
 import { connectedRingRadiusPercent, FlatBraceletEditor } from "./components/flat-bracelet-editor";
 import { mockDesignOptions } from "./fixtures/mock-design-options";
 import { calculateBraceletCircumferenceMm, evaluateBraceletFit } from "./model/bracelet-fit";
 import { resolveSelectedDesign } from "./model/design-selection";
+import { WristMeasurementGuide } from "../questionnaire/components/wrist-measurement-guide";
 import {
   getNextStepIndex,
   getPreviousStepIndex,
@@ -38,6 +40,16 @@ test("questionnaire can move forward and return to the previous step without und
   assert.equal(getPreviousStepIndex(1), 0);
   assert.equal(getPreviousStepIndex(0), 0);
   assert.equal(getNextStepIndex(5), 5);
+});
+
+test("wrist step shows an inline image guide with accessible measurement instructions", () => {
+  const markup = renderToStaticMarkup(<WristMeasurementGuide />);
+  assert.match(markup, /wrist-measurement\.webp/);
+  assert.match(markup, /软尺贴合手腕一圈的测量示意/);
+  assert.match(markup, /贴肤环绕腕骨/);
+  assert.match(markup, /不要预留松量/);
+  assert.match(markup, /毫米数填入上方/);
+  assert.doesNotMatch(markup, /role="dialog"/);
 });
 
 test("questionnaire produces a shared Generate Design request DTO", () => {
@@ -157,13 +169,30 @@ test("DIY editor keeps the focused mobile column and adds the desktop workbench"
   assert.match(source, /data-desktop-diy-workspace="true"/);
   assert.match(source, /导出设计图/);
   assert.match(source, /完成设计/);
-  assert.match(source, /设计已完成，订单快照已生成/);
+  assert.match(source, /设计已确认，订单快照已生成/);
   assert.match(source, /清空设计/);
   assert.match(source, /收缩成串/);
   assert.match(source, /散开查看/);
-  assert.match(source, /h-\[calc\(100dvh-4\.75rem\)\]/);
-  assert.match(source, /grid-rows-\[minmax\(0,1fr\)_clamp/);
+  assert.match(source, /h-\[calc\(100dvh-3\.25rem\)\]/);
+  assert.match(source, /grid-rows-\[minmax\(0,1fr\)_11\.25rem\]/);
   assert.match(source, /fitDesktopViewport/);
+});
+
+test("DIY workbench exposes tray choice, current beads, diameter controls and extensible product types", () => {
+  const source = readFileSync(new URL("./components/diy-editor.tsx", import.meta.url), "utf8");
+  assert.match(source, /DISPLAY_TRAY_OPTIONS/);
+  assert.match(source, /loadDisplayTray/);
+  assert.match(source, /saveDisplayTray/);
+  assert.match(source, /trayMaterial=\{trayMaterial\}/);
+  assert.match(source, /data-current-bracelet-materials="true"/);
+  assert.match(source, /将选中珠子调整为/);
+  assert.match(source, /material\.crystalId === selectedMaterial\.crystalId/);
+  assert.match(source, /水晶库/);
+  assert.match(source, /天然石/);
+  assert.match(source, /配饰/);
+  assert.match(source, /max-w-\[30rem\]/);
+  assert.match(source, /displayTrayCanvasPalette\(trayMaterial\)/);
+  assert.match(source, /展示托盘：/);
 });
 
 test("flat bracelet editor exposes the touch-first 2D ring", () => {
@@ -183,27 +212,38 @@ test("flat bracelet editor exposes the touch-first 2D ring", () => {
   assert.match(markup, /data-bracelet-layout="spread"/);
   assert.match(markup, /2D 手串编辑预览/);
   assert.match(markup, /aria-pressed="true"/);
-  assert.match(markup, /100dvh-20\.5rem/);
+  assert.match(markup, /clamp\(14rem, calc\(100dvh - 20\.5rem\), 35rem\)/);
   assert.equal(connectedRingRadiusPercent(140) < 39, true);
   assert.equal(connectedRingRadiusPercent(200), 39);
   const source = readFileSync(new URL("./components/flat-bracelet-editor.tsx", import.meta.url), "utf8");
-  assert.match(source, /data-remove-drop-zone-active=/);
-  assert.match(source, /拖到这里删除/);
-  assert.match(source, /overDeleteZone && canRemove/);
+  assert.match(source, /data-tray-removal-active=/);
+  assert.match(source, /拖出托盘即可删除/);
+  assert.match(source, /outsideTray && canRemove/);
+  assert.match(source, /onDragEnd=\{\(event\) =>/);
+  assert.match(source, /nativeDragIdRef\.current/);
+  assert.match(source, /isPointOutsideTray/);
   assert.match(source, /calculateSizeAwareRingLayout/);
   assert.match(source, /transition-none/);
   assert.doesNotMatch(source, /dragging \? "z-30 scale-110 opacity-90 drop-shadow-xl"/);
-  assert.doesNotMatch(source, /outsideRing/);
+  assert.doesNotMatch(source, /data-remove-drop-zone/);
+  assert.doesNotMatch(source, /overDeleteZone/);
   const beadImageSource = readFileSync(new URL("./components/crystal-bead-image.tsx", import.meta.url), "utf8");
   assert.match(beadImageSource, /data-photo-real-bead="true"/);
   assert.match(beadImageSource, /drop-shadow-\[0_7px_6px/);
-  assert.match(beadImageSource, /scale-\[1\.34\]/);
+  assert.doesNotMatch(beadImageSource, /scale-\[/);
   assert.match(beadImageSource, /loading="eager"/);
   assert.match(source, /silver-star-ring-charm\.png/);
   assert.match(source, /loading="eager"/);
 });
 
-test("bracelet circumference follows component sizes and gates the 13–20cm completion range", () => {
+test("display tray renders the approved switchable presentation materials", () => {
+  const markup = renderToStaticMarkup(<DisplayTray material="BONE_CHINA" />);
+  assert.match(markup, /data-display-tray="BONE_CHINA"/);
+  assert.match(markup, /米白骨瓷/);
+  assert.match(markup, /仅改变展示背景，不计入价格/);
+});
+
+test("bracelet circumference keeps size advisories without blocking completion", () => {
   const base = mockDesignOptions[0]!;
   const withLength = (diameterMm: number): PublicDesignV1 => ({
     ...base,
@@ -213,13 +253,15 @@ test("bracelet circumference follows component sizes and gates the 13–20cm com
 
   assert.equal(calculateBraceletCircumferenceMm(withLength(129)), 129);
   assert.deepEqual(evaluateBraceletFit(withLength(129)).status, "TOO_SMALL");
+  assert.equal(evaluateBraceletFit(withLength(129)).canComplete, true);
   assert.equal(evaluateBraceletFit(withLength(130)).canComplete, true);
   assert.equal(evaluateBraceletFit(withLength(200)).canComplete, true);
   assert.deepEqual(evaluateBraceletFit(withLength(201)).status, "TOO_LARGE");
+  assert.equal(evaluateBraceletFit(withLength(201)).canComplete, true);
 
   const editorSource = readFileSync(new URL("./components/diy-editor.tsx", import.meta.url), "utf8");
-  assert.match(editorSource, /!braceletFit\.canComplete/);
-  assert.match(editorSource, /调整到 13\.0–20\.0cm 后即可完成/);
+  assert.doesNotMatch(editorSource, /!braceletFit\.canComplete/);
+  assert.match(editorSource, /建议范围 13\.0–20\.0cm，不影响完成设计/);
 });
 
 test("DIY entry bypasses the AI questionnaire and the mobile questionnaire uses direct touch buttons", () => {

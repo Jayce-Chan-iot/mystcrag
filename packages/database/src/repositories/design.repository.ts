@@ -127,6 +127,15 @@ export class DesignRepository {
     return mapDesign(row);
   }
 
+  async listDesigns(actorId: string): Promise<PersistedDesign[]> {
+    const rows = await this.prisma.design.findMany({
+      where: { ownerId: actorId, deletedAt: null },
+      orderBy: { updatedAt: "desc" },
+      take: 200
+    });
+    return rows.map(mapDesign);
+  }
+
   async getRevision(designId: string, revisionNumber: number): Promise<PersistedDesignRevision> {
     const row = await this.prisma.designRevision.findUnique({
       where: { designId_revisionNumber: { designId, revisionNumber } }

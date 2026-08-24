@@ -5,20 +5,31 @@ import {
   AccessoryDimensionsSchema,
   AccessoryTypeSchema,
   BeadShapeSchema,
+  CloneDesignRequestSchema,
+  CloneDesignResponseSchema,
   CulturalInspirationSchema,
+  DeleteDesignRequestSchema,
+  DeleteDesignResponseSchema,
   DesignV1Schema,
+  type CatalogAccessoryProduct,
   type CatalogMaterialProduct,
   toOrderSnapshot,
   toPublicDesign,
   type AccessoryV1,
   type BeadV1,
+  type CloneDesignRequest,
+  type CloneDesignResponse,
   type ContractWarning,
   type CreateOrderFromDesignRequest,
   type CreateOrderFromDesignResponse,
+  type DeleteDesignRequest,
+  type DeleteDesignResponse,
   type DesignV1,
   type GenerateDesignRequest,
   type GenerateDesignResponse,
   type ListCatalogMaterialsResponse,
+  type ListMyDesignsResponse,
+  type ListMyOrdersResponse,
   type PriceDesignRequest,
   type PriceDesignResponse,
   type PublishDesignRequest,
@@ -60,6 +71,48 @@ export type CatalogProduct = {
   textureAssetKey: string | null;
 };
 
+export type AvailableCatalogMaterialProduct = {
+  id: string;
+  productType: "MATERIAL";
+  sku: string;
+  name: string;
+  currency: "CNY" | "TWD";
+  unitPriceMinor: number;
+  active: boolean;
+  crystalId: string;
+  crystalNameCn: string;
+  crystalNameEn: string;
+  mineralName: string;
+  colorTags: string[];
+  visualTags: string[];
+  styleTags: string[];
+  emotionTags: string[];
+  cultureTags: string[];
+  shape: string;
+  diameterMm: number;
+  materialKey: string;
+  modelAssetKey: string | null;
+  textureAssetKey: string | null;
+  availableQuantity: number;
+};
+
+export type AvailableCatalogAccessoryProduct = {
+  id: string;
+  productType: "ACCESSORY";
+  sku: string;
+  name: string;
+  currency: "CNY" | "TWD";
+  unitPriceMinor: number;
+  active: boolean;
+  accessoryType: string;
+  material: string;
+  finish: string;
+  dimensions: unknown;
+  modelAssetKey: string | null;
+  textureAssetKey: string | null;
+  availableQuantity: number;
+};
+
 type StoredDesign = {
   id: string;
   ownerId: string;
@@ -87,6 +140,7 @@ type DesignStore = {
   getDesign(actorId: string, designId: string): Promise<StoredDesign>;
   getRevision(designId: string, revision: number): Promise<StoredRevision>;
   listDesignRevisions(actorId: string, designId: string): Promise<StoredRevision[]>;
+  listDesigns(actorId: string): Promise<StoredDesign[]>;
   updateDesign(
     actorId: string,
     designId: string,
@@ -95,6 +149,7 @@ type DesignStore = {
     changeReason: string
   ): Promise<StoredDesign>;
   saveDesign(actorId: string, designId: string, expectedRevision: number): Promise<StoredDesign>;
+  softDeleteDesign(actorId: string, designId: string): Promise<void>;
 };
 type CatalogStore = {
   getCatalogProducts(productIds: readonly string[]): Promise<CatalogProduct[]>;
@@ -102,6 +157,12 @@ type CatalogStore = {
     currency: "CNY" | "TWD",
     excludedProductIds?: readonly string[]
   ): Promise<CatalogProduct[]>;
+  listAvailableCatalogMaterialProducts(
+    currency: "CNY" | "TWD"
+  ): Promise<AvailableCatalogMaterialProduct[]>;
+  listAvailableCatalogAccessoryProducts(
+    currency: "CNY" | "TWD"
+  ): Promise<AvailableCatalogAccessoryProduct[]>;
 };
 type PriceStore = { recalculateDesignPrice(input: unknown): Promise<DesignV1> };
 type InventoryStore = {
@@ -133,10 +194,20 @@ type OrderStore = {
     expectedPricingVersion: string
   ): Promise<{
     id: string;
-    status: "PENDING" | "CONFIRMED" | "IN_PRODUCTION" | "SHIPPED" | "COMPLETED" | "CANCELLED";
+    status: "PENDING" | "AWAITING_RESTOCK" | "CONFIRMED" | "IN_PRODUCTION" | "SHIPPED" | "COMPLETED" | "CANCELLED";
     createdAt: Date;
     designSnapshot: DesignV1;
+    fulfillmentSnapshot: import("@mystcrag/design-contract").OrderFulfillmentSnapshotV1;
   }>;
+  listOrders(actorId: string): Promise<Array<{
+    id: string;
+    status: "PENDING" | "AWAITING_RESTOCK" | "CONFIRMED" | "IN_PRODUCTION" | "SHIPPED" | "COMPLETED" | "CANCELLED";
+    createdAt: Date;
+    currency: "CNY" | "TWD";
+    totalAmountMinor: number;
+    designSnapshot: DesignV1;
+    fulfillmentSnapshot: import("@mystcrag/design-contract").OrderFulfillmentSnapshotV1;
+  }>>;
 };
 
 const AiDesignCandidateSchema = z.strictObject({
@@ -147,6 +218,7 @@ const AiDesignCandidateSchema = z.strictObject({
   recommendationReasons: z.array(z.string().trim().min(1).max(500)).min(1),
   culturalInspiration: z.array(CulturalInspirationSchema),
   sourceTemplateIds: z.array(z.string().trim().min(1)),
+  productionNotes: z.array(z.string().trim().min(1).max(500)).default([]),
   providerMetadata: z.strictObject({
     modelProvider: z.string().trim().min(1),
     modelName: z.string().trim().min(1),
@@ -210,9 +282,13 @@ export interface DesignApiService {
   update(actorId: string, request: UpdateDesignRequest): Promise<UpdateDesignResponse>;
   price(actorId: string, request: PriceDesignRequest): Promise<PriceDesignResponse>;
   save(actorId: string, request: SaveDesignRequest): Promise<SaveDesignResponse>;
+  delete(actorId: string, request: DeleteDesignRequest): Promise<DeleteDesignResponse>;
+  cloneDesign(actorId: string, request: CloneDesignRequest): Promise<CloneDesignResponse>;
   get(actorId: string, designId: string): Promise<ReturnType<typeof toPublicDesign>>;
   materials(actorId: string, currency: "CNY" | "TWD"): Promise<ListCatalogMaterialsResponse>;
   revisions(actorId: string, designId: string): Promise<RevisionListResponse>;
+  listDesigns(actorId: string): Promise<ListMyDesignsResponse>;
+  listOrders(actorId: string): Promise<ListMyOrdersResponse>;
   publish(actorId: string, request: PublishDesignRequest): Promise<PublishDesignResponse>;
   createOrder(
     actorId: string,
@@ -534,7 +610,7 @@ function buildGeneratedDesign(
       billOfMaterials: [],
       componentSequence: [],
       anchoredComponents: [],
-      productionNotes: [],
+      productionNotes: candidate.productionNotes,
       substitutionRules: []
     },
     compliance: {
@@ -782,13 +858,19 @@ export class DesignApplicationService implements DesignApiService {
           ...calculated,
           designId: deriveTarotDesignAuthorityId(designIdSeed, calculated)
         });
-    await this.dependencies.inventory.validateAvailability(quantitiesByProduct(priced));
+    const warnings: ContractWarning[] = [];
+    try {
+      await this.dependencies.inventory.validateAvailability(quantitiesByProduct(priced));
+    } catch (error) {
+      if (input.designMode !== "TAROT_GUIDED" || errorCode(error) !== "INVENTORY_CHANGED") throw error;
+      warnings.push({ code: "RESTOCK_REQUIRED", message: "Some materials require replenishment; estimated wait is about 5 days." });
+    }
     try {
       const persisted = await this.dependencies.designs.createDesign(input.actorId, priced);
       return {
         requestId: input.request.requestId,
         design: toPublicDesign(persisted.snapshot),
-        warnings: []
+        warnings
       };
     } catch (error) {
       if (input.designId === undefined || errorCode(error) !== "CONFLICT") throw error;
@@ -802,7 +884,7 @@ export class DesignApplicationService implements DesignApiService {
       return {
         requestId: input.request.requestId,
         design: toPublicDesign(existing.snapshot),
-        warnings: []
+        warnings
       };
     }
   }
@@ -823,7 +905,13 @@ export class DesignApplicationService implements DesignApiService {
       revision: request.expectedRevision + 1,
       updatedAt: timestamp
     });
-    await this.dependencies.inventory.validateAvailability(quantitiesByProduct(next));
+    const warnings: ContractWarning[] = [];
+    try {
+      await this.dependencies.inventory.validateAvailability(quantitiesByProduct(next));
+    } catch (error) {
+      if (next.designMode !== "TAROT_GUIDED" || errorCode(error) !== "INVENTORY_CHANGED") throw error;
+      warnings.push({ code: "RESTOCK_REQUIRED", message: "Some materials require replenishment; estimated wait is about 5 days." });
+    }
     const persisted = await this.dependencies.designs.updateDesign(
       actorId,
       request.designId,
@@ -831,7 +919,7 @@ export class DesignApplicationService implements DesignApiService {
       next,
       request.operations.map(({ operation }) => operation).join(",")
     );
-    return { requestId: request.requestId, design: toPublicDesign(persisted.snapshot), warnings: [] };
+    return { requestId: request.requestId, design: toPublicDesign(persisted.snapshot), warnings };
   }
 
   async price(actorId: string, request: PriceDesignRequest): Promise<PriceDesignResponse> {
@@ -857,7 +945,10 @@ export class DesignApplicationService implements DesignApiService {
       await this.dependencies.inventory.validateAvailability(quantitiesByProduct(priced));
     } catch (error) {
       if (errorCode(error) === "INVENTORY_CHANGED") {
-        warnings.push({
+        warnings.push(request.design.designMode === "TAROT_GUIDED" ? {
+          code: "RESTOCK_REQUIRED",
+          message: "Some materials require replenishment; estimated wait is about 5 days."
+        } : {
           code: "INVENTORY_CHANGED",
           message: error instanceof Error ? error.message : "Catalog inventory changed."
         });
@@ -890,8 +981,87 @@ export class DesignApplicationService implements DesignApiService {
     };
   }
 
+  async delete(actorId: string, request: DeleteDesignRequest): Promise<DeleteDesignResponse> {
+    const request_ = DeleteDesignRequestSchema.parse(request);
+    const current = await this.dependencies.designs.getDesign(actorId, request_.designId);
+    if (current.currentRevision !== request_.expectedRevision) {
+      throw new DomainApiError("CONFLICT", "Design revision conflict");
+    }
+    await this.dependencies.designs.softDeleteDesign(actorId, request_.designId);
+    return DeleteDesignResponseSchema.parse({
+      requestId: request_.requestId,
+      designId: request_.designId,
+      deletedAt: this.now().toISOString()
+    });
+  }
+
+  async cloneDesign(actorId: string, request: CloneDesignRequest): Promise<CloneDesignResponse> {
+    const request_ = CloneDesignRequestSchema.parse(request);
+    const source = await this.dependencies.designs.getDesign(actorId, request_.designId);
+    if (source.currentRevision !== request_.expectedRevision) {
+      throw new DomainApiError("CONFLICT", "Design revision conflict");
+    }
+    const timestamp = this.now().toISOString();
+    const copySuffix = " · 副本";
+    const sourceName = source.snapshot.designName;
+    const clonedName = sourceName.length + copySuffix.length <= 200
+      ? `${sourceName}${copySuffix}`
+      : sourceName;
+    const clone = DesignV1Schema.parse({
+      ...structuredClone(source.snapshot),
+      designId: this.createId("design"),
+      designName: clonedName,
+      revision: 1,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      community: {
+        visibility: "PRIVATE",
+        publishConsent: false,
+        allowRemix: false,
+        creatorDisplayMode: "ANONYMOUS"
+      },
+      provenance: {
+        ...structuredClone(source.snapshot.provenance),
+        sourceDesignId: source.snapshot.designId
+      }
+    });
+    const persisted = await this.dependencies.designs.createDesign(actorId, clone);
+    return CloneDesignResponseSchema.parse({
+      requestId: request_.requestId,
+      design: toPublicDesign(persisted.snapshot),
+      warnings: [],
+      clonedAt: timestamp
+    });
+  }
+
   async get(actorId: string, designId: string): Promise<ReturnType<typeof toPublicDesign>> {
     return toPublicDesign((await this.dependencies.designs.getDesign(actorId, designId)).snapshot);
+  }
+
+  async listDesigns(actorId: string): Promise<ListMyDesignsResponse> {
+    const designs = await this.dependencies.designs.listDesigns(actorId);
+    return {
+      designs: designs.slice(0, 200).map((stored) => ({
+        design: toPublicDesign(stored.snapshot),
+        status: stored.status,
+        updatedAt: stored.updatedAt.toISOString()
+      }))
+    };
+  }
+
+  async listOrders(actorId: string): Promise<ListMyOrdersResponse> {
+    const orders = await this.dependencies.orders.listOrders(actorId);
+    return {
+      orders: orders.slice(0, 100).map((order) => ({
+        orderId: order.id,
+        status: order.status,
+        currency: order.currency,
+        totalAmountMinor: order.totalAmountMinor,
+        createdAt: order.createdAt.toISOString(),
+        design: toPublicDesign(order.designSnapshot),
+        fulfillment: order.fulfillmentSnapshot
+      }))
+    };
   }
 
   async materials(
@@ -899,8 +1069,11 @@ export class DesignApplicationService implements DesignApiService {
     currency: "CNY" | "TWD"
   ): Promise<ListCatalogMaterialsResponse> {
     void actorId;
-    const catalog = await this.dependencies.catalog.listActiveCatalogProducts(currency);
-    const materials: CatalogMaterialProduct[] = catalog.flatMap((product) => {
+    const [catalogMaterials, catalogAccessories] = await Promise.all([
+      this.dependencies.catalog.listAvailableCatalogMaterialProducts(currency),
+      this.dependencies.catalog.listAvailableCatalogAccessoryProducts(currency)
+    ]);
+    const materials: CatalogMaterialProduct[] = catalogMaterials.flatMap((product) => {
       if (
         product.productType !== "MATERIAL" ||
         !product.crystalId ||
@@ -919,6 +1092,7 @@ export class DesignApplicationService implements DesignApiService {
         crystalId: product.crystalId,
         crystalNameCn: product.crystalNameCn ?? product.name,
         crystalNameEn: product.crystalNameEn ?? product.name,
+        mineralName: product.mineralName ?? "Mineral",
         colorTags: product.colorTags ?? [],
         visualTags: product.visualTags ?? [],
         styleTags: product.styleTags ?? [],
@@ -930,10 +1104,22 @@ export class DesignApplicationService implements DesignApiService {
         modelAssetKey: product.modelAssetKey,
         textureAssetKey: product.textureAssetKey,
         currency: product.currency,
-        unitPriceMinor: product.unitPriceMinor
+        unitPriceMinor: product.unitPriceMinor,
+        availableQuantity: product.availableQuantity
       }];
     });
-    return { materials };
+    const accessories: CatalogAccessoryProduct[] = catalogAccessories.map((product) => ({
+      accessoryProductId: product.id,
+      sku: product.sku,
+      displayName: product.name,
+      accessoryType: product.accessoryType,
+      material: product.material,
+      finish: product.finish,
+      currency: product.currency,
+      unitPriceMinor: product.unitPriceMinor,
+      availableQuantity: product.availableQuantity
+    }));
+    return { materials, accessories };
   }
 
   async revisions(actorId: string, designId: string): Promise<RevisionListResponse> {
@@ -996,8 +1182,8 @@ export class DesignApplicationService implements DesignApiService {
       design: toPublicDesign(order.designSnapshot),
       warnings: [],
       orderId: order.id,
-      orderStatus: order.status === "CONFIRMED" ? "CONFIRMED" : "PENDING",
-      snapshot: toOrderSnapshot(order.designSnapshot, order.createdAt.toISOString()),
+      orderStatus: order.status === "AWAITING_RESTOCK" ? "AWAITING_RESTOCK" : order.status === "CONFIRMED" ? "CONFIRMED" : "PENDING",
+      snapshot: toOrderSnapshot(order.designSnapshot, order.createdAt.toISOString(), order.fulfillmentSnapshot),
       createdAt: order.createdAt.toISOString()
     };
   }

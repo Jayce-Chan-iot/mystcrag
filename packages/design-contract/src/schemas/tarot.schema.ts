@@ -84,9 +84,27 @@ export const TarotMaterialDisplayRecommendationSchema = z.strictObject({
   reason: z.string().trim().min(1).max(240)
 });
 
+export const TarotFulfillmentAdvisorySchema = z.strictObject({
+  requiresRestock: z.boolean(),
+  estimatedRestockDays: z.union([z.literal(0), z.literal(5)]),
+  affectedProductIds: z.array(IdentifierSchema).max(30)
+}).superRefine((advisory, context) => {
+  if (advisory.requiresRestock !== (advisory.affectedProductIds.length > 0)) {
+    context.addIssue({ code: "custom", path: ["affectedProductIds"], message: "Restock flag must match affected products" });
+  }
+  if (advisory.estimatedRestockDays !== (advisory.requiresRestock ? 5 : 0)) {
+    context.addIssue({ code: "custom", path: ["estimatedRestockDays"], message: "Restock estimate must match advisory" });
+  }
+});
+
 export const TarotRankedRecommendationSchema = z.strictObject({
   rank: z.number().int().min(1).max(3),
-  design: PublicDesignV1Schema
+  design: PublicDesignV1Schema,
+  fulfillment: TarotFulfillmentAdvisorySchema.default({
+    requiresRestock: false,
+    estimatedRestockDays: 0,
+    affectedProductIds: []
+  })
 });
 
 const requiredSlotsFor = (spreadType: z.infer<typeof TarotSpreadTypeSchema>) =>
@@ -306,6 +324,7 @@ export const RevealTarotSessionRequestSchema = z.strictObject({
 export const GenerateTarotRecommendationsRequestSchema = z.strictObject({
   requestId: IdentifierSchema,
   expectedRevision: PositiveSafeIntegerSchema,
+  wristCircumferenceMm: z.number().int().min(130).max(200).optional(),
   question: z.string().trim().min(1).max(120).optional(),
   saveQuestion: z.boolean().default(false),
   locale: LocaleSchema,
@@ -359,6 +378,7 @@ export type TarotRevealedCard = z.infer<typeof TarotRevealedCardSchema>;
 export type TarotInterpretation = z.infer<typeof TarotInterpretationSchema>;
 export type TarotColorStory = z.infer<typeof TarotColorStorySchema>;
 export type TarotMaterialDisplayRecommendation = z.infer<typeof TarotMaterialDisplayRecommendationSchema>;
+export type TarotFulfillmentAdvisory = z.infer<typeof TarotFulfillmentAdvisorySchema>;
 export type TarotRankedRecommendation = z.infer<typeof TarotRankedRecommendationSchema>;
 export type TarotPublicSession = z.infer<typeof TarotPublicSessionSchema>;
 export type TarotDrawingSession = z.infer<typeof TarotDrawingSessionSchema>;

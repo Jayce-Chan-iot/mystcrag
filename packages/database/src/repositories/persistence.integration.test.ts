@@ -15,7 +15,8 @@ const databaseUrl = process.env.DATABASE_URL;
 const migrationNames = [
   "20260721140000_init_mystcrag_persistence_v1",
   "20260818120000_add_order_idempotency",
-  "20260820100000_add_tarot_sessions"
+  "20260820100000_add_tarot_sessions",
+  "20260822150000_add_backorder_fulfillment"
 ];
 
 function nextRevision(
@@ -350,7 +351,7 @@ test("live PostgreSQL 17 persistence verification matrix", { skip: !databaseUrl 
       await assert.rejects(() => prisma.order.delete({ where: { id: orderId } }));
     });
 
-    await t.test("10. failed order validation leaves order and snapshot counts unchanged", async () => {
+    await t.test("10. Tarot zero-stock order records a backorder without negative inventory", async () => {
       await prisma.inventorySnapshot.create({
         data: {
           productType: "MATERIAL",
@@ -359,33 +360,47 @@ test("live PostgreSQL 17 persistence verification matrix", { skip: !databaseUrl 
           sourceVersion: "postgres-verification-out-of-stock"
         }
       });
-      const before = {
-        orders: await prisma.order.count(),
-        snapshots: await prisma.orderDesignSnapshot.count()
-      };
       const outOfStockDesign = DesignV1Schema.parse({
         ...structuredClone(revision1),
-        designId: "postgres-out-of-stock-design"
+        designId: "postgres-out-of-stock-design",
+        designMode: "TAROT_GUIDED"
       });
       await designs.createDesign(actorId, outOfStockDesign);
-      await assert.rejects(
-        () =>
-          orders.createOrderFromDesign(
-            actorId,
-            outOfStockDesign.designId,
-            1,
-            5_500,
-            "cny-retail-2026-07-v1"
-          ),
-        (error: unknown) =>
-          error instanceof PersistenceError && error.code === "INVENTORY_CHANGED"
+      const backorder = await orders.createOrderFromDesign(
+        actorId,
+        outOfStockDesign.designId,
+        1,
+        5_500,
+        "cny-retail-2026-07-v1"
       );
-      assert.deepEqual(
-        {
-          orders: await prisma.order.count(),
-          snapshots: await prisma.orderDesignSnapshot.count()
-        },
-        before
+      assert.equal(backorder.status, "AWAITING_RESTOCK");
+      assert.equal(backorder.fulfillmentSnapshot.status, "AWAITING_RESTOCK");
+      const line = backorder.fulfillmentSnapshot.lines.find(({ productId }) => productId === "product-aquamarine-round-8");
+      assert.ok(line);
+      assert.equal(line.reservedQuantity, 0);
+      assert.equal(line.backorderQuantity, line.requestedQuantity);
+      const latest = await prisma.inventorySnapshot.findFirst({
+        where: { productId: "product-aquamarine-round-8" },
+        orderBy: { capturedAt: "desc" }
+      });
+      assert.ok(latest);
+      assert.ok(latest.availableQuantity - latest.reservedQuantity >= 0);
+
+      const blockedDesign = DesignV1Schema.parse({
+        ...structuredClone(revision1),
+        designId: "postgres-non-tarot-out-of-stock-design",
+        designMode: "DIY_CREATED"
+      });
+      await designs.createDesign(actorId, blockedDesign);
+      await assert.rejects(
+        () => orders.createOrderFromDesign(
+          actorId,
+          blockedDesign.designId,
+          1,
+          5_500,
+          "cny-retail-2026-07-v1"
+        ),
+        (error: unknown) => error instanceof PersistenceError && error.code === "INVENTORY_CHANGED"
       );
     });
 

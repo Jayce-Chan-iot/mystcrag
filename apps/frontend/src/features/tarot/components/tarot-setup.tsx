@@ -8,6 +8,7 @@ import type {
 import { useRouter } from "next/navigation";
 import { useRef, useState, type FormEvent } from "react";
 
+import { WristMeasurementGuide } from "../../questionnaire/components/wrist-measurement-guide";
 import { ERROR_PRESENTATION, toFrontendApiError } from "../../../lib/api/frontend-api-error";
 import { tarotApi, type TarotApiClient } from "../../../lib/api/tarot-api";
 import {
@@ -28,6 +29,7 @@ export type TarotSetupInput = Readonly<{
   theme: TarotTheme;
   question: string;
   saveQuestion: boolean;
+  wristCircumferenceMm: number;
   parentSessionId?: string;
 }>;
 
@@ -70,7 +72,8 @@ export function createTarotSetupSubmitter({
       const response = await create(request);
       draftStore.set(response.session.sessionId, {
         question,
-        saveQuestion: input.saveQuestion && question.length > 0
+        saveQuestion: input.saveQuestion && question.length > 0,
+        wristCircumferenceMm: input.wristCircumferenceMm
       });
       navigate(`/tarot/draw/${encodeURIComponent(response.session.sessionId)}`);
     })().finally(() => {
@@ -86,12 +89,14 @@ export type TarotSetupFieldsProps = Readonly<{
   spreadType: TarotSpreadType;
   question: string;
   saveQuestion: boolean;
+  wristCircumferenceMm?: number;
   error: string | null;
   isSubmitting: boolean;
   onThemeChange(value: TarotTheme): void;
   onSpreadChange(value: TarotSpreadType): void;
   onQuestionChange(value: string): void;
   onSaveQuestionChange(value: boolean): void;
+  onWristChange?(value: number): void;
   onSubmit(): void;
 }>;
 
@@ -100,12 +105,14 @@ export function TarotSetupFields({
   spreadType,
   question,
   saveQuestion,
+  wristCircumferenceMm = 155,
   error,
   isSubmitting,
   onThemeChange,
   onSpreadChange,
   onQuestionChange,
   onSaveQuestionChange,
+  onWristChange = () => undefined,
   onSubmit
 }: TarotSetupFieldsProps) {
   const questionHelpId = "tarot-question-help";
@@ -118,7 +125,7 @@ export function TarotSetupFields({
         onSubmit();
       }}
     >
-      <section className="rounded-[2rem] border border-[var(--border)] bg-white/70 p-5 shadow-[0_24px_70px_rgb(62_47_72/0.07)] sm:p-8" aria-labelledby="tarot-theme-title">
+      <section className="rounded-[2rem] border border-[var(--border)] bg-white/70 p-5 shadow-[0_24px_70px_rgb(62_47_72/0.07)] sm:p-8" aria-labelledby="tarot-theme-title" data-tarot-setup-panel="theme">
         <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--accent)]">01 · Reading theme</p>
         <h2 className="mt-4 font-serif text-3xl" id="tarot-theme-title">此刻，你想把注意力放在哪里？</h2>
         <label className="mt-8 block text-sm font-medium" htmlFor="tarot-theme">选择主题</label>
@@ -159,10 +166,38 @@ export function TarotSetupFields({
         </label>
       </section>
 
-      <section className="flex flex-col rounded-[2rem] border border-[var(--border)] bg-[var(--surface)]/80 p-5 sm:p-8" aria-labelledby="tarot-spread-title">
-        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--accent)]">02 · Card spread</p>
-        <h2 className="mt-4 font-serif text-3xl" id="tarot-spread-title">选择抽牌方式</h2>
-        <fieldset className="mt-7 grid gap-3">
+      <section className="flex flex-col rounded-[2rem] border border-[var(--border)] bg-[var(--surface)]/80 p-5 sm:p-8" aria-labelledby="tarot-spread-title" data-tarot-setup-panel="spread">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-5 border-b border-[var(--border)] pb-5">
+          <div>
+            <label className="block text-sm font-medium" htmlFor="tarot-wrist">设计手围</label>
+            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">用于生成适合本次佩戴尺寸的三套手串。</p>
+          </div>
+          <div className="flex items-baseline gap-1.5">
+            <input
+              className="w-20 border-0 border-b border-[var(--foreground)] bg-transparent pb-1 text-right font-serif text-2xl outline-none focus:border-[var(--accent)]"
+              id="tarot-wrist"
+              inputMode="decimal"
+              max="20"
+              min="13"
+              onChange={(event) => {
+                const centimeters = Number(event.target.value);
+                if (Number.isFinite(centimeters)) onWristChange(Math.round(centimeters * 10));
+              }}
+              step="0.5"
+              type="number"
+              value={(wristCircumferenceMm / 10).toFixed(1)}
+            />
+            <span className="text-sm text-[var(--muted)]">cm</span>
+          </div>
+        </div>
+        <details className="group border-b border-[var(--border)] py-3">
+          <summary className="cursor-pointer list-none text-xs font-medium text-[var(--accent)]">如何量取净手围 <span aria-hidden="true">＋</span></summary>
+          <div className="mt-3"><WristMeasurementGuide /></div>
+        </details>
+
+        <p className="mt-5 text-xs font-semibold uppercase tracking-[0.28em] text-[var(--accent)]">02 · Card spread</p>
+        <h2 className="mt-3 font-serif text-3xl" id="tarot-spread-title">选择抽牌方式</h2>
+        <fieldset className="mt-7 grid gap-3" data-tarot-spread-options="true">
           <legend className="sr-only">牌阵</legend>
           {[
             { value: "SINGLE" as const, label: "单张指引", detail: "用一张牌聚焦此刻最值得留意的线索。" },
@@ -182,13 +217,14 @@ export function TarotSetupFields({
           ))}
         </fieldset>
 
-        <div className="mt-7 rounded-2xl border border-[var(--border)] bg-white/55 p-4 text-xs leading-6 text-[var(--muted)]">
+        <div className="mt-7 rounded-2xl border border-[var(--border)] bg-white/55 p-4 text-xs leading-6 text-[var(--muted)]" data-tarot-safety-note="true">
           塔罗内容仅用于自我反思与设计灵感，不构成事实预测、医疗或投资建议；水晶搭配也不代表功效承诺。
         </div>
         {error ? <p className="mt-5 text-sm leading-6 text-[var(--danger)]" role="alert">{error}</p> : null}
         <button
           className="mt-7 min-h-13 rounded-full bg-[var(--accent-deep)] px-7 text-sm font-medium text-white shadow-[0_14px_35px_rgb(73_53_95/0.22)] transition hover:-translate-y-0.5 disabled:cursor-wait disabled:opacity-55 lg:mt-auto"
           disabled={isSubmitting}
+          data-tarot-setup-submit="true"
           type="submit"
         >
           {isSubmitting ? "正在准备牌阵…" : "进入抽牌"} <span aria-hidden="true">→</span>
@@ -205,6 +241,7 @@ export function TarotSetup({ client = tarotApi }: Readonly<{ client?: Pick<Tarot
   const [spreadType, setSpreadType] = useState<TarotSpreadType>("PAST_PRESENT_FUTURE");
   const [question, setQuestion] = useState("");
   const [saveQuestion, setSaveQuestion] = useState(false);
+  const [wristCircumferenceMm, setWristCircumferenceMm] = useState(155);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitterRef = useRef<ReturnType<typeof createTarotSetupSubmitter> | null>(null);
@@ -223,7 +260,7 @@ export function TarotSetup({ client = tarotApi }: Readonly<{ client?: Pick<Tarot
     setIsSubmitting(true);
     setError(null);
     try {
-      await submitterRef.current?.({ theme, spreadType, question, saveQuestion });
+      await submitterRef.current?.({ theme, spreadType, question, saveQuestion, wristCircumferenceMm });
     } catch (submissionError) {
       const presentation = ERROR_PRESENTATION[toFrontendApiError(submissionError).code];
       setError(`${presentation.title}：${presentation.message}`);
@@ -232,7 +269,7 @@ export function TarotSetup({ client = tarotApi }: Readonly<{ client?: Pick<Tarot
   };
 
   return (
-    <main className="min-h-[calc(100vh-5rem)] px-5 pb-20 pt-10 sm:px-8 sm:pb-28 sm:pt-14">
+    <main className="min-h-[calc(100vh-5rem)] px-5 pb-20 pt-10 sm:px-8 sm:pb-28 sm:pt-14" data-atelier-surface="tarot-setup">
       <header className="mx-auto mb-10 max-w-3xl text-center sm:mb-14">
         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-[var(--accent)]">塔罗水晶引导 · Tarot guidance</p>
         <h1 className="mt-5 font-serif text-4xl leading-tight sm:text-6xl">先听见问题，再选择一组牌。</h1>
@@ -247,6 +284,7 @@ export function TarotSetup({ client = tarotApi }: Readonly<{ client?: Pick<Tarot
           setError(null);
         }}
         onSaveQuestionChange={setSaveQuestion}
+        onWristChange={setWristCircumferenceMm}
         onSpreadChange={setSpreadType}
         onSubmit={() => void submit()}
         onThemeChange={setTheme}
@@ -254,6 +292,7 @@ export function TarotSetup({ client = tarotApi }: Readonly<{ client?: Pick<Tarot
         saveQuestion={saveQuestion}
         spreadType={spreadType}
         theme={theme}
+        wristCircumferenceMm={wristCircumferenceMm}
       />
     </main>
   );

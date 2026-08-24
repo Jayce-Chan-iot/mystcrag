@@ -1,4 +1,4 @@
-import type { PublicDesignV1 } from "@mystcrag/design-contract";
+import type { PublicDesignV1, TarotFulfillmentAdvisory } from "@mystcrag/design-contract";
 
 import { BraceletPreview } from "../../design/components/bracelet-preview";
 import { formatMinorAmount } from "../../design/model/format-minor-amount";
@@ -18,6 +18,7 @@ export function TarotRecommendationCard({
   rank,
   selected,
   disabled = false,
+  fulfillment = { requiresRestock: false, estimatedRestockDays: 0, affectedProductIds: [] },
   materialNamesByProductId,
   onSelect
 }: Readonly<{
@@ -25,6 +26,7 @@ export function TarotRecommendationCard({
   rank: number;
   selected: boolean;
   disabled?: boolean;
+  fulfillment?: TarotFulfillmentAdvisory;
   materialNamesByProductId: ReadonlyMap<string, string>;
   onSelect(designId: string): void;
 }>) {
@@ -60,9 +62,14 @@ export function TarotRecommendationCard({
       </div>
 
       <div className={styles.recommendationBody}>
+        {fulfillment.requiresRestock ? (
+          <p className={styles.restockNotice} role="status">
+            需补货：下单后预计等待约 5 天，具体以实际补货时间为准。
+          </p>
+        ) : null}
         <div className={styles.paletteDots} aria-label={`配色 ${design.story.colorPalette.join("、")}`}>
-          {design.story.colorPalette.slice(0, 4).map((color) => (
-            <span key={color} style={{ backgroundColor: color }} title={color} />
+          {design.story.colorPalette.slice(0, 4).map((color, index) => (
+            <span key={`${color}-${index}`} style={{ backgroundColor: color }} title={color} />
           ))}
         </div>
         <p className={styles.recommendationMaterials}>{materials.join(" · ")}</p>

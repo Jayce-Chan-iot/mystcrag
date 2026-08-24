@@ -18,6 +18,7 @@ import {
   validateQuestionnaireStep,
   type QuestionnaireAnswers
 } from "../model/questionnaire";
+import { WristMeasurementGuide } from "./wrist-measurement-guide";
 
 export function QuestionnaireWizard() {
   const router = useRouter();
@@ -85,11 +86,19 @@ export function QuestionnaireWizard() {
   const options = step.id === "wrist" ? null : QUESTION_OPTIONS[step.id];
 
   return (
-    <main className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-5xl flex-col px-5 pb-28 pt-8 sm:px-8 sm:pb-16 sm:pt-12">
+    <main className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-5xl flex-col px-5 pb-28 pt-8 sm:px-8 sm:pb-16 sm:pt-12" data-atelier-surface="questionnaire">
       <div className="flex items-center justify-between text-xs tracking-[0.15em] text-[var(--muted)]">
         <span>AI DESIGN · PERSONAL BRIEF</span>
         <span aria-label={`第 ${stepIndex + 1} 步，共 ${QUESTIONNAIRE_STEPS.length} 步`}>{String(stepIndex + 1).padStart(2, "0")} / 06</span>
       </div>
+      <ol className="mt-4 grid grid-cols-6 gap-2" aria-label="AI 设计问卷进度" data-questionnaire-stepper="true">
+        {QUESTIONNAIRE_STEPS.map((questionnaireStep, index) => (
+          <li className="min-w-0 text-center" data-active={index === stepIndex || undefined} data-complete={index < stepIndex || undefined} key={questionnaireStep.id}>
+            <span className={`mx-auto grid h-7 w-7 place-items-center rounded-full border text-[0.68rem] ${index <= stepIndex ? "border-[var(--accent-deep)] bg-[var(--accent-deep)] text-white" : "border-[var(--border)] bg-white text-[var(--muted)]"}`}>{index + 1}</span>
+            <span className="mt-1 hidden truncate text-[0.62rem] text-[var(--muted)] sm:block">{questionnaireStep.eyebrow.replace(/^\d+\s*\u00b7\s*/, "")}</span>
+          </li>
+        ))}
+      </ol>
       <div className="mt-5 h-px overflow-hidden bg-[var(--border)]" role="progressbar" aria-valuemin={1} aria-valuemax={6} aria-valuenow={stepIndex + 1}>
         <div className="h-full bg-[var(--accent)] transition-all duration-500" style={{ width: `${progress}%` }} />
       </div>
@@ -100,25 +109,28 @@ export function QuestionnaireWizard() {
         <p className="mt-4 max-w-2xl leading-7 text-[var(--muted)]">{step.description}</p>
 
         {step.id === "wrist" ? (
-          <div className="mt-12 max-w-md">
-            <label className="block text-sm text-[var(--muted)]" htmlFor="wrist">净手围（毫米）</label>
-            <div className="mt-3 flex items-end border-b border-[var(--foreground)] pb-3">
-              <input
-                aria-describedby={error ? "question-error" : "wrist-help"}
-                aria-invalid={Boolean(error)}
-                className="min-w-0 flex-1 bg-transparent font-serif text-5xl outline-none placeholder:text-[var(--border)]"
-                id="wrist"
-                inputMode="decimal"
-                max="220"
-                min="120"
-                onChange={(event) => updateAnswer(event.target.value)}
-                placeholder="155"
-                type="number"
-                value={answers.wrist}
-              />
-              <span className="pb-1 text-[var(--muted)]">mm</span>
+          <div className="mt-10 grid items-start gap-6 md:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
+            <div className="max-w-md">
+              <label className="block text-sm text-[var(--muted)]" htmlFor="wrist">净手围（毫米）</label>
+              <div className="mt-3 flex items-end border-b border-[var(--foreground)] pb-3">
+                <input
+                  aria-describedby={error ? "question-error" : "wrist-help"}
+                  aria-invalid={Boolean(error)}
+                  className="min-w-0 flex-1 bg-transparent font-serif text-5xl outline-none placeholder:text-[var(--border)]"
+                  id="wrist"
+                  inputMode="decimal"
+                  max="220"
+                  min="120"
+                  onChange={(event) => updateAnswer(event.target.value)}
+                  placeholder="155"
+                  type="number"
+                  value={answers.wrist}
+                />
+                <span className="pb-1 text-[var(--muted)]">mm</span>
+              </div>
+              <p className="mt-3 text-sm text-[var(--muted)]" id="wrist-help">常见成人手围约为 140–180 mm。</p>
             </div>
-            <p className="mt-3 text-sm text-[var(--muted)]" id="wrist-help">常见成人手围约为 140–180 mm。</p>
+            <WristMeasurementGuide />
           </div>
         ) : (
           <><fieldset className="mt-10 grid gap-3 sm:grid-cols-2" role="radiogroup">

@@ -1,5 +1,11 @@
-import { PageScaffold } from "../../components/page-scaffold";
+import type { Metadata } from "next";
 
-export default function GalleryPage() {
-  return <PageScaffold eyebrow="Community" title="设计广场" description="在获得明确授权后，展示用户共创的设计与故事。" />;
+import { GalleryPage } from "../../src/features/gallery/components/gallery-page";
+
+export const metadata: Metadata = {
+  title: "作品画廊"
+};
+
+export default function Page() {
+  return <GalleryPage />;
 }

@@ -135,30 +135,53 @@ const crystals = [
   { id: "crystal-rhodonite", nameCn: "蔷薇辉石", nameEn: "Rhodonite", mineralName: "Rhodonite", colorTags: ["pink", "black", "deep"], productSlug: "rhodonite", skuPrefix: "RH", shape: "ROUND", diameterMm: 8, cnyPrice: 460, twdPrice: 230 }
 ] as const;
 
-const materialProducts = crystals.flatMap((crystal) => ([
-  {
-    id: `product-${crystal.productSlug}-${crystal.shape.toLowerCase()}-${crystal.diameterMm}`,
-    sku: `${crystal.skuPrefix}-CNY-${crystal.diameterMm}`,
-    crystalId: crystal.id,
-    name: `${crystal.nameCn}${crystal.shape === "ROUND" ? "圆珠" : "切面珠"} ${crystal.diameterMm}mm`,
-    currency: "CNY" as const,
-    price: crystal.cnyPrice,
-    cost: Math.floor(crystal.cnyPrice * 0.42),
-    shape: crystal.shape,
-    diameterMm: crystal.diameterMm
-  },
-  {
-    id: `product-${crystal.productSlug}-${crystal.shape.toLowerCase()}-${crystal.diameterMm}-twd`,
-    sku: `${crystal.skuPrefix}-TWD-${crystal.diameterMm}`,
-    crystalId: crystal.id,
-    name: `${crystal.nameCn}${crystal.shape === "ROUND" ? "圓珠" : "切面珠"} ${crystal.diameterMm}mm`,
-    currency: "TWD" as const,
-    price: crystal.twdPrice,
-    cost: Math.floor(crystal.twdPrice * 0.42),
-    shape: crystal.shape,
-    diameterMm: crystal.diameterMm
-  }
-]));
+const CORE_DIAMETER_CRYSTAL_IDS: ReadonlySet<string> = new Set([
+  "crystal-aquamarine",
+  "crystal-moonstone",
+  "crystal-clear-quartz",
+  "crystal-amethyst",
+  "crystal-rose-quartz",
+  "crystal-citrine"
+] as const satisfies ReadonlyArray<(typeof crystals)[number]["id"]>);
+
+const DIAMETER_PRICE_FACTORS: Readonly<Record<number, number>> = { 6: 0.8, 8: 1, 10: 1.25 };
+
+const ZERO_STOCK_PRODUCT_IDS = new Set(["product-moonstone-round-10", "product-garnet-faceted-8", "product-pendant-drop-silver-8"]);
+
+function diameterPriceFactor(diameterMm: number): number {
+  return DIAMETER_PRICE_FACTORS[diameterMm] ?? 1;
+}
+
+function diametersFor(crystal: (typeof crystals)[number]): number[] {
+  return CORE_DIAMETER_CRYSTAL_IDS.has(crystal.id) ? [6, 8, 10] : [crystal.diameterMm];
+}
+
+const materialProducts = crystals.flatMap((crystal) =>
+  diametersFor(crystal).flatMap((diameterMm) => ([
+    {
+      id: `product-${crystal.productSlug}-${crystal.shape.toLowerCase()}-${diameterMm}`,
+      sku: `${crystal.skuPrefix}-CNY-${diameterMm}`,
+      crystalId: crystal.id,
+      name: `${crystal.nameCn}${crystal.shape === "ROUND" ? "圆珠" : "切面珠"} ${diameterMm}mm`,
+      currency: "CNY" as const,
+      price: Math.max(10, Math.round((crystal.cnyPrice * diameterPriceFactor(diameterMm)) / 10) * 10),
+      cost: Math.floor(crystal.cnyPrice * 0.42),
+      shape: crystal.shape,
+      diameterMm
+    },
+    {
+      id: `product-${crystal.productSlug}-${crystal.shape.toLowerCase()}-${diameterMm}-twd`,
+      sku: `${crystal.skuPrefix}-TWD-${diameterMm}`,
+      crystalId: crystal.id,
+      name: `${crystal.nameCn}${crystal.shape === "ROUND" ? "圓珠" : "切面珠"} ${diameterMm}mm`,
+      currency: "TWD" as const,
+      price: Math.max(10, Math.round((crystal.twdPrice * diameterPriceFactor(diameterMm)) / 10) * 10),
+      cost: Math.floor(crystal.twdPrice * 0.42),
+      shape: crystal.shape,
+      diameterMm
+    }
+  ]))
+);
 
 async function seed() {
   const prisma = createPrismaClient(
@@ -278,15 +301,23 @@ async function seed() {
       ...materialProducts.map(({ id }) => id),
       ...accessories.map(({ id }) => id)
     ];
+    await prisma.materialProduct.updateMany({
+      where: { id: { notIn: materialProducts.map(({ id }) => id) }, active: true },
+      data: { active: false }
+    });
+    await prisma.accessoryProduct.updateMany({
+      where: { id: { notIn: accessories.map(({ id }) => id) }, active: true },
+      data: { active: false }
+    });
+    await prisma.inventorySnapshot.deleteMany({ where: { sourceVersion: "seed-2026-07-v1" } });
     await prisma.inventorySnapshot.createMany({
       data: allProductIds.map((productId) => ({
         productType: productId.startsWith("product-spacer") || productId.startsWith("product-pendant") ? "ACCESSORY" : "MATERIAL",
         productId,
-        availableQuantity: 100,
+        availableQuantity: ZERO_STOCK_PRODUCT_IDS.has(productId) ? 0 : 100,
         reservedQuantity: 0,
         sourceVersion: "seed-2026-07-v1"
-      })),
-      skipDuplicates: true
+      }))
     });
 
     const designs = [publishedRevision2, diyDesign, rejectedDesign];
@@ -357,6 +388,18 @@ async function seed() {
               designSnapshot: toPrismaJson(publishedRevision1),
               pricingSnapshot: toPrismaJson(publishedRevision1.pricing),
               productionSnapshot: toPrismaJson(publishedRevision1.production),
+              fulfillmentSnapshot: toPrismaJson({
+                status: "IN_STOCK",
+                estimatedRestockDays: 0,
+                lines: publishedRevision1.production.billOfMaterials.map((item) => ({
+                  productId: item.productId,
+                  requestedQuantity: item.quantity,
+                  reservedQuantity: item.quantity,
+                  backorderQuantity: 0,
+                  status: "IN_STOCK",
+                  estimatedRestockDays: 0
+                }))
+              }),
               currency: "CNY",
               pricingRuleVersion: publishedRevision1.pricing.pricingVersion
             }

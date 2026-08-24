@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CloneDesignRequestSchema,
+  CloneDesignResponseSchema,
   CreateOrderFromDesignRequestSchema,
   CreateOrderFromDesignResponseSchema,
+  DeleteDesignRequestSchema,
+  DeleteDesignResponseSchema,
   GenerateDesignRequestSchema,
   GenerateDesignResponseSchema,
   ListCatalogMaterialsQuerySchema,
@@ -44,7 +48,19 @@ test("public projection removes the commercial envelope", () => {
 test("all six request and response DTO pairs accept public-safe examples", () => {
   const design = cloneDesign();
   const warnings: never[] = [];
-  const snapshot = toOrderSnapshot(design, capturedAt);
+  const fulfillment = {
+    status: "IN_STOCK" as const,
+    estimatedRestockDays: 0,
+    lines: design.production.billOfMaterials.map((item) => ({
+      productId: item.productId,
+      requestedQuantity: item.quantity,
+      reservedQuantity: item.quantity,
+      backorderQuantity: 0,
+      status: "IN_STOCK" as const,
+      estimatedRestockDays: 0
+    }))
+  };
+  const snapshot = toOrderSnapshot(design, capturedAt, fulfillment);
 
   assert.equal(
     GenerateDesignRequestSchema.safeParse({
@@ -159,6 +175,34 @@ test("all six request and response DTO pairs accept public-safe examples", () =>
   );
 });
 
+test("order response accepts an immutable awaiting-restock fulfillment snapshot", () => {
+  const design = cloneDesign();
+  const fulfillment = {
+    status: "AWAITING_RESTOCK" as const,
+    estimatedRestockDays: 5,
+    lines: [{
+      productId: design.production.billOfMaterials[0]!.productId,
+      requestedQuantity: 8,
+      reservedQuantity: 2,
+      backorderQuantity: 6,
+      status: "PARTIALLY_BACKORDERED" as const,
+      estimatedRestockDays: 5
+    }]
+  };
+  const snapshot = toOrderSnapshot(design, capturedAt, fulfillment);
+  assert.equal(snapshot.fulfillment.status, "AWAITING_RESTOCK");
+  assert.equal(snapshot.fulfillment.lines[0]?.backorderQuantity, 6);
+  assert.equal(CreateOrderFromDesignResponseSchema.safeParse({
+    requestId: "request-order-backorder",
+    design,
+    warnings: [],
+    orderId: "order-backorder",
+    orderStatus: "AWAITING_RESTOCK",
+    snapshot,
+    createdAt: capturedAt
+  }).success, true);
+});
+
 test("update DTO rejects arbitrary JSON Patch operations", () => {
   assert.equal(
     UpdateDesignRequestSchema.safeParse({
@@ -166,6 +210,53 @@ test("update DTO rejects arbitrary JSON Patch operations", () => {
       designId: "design-ai-standard",
       expectedRevision: 1,
       operations: [{ operation: "replace", path: "/pricing", value: 0 }]
+    }).success,
+    false
+  );
+});
+
+test("gallery delete and clone DTOs accept revision-guarded requests", () => {
+  const design = toPublicDesign(cloneDesign());
+  const deleteRequest = DeleteDesignRequestSchema.parse({
+    requestId: "request-delete-1",
+    designId: design.designId,
+    expectedRevision: design.revision
+  });
+  assert.equal(deleteRequest.expectedRevision, design.revision);
+  assert.equal(
+    DeleteDesignResponseSchema.safeParse({
+      requestId: deleteRequest.requestId,
+      designId: design.designId,
+      deletedAt: capturedAt
+    }).success,
+    true
+  );
+  const cloneRequest = CloneDesignRequestSchema.parse({
+    requestId: "request-clone-1",
+    designId: design.designId,
+    expectedRevision: design.revision
+  });
+  assert.equal(
+    CloneDesignResponseSchema.safeParse({
+      requestId: cloneRequest.requestId,
+      design,
+      warnings: [],
+      clonedAt: capturedAt
+    }).success,
+    true
+  );
+});
+
+test("gallery delete and clone DTOs reject missing or non-positive revision guards", () => {
+  assert.equal(
+    DeleteDesignRequestSchema.safeParse({ requestId: "request-delete-2", designId: "design-x" }).success,
+    false
+  );
+  assert.equal(
+    CloneDesignRequestSchema.safeParse({
+      requestId: "request-clone-2",
+      designId: "design-x",
+      expectedRevision: 0
     }).success,
     false
   );
@@ -181,6 +272,7 @@ test("material catalog exposes sellable bead fields without internal cost data",
       crystalId: "crystal-amethyst",
       crystalNameCn: "紫水晶",
       crystalNameEn: "Amethyst",
+      mineralName: "Quartz",
       colorTags: ["purple", "cool"],
       visualTags: ["translucent", "faceted"],
       styleTags: ["minimal", "contemporary-eastern"],
@@ -192,14 +284,29 @@ test("material catalog exposes sellable bead fields without internal cost data",
       modelAssetKey: "sphere-faceted-8mm-v1",
       textureAssetKey: "crystal-amethyst-texture-v1",
       currency: "CNY",
-      unitPriceMinor: 680
+      unitPriceMinor: 680,
+      availableQuantity: 100
+    }],
+    accessories: [{
+      accessoryProductId: "product-spacer-silver-3",
+      sku: "SP-CNY-SILVER-3",
+      displayName: "925银隔珠 3mm",
+      accessoryType: "SPACER",
+      material: "STERLING_SILVER",
+      finish: "POLISHED",
+      currency: "CNY",
+      unitPriceMinor: 300,
+      availableQuantity: 7
     }]
   });
   assert.equal(response.materials[0]?.crystalNameCn, "紫水晶");
+  assert.equal(response.materials[0]?.availableQuantity, 100);
   assert.deepEqual(response.materials[0]?.visualTags, ["translucent", "faceted"]);
   assert.deepEqual(response.materials[0]?.styleTags, ["minimal", "contemporary-eastern"]);
   assert.deepEqual(response.materials[0]?.emotionTags, ["calm-aesthetic"]);
   assert.deepEqual(response.materials[0]?.cultureTags, ["design-inspiration-only"]);
+  assert.equal(response.accessories[0]?.displayName, "925银隔珠 3mm");
+  assert.equal(response.accessories[0]?.availableQuantity, 7);
   assert.equal(JSON.stringify(response).includes("unitCostMinor"), false);
 });
 

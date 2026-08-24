@@ -49,6 +49,17 @@ test("enabled landing renders equal AI, Tarot, and DIY creation paths", () => {
   assert.match(markup, /从光泽、色彩与排列中，自由创作只属于你的手串。/);
 });
 
+test("every landing creation card is one complete route link", () => {
+  const markup = withTarotFlag("true", () => renderToStaticMarkup(<HomePage />));
+
+  for (const [path, href] of [["ai", "/ai-design"], ["tarot", "/tarot/setup"], ["diy", "/diy"]] as const) {
+    const card = markup.match(new RegExp(`<article[^>]*data-creation-path="${path}"[^>]*>([\\s\\S]*?)</article>`))?.[1];
+    assert.ok(card, `missing ${path} creation card`);
+    assert.equal((card.match(/<a\b/g) ?? []).length, 1);
+    assert.match(card, new RegExp(`^<a[^>]*href="${href.replaceAll("/", "\\/")}"[^>]*>[\\s\\S]*data-reference-entry-image="true"[\\s\\S]*home-reference-entry-copy[\\s\\S]*</a>$`));
+  }
+});
+
 test("disabled landing omits only the Tarot entry", () => {
   const landing = withTarotFlag(undefined, () => renderToStaticMarkup(<HomePage />));
 
@@ -56,17 +67,27 @@ test("disabled landing omits only the Tarot entry", () => {
   assert.doesNotMatch(landing, /href="\/tarot\/setup"/);
   assert.match(landing, /href="\/ai-design"/);
   assert.match(landing, /href="\/diy"/);
-  assert.match(landing, /两种创作方式拥有相同的设计自由/);
-  assert.doesNotMatch(landing, /三种创作方式拥有相同的设计自由/);
+  assert.match(landing, /hero-bracelet\.webp/);
+  assert.match(landing, /entry-ai\.webp/);
+  assert.match(landing, /entry-diy\.webp/);
+  assert.doesNotMatch(landing, /entry-tarot\.webp/);
 });
 
-test("enabled mobile header keeps every navigation entry reachable without wrapping the brand", () => {
+test("mobile navigation uses the fixed bottom tab bar and keeps the desktop header clean", () => {
   const layoutSource = readFileSync(new URL("../../../app/layout.tsx", import.meta.url), "utf8");
+  const bottomNavSource = readFileSync(new URL("../../../components/mobile-bottom-nav.tsx", import.meta.url), "utf8");
 
-  assert.match(layoutSource, /data-mobile-scroll-navigation="true"/);
-  assert.match(layoutSource, /overflow-x-auto/);
-  assert.match(layoutSource, /whitespace-nowrap/);
-  assert.match(layoutSource, /sm:flex-row/);
+  assert.match(layoutSource, /<MobileBottomNav\s*\/>/);
+  assert.match(layoutSource, /data-desktop-navigation="true"/);
+  assert.match(layoutSource, /hidden[\s\S]*?lg:flex/);
+  assert.doesNotMatch(layoutSource, /data-mobile-scroll-navigation/);
+
+  assert.match(bottomNavSource, /data-mobile-bottom-nav="true"/);
+  assert.match(bottomNavSource, /grid-cols-5/);
+  assert.match(bottomNavSource, /lg:hidden/);
+  for (const label of ["首页", "灵感", "DIY", "作品画廊", "我的"]) {
+    assert.match(bottomNavSource, new RegExp(label));
+  }
 });
 
 test("server-only Tarot flag consumers opt out of static prerendering", () => {
@@ -93,6 +114,7 @@ test("main navigation places Tarot beside AI and DIY only when enabled", async (
   assert.deepEqual(navigationModule.getMainNavigation(false), [
     { href: "/ai-design", label: "AI 设计" },
     { href: "/diy", label: "DIY 创作" },
+    { href: "/gallery", label: "作品画廊" },
     { href: "/#inspiration", label: "设计灵感" }
   ]);
 });
@@ -131,6 +153,9 @@ test("setup renders all approved themes, both spreads, and visible privacy and s
   assert.match(markup, /问题不会被保存/);
   assert.match(markup, /自我反思与设计灵感/);
   assert.match(markup, /不构成事实预测、医疗或投资建议/);
+  assert.match(markup, /设计手围/);
+  assert.match(markup, /如何量取净手围/);
+  assert.match(markup, /value="15\.5"/);
 });
 
 test("setup exposes the 120-character boundary and an inline non-modal error", () => {
@@ -197,7 +222,8 @@ test("session creation excludes the question, stores its draft after success, th
     question: "  我该如何整理新的方向？  ",
     saveQuestion: true,
     spreadType: "PAST_PRESENT_FUTURE",
-    theme: "NEW_BEGINNINGS"
+    theme: "NEW_BEGINNINGS",
+    wristCircumferenceMm: 165
   });
   await Promise.resolve();
 
@@ -213,7 +239,8 @@ test("session creation excludes the question, stores its draft after success, th
 
   assert.deepEqual(store.get("session/with space"), {
     question: "我该如何整理新的方向？",
-    saveQuestion: true
+    saveQuestion: true,
+    wristCircumferenceMm: 165
   });
   assert.deepEqual(events, [
     "draft:session/with space",
@@ -238,7 +265,8 @@ test("failed or duplicate setup submissions never navigate or create twice", asy
     question: "",
     saveQuestion: false,
     spreadType: "SINGLE" as const,
-    theme: "CAREER" as const
+    theme: "CAREER" as const,
+    wristCircumferenceMm: 155
   };
 
   const first = submit(input);

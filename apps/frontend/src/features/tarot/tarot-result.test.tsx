@@ -279,6 +279,32 @@ test("recommendation card uses session-authoritative localized material names, w
   assert.match(markup, /¥114.00/);
 });
 
+test("recommendation palette permits repeated colors without duplicate React keys", () => {
+  const recommendationDesign = design(1);
+  recommendationDesign.story = {
+    ...recommendationDesign.story,
+    colorPalette: ["#A8D8E8", "#A8D8E8", "#F6F3EC"]
+  };
+  const errors: string[] = [];
+  const originalError = console.error;
+  console.error = (...arguments_: unknown[]) => errors.push(arguments_.map(String).join(" "));
+  try {
+    renderToStaticMarkup(
+      <TarotRecommendationCard
+        design={recommendationDesign}
+        materialNamesByProductId={new Map()}
+        onSelect={() => undefined}
+        rank={1}
+        selected={false}
+      />
+    );
+  } finally {
+    console.error = originalError;
+  }
+
+  assert.doesNotMatch(errors.join("\n"), /same key|unique.*key/i);
+});
+
 test("GET restore returns drawing sessions to the draw route", async () => {
   const navigation: string[] = [];
   const result = coordinator({
@@ -298,7 +324,7 @@ test("GET restore returns drawing sessions to the draw route", async () => {
 test("DRAWN restore generates recommendations once from the ephemeral draft", async () => {
   const requests: unknown[] = [];
   const draftStore = createTarotQuestionDraftStore();
-  draftStore.set("session/with space", { question: "  我该如何整理下一步？  ", saveQuestion: true });
+  draftStore.set("session/with space", { question: "  我该如何整理下一步？  ", saveQuestion: true, wristCircumferenceMm: 165 });
   const result = coordinator({
     draftStore,
     client: fakeClient({
@@ -315,6 +341,7 @@ test("DRAWN restore generates recommendations once from the ephemeral draft", as
   assert.deepEqual(requests[0], {
     requestId: "request-1",
     expectedRevision: 5,
+    wristCircumferenceMm: 165,
     question: "我该如何整理下一步？",
     saveQuestion: true,
     locale: "zh-CN",
@@ -431,6 +458,29 @@ test("a rejected recommendation keeps an inline retry path instead of stranding 
 
   await result.continueWithoutQuestion();
   assert.equal(result.getState().session?.status, "RECOMMENDED");
+});
+
+test("inventory changes expose material rematching without reopening the optional question form", async () => {
+  let calls = 0;
+  const result = coordinator({
+    client: fakeClient({
+      get: async () => ({ requestId: "restore", session: drawnSession(), cardBack }),
+      recommendations: async (_sessionId, input) => {
+        calls += 1;
+        if (calls === 1) throw new FrontendApiError("INVENTORY_CHANGED", "stock changed");
+        return { requestId: input.requestId, session: recommendedSession() };
+      }
+    })
+  });
+  await result.restore();
+  await result.continueWithoutQuestion();
+
+  assert.equal(result.getState().needsQuestionRecovery, false);
+  assert.equal(result.getState().needsRecommendationRetry, true);
+
+  await result.retryRecommendations();
+  assert.equal(result.getState().session?.status, "RECOMMENDED");
+  assert.equal(calls, 2);
 });
 
 test("recommendation and reconciliation failures preserve the draft and restore inline retry", async () => {

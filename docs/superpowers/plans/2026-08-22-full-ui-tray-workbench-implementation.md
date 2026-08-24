@@ -24,7 +24,7 @@
 
 **Files:**
 - Create: `apps/frontend/src/features/design/model/display-tray.ts`
-- Create: `apps/frontend/src/features/design/model/display-tray.test.ts`
+- Create: `apps/frontend/src/features/design/model/display-tray.test.tsx`
 - Modify: `docs/UI_DESIGN_SYSTEM.md`
 - Modify: `docs/BRACELET_GEOMETRY.md`
 
@@ -129,4 +129,3 @@
 - [ ] Inspect console, network failures, horizontal overflow, clipped cards/catalog, touch targets, and visible next actions; save validated screenshots.
 - [ ] Run `/Users/chenyanyan/Desktop/玄矶系统.command --self-check`, `--status`, and a real HTTP health check; stop and restart once to prove repeatability.
 - [ ] Run `pnpm validate` and record the final zero-failure output.
-

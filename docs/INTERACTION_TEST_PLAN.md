@@ -23,7 +23,7 @@ and the restored state after reload when persistence applies.
 - `READY_WITH_WARNINGS`: all P0 cases pass and only documented non-core MINOR
   issues remain.
 - `NOT_READY`: any P0 case fails, data is lost or corrupted, price/revision is
-  accepted from the client, an invalid bracelet can complete, or duplicate
+  accepted from the client, completion is blocked solely by advisory fit, or duplicate
   orders can be created from one completion intent.
 
 ## State invariants
@@ -35,7 +35,7 @@ These invariants must hold after every operation:
 3. Presentation-only state never changes the design DTO or revision.
 4. Frontend code never invents a successful revision, price, save time, or order.
 5. Failed requests leave the last confirmed design usable and recoverable.
-6. A valid completion circumference is 130–200 mm inclusive.
+6. Every finite positive assembled circumference can complete; 130–200 mm is an advisory range only.
 7. An anchored accessory never references a missing bead.
 8. At least one bead remains after remove or clear operations.
 9. Save/reload restores component identity, order, material, price, and revision.
@@ -49,19 +49,21 @@ These invariants must hold after every operation:
 | INT-P0-002 | Add after selection | Exactly one new component is inserted after the selected bead with a unique ID and contiguous order. |
 | INT-P0-003 | Add without selection | Exactly one new component is appended; no existing identity changes. |
 | INT-P0-004 | Move by drag | Only production order changes; identity, material, diameter, and unit price remain stable. |
-| INT-P0-005 | Cancel drag | Releasing outside the ring and delete target leaves the design unchanged. |
-| INT-P0-006 | Remove through delete target | Exactly the dragged bead is removed and order, selection, circumference, and price reconcile. |
+| INT-P0-005 | Cancel drag | Releasing inside the display tray but away from the ring leaves the design unchanged. |
+| INT-P0-006 | Remove outside tray | Releasing beyond the visible circular tray removes exactly the dragged bead; order, selection, circumference, and price reconcile. |
 | INT-P0-007 | Protect accessory anchor | A bead referenced by an anchored accessory cannot be removed without a valid anchor transition. |
 | INT-P0-008 | Protect final bead | Remove and clear never produce a zero-bead bracelet. |
 | INT-P0-009 | Connected/spread toggle | Layout changes, but DTO, order, price, revision, and selection identity remain unchanged. |
-| INT-P0-010 | Circumference lower boundary | 129 mm cannot complete; 130 mm can complete. |
-| INT-P0-011 | Circumference upper boundary | 200 mm can complete; 201 mm cannot complete. |
+| INT-P0-010 | Circumference lower advisory | 129 mm remains classified below the suggested range and can complete; 130 mm can complete without that advisory. |
+| INT-P0-011 | Circumference upper advisory | 200 mm can complete without an upper advisory; 201 mm remains classified above the suggested range and can complete. |
 | INT-P0-012 | Authoritative update | Update uses `expectedRevision`; UI accepts only Backend revision and price. |
 | INT-P0-013 | Save and reload | Reload restores the last saved identity, order, materials, total, and revision. |
 | INT-P0-014 | Complete valid design | Current revision and price generate a `PENDING` immutable order snapshot. |
 | INT-P0-015 | Prevent duplicate completion | Repeated click/tap while pending or after success cannot create a second order. |
 | INT-P0-016 | AI entry | Questionnaire generates three distinct options and selected design reaches the same DIY invariants. |
 | INT-P0-017 | Direct DIY entry | Direct entry bypasses the questionnaire and loads an editable persisted base design. |
+| INT-P0-018 | Display tray preference | Switching among the four tray materials survives reload for that Design, appears in PNG export, and never changes DTO revision, pricing, or order products. |
+| INT-P0-019 | Current-bead diameter control | Selecting a current bead and choosing a sellable diameter variant preserves `componentId` while Backend-authoritative circumference, revision, and price update. |
 
 ## P1 failure and concurrency matrix
 
@@ -92,7 +94,7 @@ inaccessible side-rail or shelf state.
 Run the core matrix at 360×800, 375×667, 390×844, and 430×932 CSS
 pixels with device pixel ratios 2 and 3 where supported. Validate tap selection,
 touch drag, catalog horizontal scrolling, page scrolling, virtual-keyboard
-recovery, delete-target hit behavior, and safe access to the completion action.
+recovery, outside-tray removal hit behavior, and safe access to the completion action.
 
 CSS viewport dimensions are layout coordinates, not output-image resolution.
 High-DPR captures are used to inspect bead edges and hit regions, but visual
@@ -132,3 +134,10 @@ Every P0 browser case records:
 - large-scale external image acquisition;
 - commercial production authentication;
 - a paid or network LLM provider.
+# Tarot backorder acceptance
+
+- A zero-stock active bead remains eligible for all three Tarot recommendation directions.
+- Affected recommendation cards and the restored DIY editor show an inline five-day replenishment estimate without a modal.
+- Completion remains enabled and creates an `AWAITING_RESTOCK` order with an immutable fulfillment snapshot.
+- A non-Tarot design with the same shortage remains blocked by `INVENTORY_CHANGED`.
+- Desktop and mobile layouts keep the advisory readable without hiding the primary action.

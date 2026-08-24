@@ -69,6 +69,7 @@ test("material library loads the complete currency catalog through the protected
       crystalId: material.crystalId,
       crystalNameCn: "海蓝宝",
       crystalNameEn: "Aquamarine",
+      mineralName: "Beryl",
       colorTags: ["blue", "cool"],
       visualTags: ["translucent"],
       styleTags: ["minimal"],
@@ -80,7 +81,19 @@ test("material library loads the complete currency catalog through the protected
       modelAssetKey: material.modelAssetKey,
       textureAssetKey: material.textureAssetKey,
       currency: design.currency,
-      unitPriceMinor: material.unitPriceMinor
+      unitPriceMinor: material.unitPriceMinor,
+      availableQuantity: 93
+    }],
+    accessories: [{
+      accessoryProductId: "product-spacer-silver-3",
+      sku: "SP-CNY-SILVER-3",
+      displayName: "925银隔珠 3mm",
+      accessoryType: "SPACER",
+      material: "STERLING_SILVER",
+      finish: "POLISHED",
+      currency: design.currency,
+      unitPriceMinor: 300,
+      availableQuantity: 7
     }]
   };
   const client = createDesignApiClient({ accessToken: "verified-test-token", useMock: false, fetcher: successFetch(payload, calls) });
@@ -90,6 +103,8 @@ test("material library loads the complete currency catalog through the protected
   assert.deepEqual(response.materials[0]?.styleTags, ["minimal"]);
   assert.deepEqual(response.materials[0]?.emotionTags, ["calm-aesthetic"]);
   assert.deepEqual(response.materials[0]?.cultureTags, ["design-inspiration-only"]);
+  assert.equal(response.materials[0]?.availableQuantity, 93);
+  assert.equal(response.accessories[0]?.displayName, "925银隔珠 3mm");
   assert.equal(calls[0]?.input, "/api/catalog/materials?currency=CNY");
   assert.equal(calls[0]?.init?.method, "GET");
 });

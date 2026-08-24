@@ -8,7 +8,7 @@ type PageScaffoldProps = {
 
 export function PageScaffold({ eyebrow, title, description }: PageScaffoldProps) {
   return (
-    <main className="mx-auto min-h-[calc(100vh-5rem)] max-w-6xl px-5 py-12 sm:py-20">
+    <main className="mx-auto min-h-[calc(100vh-5rem)] max-w-6xl px-5 py-12 sm:py-20" data-atelier-surface="content-shell">
       <Surface className="max-w-3xl">
         <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--accent)]">{eyebrow}</p>
         <h1 className="mt-4 text-4xl font-semibold tracking-tight sm:text-6xl">{title}</h1>

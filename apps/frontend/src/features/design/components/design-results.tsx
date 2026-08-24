@@ -70,7 +70,7 @@ export function DesignResults({ designId }: { designId: string }) {
       : `${designs.length} 个方案`;
 
   return (
-    <main className="mx-auto min-h-[calc(100vh-5rem)] max-w-[90rem] px-5 pb-28 pt-7 sm:px-8 sm:pt-9" data-results-layout="comparison-grid">
+    <main className="mx-auto min-h-[calc(100vh-5rem)] max-w-[90rem] px-5 pb-28 pt-7 sm:px-8 sm:pt-9" data-atelier-surface="design-results" data-results-layout="comparison-grid">
       <header className="flex flex-wrap items-end justify-between gap-5">
         <div>
           <p className="text-[0.68rem] uppercase tracking-[0.3em] text-[var(--accent)]">AI Design · {optionCountLabel}</p>

@@ -112,7 +112,13 @@ const recommendedSession = {
       reason: "作为主色材质，呈现清透而平衡的视觉节奏。"
     }
   ],
-  recommendations: recommendationDesigns.map((design, index) => ({ rank: index + 1, design }))
+  recommendations: recommendationDesigns.map((design, index) => ({
+    rank: index + 1,
+    design,
+    fulfillment: index === 0
+      ? { requiresRestock: true, estimatedRestockDays: 5, affectedProductIds: ["product-aquamarine-round-8"] }
+      : { requiresRestock: false, estimatedRestockDays: 0, affectedProductIds: [] }
+  }))
 } as const;
 
 test("Tarot API requests and all six endpoint responses accept public-safe payloads", () => {
@@ -165,6 +171,7 @@ test("Tarot API requests and all six endpoint responses accept public-safe paylo
     GenerateTarotRecommendationsRequestSchema.safeParse({
       requestId: "request-recommend-1",
       expectedRevision: 5,
+      wristCircumferenceMm: 165,
       question: "接下来我可以如何安排自己的节奏？",
       saveQuestion: false,
       locale: "zh-CN",
@@ -322,6 +329,19 @@ test("Tarot public schemas reject private state and unknown fields", () => {
 });
 
 test("Tarot contracts enforce public request bounds and state ordering", () => {
+  for (const wristCircumferenceMm of [129, 201]) {
+    assert.equal(
+      GenerateTarotRecommendationsRequestSchema.safeParse({
+        requestId: `request-invalid-wrist-${wristCircumferenceMm}`,
+        expectedRevision: 1,
+        wristCircumferenceMm,
+        saveQuestion: false,
+        locale: "zh-CN",
+        currency: "CNY"
+      }).success,
+      false
+    );
+  }
   assert.equal(
     GenerateTarotRecommendationsRequestSchema.safeParse({
       requestId: "request-question-too-long",

@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "../src/features/tarot/tarot.module.css";
+@import "./atelier.css";
 
 :root {
   color-scheme: light;

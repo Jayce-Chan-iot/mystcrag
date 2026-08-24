@@ -7,12 +7,17 @@ export const DISPLAYED_TAROT_POSITIONS = Object.freeze(
   Array.from({ length: 78 }, (_, index) => index)
 );
 
+export function splitDisplayedTarotRows<T>(positions: readonly T[]): readonly (readonly T[])[] {
+  const midpoint = Math.ceil(positions.length / 2);
+  return [positions.slice(0, midpoint), positions.slice(midpoint)];
+}
+
 export function getFanCardTransform(index: number, count: number) {
   const normalized = count <= 1 ? 0 : (index / (count - 1)) * 2 - 1;
   return {
-    xPercent: normalized * 50,
-    yPx: normalized * normalized * 82,
-    rotateDeg: normalized * 18
+    xPercent: normalized * 46,
+    yPx: normalized * normalized * 30,
+    rotateDeg: normalized * 10
   };
 }
 
@@ -78,12 +83,15 @@ export function TarotFan({
       choose: () => onSelect(position), preventDefault: () => event.preventDefault()
     });
   };
+  const rows = splitDisplayedTarotRows(DISPLAYED_TAROT_POSITIONS);
 
   return (
     <div className={styles.fanViewport} aria-label="可选的塔罗牌" role="group">
-      <div className={styles.fanRail}>
-        {DISPLAYED_TAROT_POSITIONS.map((position) => {
-          const transform = getFanCardTransform(position, DISPLAYED_TAROT_POSITIONS.length);
+      <div className={styles.fanRows}>
+        {rows.map((row, rowIndex) => (
+          <div className={styles.fanRail} data-tarot-row={rowIndex} key={rowIndex}>
+          {row.map((position, positionIndex) => {
+          const transform = getFanCardTransform(positionIndex, row.length);
           const accepted = acceptedPositions.has(position);
           const pending = pendingPosition === position;
           const style = {
@@ -132,7 +140,9 @@ export function TarotFan({
               />
             </button>
           );
-        })}
+          })}
+          </div>
+        ))}
       </div>
     </div>
   );

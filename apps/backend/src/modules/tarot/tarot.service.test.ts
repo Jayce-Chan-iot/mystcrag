@@ -13,7 +13,7 @@ import {
 import { standardAiDesignFixture } from "@mystcrag/design-contract/fixtures";
 import {
   PersistenceError,
-  type CatalogMaterialProduct,
+  type AvailableCatalogMaterialProduct,
   type TarotRecommendationSnapshot
 } from "@mystcrag/database";
 import {
@@ -487,7 +487,7 @@ test("save records only a recommendation selection and returns full public desig
   assert.equal(serialized.includes("questionCiphertext"), false);
 });
 
-const recommendationCatalog = (): CatalogMaterialProduct[] => {
+const recommendationCatalog = (): AvailableCatalogMaterialProduct[] => {
   const design = structuredClone(standardAiDesignFixture);
   const active = design.beads.map((bead, index) => ({
     id: bead.beadProductId,
@@ -500,6 +500,7 @@ const recommendationCatalog = (): CatalogMaterialProduct[] => {
     crystalId: bead.crystalId,
     crystalNameCn: `测试水晶 ${index + 1}`,
     crystalNameEn: `Test crystal ${index + 1}`,
+    mineralName: "Quartz",
     colorTags: ["chartreuse"],
     visualTags: index === 1 ? ["focused"] : [],
     styleTags: [],
@@ -512,13 +513,22 @@ const recommendationCatalog = (): CatalogMaterialProduct[] => {
     textureAssetKey: bead.textureAssetKey
   }));
   return [
-    ...active,
+    ...active.map((product) => ({ ...product, availableQuantity: 100 })),
     {
       ...active[0]!,
       id: "product-inactive-perfect-match",
       sku: "TAROT-INACTIVE",
       active: false,
-      colorTags: ["amber", "ivory", "ink"]
+      colorTags: ["amber", "ivory", "ink"],
+      availableQuantity: 100
+    },
+    {
+      ...active[0]!,
+      id: "product-zero-stock-perfect-match",
+      sku: "TAROT-ZERO-STOCK",
+      active: true,
+      colorTags: ["amber", "ivory", "ink"],
+      availableQuantity: 0
     }
   ];
 };
@@ -599,7 +609,8 @@ test("recommendation ranking consumes authoritative Crystal visual and theme met
     "materialProductIds" in firstCandidate
   );
   const ids = (firstCandidate as { materialProductIds: string[] }).materialProductIds;
-  assert.equal(ids[0], harness.catalog[1]!.id);
+  assert.equal(ids.includes("product-zero-stock-perfect-match"), true);
+  assert.equal(ids.includes("product-inactive-perfect-match"), false);
 });
 
 test("saveQuestion fails closed before catalog, generation, or persistence", async () => {

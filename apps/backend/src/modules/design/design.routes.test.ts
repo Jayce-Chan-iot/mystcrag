@@ -18,6 +18,8 @@ import { AiRecommendationDesignAdapter } from "./ai-recommendation-design.adapte
 import {
   DesignApplicationService,
   MockDesignGenerationAdapter,
+  type AvailableCatalogAccessoryProduct,
+  type AvailableCatalogMaterialProduct,
   type CatalogProduct,
   type DesignGenerationAdapter
 } from "./design-api.service.js";
@@ -67,6 +69,7 @@ function catalogFromFixture(): CatalogProduct[] {
       crystalId: bead.crystalId,
       crystalNameCn: `测试水晶 ${index + 1}`,
       crystalNameEn: bead.crystalId,
+      mineralName: "Quartz",
       colorTags: index === 0 ? ["blue", "cool"] : ["neutral"],
       visualTags: ["translucent"],
       styleTags: ["minimal"],
@@ -107,6 +110,16 @@ function createHarness(
   const current = new Map<string, PersistedDesign>();
   const revisionRows = new Map<string, PersistedDesignRevision[]>();
   const orderSnapshots: DesignV1[] = [];
+  const orderRows: Array<{
+    id: string;
+    userId: string;
+    status: "PENDING" | "AWAITING_RESTOCK" | "CONFIRMED" | "IN_PRODUCTION" | "SHIPPED" | "COMPLETED" | "CANCELLED";
+    createdAt: Date;
+    designSnapshot: DesignV1;
+    fulfillmentSnapshot: import("@mystcrag/design-contract").OrderFulfillmentSnapshotV1;
+    totalAmountMinor: number;
+    currency: "CNY" | "TWD";
+  }> = [];
   let componentCounter = 0;
   let createAttempts = 0;
   let failUpdate = false;
@@ -171,6 +184,12 @@ function createHarness(
       requireOwned(ownerId, designId);
       return structuredClone(revisionRows.get(designId) ?? []);
     },
+    async listDesigns(ownerId: string) {
+      return [...current.values()]
+        .filter((design) => design.ownerId === ownerId && design.deletedAt === null)
+        .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())
+        .map((design) => structuredClone(design));
+    },
     async updateDesign(
       ownerId: string,
       designId: string,
@@ -209,6 +228,11 @@ function createHarness(
       }
       existing.status = "SAVED";
       return structuredClone(existing);
+    },
+    async softDeleteDesign(ownerId: string, designId: string) {
+      const existing = requireOwned(ownerId, designId);
+      existing.deletedAt = fixedNow;
+      existing.status = "ARCHIVED";
     }
   };
 
@@ -339,7 +363,7 @@ function createHarness(
       }
       const snapshot = structuredClone(design.snapshot);
       orderSnapshots.push(snapshot);
-      return {
+      const createdOrder = {
         id: `order-${orderSnapshots.length}`,
         userId: ownerId,
         status: "PENDING" as const,
@@ -350,8 +374,28 @@ function createHarness(
         designSnapshot: snapshot,
         pricingSnapshot: structuredClone(snapshot.pricing),
         productionSnapshot: structuredClone(snapshot.production),
+        fulfillmentSnapshot: {
+          status: "IN_STOCK" as const,
+          estimatedRestockDays: 0,
+          lines: snapshot.production.billOfMaterials.map((item) => ({
+            productId: item.productId,
+            requestedQuantity: item.quantity,
+            reservedQuantity: item.quantity,
+            backorderQuantity: 0,
+            status: "IN_STOCK" as const,
+            estimatedRestockDays: 0
+          }))
+        },
         pricingRuleVersion: snapshot.pricing.pricingVersion
       };
+      orderRows.push(createdOrder);
+      return structuredClone(createdOrder);
+    },
+    async listOrders(ownerId: string) {
+      return orderRows
+        .filter((order) => order.userId === ownerId)
+        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+        .map((order) => structuredClone(order));
     }
   };
 
@@ -366,6 +410,22 @@ function createHarness(
         return catalog.filter(
           (product) => product.currency === currency && !excluded.includes(product.id)
         );
+      },
+      async listAvailableCatalogMaterialProducts(
+        currency
+      ): Promise<AvailableCatalogMaterialProduct[]> {
+        return catalog.flatMap((product) => {
+          if (product.productType !== "MATERIAL" || product.currency !== currency) return [];
+          return [{ ...product, availableQuantity: 42 } as AvailableCatalogMaterialProduct];
+        });
+      },
+      async listAvailableCatalogAccessoryProducts(
+        currency
+      ): Promise<AvailableCatalogAccessoryProduct[]> {
+        return catalog.flatMap((product) => {
+          if (product.productType !== "ACCESSORY" || product.currency !== currency) return [];
+          return [{ ...product, availableQuantity: 7 } as AvailableCatalogAccessoryProduct];
+        });
       }
     },
     pricing,
@@ -956,6 +1016,9 @@ test("GET material catalog returns active public products without commercial cos
   assert.deepEqual(response.json().materials[0].styleTags, ["minimal"]);
   assert.deepEqual(response.json().materials[0].emotionTags, ["calm-aesthetic"]);
   assert.deepEqual(response.json().materials[0].cultureTags, ["design-inspiration-only"]);
+  assert.equal(response.json().materials.every((material: { availableQuantity: number }) => material.availableQuantity === 42), true);
+  assert.equal(response.json().accessories.length, 2);
+  assert.equal(response.json().accessories[0].availableQuantity, 7);
   assert.equal(response.body.includes("unitCostMinor"), false);
 
   const invalidCurrency = await app.inject({
@@ -965,6 +1028,200 @@ test("GET material catalog returns active public products without commercial cos
   });
   assert.equal(invalidCurrency.statusCode, 400);
   assert.equal(invalidCurrency.json().error.code, "VALIDATION_ERROR");
+  await app.close();
+});
+
+test("GET /api/designs returns owner-scoped design list without other owners' rows", async () => {
+  const harness = createHarness();
+  const ownedDesign = cloneDesign();
+  const otherDesign = cloneDesign();
+  otherDesign.designId = "design-owned-by-someone-else";
+  harness.seed(ownedDesign, actorId);
+  harness.seed(otherDesign, "different-actor");
+  const app = createApp({ designService: harness.service, authProvider });
+
+  const response = await app.inject({
+    method: "GET",
+    url: "/api/designs",
+    headers: requestHeaders()
+  });
+  assert.equal(response.statusCode, 200);
+  const payload = response.json();
+  assert.equal(payload.designs.length, 1);
+  assert.equal(payload.designs[0].design.designId, ownedDesign.designId);
+  assert.equal(payload.designs[0].status, "DRAFT");
+  assert.equal(typeof payload.designs[0].updatedAt, "string");
+  assert.equal(JSON.stringify(payload).includes("design-owned-by-someone-else"), false);
+  assert.equal(JSON.stringify(payload).includes("ownerId"), false);
+
+  const otherActorResponse = await app.inject({
+    method: "GET",
+    url: "/api/designs",
+    headers: requestHeaders("different-actor")
+  });
+  assert.equal(otherActorResponse.statusCode, 200);
+  assert.equal(otherActorResponse.json().designs.length, 1);
+  assert.equal(
+    otherActorResponse.json().designs[0].design.designId,
+    "design-owned-by-someone-else"
+  );
+  await app.close();
+});
+
+test("GET /api/orders returns owner-scoped order summaries with design snapshots", async () => {
+  const harness = createHarness();
+  const design = cloneDesign();
+  harness.seed(design);
+  const app = createApp({ designService: harness.service, authProvider });
+
+  const createdResponse = await app.inject({
+    method: "POST",
+    url: "/api/orders/from-design",
+    headers: requestHeaders(),
+    payload: {
+      requestId: "request-order",
+      design,
+      expectedRevision: design.revision,
+      expectedPricingVersion: design.pricing.pricingVersion,
+      expectedTotalPriceMinor: design.pricing.totalPriceMinor
+    }
+  });
+  assert.equal(createdResponse.statusCode, 200);
+
+  const listResponse = await app.inject({
+    method: "GET",
+    url: "/api/orders",
+    headers: requestHeaders()
+  });
+  assert.equal(listResponse.statusCode, 200);
+  const payload = listResponse.json();
+  assert.equal(payload.orders.length, 1);
+  assert.equal(payload.orders[0].orderId, createdResponse.json().orderId);
+  assert.equal(payload.orders[0].status, "PENDING");
+  assert.equal(payload.orders[0].currency, design.currency);
+  assert.equal(payload.orders[0].totalAmountMinor, design.pricing.totalPriceMinor);
+  assert.equal(payload.orders[0].design.designId, design.designId);
+  assert.equal(payload.orders[0].fulfillment.status, "IN_STOCK");
+  assert.equal(JSON.stringify(payload).includes("ownerId"), false);
+  await app.close();
+});
+
+test("POST /api/design/delete soft-deletes an owned design after a revision guard check", async () => {
+  const harness = createHarness();
+  const keepDesign = cloneDesign();
+  const removeDesign = cloneDesign();
+  removeDesign.designId = "design-remove-me";
+  harness.seed(keepDesign);
+  harness.seed(removeDesign);
+  const app = createApp({ designService: harness.service, authProvider });
+
+  const staleRevision = await app.inject({
+    method: "POST",
+    url: "/api/design/delete",
+    headers: requestHeaders(),
+    payload: {
+      requestId: "request-delete-stale",
+      designId: removeDesign.designId,
+      expectedRevision: removeDesign.revision + 5
+    }
+  });
+  assert.equal(staleRevision.statusCode, 409);
+  assert.equal(staleRevision.json().error.code, "CONFLICT");
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/design/delete",
+    headers: requestHeaders(),
+    payload: {
+      requestId: "request-delete-ok",
+      designId: removeDesign.designId,
+      expectedRevision: removeDesign.revision
+    }
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().designId, removeDesign.designId);
+  assert.equal(typeof response.json().deletedAt, "string");
+
+  const listResponse = await app.inject({
+    method: "GET",
+    url: "/api/designs",
+    headers: requestHeaders()
+  });
+  assert.equal(listResponse.json().designs.length, 1);
+  assert.equal(listResponse.json().designs[0].design.designId, keepDesign.designId);
+
+  const forbidden = await app.inject({
+    method: "POST",
+    url: "/api/design/delete",
+    headers: requestHeaders("different-actor"),
+    payload: {
+      requestId: "request-delete-foreign",
+      designId: keepDesign.designId,
+      expectedRevision: keepDesign.revision
+    }
+  });
+  assert.equal(forbidden.statusCode, 403);
+  assert.equal(forbidden.json().error.code, "FORBIDDEN");
+  await app.close();
+});
+
+test("POST /api/design/clone creates an independent revision-1 copy with fresh provenance", async () => {
+  const harness = createHarness();
+  const source = cloneDesign();
+  harness.seed(source);
+  const app = createApp({ designService: harness.service, authProvider });
+
+  const staleRevision = await app.inject({
+    method: "POST",
+    url: "/api/design/clone",
+    headers: requestHeaders(),
+    payload: {
+      requestId: "request-clone-stale",
+      designId: source.designId,
+      expectedRevision: source.revision + 3
+    }
+  });
+  assert.equal(staleRevision.statusCode, 409);
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/design/clone",
+    headers: requestHeaders(),
+    payload: {
+      requestId: "request-clone-ok",
+      designId: source.designId,
+      expectedRevision: source.revision
+    }
+  });
+  assert.equal(response.statusCode, 200);
+  const clone = response.json().design;
+  assert.notEqual(clone.designId, source.designId);
+  assert.match(clone.designId, /^design-/);
+  assert.equal(clone.revision, 1);
+  assert.equal(clone.designName, `${source.designName} · 副本`);
+  assert.equal(clone.community.visibility, "PRIVATE");
+  assert.equal(clone.provenance.sourceDesignId, source.designId);
+  assert.equal(clone.beads.length, source.beads.length);
+  assert.equal(response.json().design.createdAt, response.json().clonedAt);
+
+  const listResponse = await app.inject({
+    method: "GET",
+    url: "/api/designs",
+    headers: requestHeaders()
+  });
+  assert.equal(listResponse.json().designs.length, 2);
+
+  const forbidden = await app.inject({
+    method: "POST",
+    url: "/api/design/clone",
+    headers: requestHeaders("different-actor"),
+    payload: {
+      requestId: "request-clone-foreign",
+      designId: source.designId,
+      expectedRevision: source.revision
+    }
+  });
+  assert.equal(forbidden.statusCode, 403);
   await app.close();
 });
 
@@ -981,7 +1238,9 @@ test("protected routes reject missing, invalid, expired, and wrong-audience cred
     { method: "POST" as const, url: "/api/orders/from-design" },
     { method: "GET" as const, url: "/api/design/design-id" },
     { method: "GET" as const, url: "/api/design/design-id/revisions" },
-    { method: "GET" as const, url: "/api/catalog/materials?currency=CNY" }
+    { method: "GET" as const, url: "/api/catalog/materials?currency=CNY" },
+    { method: "GET" as const, url: "/api/designs" },
+    { method: "GET" as const, url: "/api/orders" }
   ]) {
     const response = await app.inject(route);
     assert.equal(response.statusCode, 401, `${route.method} ${route.url}`);

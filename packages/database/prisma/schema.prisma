@@ -65,6 +65,7 @@ enum PublicationStatus {
 
 enum OrderStatus {
   PENDING
+  AWAITING_RESTOCK
   CONFIRMED
   IN_PRODUCTION
   SHIPPED
@@ -238,6 +239,7 @@ model OrderDesignSnapshot {
   designSnapshot     Json     @map("design_snapshot")
   pricingSnapshot    Json     @map("pricing_snapshot")
   productionSnapshot Json     @map("production_snapshot")
+  fulfillmentSnapshot Json    @map("fulfillment_snapshot")
   currency           Currency
   pricingRuleVersion String   @map("pricing_rule_version")
   createdAt          DateTime @default(now()) @map("created_at")

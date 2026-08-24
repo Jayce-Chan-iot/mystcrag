@@ -3,6 +3,7 @@ import {
   TarotColorStorySchema,
   TarotInterpretationSchema,
   TarotMaterialDisplayRecommendationSchema,
+  TarotFulfillmentAdvisorySchema,
   TarotRevealedCardSchema
 } from "@mystcrag/design-contract";
 import { PrivateDrawStateSchema, type PrivateDrawState } from "@mystcrag/tarot-engine";
@@ -72,6 +73,10 @@ export const TarotRecommendationSnapshotSchema = z.strictObject({
     .optional(),
   colorStory: TarotColorStorySchema,
   materialRecommendations: z.array(TarotMaterialDisplayRecommendationSchema).min(1).max(12)
+  ,fulfillmentAdvisories: z.array(z.strictObject({
+    rank: z.number().int().min(1).max(3),
+    ...TarotFulfillmentAdvisorySchema.shape
+  })).length(3).optional()
 });
 
 export type TarotDrawSnapshot = z.infer<typeof TarotDrawSnapshotSchema>;

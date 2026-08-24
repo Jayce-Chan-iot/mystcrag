@@ -19,6 +19,7 @@ export * from "./schemas/component.schema";
 export * from "./schemas/design.schema";
 export * from "./schemas/metadata.schema";
 export * from "./schemas/order-snapshot.schema";
+export * from "./schemas/order-fulfillment.schema";
 export * from "./schemas/pricing.schema";
 export * from "./schemas/production.schema";
 export * from "./schemas/provenance.schema";

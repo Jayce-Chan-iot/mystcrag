@@ -1,8 +1,10 @@
 import {
   DesignV1Schema,
+  OrderFulfillmentSnapshotV1Schema,
   PricingV1Schema,
   ProductionV1Schema,
   type DesignV1,
+  type OrderFulfillmentSnapshotV1,
   type PricingV1,
   type ProductionV1
 } from "@mystcrag/design-contract";
@@ -32,6 +34,10 @@ export function parsePricingSnapshot(input: unknown): PricingV1 {
 
 export function parseProductionSnapshot(input: unknown): ProductionV1 {
   return parseSnapshot(ProductionV1Schema, input, "Production snapshot");
+}
+
+export function parseOrderFulfillmentSnapshot(input: unknown): OrderFulfillmentSnapshotV1 {
+  return parseSnapshot(OrderFulfillmentSnapshotV1Schema, input, "Order fulfillment snapshot");
 }
 
 export function toPrismaJson(input: unknown): Prisma.InputJsonValue {

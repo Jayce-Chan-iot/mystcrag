@@ -45,6 +45,7 @@ Landing page
 ### 3.2 Setup
 
 - Show a theme select and an optional question field together.
+- Show a 13.0–20.0 cm design-wrist input with the shared photographic measurement guide; carry the selected size into all three recommendations for this session.
 - Initial themes: relationships, career, self-growth, new beginnings, and financial planning.
 - Show one-card and three-card modes on the same page.
 - The optional question has a 120-character limit.
@@ -139,7 +140,7 @@ The three generated directions are intentionally distinct:
 2. stronger contrast and focal-bead emphasis;
 3. lighter neutral-led interpretation.
 
-Every candidate uses active sellable SKUs, has a valid sequence, and targets a saved wrist size when available. Otherwise it targets 15.5 cm. Completion remains blocked outside the existing 13–20 cm guardrail.
+Every candidate uses active sellable SKUs, has a valid sequence, and targets a saved wrist size when available. Otherwise it targets 15.5 cm. The existing 13–20 cm range is a non-blocking fit suggestion; designs below or above it can still be completed.
 
 AI cannot choose the drawn card, orientation, product price, inventory, or final component sequence. It only writes bounded explanation text.
 

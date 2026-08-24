@@ -1,10 +1,11 @@
-import type { DesignV1, PricingV1, ProductionV1 } from "@mystcrag/design-contract";
+import type { DesignV1, OrderFulfillmentSnapshotV1, PricingV1, ProductionV1 } from "@mystcrag/design-contract";
 
 import type { PrismaClient } from "../../generated/client/client.js";
 import { PersistenceError, rethrowPersistenceError } from "../errors/persistence-errors.js";
 import { bigintToMinor, minorToBigInt } from "../mappers/money.mapper.js";
 import {
   parseDesignSnapshot,
+  parseOrderFulfillmentSnapshot,
   parsePricingSnapshot,
   parseProductionSnapshot,
   toPrismaJson
@@ -14,7 +15,7 @@ import { recalculateWithCatalog } from "./pricing.repository.js";
 export type PersistedOrder = {
   id: string;
   userId: string;
-  status: "PENDING" | "CONFIRMED" | "IN_PRODUCTION" | "SHIPPED" | "COMPLETED" | "CANCELLED";
+  status: "PENDING" | "AWAITING_RESTOCK" | "CONFIRMED" | "IN_PRODUCTION" | "SHIPPED" | "COMPLETED" | "CANCELLED";
   currency: "CNY" | "TWD";
   totalAmountMinor: number;
   designRevisionId: string;
@@ -22,6 +23,7 @@ export type PersistedOrder = {
   designSnapshot: DesignV1;
   pricingSnapshot: PricingV1;
   productionSnapshot: ProductionV1;
+  fulfillmentSnapshot: OrderFulfillmentSnapshotV1;
   pricingRuleVersion: string;
 };
 
@@ -79,20 +81,49 @@ export class OrderRepository {
       ) {
         throw new PersistenceError("PRICE_CHANGED", "Server price differs from the expected price");
       }
+      const fulfillmentLines: OrderFulfillmentSnapshotV1["lines"] = [];
+      const inventoryRows: Array<{ productId: string; availableQuantity: number; reservedQuantity: number; reserveNow: number }> = [];
       for (const [productId, quantity] of quantitiesByProduct(pricedDesign)) {
         const inventory = await tx.inventorySnapshot.findFirst({
           where: { productId },
           orderBy: { capturedAt: "desc" }
         });
-        if (!inventory || inventory.availableQuantity - inventory.reservedQuantity < quantity) {
+        const remaining = inventory
+          ? Math.max(0, inventory.availableQuantity - inventory.reservedQuantity)
+          : 0;
+        if (pricedDesign.designMode !== "TAROT_GUIDED" && remaining < quantity) {
           throw new PersistenceError("INVENTORY_CHANGED", `Inventory changed for ${productId}`);
         }
+        const reservedQuantity = Math.min(remaining, quantity);
+        const backorderQuantity = quantity - reservedQuantity;
+        fulfillmentLines.push({
+          productId,
+          requestedQuantity: quantity,
+          reservedQuantity,
+          backorderQuantity,
+          status: backorderQuantity === 0 ? "IN_STOCK" : reservedQuantity === 0 ? "BACKORDERED" : "PARTIALLY_BACKORDERED",
+          estimatedRestockDays: backorderQuantity > 0 ? 5 : 0
+        });
+        if (inventory && reservedQuantity > 0) {
+          inventoryRows.push({
+            productId,
+            availableQuantity: inventory.availableQuantity,
+            reservedQuantity: inventory.reservedQuantity,
+            reserveNow: reservedQuantity
+          });
+        }
       }
-      const row = await tx.order.upsert({
-        where: { idempotencyKey },
-        create: {
+      const requiresRestock = fulfillmentLines.some((line) => line.backorderQuantity > 0);
+      const fulfillmentSnapshot: OrderFulfillmentSnapshotV1 = {
+        status: requiresRestock ? "AWAITING_RESTOCK" : "IN_STOCK",
+        estimatedRestockDays: requiresRestock ? 5 : 0,
+        lines: fulfillmentLines
+      };
+      const row = await tx.order.create({
+        data: {
           idempotencyKey,
           userId: actorId,
+          status: requiresRestock ? "AWAITING_RESTOCK" : "PENDING",
           currency: pricedDesign.currency,
           totalAmountMinor: minorToBigInt(
             pricedDesign.pricing.totalPriceMinor,
@@ -105,14 +136,25 @@ export class OrderRepository {
               designSnapshot: toPrismaJson(pricedDesign),
               pricingSnapshot: toPrismaJson(pricedDesign.pricing),
               productionSnapshot: toPrismaJson(pricedDesign.production),
+              fulfillmentSnapshot: toPrismaJson(fulfillmentSnapshot),
               currency: pricedDesign.currency,
               pricingRuleVersion: pricedDesign.pricing.pricingVersion
             }
           }
         },
-        update: {},
         include: { designSnapshot: true }
       });
+      for (const inventory of inventoryRows) {
+        await tx.inventorySnapshot.create({
+          data: {
+            productType: "MATERIAL",
+            productId: inventory.productId,
+            availableQuantity: inventory.availableQuantity,
+            reservedQuantity: inventory.reservedQuantity + inventory.reserveNow,
+            sourceVersion: `order:${row.id}`
+          }
+        });
+      }
       return this.mapOrder(row);
     }).catch(async (error: unknown) => {
       const code = typeof error === "object" && error !== null && "code" in error
@@ -138,6 +180,16 @@ export class OrderRepository {
     return this.mapOrder(row);
   }
 
+  async listOrders(actorId: string): Promise<PersistedOrder[]> {
+    const rows = await this.prisma.order.findMany({
+      where: { userId: actorId },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      include: { designSnapshot: true }
+    });
+    return rows.map((row) => this.mapOrder(row));
+  }
+
   private mapOrder(row: {
     id: string;
     userId: string;
@@ -150,6 +202,7 @@ export class OrderRepository {
       designSnapshot: unknown;
       pricingSnapshot: unknown;
       productionSnapshot: unknown;
+      fulfillmentSnapshot: unknown;
       pricingRuleVersion: string;
     };
   }): PersistedOrder {
@@ -159,6 +212,7 @@ export class OrderRepository {
     const designSnapshot = parseDesignSnapshot(row.designSnapshot.designSnapshot);
     const pricingSnapshot = parsePricingSnapshot(row.designSnapshot.pricingSnapshot);
     const productionSnapshot = parseProductionSnapshot(row.designSnapshot.productionSnapshot);
+    const fulfillmentSnapshot = parseOrderFulfillmentSnapshot(row.designSnapshot.fulfillmentSnapshot);
     const totalAmountMinor = bigintToMinor(row.totalAmountMinor, "totalAmountMinor");
     if (
       totalAmountMinor !== pricingSnapshot.totalPriceMinor ||
@@ -177,6 +231,7 @@ export class OrderRepository {
       designSnapshot,
       pricingSnapshot,
       productionSnapshot,
+      fulfillmentSnapshot,
       pricingRuleVersion: row.designSnapshot.pricingRuleVersion
     };
   }

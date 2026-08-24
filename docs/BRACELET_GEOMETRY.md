@@ -15,4 +15,6 @@ Fit vocabulary remains distinct:
 - elastic allowance — Design Contract assembly allowance;
 - delta — estimated fit minus target inner circumference.
 
-The current completion range is 130–200mm inclusive. The UI must not relabel the assembled path as the user’s wrist.
+The suggested assembled-material range is 130–200mm inclusive. The engine continues to classify values below, within, and above that range, but those classifications are advisory only and must never block completion or order creation. The UI must not relabel the assembled path as the user’s wrist.
+
+The DIY presentation surface is a square hit-test stage containing a circular display tray. The visible tray radius is 47% of the shorter stage edge. A moved bead released beyond that circle is a removal intent; a release inside the tray but away from the ring cancels, while a release near the ring resolves the target slot through Bracelet Engine angular ranges. Tray material is presentation-only local state and never changes slot geometry, component identity, revision, price, inventory, or order data.

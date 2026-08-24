@@ -1,3 +1,5 @@
+"use client";
+
 import type { PublicDesignV1 } from "@mystcrag/design-contract";
 import Image from "next/image";
 import * as React from "react";
@@ -27,8 +29,8 @@ export function BraceletPreview({
       <div className="absolute inset-[11%] rounded-full border border-white/90 shadow-[0_16px_38px_rgb(57_45_67/0.08)]" />
       {inlineComponents.map((component, index) => {
         const angle = (index / inlineComponents.length) * Math.PI * 2 - Math.PI / 2;
-        const x = 50 + Math.cos(angle) * 40;
-        const y = 50 + Math.sin(angle) * 40;
+        const x = Number((50 + Math.cos(angle) * 40).toFixed(4));
+        const y = Number((50 + Math.sin(angle) * 40).toFixed(4));
         const isBead = component.kind === "bead";
         const isSelected = component.componentId === selectedComponentId;
         const label = isBead ? `选择第 ${component.positionIndex + 1} 颗珠子` : `${component.accessoryType} 配件`;

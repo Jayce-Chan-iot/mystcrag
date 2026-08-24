@@ -2,7 +2,9 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";
 import {
   ListCatalogMaterialsQuerySchema,
-  ListCatalogMaterialsResponseSchema
+  ListCatalogMaterialsResponseSchema,
+  ListMyDesignsResponseSchema,
+  ListMyOrdersResponseSchema
 } from "@mystcrag/design-contract";
 
 import { actorIdFromVerifiedContext } from "../../auth/auth-provider.js";
@@ -119,6 +121,40 @@ export async function handleDesignGet(
     return reply.status(200).send(output);
   } catch (error) {
     const domainError = mapError(error, true);
+    return reply
+      .status(domainError.statusCode)
+      .send(toApiErrorEnvelope(domainError, request.id));
+  }
+}
+
+export async function handleMyDesignsGet(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  service: DesignApiService
+) {
+  try {
+    const actorId = actorIdFromVerifiedContext(request);
+    const output = await service.listDesigns(actorId);
+    return reply.status(200).send(validateResponse(ListMyDesignsResponseSchema, output));
+  } catch (error) {
+    const domainError = mapError(error, false);
+    return reply
+      .status(domainError.statusCode)
+      .send(toApiErrorEnvelope(domainError, request.id));
+  }
+}
+
+export async function handleMyOrdersGet(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  service: DesignApiService
+) {
+  try {
+    const actorId = actorIdFromVerifiedContext(request);
+    const output = await service.listOrders(actorId);
+    return reply.status(200).send(validateResponse(ListMyOrdersResponseSchema, output));
+  } catch (error) {
+    const domainError = mapError(error, false);
     return reply
       .status(domainError.statusCode)
       .send(toApiErrorEnvelope(domainError, request.id));

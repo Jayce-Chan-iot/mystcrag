@@ -24,7 +24,7 @@ import {
 } from "@mystcrag/design-contract";
 import {
   PersistenceError,
-  type CatalogMaterialProduct,
+  type AvailableCatalogMaterialProduct,
   type TarotRecommendationSnapshot,
   type TarotDrawSnapshot,
   type TarotSessionRepository
@@ -95,8 +95,10 @@ const deterministicDesignId = (
   return `tarot-design-${digest}`;
 };
 
-const isSellableMaterial = (product: CatalogMaterialProduct): boolean =>
+const isSellableMaterial = (product: AvailableCatalogMaterialProduct): boolean =>
   product.active &&
+  Number.isSafeInteger(product.availableQuantity) &&
+  product.availableQuantity >= 0 &&
   product.productType === "MATERIAL" &&
   product.colorTags.length > 0 &&
   Number.isFinite(product.diameterMm) &&
@@ -107,10 +109,11 @@ const isSellableMaterial = (product: CatalogMaterialProduct): boolean =>
   product.textureAssetKey.length > 0;
 
 function sequenceAroundWrist(
-  pattern: readonly CatalogMaterialProduct[],
+  pattern: readonly AvailableCatalogMaterialProduct[],
   targetMm = DEFAULT_WRIST_CIRCUMFERENCE_MM
 ): string[] {
   const sequence: string[] = [];
+  if (pattern.length === 0) throw new DomainApiError("INVENTORY_CHANGED", "No material pattern is available.");
   let assembledMm = 0;
   let patternIndex = 0;
   while (assembledMm < targetMm) {
@@ -118,10 +121,10 @@ function sequenceAroundWrist(
     if (!product) {
       throw new DomainApiError("INVENTORY_CHANGED", "No material pattern is available.");
     }
+    patternIndex += 1;
     if (assembledMm + product.diameterMm > MAX_COMPLETION_MM) break;
     sequence.push(product.id);
     assembledMm += product.diameterMm;
-    patternIndex += 1;
   }
   if (assembledMm < MIN_COMPLETION_MM || assembledMm > MAX_COMPLETION_MM) {
     throw new DomainApiError(
@@ -133,13 +136,14 @@ function sequenceAroundWrist(
 }
 
 function validateDesignPreferences(
-  preferences: TarotDesignPreferences | undefined
+  preferences: TarotDesignPreferences | undefined,
+  requestedWristCircumferenceMm?: number
 ): {
   wristCircumferenceMm: number;
   budget?: { minMinor?: number; maxMinor?: number };
 } {
   const wristCircumferenceMm =
-    preferences?.wristCircumferenceMm ?? DEFAULT_WRIST_CIRCUMFERENCE_MM;
+    requestedWristCircumferenceMm ?? preferences?.wristCircumferenceMm ?? DEFAULT_WRIST_CIRCUMFERENCE_MM;
   const budget = preferences?.budget;
   const validMinor = (value: number | undefined): boolean =>
     value === undefined || (Number.isSafeInteger(value) && value >= 0);
@@ -162,8 +166,8 @@ function validateDesignPreferences(
 }
 
 function directionPatterns(
-  materials: readonly CatalogMaterialProduct[]
-): Readonly<Record<TarotDirection, readonly CatalogMaterialProduct[]>> {
+  materials: readonly AvailableCatalogMaterialProduct[]
+): Readonly<Record<TarotDirection, readonly AvailableCatalogMaterialProduct[]>> {
   const primary = materials[0];
   const secondary = materials[1];
   if (!primary || !secondary) {
@@ -191,6 +195,7 @@ function candidateForDirection(input: {
   direction: TarotDirection;
   materialProductIds: readonly string[];
   ruleVersion: string;
+  productionNotes: readonly string[];
 }) {
   const directionName = input.direction.toLowerCase().replaceAll("_", " ");
   const directionId = input.direction.toLowerCase().replaceAll("_", "-");
@@ -204,6 +209,7 @@ function candidateForDirection(input: {
     ],
     culturalInspiration: [],
     sourceTemplateIds: [],
+    productionNotes: [...input.productionNotes],
     providerMetadata: {
       modelProvider: "deterministic",
       modelName: "mystcrag-tarot-candidate-builder",
@@ -254,7 +260,7 @@ implements TarotRecommendationCopyPort {
   async createSnapshot(input: {
     cards: readonly RevealedTarotCard[];
     signals: TarotDesignSignals;
-    materials: readonly CatalogMaterialProduct[];
+    materials: readonly AvailableCatalogMaterialProduct[];
     locale: string;
     theme: Parameters<TarotRecommendationCopyPort["createSnapshot"]>[0]["theme"];
     question?: string;
@@ -318,7 +324,7 @@ function validateGeneratedDesign(
     expectedRank: number;
     expectedWristCircumferenceMm: number;
     currency: "CNY" | "TWD";
-    productsById: ReadonlyMap<string, CatalogMaterialProduct>;
+    productsById: ReadonlyMap<string, AvailableCatalogMaterialProduct>;
   }
 ): GenerateDesignResponse {
   const response = GenerateDesignResponseSchema.parse(responseInput);
@@ -652,7 +658,8 @@ export class TarotService implements TarotApiService {
       theme: current.theme
     });
     const preferences = validateDesignPreferences(
-      await this.dependencies.preferences?.getDesignPreferences(actorId)
+      await this.dependencies.preferences?.getDesignPreferences(actorId),
+      input.wristCircumferenceMm
     );
     const catalog = await this.dependencies.catalog.listActiveCatalogProducts(input.currency);
     const sellable = catalog.filter(isSellableMaterial);
@@ -704,7 +711,7 @@ export class TarotService implements TarotApiService {
       }
       throw error;
     }
-    const generated = [];
+    const generated: Array<{ rank: number; response: GenerateDesignResponse; affectedProductIds: string[] }> = [];
     for (const [index, { direction, sequence }] of candidates.entries()) {
       const rank = index + 1;
       const designId = deterministicDesignId(current.id, current.ruleVersion, rank);
@@ -727,7 +734,17 @@ export class TarotService implements TarotApiService {
             rank,
             direction,
             materialProductIds: sequence,
-            ruleVersion: current.ruleVersion
+            ruleVersion: current.ruleVersion,
+            productionNotes: (() => {
+              const counts = new Map<string, number>();
+              for (const productId of sequence) counts.set(productId, (counts.get(productId) ?? 0) + 1);
+              const needsRestock = [...counts].some(([productId, quantity]) =>
+                quantity > (byId.get(productId)?.availableQuantity ?? 0)
+              );
+              return needsRestock
+                ? ["本方案含需补货材料，下单后预计等待约 5 天，具体以实际补货时间为准。"]
+                : [];
+            })(),
           }),
           designMode: "TAROT_GUIDED",
           designId
@@ -744,7 +761,12 @@ export class TarotService implements TarotApiService {
           productsById: byId
         }
       );
-      generated.push({ rank, response });
+      const counts = new Map<string, number>();
+      for (const productId of sequence) counts.set(productId, (counts.get(productId) ?? 0) + 1);
+      const affectedProductIds = [...counts]
+        .filter(([productId, quantity]) => quantity > (byId.get(productId)?.availableQuantity ?? 0))
+        .map(([productId]) => productId);
+      generated.push({ rank, response, affectedProductIds });
     }
     if (
       new Set(generated.map(({ response }) => response.design.designId)).size !== 3 ||
@@ -760,6 +782,15 @@ export class TarotService implements TarotApiService {
       );
     }
 
+    snapshot = {
+      ...snapshot,
+      fulfillmentAdvisories: generated.map(({ rank, affectedProductIds }) => ({
+        rank,
+        requiresRestock: affectedProductIds.length > 0,
+        estimatedRestockDays: affectedProductIds.length > 0 ? 5 : 0,
+        affectedProductIds
+      }))
+    };
     const recommendationLinks = generated.map(({ rank, response }) => ({
       rank,
       designId: response.design.designId

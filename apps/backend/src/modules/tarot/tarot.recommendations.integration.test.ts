@@ -10,7 +10,7 @@ import {
 import { standardAiDesignFixture } from "@mystcrag/design-contract/fixtures";
 import {
   PersistenceError,
-  type CatalogMaterialProduct
+  type AvailableCatalogMaterialProduct
 } from "@mystcrag/database";
 import {
   TarotCopyService,
@@ -44,7 +44,7 @@ const actorId = "tarot-real-design-owner";
 type PersistedDesign = Awaited<ReturnType<DesignApplicationDependencies["designs"]["getDesign"]>>;
 type PersistedRevision = Awaited<ReturnType<DesignApplicationDependencies["designs"]["getRevision"]>>;
 
-function realCatalog(): CatalogMaterialProduct[] {
+function realCatalog(): AvailableCatalogMaterialProduct[] {
   return structuredClone(standardAiDesignFixture).beads.map((bead, index) => ({
     id: bead.beadProductId,
     productType: "MATERIAL" as const,
@@ -53,9 +53,11 @@ function realCatalog(): CatalogMaterialProduct[] {
     currency: "CNY" as const,
     unitPriceMinor: bead.unitPriceMinor,
     active: true,
+    availableQuantity: 100,
     crystalId: bead.crystalId,
     crystalNameCn: `真实测试水晶 ${index + 1}`,
     crystalNameEn: `Real test crystal ${index + 1}`,
+    mineralName: "Quartz",
     colorTags: ["chartreuse"],
     visualTags: index === 1 ? ["focused"] : [],
     styleTags: [],
@@ -169,11 +171,19 @@ function createRealRecommendationHarness(options: {
       await this.getDesign(ownerId, designId);
       return cloneTestValue(revisions.get(designId) ?? []);
     },
+    async listDesigns(ownerId) {
+      return cloneTestValue(
+        [...designs.values()].filter((row) => row.ownerId === ownerId)
+      );
+    },
     async updateDesign() {
       throw new Error("Update is outside this integration harness");
     },
     async saveDesign(ownerId, designId) {
       return this.getDesign(ownerId, designId);
+    },
+    async softDeleteDesign(ownerId, designId) {
+      await this.getDesign(ownerId, designId);
     }
   };
 
@@ -210,6 +220,12 @@ function createRealRecommendationHarness(options: {
             product.currency === currency &&
             !excluded.includes(product.id)
         ));
+      },
+      async listAvailableCatalogMaterialProducts(currency) {
+        return cloneTestValue(catalog.filter((product) => product.currency === currency));
+      },
+      async listAvailableCatalogAccessoryProducts() {
+        return [];
       }
     },
     pricing,
@@ -228,6 +244,9 @@ function createRealRecommendationHarness(options: {
     },
     orders: {
       async createOrderFromDesign() {
+        throw new Error("Orders are outside this integration harness");
+      },
+      async listOrders() {
         throw new Error("Orders are outside this integration harness");
       }
     },
@@ -876,6 +895,27 @@ test("saved wrist reaches every real candidate and budget does not hard-filter p
     [...selectedProductIds].sort(),
     harness.catalog.map(({ id }) => id).sort()
   );
+});
+
+test("current Tarot wrist request overrides the saved wrist for every generated design", async () => {
+  const harness = createRealRecommendationHarness({
+    preferences: { wristCircumferenceMm: 155 }
+  });
+  const revealed = await revealRealRecommendationSession(harness.tarotService);
+  const request = {
+    ...recommendationRequest(revealed.session.revision),
+    wristCircumferenceMm: 165
+  } as Parameters<typeof harness.tarotService.recommendations>[2] & { wristCircumferenceMm: number };
+  const response = await harness.tarotService.recommendations(
+    actorId,
+    revealed.session.sessionId,
+    request
+  );
+
+  assert.ok(response.session.recommendations);
+  assert.ok(response.session.recommendations.every(
+    ({ design }) => design.bracelet.wristCircumferenceMm === 165
+  ));
 });
 
 test("invalid saved wrist or budget preferences fail before design persistence", async () => {

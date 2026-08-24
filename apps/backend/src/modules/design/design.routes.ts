@@ -1,6 +1,10 @@
 import {
+  CloneDesignRequestSchema,
+  CloneDesignResponseSchema,
   CreateOrderFromDesignRequestSchema,
   CreateOrderFromDesignResponseSchema,
+  DeleteDesignRequestSchema,
+  DeleteDesignResponseSchema,
   GenerateDesignRequestSchema,
   GenerateDesignResponseSchema,
   PriceDesignRequestSchema,
@@ -21,7 +25,9 @@ import {
 import {
   handleDesignGet,
   handleCatalogMaterialsGet,
-  handleDesignPost
+  handleDesignPost,
+  handleMyDesignsGet,
+  handleMyOrdersGet
 } from "./design.controller.js";
 import type { DesignApiService } from "./design-api.service.js";
 
@@ -75,6 +81,28 @@ export function registerDesignContractRoutes(
       { ignoreOwnerId: true, ownerScoped: true }
     )
   );
+  app.post("/api/design/delete", protectedRoute, (request, reply) =>
+    handleDesignPost(
+      request,
+      reply,
+      DeleteDesignRequestSchema,
+      DeleteDesignResponseSchema,
+      (api, actorId, input) => api.delete(actorId, input),
+      service,
+      { ownerScoped: true }
+    )
+  );
+  app.post("/api/design/clone", protectedRoute, (request, reply) =>
+    handleDesignPost(
+      request,
+      reply,
+      CloneDesignRequestSchema,
+      CloneDesignResponseSchema,
+      (api, actorId, input) => api.cloneDesign(actorId, input),
+      service,
+      { ownerScoped: true }
+    )
+  );
   app.post("/api/design/publish", protectedRoute, (request, reply) =>
     handleDesignPost(
       request,
@@ -111,6 +139,12 @@ export function registerDesignContractRoutes(
     "/api/catalog/materials",
     protectedRoute,
     (request, reply) => handleCatalogMaterialsGet(request, reply, service)
+  );
+  app.get("/api/designs", protectedRoute, (request, reply) =>
+    handleMyDesignsGet(request, reply, service)
+  );
+  app.get("/api/orders", protectedRoute, (request, reply) =>
+    handleMyOrdersGet(request, reply, service)
   );
 }
 

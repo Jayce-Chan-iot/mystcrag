@@ -38,9 +38,7 @@ const app = createApp({
     },
     catalog: {
       async listActiveCatalogProducts(currency) {
-        return (await productRepository.listActiveCatalogProducts(currency)).filter(
-          (product) => product.productType === "MATERIAL"
-        );
+        return productRepository.listAvailableCatalogMaterialProducts(currency);
       }
     },
     designGenerator: designApplicationService,

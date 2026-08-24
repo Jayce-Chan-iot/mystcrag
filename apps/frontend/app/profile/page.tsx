@@ -1,5 +1,11 @@
-import { PageScaffold } from "../../components/page-scaffold";
+import type { Metadata } from "next";
 
-export default function ProfilePage() {
-  return <PageScaffold eyebrow="Profile" title="用户中心" description="管理个人资料、私有设计与后续订单信息。" />;
+import { ProfilePage } from "../../src/features/profile/components/profile-page";
+
+export const metadata: Metadata = {
+  title: "个人中心"
+};
+
+export default function Page() {
+  return <ProfilePage />;
 }

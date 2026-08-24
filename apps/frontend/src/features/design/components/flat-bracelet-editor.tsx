@@ -6,7 +6,9 @@ import Image from "next/image";
 import * as React from "react";
 
 import { evaluateBraceletFit, inlineAccessoryLengthMm, type BraceletFit } from "../model/bracelet-fit";
+import { isPointOutsideTray, type DisplayTrayMaterial } from "../model/display-tray";
 import { CrystalBeadImage } from "./crystal-bead-image";
+import { DisplayTray } from "./display-tray";
 
 export type RingComponent =
   | (PublicDesignV1["beads"][number] & { kind: "BEAD" })
@@ -21,7 +23,7 @@ type DragState = {
   y: number;
   moved: boolean;
   nearRing: boolean;
-  overDeleteZone: boolean;
+  outsideTray: boolean;
   targetPositionIndex: number;
 };
 
@@ -99,6 +101,7 @@ export function FlatBraceletEditor({
   selectedComponentId,
   busy,
   connected = false,
+  trayMaterial = "BONE_CHINA",
   fit: providedFit,
   fitDesktopViewport = false,
   onSelect,
@@ -109,6 +112,7 @@ export function FlatBraceletEditor({
   selectedComponentId: string;
   busy: boolean;
   connected?: boolean;
+  trayMaterial?: DisplayTrayMaterial;
   fit?: BraceletFit;
   fitDesktopViewport?: boolean;
   onSelect: (componentId: string) => void;
@@ -124,7 +128,7 @@ export function FlatBraceletEditor({
   const nativeDragIdRef = React.useRef("");
   const [drag, setDrag] = React.useState<DragState | null>(null);
   const [nativeDraggedComponentId, setNativeDraggedComponentId] = React.useState("");
-  const [nativeOverDeleteZone, setNativeOverDeleteZone] = React.useState(false);
+  const [nativeOutsideTray, setNativeOutsideTray] = React.useState(false);
 
   const canRemove = (componentId: string) => {
     const component = components.find((item) => item.componentId === componentId);
@@ -141,7 +145,7 @@ export function FlatBraceletEditor({
   const clearNativeDrag = () => {
     nativeDragIdRef.current = "";
     setNativeDraggedComponentId("");
-    setNativeOverDeleteZone(false);
+    setNativeOutsideTray(false);
   };
 
   const updateDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -162,7 +166,7 @@ export function FlatBraceletEditor({
       y: (y / rect.height) * 100,
       moved,
       nearRing: Math.abs(distance - ringRadius) <= rect.width * 0.16,
-      overDeleteZone: distance <= rect.width * 0.16,
+      outsideTray: isPointOutsideTray({ x, y }, rect),
       targetPositionIndex: targetPositionForAngle(componentLayouts, angle, currentDrag.targetPositionIndex)
     });
   };
@@ -171,7 +175,7 @@ export function FlatBraceletEditor({
     const currentDrag = dragRef.current;
     if (!currentDrag || currentDrag.pointerId !== event.pointerId) return;
     let nearRing = currentDrag.nearRing;
-    let overDeleteZone = currentDrag.overDeleteZone;
+    let outsideTray = currentDrag.outsideTray;
     let targetPositionIndex = currentDrag.targetPositionIndex;
     if (stageRef.current) {
       const rect = stageRef.current.getBoundingClientRect();
@@ -183,11 +187,11 @@ export function FlatBraceletEditor({
       const distance = Math.hypot(x - centerX, y - centerY);
       const angle = (Math.atan2(y - centerY, x - centerX) + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2);
       nearRing = Math.abs(distance - ringRadius) <= rect.width * 0.16;
-      overDeleteZone = distance <= rect.width * 0.16;
+      outsideTray = isPointOutsideTray({ x, y }, rect);
       targetPositionIndex = targetPositionForAngle(componentLayouts, angle, targetPositionIndex);
     }
     if (currentDrag.moved) {
-      if (overDeleteZone && canRemove(currentDrag.componentId)) onRemove(currentDrag.componentId);
+      if (outsideTray && canRemove(currentDrag.componentId)) onRemove(currentDrag.componentId);
       else if (nearRing) onMove(currentDrag.componentId, targetPositionIndex);
     } else {
       onSelect(currentDrag.componentId);
@@ -198,16 +202,16 @@ export function FlatBraceletEditor({
   return (
     <div
       aria-label="2D 手串编辑预览"
-      className={`relative mx-auto aspect-square w-full select-none ${fitDesktopViewport ? "max-w-[min(35rem,calc(100dvh-20.5rem))]" : "max-w-[35rem]"}`}
+      className="relative mx-auto aspect-square w-full max-w-[35rem] select-none"
       data-bracelet-layout={connected ? "connected" : "spread"}
       data-flat-bracelet-editor="true"
+      style={fitDesktopViewport ? { maxWidth: "clamp(14rem, calc(100dvh - 20.5rem), 35rem)" } : undefined}
       onDragOver={(event) => {
         const componentId = nativeDragIdRef.current;
         if (!componentId || !stageRef.current) return;
         event.preventDefault();
         const rect = stageRef.current.getBoundingClientRect();
-        const distance = Math.hypot(event.clientX - rect.left - rect.width / 2, event.clientY - rect.top - rect.height / 2);
-        setNativeOverDeleteZone(distance <= rect.width * 0.16);
+        setNativeOutsideTray(isPointOutsideTray({ x: event.clientX - rect.left, y: event.clientY - rect.top }, rect));
       }}
       onDrop={(event) => {
         const componentId = nativeDragIdRef.current;
@@ -221,7 +225,7 @@ export function FlatBraceletEditor({
         const distance = Math.hypot(x - centerX, y - centerY);
         const ringRadius = rect.width * (ringRadiusPercent / 100);
         const angle = (Math.atan2(y - centerY, x - centerX) + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2);
-        if (distance <= rect.width * 0.16 && canRemove(componentId)) onRemove(componentId);
+        if (isPointOutsideTray({ x, y }, rect) && canRemove(componentId)) onRemove(componentId);
         else if (Math.abs(distance - ringRadius) <= rect.width * 0.16) {
           onMove(componentId, targetPositionForAngle(componentLayouts, angle, 0));
         }
@@ -229,32 +233,36 @@ export function FlatBraceletEditor({
       }}
       ref={stageRef}
     >
+      <DisplayTray material={trayMaterial} />
+
       {drag?.moved || nativeDraggedComponentId ? (
         <div
           aria-live="polite"
-          className={`pointer-events-none absolute left-1/2 top-1/2 z-20 grid h-28 w-28 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-dashed px-3 text-center text-xs font-medium shadow-[0_12px_35px_rgb(57_45_67/0.12)] transition ${(drag?.overDeleteZone || nativeOverDeleteZone) ? "scale-110 border-[var(--danger)] bg-white/96 text-[var(--danger)]" : "border-[var(--danger)]/55 bg-white/88 text-[var(--danger)]"}`}
-          data-remove-drop-zone="true"
-          data-remove-drop-zone-active={drag?.overDeleteZone || nativeOverDeleteZone}
+          className="pointer-events-none absolute inset-0 z-20"
+          data-tray-removal-active={drag?.outsideTray || nativeOutsideTray}
         >
-          {canRemove(drag?.componentId ?? nativeDraggedComponentId)
-            ? (drag?.overDeleteZone || nativeOverDeleteZone) ? "松手删除这颗珠子" : "拖到这里删除"
-            : "这颗珠子暂时不能删除"}
+          <div className={`absolute inset-[3%] rounded-full border-2 border-dashed transition-colors ${(drag?.outsideTray || nativeOutsideTray) ? "border-[var(--danger)]" : "border-[var(--danger)]/55"}`} />
+          <div className={`absolute bottom-1 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border bg-white/95 px-4 py-2 text-xs font-medium shadow-[0_8px_24px_rgb(57_45_67/0.12)] ${(drag?.outsideTray || nativeOutsideTray) ? "border-[var(--danger)] text-[var(--danger)]" : "border-[var(--border)] text-[var(--ink-soft)]"}`}>
+            {canRemove(drag?.componentId ?? nativeDraggedComponentId)
+              ? (drag?.outsideTray || nativeOutsideTray) ? "松手移出当前手串" : "拖出托盘即可删除"
+              : "这颗珠子暂时不能删除"}
+          </div>
         </div>
       ) : null}
 
       {!drag?.moved && !nativeDraggedComponentId && fit.message ? (
         <div
           aria-live="polite"
-          className={`pointer-events-none absolute left-1/2 top-1/2 z-20 w-[min(78%,18rem)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border bg-white/86 px-5 py-4 text-center shadow-[0_12px_35px_rgb(57_45_67/0.10)] backdrop-blur-sm ${
+          className={`pointer-events-none absolute left-1/2 top-1/2 z-20 w-[min(70%,17rem)] -translate-x-1/2 -translate-y-1/2 px-3 py-2 text-center ${
             fit.status === "TOO_LARGE"
-              ? "border-amber-300/80 text-amber-800"
-              : "border-[var(--accent)]/25 text-[var(--accent-deep)]"
+              ? "text-amber-800"
+              : "text-[var(--accent-deep)]"
           }`}
           data-bracelet-fit-status={fit.status}
           role="status"
         >
           <strong className="block text-sm font-semibold">{fit.message}</strong>
-          <span className="mt-1 block text-xs opacity-75">可完成手围范围：13.0–20.0cm</span>
+          <span className="mt-1 block text-xs opacity-75">常见建议范围：13.0–20.0cm，不影响完成设计</span>
         </div>
       ) : null}
 
@@ -276,7 +284,25 @@ export function FlatBraceletEditor({
             disabled={busy || !isBead}
             draggable={isBead && !busy}
             key={component.componentId}
-            onDragEnd={clearNativeDrag}
+            onDragEnd={(event) => {
+              const componentId = nativeDragIdRef.current;
+              if (componentId && stageRef.current) {
+                const rect = stageRef.current.getBoundingClientRect();
+                const x = event.clientX - rect.left;
+                const y = event.clientY - rect.top;
+                const centerX = rect.width / 2;
+                const centerY = rect.height / 2;
+                const distance = Math.hypot(x - centerX, y - centerY);
+                const ringRadius = rect.width * (ringRadiusPercent / 100);
+                const angle = (Math.atan2(y - centerY, x - centerX) + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2);
+                if (isPointOutsideTray({ x, y }, rect) && canRemove(componentId)) {
+                  onRemove(componentId);
+                } else if (Math.abs(distance - ringRadius) <= rect.width * 0.16) {
+                  onMove(componentId, targetPositionForAngle(componentLayouts, angle, 0));
+                }
+              }
+              clearNativeDrag();
+            }}
             onDragStart={(event) => {
               if (!isBead || busy) return;
               clearDrag();
@@ -306,7 +332,7 @@ export function FlatBraceletEditor({
                 y: ((event.clientY - rect.top) / rect.height) * 100,
                 moved: false,
                 nearRing: true,
-                overDeleteZone: false,
+                outsideTray: false,
                 targetPositionIndex: component.positionIndex
               });
               onSelect(component.componentId);

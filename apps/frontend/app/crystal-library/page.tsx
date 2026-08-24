@@ -1,5 +1,11 @@
-import { PageScaffold } from "../../components/page-scaffold";
+import type { Metadata } from "next";
 
-export default function CrystalLibraryPage() {
-  return <PageScaffold eyebrow="Crystal Library" title="水晶百科" description="沉淀矿物事实、视觉特征、设计标签与合规的文化参考。" />;
+import { CrystalLibraryPage } from "../../src/features/library/components/crystal-library-page";
+
+export const metadata: Metadata = {
+  title: "矿石库"
+};
+
+export default function Page() {
+  return <CrystalLibraryPage />;
 }

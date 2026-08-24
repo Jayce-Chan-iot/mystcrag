@@ -14,6 +14,7 @@ import {
 import { CreatorDisplayModeSchema, VisibilitySchema } from "./community.schema";
 import { CurrencySchema, IsoDateTimeSchema, LocaleSchema } from "./metadata.schema";
 import { OrderDesignSnapshotV1Schema } from "./order-snapshot.schema";
+import { OrderFulfillmentSnapshotV1Schema } from "./order-fulfillment.schema";
 import { PublicDesignV1Schema } from "./public-design.schema";
 
 export const ContractWarningSchema = z.strictObject({
@@ -130,6 +131,29 @@ export const SaveDesignResponseSchema = z.strictObject({
   savedAt: IsoDateTimeSchema
 });
 
+export const DeleteDesignRequestSchema = z.strictObject({
+  requestId: RequestIdSchema,
+  designId: IdentifierSchema,
+  expectedRevision: PositiveSafeIntegerSchema
+});
+
+export const DeleteDesignResponseSchema = z.strictObject({
+  requestId: RequestIdSchema,
+  designId: IdentifierSchema,
+  deletedAt: IsoDateTimeSchema
+});
+
+export const CloneDesignRequestSchema = z.strictObject({
+  requestId: RequestIdSchema,
+  designId: IdentifierSchema,
+  expectedRevision: PositiveSafeIntegerSchema
+});
+
+export const CloneDesignResponseSchema = z.strictObject({
+  ...PublicDesignResponseShape,
+  clonedAt: IsoDateTimeSchema
+});
+
 export const PublishDesignRequestSchema = z
   .strictObject({
     requestId: RequestIdSchema,
@@ -222,7 +246,7 @@ export const CreateOrderFromDesignResponseSchema = z
   .strictObject({
     ...PublicDesignResponseShape,
     orderId: IdentifierSchema,
-    orderStatus: z.enum(["PENDING", "CONFIRMED"]),
+    orderStatus: z.enum(["PENDING", "CONFIRMED", "AWAITING_RESTOCK"]),
     snapshot: OrderDesignSnapshotV1Schema,
     createdAt: IsoDateTimeSchema
   })
@@ -239,6 +263,51 @@ export const CreateOrderFromDesignResponseSchema = z
     }
   });
 
+export const DesignPersistenceStatusSchema = z.enum([
+  "DRAFT",
+  "GENERATED",
+  "SAVED",
+  "ARCHIVED"
+]);
+
+export const ListMyDesignsResponseSchema = z.strictObject({
+  designs: z
+    .array(
+      z.strictObject({
+        design: PublicDesignV1Schema,
+        status: DesignPersistenceStatusSchema,
+        updatedAt: IsoDateTimeSchema
+      })
+    )
+    .max(200)
+});
+
+export const OrderSummaryStatusSchema = z.enum([
+  "PENDING",
+  "AWAITING_RESTOCK",
+  "CONFIRMED",
+  "IN_PRODUCTION",
+  "SHIPPED",
+  "COMPLETED",
+  "CANCELLED"
+]);
+
+export const ListMyOrdersResponseSchema = z.strictObject({
+  orders: z
+    .array(
+      z.strictObject({
+        orderId: IdentifierSchema,
+        status: OrderSummaryStatusSchema,
+        currency: CurrencySchema,
+        totalAmountMinor: MinorAmountSchema,
+        createdAt: IsoDateTimeSchema,
+        design: PublicDesignV1Schema,
+        fulfillment: OrderFulfillmentSnapshotV1Schema
+      })
+    )
+    .max(100)
+});
+
 export type ContractWarning = z.infer<typeof ContractWarningSchema>;
 export type GenerateDesignRequest = z.infer<typeof GenerateDesignRequestSchema>;
 export type GenerateDesignResponse = z.infer<typeof GenerateDesignResponseSchema>;
@@ -249,7 +318,15 @@ export type PriceDesignRequest = z.infer<typeof PriceDesignRequestSchema>;
 export type PriceDesignResponse = z.infer<typeof PriceDesignResponseSchema>;
 export type SaveDesignRequest = z.infer<typeof SaveDesignRequestSchema>;
 export type SaveDesignResponse = z.infer<typeof SaveDesignResponseSchema>;
+export type DeleteDesignRequest = z.infer<typeof DeleteDesignRequestSchema>;
+export type DeleteDesignResponse = z.infer<typeof DeleteDesignResponseSchema>;
+export type CloneDesignRequest = z.infer<typeof CloneDesignRequestSchema>;
+export type CloneDesignResponse = z.infer<typeof CloneDesignResponseSchema>;
 export type PublishDesignRequest = z.infer<typeof PublishDesignRequestSchema>;
 export type PublishDesignResponse = z.infer<typeof PublishDesignResponseSchema>;
 export type CreateOrderFromDesignRequest = z.infer<typeof CreateOrderFromDesignRequestSchema>;
 export type CreateOrderFromDesignResponse = z.infer<typeof CreateOrderFromDesignResponseSchema>;
+export type DesignPersistenceStatus = z.infer<typeof DesignPersistenceStatusSchema>;
+export type ListMyDesignsResponse = z.infer<typeof ListMyDesignsResponseSchema>;
+export type OrderSummaryStatus = z.infer<typeof OrderSummaryStatusSchema>;
+export type ListMyOrdersResponse = z.infer<typeof ListMyOrdersResponseSchema>;

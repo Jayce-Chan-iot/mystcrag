@@ -337,6 +337,7 @@ export function TarotDrawView({
   return (
     <main
       className={styles.drawPage}
+      data-atelier-surface="tarot-draw"
       data-tarot-draw-layout="desktop-fan-mobile-half-fan"
     >
       <aside className={styles.themeSidebar} aria-label="本次抽牌主题">

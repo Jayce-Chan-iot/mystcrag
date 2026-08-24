@@ -16,7 +16,7 @@ import type {
   TarotTheme
 } from "@mystcrag/design-contract";
 import type {
-  CatalogMaterialProduct,
+  AvailableCatalogMaterialProduct,
   TarotRecommendationSnapshot
 } from "@mystcrag/database";
 import type {
@@ -31,7 +31,7 @@ export interface TarotDesignReader {
 export interface TarotCatalogPort {
   listActiveCatalogProducts(
     currency: "CNY" | "TWD"
-  ): Promise<readonly CatalogMaterialProduct[]>;
+  ): Promise<readonly AvailableCatalogMaterialProduct[]>;
 }
 
 export interface TarotDesignPreferences {
@@ -60,7 +60,7 @@ export interface TarotRecommendationCopyPort {
   createSnapshot(input: {
     cards: readonly RevealedTarotCard[];
     signals: TarotDesignSignals;
-    materials: readonly CatalogMaterialProduct[];
+    materials: readonly AvailableCatalogMaterialProduct[];
     locale: string;
     theme: TarotTheme;
     question?: string;

@@ -47,10 +47,10 @@ export function evaluateBraceletFit(design: PublicDesignV1): BraceletFit {
 
   if (circumferenceMm < MIN_BRACELET_CIRCUMFERENCE_MM) {
     return {
-      canComplete: false,
+      canComplete: true,
       circumferenceMm,
       circumferenceCmLabel,
-      message: `珠子太少，当前 ${circumferenceCmLabel}cm，无法串成手串`,
+      message: `当前 ${circumferenceCmLabel}cm，低于常见建议范围，可继续完成设计`,
       status: "TOO_SMALL",
       ...shared
     };
@@ -58,10 +58,10 @@ export function evaluateBraceletFit(design: PublicDesignV1): BraceletFit {
 
   if (circumferenceMm > MAX_BRACELET_CIRCUMFERENCE_MM) {
     return {
-      canComplete: false,
+      canComplete: true,
       circumferenceMm,
       circumferenceCmLabel,
-      message: `手串过大，当前 ${circumferenceCmLabel}cm，请减少珠子`,
+      message: `当前 ${circumferenceCmLabel}cm，高于常见建议范围，可继续完成设计`,
       status: "TOO_LARGE",
       ...shared
     };

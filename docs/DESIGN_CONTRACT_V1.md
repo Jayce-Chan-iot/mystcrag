@@ -130,13 +130,16 @@ Designs created through the internal `TAROT_GUIDED` generation boundary must inc
 
 ## Material catalog projection
 
-`CatalogMaterialProduct` exposes sellable product identity, bilingual Crystal names, color tags, Crystal-authored `visualTags`, `styleTags`, `emotionTags`, and compliance-safe `cultureTags`, bead geometry, render assets, currency, and authoritative unit price. It never exposes unit cost, supplier data, or inventory quantity. The four additive Crystal tag arrays are public-safe design metadata and are the authoritative inputs for deterministic recommendation scoring.
+`CatalogMaterialProduct` exposes sellable product identity, bilingual Crystal names, color tags, Crystal-authored `visualTags`, `styleTags`, `emotionTags`, and compliance-safe `cultureTags`, bead geometry, render assets, currency, authoritative unit price, and a non-negative integer `availableQuantity` that backs first-party sellable and zero-stock UI states. `CatalogAccessoryProduct` exposes the same public-safe shape for accessories: identity, type, material, finish, currency, unit price, and `availableQuantity`. Neither projection exposes unit cost, supplier data, or raw inventory ledgers. The four additive Crystal tag arrays are public-safe design metadata and are the authoritative inputs for deterministic recommendation scoring.
 
 ## Public and order projections
 
 `PublicDesignV1` is the safe design view used by every Phase 2A response DTO. It excludes commercial cost and supplier data.
 
 `OrderDesignSnapshotV1` contains:
+
+- a strict `fulfillment` snapshot with requested, reserved, and backorder quantities per product;
+- `IN_STOCK` or `AWAITING_RESTOCK` summary state and a five-day estimate only when a shortage exists;
 
 - `snapshotVersion: 1.0.0`
 - an explicit capture timestamp
@@ -154,8 +157,11 @@ The package exports request and response schemas for these Design and Order oper
 - Save Design
 - Publish Design
 - Create Order From Design
+- Delete Design (soft delete; response carries `deletedAt`, not a design)
+- Clone Design (fresh revision-1 copy of the source snapshot)
+- List My Designs and List My Orders (owner-scoped listing responses)
 
-Every response contains a validated public design and structured warnings. Update requests use only `REPLACE_COMPONENT`, `MOVE_COMPONENT`, `ADD_COMPONENT`, `REMOVE_COMPONENT`, and `UPDATE_BRACELET`; arbitrary JSON Patch is rejected. Publish and create-order requests enforce consent/compliance and revision or price expectations at the schema boundary where the required design context is present.
+Mutation responses contain a validated public design and structured warnings, except Delete (identity plus `deletedAt`) and the two list responses (bounded arrays of `{ design, status, updatedAt }` and order summaries with immutable design snapshots). Update requests use only `REPLACE_COMPONENT`, `MOVE_COMPONENT`, `ADD_COMPONENT`, `REMOVE_COMPONENT`, and `UPDATE_BRACELET`; arbitrary JSON Patch is rejected. Publish and create-order requests enforce consent/compliance and revision or price expectations at the schema boundary where the required design context is present. Delete and Clone require the source design's current revision and surface stale revisions as `CONFLICT` at the Backend boundary.
 
 The package also exports these Tarot session DTO families:
 
@@ -168,7 +174,7 @@ The package also exports these Tarot session DTO families:
 
 Tarot responses use a request ID and strict public session projection. The contract duplicates its stable Tarot wire literals locally; it does not depend on the Tarot engine package. `GET` is the broad restore projection, enforces state-specific invariants, and includes the canonical card-back metadata used by first-party draw UI. Create returns only a `DRAWING` session plus the same card-back metadata. Select accepts a strict `DRAWING`, `DRAWN`, `RECOMMENDED`, or `SAVED` public projection: new selections return `DRAWING`, while an exact accepted retry returns the authoritative current lifecycle state. Reveal returns a revealed `DRAWN`, `RECOMMENDED`, or `SAVED` projection so exact retries remain representable after later lifecycle advances. Recommendation responses require `RECOMMENDED` or `SAVED` state with exactly three distinct ranked `PublicDesignV1` values. Save responses require `SAVED` state.
 
-Tarot public projections never contain deck or orientation order, private deck state, raw or encrypted questions, encryption material, hidden prompts, commercial costs, or inventory quantities. Card identity and orientation are absent from create and new-selection projections; an exact selection retry may include them only when the authoritative session has already been revealed. Tarot routes reuse the established API error envelope; the Design Contract does not define a separate Tarot error shape.
+Tarot public projections never contain deck or orientation order, private deck state, raw or encrypted questions, encryption material, hidden prompts, commercial costs, or inventory quantities. Ranked recommendations may expose only a fulfillment advisory containing `requiresRestock`, the five-day estimate, and affected product IDs. Card identity and orientation are absent from create and new-selection projections; an exact selection retry may include them only when the authoritative session has already been revealed. Tarot routes reuse the established API error envelope; the Design Contract does not define a separate Tarot error shape.
 
 These DTOs define data shape only. Authentication, authorization, catalog lookup, inventory checks, pricing execution, persistence, HTTP status, and application error mapping remain Backend responsibilities.
 

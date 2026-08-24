@@ -15,7 +15,8 @@ import {
   DISPLAYED_TAROT_POSITIONS,
   TarotFan,
   activateTarotFanInput,
-  getFanCardTransform
+  getFanCardTransform,
+  splitDisplayedTarotRows
 } from "./components/tarot-fan";
 import {
   TarotDrawView,
@@ -132,19 +133,37 @@ test("fan renders all 78 unique selectable positions with one stable card-back v
   assert.doesNotMatch(markup, /draggable="true"/);
 });
 
-test("fan geometry stays bounded on desktop and becomes a scrollable half-fan on mobile", () => {
-  const left = getFanCardTransform(0, 78);
-  const middle = getFanCardTransform(39, 78);
-  const right = getFanCardTransform(77, 78);
+test("fan splits all positions into two bounded rows and keeps both rows reachable on mobile", () => {
+  const rows = splitDisplayedTarotRows(DISPLAYED_TAROT_POSITIONS);
+  assert.deepEqual(rows.map((row) => row.length), [39, 39]);
+  assert.deepEqual(rows.flat(), DISPLAYED_TAROT_POSITIONS);
 
-  assert.deepEqual(left, { xPercent: -50, yPx: 82, rotateDeg: -18 });
-  assert.deepEqual(middle, { xPercent: 0.649350649350644, yPx: 0.01383032551863698, rotateDeg: 0.23376623376623185 });
-  assert.deepEqual(right, { xPercent: 50, yPx: 82, rotateDeg: 18 });
+  const left = getFanCardTransform(0, 39);
+  const middle = getFanCardTransform(19, 39);
+  const right = getFanCardTransform(38, 39);
+
+  assert.deepEqual(left, { xPercent: -46, yPx: 30, rotateDeg: -10 });
+  assert.deepEqual(middle, { xPercent: 0, yPx: 0, rotateDeg: 0 });
+  assert.deepEqual(right, { xPercent: 46, yPx: 30, rotateDeg: 10 });
+
+  const markup = renderToStaticMarkup(
+    <TarotFan
+      acceptedPositions={new Set()}
+      cardBackAssetFile="CardBack.png"
+      disabled={false}
+      onSelect={() => undefined}
+      pendingPosition={undefined}
+    />
+  );
+  assert.equal((markup.match(/data-tarot-row=/g) ?? []).length, 2);
 
   const css = readFileSync(new URL("./tarot.module.css", import.meta.url), "utf8");
-  assert.match(css, /\.tarotFanViewport[^}]*overflow:\s*hidden/s);
-  assert.match(css, /max-width:\s*100vw/);
-  assert.match(css, /@media\s*\(max-width:\s*639px\)[\s\S]*\.tarotFanViewport[^}]*overflow-x:\s*auto/);
+  assert.match(css, /\.tarotFanRows[^}]*grid-template-rows:\s*repeat\(2,/s);
+  assert.match(css, /\.tarotFanViewport[^}]*overflow-x:\s*auto/s);
+  assert.match(css, /\.tarotFanRail[^}]*grid-template-columns:\s*repeat\(39,/s);
+  assert.match(css, /\.tarotFanCard[^}]*position:\s*relative/s);
+  assert.match(css, /@media\s*\(max-width:\s*639px\)[\s\S]*\.tarotFanViewport[^}]*overflow-x:\s*auto/s);
+  assert.match(css, /@media\s*\(max-width:\s*639px\)[\s\S]*\.tarotFanRows[^}]*min-width:\s*72rem/s);
   assert.match(css, /\.tarotDrawPage[^}]*overflow-x:\s*clip/s);
   assert.match(css, /\.tarotActionFooter[^}]*position:\s*sticky/s);
   assert.match(css, /padding-bottom:\s*calc\([^)]*env\(safe-area-inset-bottom\)/);

@@ -30,6 +30,7 @@ export type TarotResultState = Readonly<{
   saving: boolean;
   redrawing: boolean;
   needsQuestionRecovery: boolean;
+  needsRecommendationRetry: boolean;
   selectedDesignId: string;
   error: string | null;
 }>;
@@ -60,6 +61,7 @@ export function createTarotResultCoordinator(dependencies: TarotResultCoordinato
     saving: false,
     redrawing: false,
     needsQuestionRecovery: false,
+    needsRecommendationRetry: false,
     selectedDesignId: "",
     error: null
   };
@@ -85,6 +87,7 @@ export function createTarotResultCoordinator(dependencies: TarotResultCoordinato
       session,
       selectedDesignId: initialSelectedDesignId(session),
       loading: false,
+      needsRecommendationRetry: false,
       ...patch
     });
   };
@@ -114,13 +117,16 @@ export function createTarotResultCoordinator(dependencies: TarotResultCoordinato
     if (recommendationInFlight !== null) return recommendationInFlight;
     const token = requestedToken ?? begin();
     const question = draft?.question.trim() ?? "";
-    publish({ generating: true, needsQuestionRecovery: false, error: null });
+    publish({ generating: true, needsQuestionRecovery: false, needsRecommendationRetry: false, error: null });
     recommendationInFlight = (async () => {
       try {
         const response: GenerateTarotRecommendationsResponse =
           await dependencies.client.recommendations(dependencies.sessionId, {
             requestId: dependencies.requestId(),
             expectedRevision: session.revision,
+            ...(draft?.wristCircumferenceMm === undefined
+              ? {}
+              : { wristCircumferenceMm: draft.wristCircumferenceMm }),
             ...(question ? { question } : {}),
             saveQuestion: question ? draft?.saveQuestion ?? false : false,
             locale: "zh-CN",
@@ -150,8 +156,20 @@ export function createTarotResultCoordinator(dependencies: TarotResultCoordinato
               error: `${errorMessage(restoreError)} 可重新输入问题或直接跳过后重试。`
             });
           }
+        } else if (code === "INVENTORY_CHANGED") {
+          publish({
+            generating: false,
+            needsQuestionRecovery: false,
+            needsRecommendationRetry: true,
+            error: "可用材料刚刚发生变化，请重新匹配当前库存。"
+          });
         } else {
-          publish({ generating: false, needsQuestionRecovery: true, error: errorMessage(error) });
+          publish({
+            generating: false,
+            needsQuestionRecovery: true,
+            needsRecommendationRetry: false,
+            error: errorMessage(error)
+          });
         }
       } finally {
         recommendationInFlight = null;
@@ -299,6 +317,12 @@ export function createTarotResultCoordinator(dependencies: TarotResultCoordinato
       if (!session || session.status !== "DRAWN") return Promise.resolve();
       return recommend(session, { question: "", saveQuestion: false });
     },
+    retryRecommendations() {
+      const session = state.session;
+      if (!session || session.status !== "DRAWN") return Promise.resolve();
+      const draft = dependencies.draftStore.get(dependencies.sessionId);
+      return recommend(session, draft ?? { question: "", saveQuestion: false });
+    },
     selectDesign(designId: string) {
       const session = state.session;
       if (!session || (session.status === "SAVED" && session.selectedDesignId !== undefined) || state.saving ||
@@ -358,10 +382,12 @@ export type TarotResultViewProps = Readonly<{
   redrawing: boolean;
   error: string | null;
   needsQuestionRecovery?: boolean;
+  needsRecommendationRetry?: boolean;
   recoveryQuestion?: string;
   onRecoveryQuestionChange?(value: string): void;
   onContinueQuestion?(): void;
   onSkipQuestion?(): void;
+  onRetryRecommendations?(): void;
   onSelect(designId: string): void;
   onSave(): void;
   onSelectAndEnterDiy(): void;
@@ -376,10 +402,12 @@ export function TarotResultView({
   redrawing,
   error,
   needsQuestionRecovery = false,
+  needsRecommendationRetry = false,
   recoveryQuestion = "",
   onRecoveryQuestionChange,
   onContinueQuestion,
   onSkipQuestion,
+  onRetryRecommendations,
   onSelect,
   onSave,
   onSelectAndEnterDiy,
@@ -398,7 +426,7 @@ export function TarotResultView({
   const savedWithoutSelection = session.status === "SAVED" && session.selectedDesignId === undefined;
 
   return (
-    <main className={styles.resultPage} data-results-layout="three-visible-no-carousel">
+    <main className={styles.resultPage} data-atelier-surface="tarot-result" data-results-layout="three-visible-no-carousel">
       <header className={styles.resultHeader}>
         <p>{session.spreadType === "SINGLE" ? "单张指引解读" : "三张塔罗牌解读"}</p>
         <h1>{interpretation?.headline ?? "牌面已揭晓，准备展开设计灵感"}</h1>
@@ -471,6 +499,15 @@ export function TarotResultView({
         </section>
       ) : null}
 
+      {needsRecommendationRetry ? (
+        <section className={styles.questionRecovery} aria-labelledby="tarot-material-retry-title">
+          <p className={styles.eyebrow}>材料状态已更新</p>
+          <h2 id="tarot-material-retry-title">重新匹配当前可用珠子</h2>
+          <p>牌面和问题都已保留，不需要重新抽牌。系统会使用最新库存重新生成三个方案。</p>
+          <div><button disabled={generating} onClick={onRetryRecommendations} type="button">重新匹配材料</button></div>
+        </section>
+      ) : null}
+
       {generating ? <p className={styles.resultStatus} aria-live="polite">正在从牌面中整理配色与手串方案…
       </p> : null}
       {error ? <p className={styles.inlineError} role="alert">{error}</p> : null}
@@ -487,10 +524,11 @@ export function TarotResultView({
             </p>
           ) : null}
           <div className={styles.recommendationGrid}>
-            {recommendations.map(({ rank, design }) => (
+            {recommendations.map(({ rank, design, fulfillment }) => (
               <TarotRecommendationCard
                 design={design}
                 disabled={busy || (session.status === "SAVED" && session.selectedDesignId !== undefined)}
+                fulfillment={fulfillment}
                 key={design.designId}
                 materialNamesByProductId={materialNamesByProductId}
                 onSelect={onSelect}
@@ -560,8 +598,10 @@ export function TarotResult({
       error={state.error}
       generating={state.generating}
       needsQuestionRecovery={state.needsQuestionRecovery}
+      needsRecommendationRetry={state.needsRecommendationRetry}
       onContinueQuestion={() => void coordinator.continueWithQuestion(recoveryQuestion)}
       onRecoveryQuestionChange={setRecoveryQuestion}
+      onRetryRecommendations={() => void coordinator.retryRecommendations()}
       onRedraw={() => void coordinator.redraw()}
       onSave={() => void coordinator.saveSelected()}
       onSelect={(designId) => coordinator.selectDesign(designId)}
