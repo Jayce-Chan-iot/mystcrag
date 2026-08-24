@@ -30,6 +30,17 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 - New recommendation snapshots persist an internal `copySource` marker with provider or deterministic-fallback mode, provider ID/version, and copy-policy version. The marker is optional only so existing persisted snapshots remain readable; every newly generated recommendation supplies it.
 - An empty or absent `MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY` means no encryption port is installed. In that mode `saveQuestion: true` fails before repository access and the nullable question columns remain null. A non-empty malformed key fails Backend startup; it never downgrades to plaintext storage.
 
+## Production external identity contract (AUTH-003 pending)
+
+The controlling semantics are frozen in [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md); Prisma is unchanged by TASK-AUTH-001.
+
+- A future additive `ExternalIdentity` record has an internal opaque id, exact `issuer`, exact `subject`, a required restrictive foreign key to `User.id`, optional mutable profile hints (`email`, `emailVerified`, `displayName`), and server timestamps.
+- `(issuer, subject)` is unique and is the only external identity key. One mapping points to one internal `User`; the same subject under different issuers does not collide.
+- `User.id` remains every business repository's `actorId`. Provider subjects are never copied into `User.id`, and email/display name never authorize or silently link accounts.
+- Find-or-provision must be atomic and database-uniqueness-driven: twenty concurrent first logins yield exactly one mapping and one new User, with no orphan User after uniqueness races.
+- Access Tokens, Refresh Tokens, authorization codes, PKCE material, cookies, and session secrets are not stored in `ExternalIdentity` or business tables.
+- Account linking/remapping requires a separate future audited task. Existing mappings cannot be silently reassigned.
+
 ## Tarot lifecycle persistence
 
 - `TarotSpreadType` supports `SINGLE` and `PAST_PRESENT_FUTURE`; `TarotSessionStatus` supports `DRAWING`, `DRAWN`, `RECOMMENDED`, `SAVED`, and `ABANDONED`. `DesignMode.TAROT_GUIDED` is additive to existing modes.

@@ -2,8 +2,8 @@
 
 **Priority:** P0 for commercial release<br>
 **Recommended next Feature:** yes, and the only major Feature selected<br>
-**Dispatch state:** blocked by baseline P0 and provider/session-topology decision<br>
-**Contract marker:** `CONTRACT_REQUIRES_IMPLEMENTATION_VALIDATION`
+**Dispatch state:** AUTH-001 contract frozen; implementation tasks remain gated by SOL review and the task DAG<br>
+**Contract marker:** `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`
 
 ## Objective
 
@@ -21,17 +21,18 @@ As a customer, I can sign in, return to the app, access only my saved work and o
 - Prisma `User` owns designs, revisions, publications, orders and Tarot sessions.
 - Test fixtures pre-create users whose IDs match actor subjects.
 - Frontend reads `NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN`, which is public build-time configuration rather than a user session.
-- There is no production provider, login/callback/logout UX, refresh/revocation policy, external-identity mapping or idempotent user provisioning path.
+- Runtime still has no production provider, login/callback/logout UX, refresh/revocation implementation, external-identity mapping or idempotent user provisioning path; their contract is now frozen in `AUTH_SESSION_CONTRACT.md`.
 
 ## Gap
 
-1. Product Owner selection of an identity provider, environments, callback/logout domains and account-recovery policy.
-2. A provider-neutral verified-identity contract including issuer, subject, audience, expiry and permitted claims.
-3. A collision-safe `(issuer, subject) -> User` persistence mapping and idempotent provisioning rule.
-4. A browser-safe session topology. Tokens must not be stored in `localStorage`, rendered into client bundles or exposed through `NEXT_PUBLIC_*`.
-5. Login, callback/loading/error, authenticated shell and logout behavior on desktop/mobile.
-6. Expiry/revocation/error envelopes, operational key rotation and deployment configuration.
-7. Automated cross-user isolation and full protected-flow browser verification.
+Product Owner decisions and all cross-module semantics are now frozen by [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md): Auth0; isolated environment clients and exact allowlists; Next.js Server/BFF token custody; provider-neutral identity; collision-safe mapping; cookie/session/API/error/environment contracts. Remaining gaps are implementation and validation only:
+
+1. AUTH-002 pins supported dependencies and writes the environment template; actual staging/production domains remain deployment inputs.
+2. AUTH-003 implements the additive `ExternalIdentity` mapping and 20-way idempotent provisioning.
+3. AUTH-004 implements Auth0/JWKS verification and internal actor composition.
+4. AUTH-005 implements the BFF session endpoints and removes production fixed-token use.
+5. AUTH-006 proves security, expiry/revocation, responsive flows, and two-user isolation.
+6. AUTH-007 performs the only final acceptance review.
 
 ## Architecture impact
 
@@ -55,7 +56,7 @@ As a customer, I can sign in, return to the app, access only my saved work and o
 
 ## Contract first
 
-TASK-AUTH-001 must freeze these decisions before implementation:
+TASK-AUTH-001 freezes these decisions before implementation:
 
 - **Domain contract:** immutable provider identity key is `(issuer, subject)`; email/display name are optional mutable profile claims and never an authorization key.
 - **API contract:** stable semantics for login initiation, callback, session read, logout, `401 UNAUTHORIZED` and any `403 FORBIDDEN`; exact endpoints depend on selected topology.
@@ -64,7 +65,7 @@ TASK-AUTH-001 must freeze these decisions before implementation:
 - **Events:** sign-in success/failure, logout, provisioning and verification failure are structured operational events without token or sensitive-claim logging.
 - **Security contract:** issuer/audience/expiry/signature validation, clock-skew limit, key rotation/cache behavior, CSRF/state/nonce/PKCE as applicable, cookie properties as applicable, and fail-closed startup.
 
-The selected provider SDK, callback hosting topology and whether the browser uses a backend cookie or a Next server/BFF session cannot be inferred safely from current code or deployment docs. TASK-AUTH-001 must record the decision and validate it against the provider's current implementation before dependency or code tasks begin.
+The frozen decisions are Auth0 OIDC Authorization Code + PKCE (`S256`), exact environment-specific allowlists, and a Next.js Server/BFF session with a host-only HttpOnly cookie. Exact SDK/package versions are deliberately an AUTH-002 implementation-validation probe, not an unresolved product decision.
 
 ## Constraints
 
@@ -100,4 +101,4 @@ The Feature may report `FEATURE ACCEPTANCE: PASS` only when all are true:
 - **E2E:** clean authenticated full-loop and two-user isolation tests pass in CI-compatible isolated runtime output.
 - **Operations:** production startup validates required configuration; key rotation/revocation and rollback procedure are documented and exercised in test.
 
-Until the baseline and contract gates close, this is an approved planning candidate—not implementation authorization.
+TASK-AUTH-001 records `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`; it is not implementation or Feature acceptance. AUTH-002 through AUTH-007 must proceed serially/parallel only as registered, and only AUTH-007 may record final acceptance.

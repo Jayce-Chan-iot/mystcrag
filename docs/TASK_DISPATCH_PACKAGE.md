@@ -2,11 +2,11 @@
 
 **Feature:** FEAT-018 Production Identity & Session<br>
 **Prepared by:** SOL / TASK-AUDIT-001<br>
-**Package state:** complete specification, dispatch blocked<br>
-**Blocking gates:** baseline P0 tasks; Product Owner identity-provider/session-topology decision<br>
-**Contract marker:** `CONTRACT_REQUIRES_IMPLEMENTATION_VALIDATION`
+**Package state:** AUTH-001 contract frozen; AUTH-002 through AUTH-007 implementation pending<br>
+**Blocking gates:** TASK-AUTH-001 SOL review before AUTH-002 starts; later tasks follow the registered DAG<br>
+**Contract marker:** `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`
 
-No Worker Agent has been dispatched. A Human Product Owner must close the gates and explicitly assign tasks.
+Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. No AUTH-002 through AUTH-007 Worker Agent has been dispatched.
 
 ## Task DAG
 
@@ -65,7 +65,7 @@ Contract freeze and dependency setup are serial. TASK-AUTH-003 and TASK-AUTH-005
 - **BRANCH:** `task/auth-001-identity-contract`
 - **OBJECTIVE:** select and document the provider/session topology and freeze every cross-module contract required by implementation.
 - **BACKGROUND:** backend supports only fail-closed signed test tokens; frontend exposes a fixed build-time token; no identity mapping/provisioning exists.
-- **DEPENDENCIES:** baseline P0 tasks `DONE`; Product Owner supplies approved provider, environments, callback/logout domains, recovery/privacy policy and deployment topology.
+- **DEPENDENCIES:** baseline P0 tasks `DONE`; Product Owner approval recorded 2026-08-25; exact staging/production domains remain deployment inputs with owner and pass/fail checks in the frozen contract.
 - **ALLOWED FILES:** `docs/AUTH_SESSION_CONTRACT.md`, `docs/API_SPECIFICATION.md`, `docs/DATABASE_SCHEMA.md`, `docs/SECURITY_AND_PRIVACY.md`, `docs/DEPLOYMENT_GUIDE.md`, `docs/DECISION_LOG.md`, exact FEAT-018 registry/task rows.
 - **FORBIDDEN FILES:** `apps/**`, `packages/**`, Prisma schema/migrations, root/package configuration, tests, CI, unrelated docs.
 - **CANONICAL REFERENCES:** `apps/backend/src/auth/auth-provider.ts`, Prisma `User`, Design Contract API error envelope, `FEATURE-018_PLAN.md`, `SECURITY_AND_PRIVACY.md`.
@@ -75,7 +75,7 @@ Contract freeze and dependency setup are serial. TASK-AUTH-003 and TASK-AUTH-005
 - **OUT OF SCOPE:** implementation, provider account creation, custom passwords, RBAC/tenants, commerce and profile migration.
 - **ACCEPTANCE CRITERIA:** Product Owner approval is recorded; every endpoint/type/state/persistence invariant has one authority; open items are zero or explicitly implementation-validation probes with owner and pass/fail rule; no runtime diff.
 - **REQUIRED TESTS:** internal doc links; architecture tests; decision-table walkthrough for new login, returning session, logout, expiry, revocation, provider outage and concurrent first login.
-- **DELIVERABLES:** approved `AUTH_SESSION_CONTRACT.md`, updated controlling docs/registries, frozen provider/dependency/runtime decision and handoff note.
+- **DELIVERABLES:** `AUTH_SESSION_CONTRACT.md` at `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`, synchronized controlling docs/registries, official Auth0 basis, implementation probes, and SOL handoff.
 
 ## TASK-AUTH-002
 

@@ -16,13 +16,26 @@ Errors use `{ error: { code, message, fieldErrors?, requestId } }`. Supported st
 
 ## Authentication and actor context
 
-All Design and Order routes listed below are protected. Clients send `Authorization: Bearer <credential>`; an `AuthProvider` verifies the credential signature, exact issuer, required audience, and expiry before the Backend creates a request-local `ActorContext`. Controllers obtain `actorId` only from that verified context and pass it to owner-scoped services. Authentication fields are not added to Design Contract DTOs, and request bodies never supply authoritative ownership.
+The controlling production contract is [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md), state `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`. The browser authenticates only to the Next.js Server/BFF with its host-only HttpOnly session cookie. The BFF holds every reusable credential server-side and sends a short-lived audience-specific Access Token to Fastify. Browser code must not call Fastify with a stored Bearer token.
+
+All Design and Order routes listed below are protected. `AuthProvider` verifies Access Token signature, exact issuer, required audience, and expiry before a provider-neutral `VerifiedIdentity` is mapped by unique `(issuer, subject)` to an internal `User.id`. Only that internal id becomes request-local `actorId` and is passed to owner-scoped services. Authentication fields are not added to Design Contract DTOs, and request bodies never supply authoritative ownership.
 
 `x-actor-id` is not an authentication mechanism. A request that supplies only `x-actor-id` receives `401 UNAUTHORIZED`, and the header cannot replace or override the subject of a valid verified credential. Missing, malformed, forged, expired, wrong-issuer, and wrong-audience credentials receive the same generic `401 UNAUTHORIZED` envelope. The response does not echo the credential or expose verifier details.
 
 Owner-scoped routes use `403 FORBIDDEN` with a generic message when a verified actor cannot access the requested resource. Missing and differently owned resources are not distinguished at this boundary, preventing ownership disclosure.
 
 The built-in signed-token provider is for explicitly enabled test/development use only. It requires `NODE_ENV=test|development`, `MYSTCRAG_AUTH_PROVIDER=signed-test`, `MYSTCRAG_ENABLE_SIGNED_TEST_AUTH=true`, and configured signing secret, issuer, and audience values. It is rejected in production even when the opt-in flag is present. Production startup without a supported authentication provider fails safely rather than falling back to a fixed, anonymous, header-derived, or test actor.
+
+### Browser authentication endpoints
+
+| Endpoint | Success contract | Failure and cache contract |
+| --- | --- | --- |
+| `GET /auth/login?returnTo=/relative-path` | `302` to Auth0 Authorization Code + PKCE (`S256`); binds single-use state, nonce, verifier and a validated same-origin relative return path | Invalid return path falls back to `/`; provider/config outage uses the existing `503 INTERNAL_ERROR` envelope; `Cache-Control: no-store` |
+| `GET /auth/callback?code=...&state=...` | Validates and consumes state/nonce/PKCE, establishes a rotated BFF session, then `303` to the stored relative path | Invalid/replayed transaction uses generic `401 UNAUTHORIZED`; provider/JWKS outage uses `503 INTERNAL_ERROR`; no session on failure; `no-store` |
+| `POST /auth/logout` | Exact same-origin `Origin`; locally invalidates first, clears cookie, returns idempotent `303` to the server-constructed Auth0 logout URL and then the exact allowlisted application logout URL | Origin mismatch is generic `403 FORBIDDEN`; upstream outage cannot restore local session; no token appears in the URL; `no-store` |
+| `GET /auth/session` | `200 { authenticated: true, user, idleExpiresAt, absoluteExpiresAt }` or `200 { authenticated: false }`; never returns tokens/provider ids/internal actor id | Required session dependency outage uses `503 INTERNAL_ERROR`; expired/revoked cookie is cleared; `no-store` |
+
+Every error reuses `{ error: { code, message, fieldErrors?, requestId } }`; there is no auth-specific envelope. Expired, revoked, bad-signature, wrong-issuer, and wrong-audience credentials return the same generic `401 UNAUTHORIZED`. A verified actor requesting another actor's resource receives the existing owner-safe `403 FORBIDDEN`. A JWKS/provider outage with no usable cached key fails closed as `503 INTERNAL_ERROR`, not as an anonymous or forged identity.
 
 ## Service endpoints
 

@@ -34,3 +34,13 @@ Copy `.env.example` to `.env`, then use:
 - `pnpm db:down`: stop the Compose stack without deleting its volume.
 
 The Compose password is development-only. Production must inject `DATABASE_URL`, run `prisma migrate deploy`, back up PostgreSQL, restrict network access, and use managed secrets. Never run reset or seed commands against production.
+
+## Production identity environment contract
+
+The behavioral authority is [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md), state `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`. TASK-AUTH-001 does not change `.env.example`, dependencies, or runtime configuration.
+
+The later AUTH-002 task must define these server-only values with no `NEXT_PUBLIC_` aliases: `MYSTCRAG_APP_ORIGIN`, `MYSTCRAG_AUTH_PROVIDER=auth0`, `MYSTCRAG_AUTH_ISSUER`, `MYSTCRAG_AUTH_AUDIENCE`, `MYSTCRAG_AUTH_CLIENT_ID`, `MYSTCRAG_AUTH_CLIENT_SECRET`, `MYSTCRAG_AUTH_CALLBACK_URL`, `MYSTCRAG_AUTH_LOGOUT_URL`, and `MYSTCRAG_AUTH_SESSION_SECRET`. Staging/production startup fails closed when a value is missing, malformed, inconsistent, weak, loopback, or wildcard. `SignedTestTokenAuthProvider` remains explicitly enabled development/test behavior and is never a production fallback.
+
+Development, staging, and production use distinct Auth0 Applications/Clients. For each deployment, the Product Owner and SOL/Operations must compare the environment origin, callback, logout URL, and web origin byte-for-byte with the corresponding Auth0 Application and execute login/logout smoke tests. Staging and production require HTTPS, exact entries, and no wildcard or localhost. Actual staging/production domain names remain required deployment inputs and are intentionally not invented here; missing or mismatched values block that deployment.
+
+Operational defaults frozen for implementation: Access Token lifetime at most 15 minutes; session idle/absolute lifetimes 8 hours/7 days; JWT clock skew at most 60 seconds; JWKS connect/read timeout 2 seconds each and 5 seconds total; successful key cache at most 15 minutes, unknown-key one-refresh limit, negative cache at most 30 seconds. Session-secret rotation accepts one previous verification key for at most 24 hours and never lets it mint or extend sessions.
