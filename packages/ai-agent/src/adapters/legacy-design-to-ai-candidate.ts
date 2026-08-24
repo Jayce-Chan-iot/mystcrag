@@ -1,13 +1,13 @@
 import type { BraceletDesignOutput } from "../contracts/legacy-design";
 import {
-  AiDesignCandidateSchema,
-  type AiDesignCandidate
-} from "../schemas/ai-design-candidate.schema";
+  AiBeadLayoutCandidateSchema,
+  type AiBeadLayoutCandidate
+} from "../schemas/ai-bead-layout-candidate.schema";
 
-export function legacyDesignToAiCandidate(
+export function legacyDesignToAiBeadLayoutCandidate(
   legacy: BraceletDesignOutput,
   beadProductIdByCrystalId: Readonly<Record<string, string>>
-): AiDesignCandidate {
+): AiBeadLayoutCandidate {
   let positionIndex = 0;
   const components = legacy.beads.flatMap((group) => {
     const beadProductId = beadProductIdByCrystalId[group.crystalId];
@@ -25,7 +25,7 @@ export function legacyDesignToAiCandidate(
     }));
   });
 
-  return AiDesignCandidateSchema.parse({
+  return AiBeadLayoutCandidateSchema.parse({
     designName: legacy.designName,
     emotionTags: [],
     styleTags: [legacy.style],

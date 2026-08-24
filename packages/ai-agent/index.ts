@@ -5,7 +5,7 @@ export type { DesignAgent, DesignAgentInput } from "./design-agent/index";
 export type { PricingAgent, PricingAgentInput, PricingAgentOutput } from "./pricing-agent/index";
 export type { ComplianceAgent, ComplianceAgentInput, ComplianceAgentOutput } from "./compliance-agent/index";
 export * from "./src/adapters/index";
-export * from "./src/schemas/ai-design-candidate.schema";
+export * from "./src/schemas/ai-bead-layout-candidate.schema";
 export * from "./src/schemas/recommendation-output.schema";
 export * from "./src/contracts/recommendation";
 export * from "./src/providers/index";

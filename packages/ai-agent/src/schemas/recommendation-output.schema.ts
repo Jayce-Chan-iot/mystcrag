@@ -1,9 +1,9 @@
 import { z } from "zod";
 
-import { AiDesignCandidateSchema } from "./ai-design-candidate.schema";
+import { AiBeadLayoutCandidateSchema } from "./ai-bead-layout-candidate.schema";
 
 export const RecommendationProviderOutputSchema = z.strictObject({
-  candidates: z.array(AiDesignCandidateSchema).length(3)
+  candidates: z.array(AiBeadLayoutCandidateSchema).length(3)
 });
 
 export type RecommendationProviderOutput = z.infer<typeof RecommendationProviderOutputSchema>;

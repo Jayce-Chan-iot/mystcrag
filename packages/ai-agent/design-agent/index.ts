@@ -1,6 +1,6 @@
 import type { Agent, AgentContext, AgentResult } from "../contracts";
 import type { CrystalRecommendation } from "../crystal-agent/index";
-import type { AiDesignCandidate } from "../src/schemas/ai-design-candidate.schema";
+import type { AiBeadLayoutCandidate } from "../src/schemas/ai-bead-layout-candidate.schema";
 import type { EmotionTag, PricingContext, RecommendationRequest, StyleTag } from "../src/contracts/recommendation";
 import { designDnaFixtures, type DesignDnaFixture, type TemplateSlot } from "../src/fixtures/design-dna";
 
@@ -66,7 +66,7 @@ function createCandidate(
   templateScore: TemplateScore,
   input: DesignAgentInput,
   variantIndex: number
-): AiDesignCandidate {
+): AiBeadLayoutCandidate {
   const { template } = templateScore;
   const components = template.sequence.map((slot, positionIndex) => {
     const { crystal } = pickCrystal(input.crystalRecommendations, slot, variantIndex);
@@ -104,10 +104,10 @@ function createCandidate(
   };
 }
 
-export class RuleBasedDesignAgent implements Agent<DesignAgentInput, readonly [AiDesignCandidate, AiDesignCandidate, AiDesignCandidate]> {
+export class RuleBasedDesignAgent implements Agent<DesignAgentInput, readonly [AiBeadLayoutCandidate, AiBeadLayoutCandidate, AiBeadLayoutCandidate]> {
   readonly name = "rule-based-design-agent";
 
-  async execute(input: DesignAgentInput, _context: AgentContext): Promise<AgentResult<readonly [AiDesignCandidate, AiDesignCandidate, AiDesignCandidate]>> {
+  async execute(input: DesignAgentInput, _context: AgentContext): Promise<AgentResult<readonly [AiBeadLayoutCandidate, AiBeadLayoutCandidate, AiBeadLayoutCandidate]>> {
     const templateScores = scoreDesignTemplates(input);
     const selected = templateScores.slice(0, 3);
     if (selected.length !== 3) {
@@ -121,4 +121,4 @@ export class RuleBasedDesignAgent implements Agent<DesignAgentInput, readonly [A
   }
 }
 
-export type DesignAgent = Agent<DesignAgentInput, readonly [AiDesignCandidate, AiDesignCandidate, AiDesignCandidate]>;
+export type DesignAgent = Agent<DesignAgentInput, readonly [AiBeadLayoutCandidate, AiBeadLayoutCandidate, AiBeadLayoutCandidate]>;

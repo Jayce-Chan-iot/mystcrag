@@ -6,7 +6,7 @@
   "exports": {
     ".": "./index.ts",
     "./adapters": "./src/adapters/index.ts",
-    "./schemas": "./src/schemas/ai-design-candidate.schema.ts",
+    "./schemas": "./src/schemas/ai-bead-layout-candidate.schema.ts",
     "./providers": "./src/providers/index.ts",
     "./recommendation": "./src/recommendation/index.ts",
     "./tarot": "./src/tarot/index.ts",

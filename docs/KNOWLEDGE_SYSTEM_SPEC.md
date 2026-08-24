@@ -36,7 +36,7 @@ Context（问卷 / 手动 / 塔罗）→ Knowledge Core → 检索 → Rule Comp
 ### 2.2 存在冲突的旧设计 / 设计债（审计发现，未修改）
 
 1. **CatalogMaterialProduct 双重定义**：design-contract Zod DTO（`beadProductId`/`displayName`/assetKey 必填）与 database 仓储 TS 类型（`id`/`name`/assetKey 可空）同名不同构 → EPIC 2 统一。
-2. **AiDesignCandidateSchema 双定义**：backend 本地副本（materialProductIds 形态）与 ai-agent 包内 schema（components 形态）同名不同构 → EPIC 9 收敛为单一契约。
+2. **候选概念同名冲突（已收敛）**：原 `AiDesignCandidateSchema` 在 backend 本地（materialProductIds 形态）与 ai-agent 包内（components 形态）同名不同构；BASE-003 已拆分为 ai-agent 的 `AiBeadLayoutCandidateSchema`（创意珠序候选）与 backend 路由本地的 `CatalogDesignGenerationDraftSchema`（目录生成草稿），两概念独立、无兼容别名。
 3. **预算双轨脱节**：crystal-agent 用 fixture `catalogPriceMinor` 筛选，真实目录价由 PricingRepository 重算，**无最终「总价 ≤ 预算」硬校验**；无预算时回退硬编码 100_000 分 → 新 P2 Hard Rule 修复。
 4. **emotion-agent 子串匹配**：`includes` 命中意味着 "uncalm" 之类误报 → Taxonomy 规范化替代。
 5. **串长近似**：手围拟合以直径近似串长，隔珠/桶珠/异形珠不成立 → Product V2 `lengthAlongStringMm` + bracelet-engine 输入语义扩展。

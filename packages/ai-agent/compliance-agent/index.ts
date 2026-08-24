@@ -1,5 +1,5 @@
 import type { Agent, AgentContext, AgentResult } from "../contracts";
-import { AiDesignCandidateSchema, type AiDesignCandidate } from "../src/schemas/ai-design-candidate.schema";
+import { AiBeadLayoutCandidateSchema, type AiBeadLayoutCandidate } from "../src/schemas/ai-bead-layout-candidate.schema";
 
 export type RestrictedCopyCategory =
   | "MEDICAL_EFFECT"
@@ -20,7 +20,7 @@ export type ComplianceAgentInput = {
 };
 
 export type ComplianceAgentOutput =
-  | { readonly status: "PASSED"; readonly candidate: AiDesignCandidate; readonly issues: readonly [] }
+  | { readonly status: "PASSED"; readonly candidate: AiBeadLayoutCandidate; readonly issues: readonly [] }
   | { readonly status: "REJECTED"; readonly issues: readonly ComplianceIssue[] };
 
 const restrictedCopyRules: readonly {
@@ -35,7 +35,7 @@ const restrictedCopyRules: readonly {
   { code: "CLAIM_DETERMINISTIC_FORTUNE", category: "DETERMINISTIC_FORTUNE_PREDICTION", pattern: /(?:certain destiny|deterministic fortune|will definitely happen|确定性命运|命中注定|一定会发生)/iu }
 ];
 
-function candidateTextFields(candidate: AiDesignCandidate): readonly { readonly path: string; readonly value: string }[] {
+function candidateTextFields(candidate: AiBeadLayoutCandidate): readonly { readonly path: string; readonly value: string }[] {
   return [
     { path: "designName", value: candidate.designName },
     { path: "designStory", value: candidate.designStory },
@@ -48,7 +48,7 @@ function candidateTextFields(candidate: AiDesignCandidate): readonly { readonly 
 }
 
 export function normalizeCandidateCompliance(input: unknown): ComplianceAgentOutput {
-  const parsed = AiDesignCandidateSchema.safeParse(input);
+  const parsed = AiBeadLayoutCandidateSchema.safeParse(input);
   if (!parsed.success) {
     return {
       status: "REJECTED",

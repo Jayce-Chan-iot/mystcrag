@@ -244,6 +244,42 @@ test("Design Contract is the only public Tarot schema authority", async () => {
   );
 });
 
+test("AI bead layouts and backend catalog drafts have distinct names", async () => {
+  const ambiguousNames = await matchingFiles(
+    ["apps", "packages"],
+    /\bAiDesignCandidate(?:Schema)?\b/
+  );
+  assertNoMatches(ambiguousNames);
+
+  const beadLayoutDefinitions = await matchingDeclarations(
+    ["apps", "packages"],
+    /(?:export\s+)?(?:const|type|interface|class)\s+AiBeadLayoutCandidate(?:Schema)?\b/
+  );
+  const aiSchemaDefinitions = [];
+  for (const file of beadLayoutDefinitions) {
+    if (/const\s+AiBeadLayoutCandidateSchema\s*=/.test(
+      stripImportStatements(await readFile(file, "utf8"))
+    )) {
+      aiSchemaDefinitions.push(file);
+    }
+  }
+  assert.deepEqual(
+    aiSchemaDefinitions,
+    ["packages/ai-agent/src/schemas/ai-bead-layout-candidate.schema.ts"],
+    "AiBeadLayoutCandidateSchema must have exactly one definition in AI Agent"
+  );
+
+  const catalogDraftDeclarations = await matchingDeclarations(
+    ["apps", "packages"],
+    /(?:export\s+)?(?:const|type|interface|class)\s+CatalogDesignGenerationDraft(?:Schema)?\b/
+  );
+  assert.deepEqual(
+    catalogDraftDeclarations,
+    ["apps/backend/src/modules/design/design-api.service.ts"],
+    "CatalogDesignGenerationDraftSchema must have exactly one definition in the backend design service"
+  );
+});
+
 test("pnpm dev isolates each app's documented environment", () => {
   const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   const result = spawnSync(pnpmCommand, ["exec", "turbo", "run", "dev", "--dry=json"], {
