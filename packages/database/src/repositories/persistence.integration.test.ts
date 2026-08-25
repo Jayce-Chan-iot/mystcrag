@@ -24,7 +24,8 @@ const migrationNames = [
   "20260822090000_source_registry_v2",
   "20260822120000_knowledge_rule_claim_type",
   "20260822140000_add_knowledge_collection_runs",
-  "20260822150000_add_backorder_fulfillment"
+  "20260822150000_add_backorder_fulfillment",
+  "20260825100000_add_external_identities"
 ];
 
 function nextRevision(
