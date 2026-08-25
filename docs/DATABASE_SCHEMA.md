@@ -33,7 +33,7 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 
 ## External identity persistence (TASK-AUTH-003)
 
-The controlling semantics remain frozen in [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md). Migration `20260825100000_add_external_identities` is additive: it creates the `external_identities` table with a unique `(issuer, subject)` index, a `user_id` index, and a `RESTRICT` foreign key to `users.id`. No existing table or business datum changes.
+The controlling semantics remain frozen in [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md). Migration `20260825100000_add_external_identities` is additive: it creates the `external_identities` table with a unique `(issuer, subject)` index, a `user_id` index, and a foreign key to `users.id` that is explicitly `ON DELETE RESTRICT ON UPDATE RESTRICT` (the Prisma relation declares both `onDelete: Restrict` and `onUpdate: Restrict`; the default `onUpdate` cascade is deliberately overridden). No existing table or business datum changes.
 
 Model and constraints:
 

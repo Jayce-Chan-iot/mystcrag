@@ -241,11 +241,11 @@ test("external identity persistence matrix", { skip: !databaseUrl }, async (t) =
       }
     });
 
-    await t.test("12. external identity foreign key is RESTRICT on delete", async () => {
+    await t.test("12. external identity foreign key is RESTRICT on delete and update", async () => {
       const constraints = await prisma.$queryRawUnsafe<
-        Array<{ confdeltype: string; fknname: string }>
+        Array<{ confdeltype: string; confupdtype: string; fknname: string }>
       >(
-        `SELECT conname AS "fknname", confdeltype::text AS "confdeltype"
+        `SELECT conname AS "fknname", confdeltype::text AS "confdeltype", confupdtype::text AS "confupdtype"
            FROM pg_constraint
           WHERE conrelid = '"external_identities"'::regclass
             AND contype = 'f'`
@@ -255,6 +255,7 @@ test("external identity persistence matrix", { skip: !databaseUrl }, async (t) =
       );
       assert.ok(userForeignKey, "user_id foreign key must exist");
       assert.equal(userForeignKey.confdeltype, "r");
+      assert.equal(userForeignKey.confupdtype, "r");
 
       const subject = keyOf("restrict-check");
       const mapping = await repository.findOrProvisionExternalIdentity({
