@@ -90,7 +90,7 @@ Required constraints and behavior:
 | --- | --- |
 | Staging/production name | `__Host-mystcrag_session` |
 | Development/test name | `mystcrag_session` (prevents a non-Secure cookie from impersonating the production `__Host-` cookie) |
-| Value | Opaque, authenticated session reference or encrypted server-session artifact; never a raw token or user claims |
+| Value | Auth0 Next.js SDK authenticated-encrypted Cookie Session artifact. It may contain server-encrypted session/token material but never plaintext Token or Claim |
 | `HttpOnly` | Always true |
 | `Secure` | Always true in production and staging; development may be false only for loopback HTTP |
 | `SameSite` | `Lax` |
@@ -99,29 +99,29 @@ Required constraints and behavior:
 | Idle expiry | 8 hours since the latest accepted same-origin session use |
 | Absolute expiry | 7 days since authentication; rolling use never extends it |
 
-The BFF maintains one logical server-side session authority and can invalidate a session before cookie expiry. Cookie payloads must not make revocation impossible. Authentication success rotates the session identifier. The identifier rotates again after credential renewal and at least once per 15 minutes of accepted activity; a bounded overlap of at most 30 seconds may accept the immediately previous identifier solely for in-flight parallel requests. Rotation never extends absolute expiry.
+The Auth0 Next.js SDK encrypted Cookie Session is the only FEAT-018 session mode. No Redis, Session database, persistent `SessionStore`, or `AuthSession` Prisma model is authorized. Authentication success issues a fresh encrypted cookie. Rolling-session handling reissues the encrypted cookie as accepted activity advances the idle expiry, but never extends absolute expiry. Browser JavaScript cannot read the `HttpOnly` cookie or recover any encrypted Token or Claim.
 
 ### 4.2 Token custody and lifetime
 
-- Authorization codes, PKCE verifiers, Access Tokens, Refresh Tokens, and ID Tokens remain server-only.
+- Authorization codes and PKCE verifiers are available only to the server-side SDK transaction handling. Access Tokens, Refresh Tokens, ID Tokens, and session claims are available only after authenticated server-side decryption of the Cookie Session; the browser receives ciphertext but never plaintext credentials or claims.
 - They are forbidden in `localStorage`, `sessionStorage`, IndexedDB, React/client state, HTML, RSC/client payloads, URLs, logs, telemetry, error messages, client bundles, and every `NEXT_PUBLIC_*` value.
 - Existing non-authentication browser storage for design drafts, options, display settings, favorites, or completed-order presentation is outside this task and remains untouched.
 - The BFF sends a short-lived audience-specific Access Token to Fastify only in the server-to-server `Authorization: Bearer` header. Production target lifetime is at most 15 minutes and must be enforced in the Auth0 API configuration by AUTH-002/004.
-- If a server-side Refresh Token is used, rotation and reuse detection are mandatory. Reuse, renewal rejection, or grant revocation invalidates the local session and requires interactive login.
-- Auth0-side revocation of a self-contained Access Token becomes effective at Fastify no later than that token's expiry; local session revocation is immediate. The 15-minute maximum bounds this window.
+- If the encrypted Cookie Session contains a Refresh Token, rotation and reuse detection are mandatory. Reuse, renewal rejection, or grant revocation clears the current browser Cookie Session and requires interactive login.
+- Auth0-side provider/admin grant revocation becomes effective at the next renewal attempt or when the current self-contained Access Token expires, whichever occurs first. The 15-minute Access Token maximum bounds this window.
 
 ### 4.3 Expiry, revocation, and logout
 
 - Idle or absolute expiry: BFF invalidates the session, clears the cookie, returns unauthenticated session state, and never refreshes beyond absolute expiry.
-- Local/admin/back-channel revocation: BFF invalidates the server session and clears the cookie on the next response. A protected navigation goes to login with a validated relative `returnTo`.
-- Refresh/grant revocation: renewal failure invalidates the BFF session and clears the cookie. It is not retried in a loop.
-- Active logout is idempotent: invalidate the local session first, clear the cookie even if Auth0 is unavailable, then initiate the configured Auth0/OIDC logout. Failure to clear the upstream SSO session is logged but cannot resurrect the local session.
-- Session secrets support an active key plus previous verification key. Rotation creates new cookies with the active key; the previous key is accepted for no longer than 24 hours and cannot mint/extend a session. Removal before the overlap expires is a controlled forced logout.
+- Provider/admin grant revocation: the current browser Cookie Session is rejected and cleared when renewal reports revocation, or after the current Access Token reaches its at-most-15-minute expiry. This scope makes no promise of earlier cross-browser invalidation.
+- Refresh/grant renewal failure clears the current browser Cookie Session and requires interactive login. It is not retried in a loop.
+- Active logout is idempotent and immediately expires the current browser's Cookie Session even if Auth0 is unavailable, then initiates the configured Auth0/OIDC logout. Failure to clear the upstream SSO session cannot resurrect the cleared local cookie.
+- Session-secret rotation is a controlled forced logout for existing Cookie Sessions: deploy the new secret, reject cookies that cannot be decrypted by it, clear them on response, and require interactive login. FEAT-018 does not require a multi-key session store or cross-secret overlap.
 
 ### 4.4 CSRF, origin, transaction, redirect, and cache controls
 
 - `POST /auth/logout` and every cookie-authenticated state-changing BFF route require exact `Origin` equality with `MYSTCRAG_APP_ORIGIN`. Missing or mismatched Origin fails closed. Fetch Metadata may add defense in depth but does not replace Origin validation.
-- Login uses a high-entropy, single-use, short-lived transaction record binding `state`, OIDC `nonce`, PKCE `code_verifier`, exact callback URI, and validated `returnTo`. PKCE uses `S256` only.
+- Login uses the SDK's authenticated-encrypted, HttpOnly transaction cookie to bind high-entropy, single-use, short-lived `state`, OIDC `nonce`, PKCE `code_verifier`, exact callback URI, and validated `returnTo`. PKCE uses `S256` only.
 - Callback consumes the transaction once. Missing, expired, replayed, or mismatched state/nonce/verifier fails before a session is created.
 - `returnTo` accepts only a same-origin relative path beginning with exactly one `/`. It rejects schemes, authority-relative `//`, backslashes, control characters, encoded authority/scheme bypasses, and any absolute URL. Invalid values fall back to `/`; they are never reflected to Auth0.
 - Every auth endpoint response and every response carrying session/user state uses `Cache-Control: no-store`; redirects also use `Pragma: no-cache`. Shared/CDN caches must not store `Set-Cookie` or authenticated BFF responses.
@@ -140,10 +140,10 @@ No second auth-specific envelope is authorized. Public messages are generic; det
 
 - Input: optional query `returnTo`; no body; existing session cookie may be present.
 - Success: `302 Found` to the Auth0 `/authorize` endpoint with `response_type=code`, exact client/callback/audience, OIDC scopes, unique `state`/`nonce`, and PKCE `S256` challenge.
-- Cookie change: creates only a short-lived, HttpOnly transaction cookie/record; it does not create the application session cookie.
-- `returnTo`: normalized by section 4.4 and stored server-side keyed by opaque state.
+- Cookie change: creates only a short-lived, authenticated-encrypted HttpOnly transaction cookie; it does not create the application session cookie.
+- `returnTo`: normalized by section 4.4 and stored inside the authenticated-encrypted transaction cookie bound to opaque state.
 - Cache: `no-store`, `Pragma: no-cache`.
-- Stable failures: invalid user `returnTo` falls back to `/`; unavailable/misconfigured provider returns `503` with the existing `INTERNAL_ERROR` envelope and creates no transaction/session.
+- Stable failures: invalid user `returnTo` falls back to `/`; unavailable/misconfigured provider returns HTTP `500` with the existing `INTERNAL_ERROR` envelope and creates no transaction/session.
 
 ### `GET /auth/callback`
 
@@ -151,7 +151,7 @@ No second auth-specific envelope is authorized. Public messages are generic; det
 - Success: validate/consume state, exchange code with the bound PKCE verifier, validate ID-token issuer/audience/signature/expiry/nonce, derive provider-neutral identity, establish/rotate the BFF session, then `303 See Other` to the stored relative `returnTo` (default `/`).
 - Cookie change: deletes transaction cookie; sets the session cookie using section 4.1.
 - Cache: `no-store`, `Pragma: no-cache`.
-- Stable failures: invalid/replayed state, nonce, PKCE, code, or provider-declared denial returns `401 UNAUTHORIZED` in the existing envelope, clears transaction material, creates no session, and must not redirect to untrusted input. Provider/token/JWKS dependency outage returns `503 INTERNAL_ERROR`; a safe same-origin error page may render the generic envelope semantics without claims or tokens.
+- Stable failures: invalid/replayed state, nonce, PKCE, code, or provider-declared denial returns `401 UNAUTHORIZED` in the existing envelope, clears transaction material, creates no session, and must not redirect to untrusted input. Provider/token/JWKS dependency outage returns HTTP `500` with `INTERNAL_ERROR`; a safe same-origin error page may render the generic envelope semantics without claims or tokens.
 
 ### `POST /auth/logout`
 
@@ -177,7 +177,7 @@ No second auth-specific envelope is authorized. Public messages are generic; det
 
 - Unauthenticated, expired, or revoked success: `200 OK` with `{"authenticated":false}`. Expired/revoked cookies are cleared. No provider subject, issuer, audience, token, internal `User.id`, session id, or authorization detail is returned.
 - Cache: `no-store`; never varies through a shared cache.
-- Stable dependency failure: if a required server session dependency is unavailable, return `503 INTERNAL_ERROR` without clearing a still-unproven session.
+- Stable dependency failure: an unavailable required SDK/session runtime dependency returns HTTP `500` with `INTERNAL_ERROR`. A malformed or authentication-tag-invalid cookie is treated as unauthenticated and expired; a transient provider/JWKS outage does not clear a successfully decrypted Cookie Session.
 
 ## 6. Protected API behavior
 
@@ -185,12 +185,12 @@ No second auth-specific envelope is authorized. Public messages are generic; det
 | --- | --- | --- | --- |
 | Missing credential/session | Do not call repository | `401 UNAUTHORIZED` | BFF may clear malformed cookie |
 | Expired Access Token | Reject before mapping | `401 UNAUTHORIZED` | BFF attempts at most one server-side renewal; on failure clears session |
-| Revoked session/grant | Do not forward or provision | `401 UNAUTHORIZED` | Clear/invalidate session |
+| Provider/admin grant revoked | Continue only until the next renewal or current Access Token expiry, bounded by 15 minutes; then do not forward or provision | `401 UNAUTHORIZED` when revocation is observed | Clear current browser cookie when observed |
 | Invalid signature | Reject before mapping | `401 UNAUTHORIZED` | Invalidate session; never retry as anonymous |
 | Wrong issuer | Reject before mapping | `401 UNAUTHORIZED` | Invalidate session |
 | Wrong audience | Reject before mapping | `401 UNAUTHORIZED` | Invalidate session |
 | Invalid state/nonce/PKCE | Create no session or mapping | `401 UNAUTHORIZED` | Clear transaction material only |
-| Provider/JWKS unavailable with no usable cached key | Fail closed; do not classify token as forged | `503 INTERNAL_ERROR` | Preserve existing local session for later retry; do not forward |
+| Provider/JWKS unavailable with no usable cached key | Fail closed; do not classify token as forged | HTTP `500` + `INTERNAL_ERROR` | Preserve a successfully decrypted Cookie Session for later retry; do not forward |
 | Verified actor accesses another actor's resource | Keep missing/other-owner indistinguishable | `403 FORBIDDEN` | Unchanged |
 
 The envelope remains `{ error: { code, message, fieldErrors?, requestId } }`. `UNAUTHORIZED` messages never distinguish expiry, signature, issuer, audience, or revocation. `FORBIDDEN` never confirms whether another user's resource exists.
@@ -233,10 +233,10 @@ Actual staging and production domains are deployment inputs, not fabricated cont
 | 3 | Valid returning session | Refresh/navigation | Validate/roll session; renew token server-side if needed | Authenticated view restored | session `200` | Rotate if due | session resume, no claims/token | Same actor restored |
 | 4 | Anonymous | Protected navigation | Do not call protected repository; preserve safe relative path | Redirect/prompt login | API `401 UNAUTHORIZED` | None/clear malformed | generic auth missing | No data disclosed |
 | 5 | Valid session, expired Access Token | Protected request | One bounded renewal; otherwise invalidate | Continue once or require login | success or `401 UNAUTHORIZED` | rotate on renewal; clear on failure | expiry category only | No expired token accepted |
-| 6 | Idle or absolute expiry | Session read/navigation | Invalidate; do not renew past absolute limit | Signed-out state/login | session `200 false`; API `401` | Clear | expiry class, session id hash | Expiry enforced |
-| 7 | Revoked local/grant session | Next request | Reject/renewal fails; invalidate | Signed-out state | `401 UNAUTHORIZED` | Clear | revocation source/category | Revoked session unusable |
+| 6 | Idle or absolute expiry | Session read/navigation | Invalidate; do not renew past absolute limit | Signed-out state/login | session `200 false`; API `401` | Clear | expiry class and request id | Expiry enforced |
+| 7 | Valid Cookie Session; provider/admin grant revoked | Renewal attempt or Access Token reaches 15-minute maximum | Renewal fails or expired token is rejected; do not forward afterward | Signed-out when revocation is observed | `401 UNAUTHORIZED` when observed | Clear current browser cookie | revocation source/category | Effective by next renewal or within 15 minutes |
 | 8 | Valid session | Active POST logout | Invalidate locally first; redirect through configured Auth0 logout | Signed-out; safe same-origin destination | `303` | Clear | `auth.logout`, no token | Replay stays safe/idempotent |
-| 9 | Valid or callback flow | Auth0/JWKS unavailable | Use only valid cached key; otherwise fail closed | Retry-safe error, no false logout on unproven outage | `503 INTERNAL_ERROR` | Preserve valid session; no new session | dependency, timeout, issuer alias, request id | No fail-open |
+| 9 | Valid Cookie Session or callback flow | Auth0/JWKS unavailable | Use only valid cached key; otherwise fail closed | Retry-safe error, no false logout on unproven outage | HTTP `500` + `INTERNAL_ERROR` | Preserve successfully decrypted cookie; no new session | dependency, timeout, issuer alias, request id | No fail-open |
 | 10 | Token presented | Wrong issuer | Reject before mapping/repository | Re-authenticate | `401 UNAUTHORIZED` | Invalidate BFF session | `verification_failed:issuer` | Generic public response |
 | 11 | Token presented | Wrong audience | Reject before mapping/repository | Re-authenticate | `401 UNAUTHORIZED` | Invalidate | `verification_failed:audience` | Generic public response |
 | 12 | Token presented | Bad signature | Reject before mapping/repository | Re-authenticate | `401 UNAUTHORIZED` | Invalidate | `verification_failed:signature`, no JWT | Generic public response |
@@ -261,11 +261,11 @@ These are mandatory pass/fail probes, not open product decisions:
 | --- | --- | --- | --- |
 | Select exact supported Auth0 Next.js/server and JWT libraries/versions | SOL / AUTH-002 | One supported version per dependency; Node/Next compatibility and licenses verified; no duplicate SDK | Block AUTH-003/005; revise dependency decision, not this topology |
 | Preserve public `POST /auth/logout` despite SDK default routes | FRONTEND + SOL / AUTH-002, AUTH-005 | GET cannot mutate/logout; POST enforces Origin and clears local session before upstream logout | Block handoff; implement explicit wrapper/custom route or select compliant supported integration |
-| Cookie/session-store and rotation behavior | FRONTEND / AUTH-005 | Captured headers prove name/flags/path/lifetimes; server-side invalidation and 30-second maximum overlap work | Block AUTH-006 |
+| Encrypted Cookie Session and rolling behavior | FRONTEND / AUTH-005 | Captured headers prove name/flags/path/lifetimes; cookie is authenticated ciphertext, rolling activity reissues it without extending absolute expiry, and active logout immediately clears the current browser cookie | Block AUTH-006 |
 | Access-token custody | FRONTEND + QA / AUTH-005, AUTH-006 | No token in HTML/RSC/browser storage/URL/client bundles; BFF adds Bearer only server-to-server | Block release |
 | Concurrent provisioning | DATABASE / AUTH-003 | Real PostgreSQL 20-way test produces one mapping and one User, no orphan | Block AUTH-004 |
 | Fastify verifier/JWKS | BACKEND / AUTH-004 | issuer/audience/signature/expiry/skew/unknown-kid/timeout/rotation matrix matches section 6 | Block AUTH-006 |
-| Revocation bound | BACKEND + QA / AUTH-004, AUTH-006 | Local revocation immediate; Auth0 grant revocation effective by next renewal and no later than 15-minute Access Token expiry | Block release |
+| Revocation bound | BACKEND + QA / AUTH-004, AUTH-006 | Active logout immediately clears the current browser cookie; provider/admin grant revocation is effective by next renewal or no later than the 15-minute Access Token expiry | Block release |
 | Exact environment allowlists | SOL/Operations / AUTH-002, AUTH-007 | Isolated clients and byte-exact callback/logout/origin entries; no wildcard | Block deployment |
 
 ## 11. Auth0 official basis
@@ -280,7 +280,7 @@ Accessed 2026-08-25:
 - [Get Access Tokens](https://auth0.com/docs/secure/tokens/access-tokens/get-access-tokens) — issuer depends on the authorization domain and custom API access-token lifetime is configurable.
 - [Refresh Token Rotation](https://auth0.com/docs/secure/tokens/refresh-tokens/configure-refresh-token-rotation) — rotation, bounded overlap, automatic reuse detection, and absolute token lifetime.
 - [Auth0 logout endpoint](https://auth0.com/docs/api/authentication/logout/auth-0-logout) — allowlisted `returnTo` and client-specific logout behavior.
-- [Auth0 Next.js quickstart](https://auth0.com/docs/quickstart/webapp/nextjs) and [official `nextjs-auth0` repository](https://github.com/auth0/nextjs-auth0) — Regular Web Application/BFF session routes, server session access, HttpOnly cookies, and current default route behavior. Exact package version remains AUTH-002's dependency decision.
+- [Auth0 Next.js quickstart](https://auth0.com/docs/quickstart/webapp/nextjs) and [official `nextjs-auth0` repository](https://github.com/auth0/nextjs-auth0) — Regular Web Application/BFF routes, server-side Cookie Session access, HttpOnly cookies, and current default route behavior. Exact package version remains AUTH-002's dependency decision.
 - [BFF pattern](https://auth0.com/blog/the-backend-for-frontend-pattern-bff/) — backend token custody, API proxying, Secure/HttpOnly cookie, and CSRF responsibility.
 
 ## 12. Frozen state

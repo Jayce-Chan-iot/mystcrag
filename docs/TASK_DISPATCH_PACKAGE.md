@@ -92,10 +92,10 @@ Contract freeze and dependency setup are serial. TASK-AUTH-003 and TASK-AUTH-005
 - **FORBIDDEN FILES:** application source, Prisma, migrations, feature UI, business tests, CI, unrelated upgrades.
 - **CANONICAL REFERENCES:** approved `AUTH_SESSION_CONTRACT.md`, `DEPENDENCY_DECISIONS.md`, current workspace/CI configuration.
 - **ARCHITECTURE CONSTRAINTS:** one version per dependency; no duplicate auth SDK; no global state library unless contract proves necessity; secrets never receive `NEXT_PUBLIC_` prefix.
-- **FUNCTIONAL REQUIREMENTS:** install approved runtime/test packages, expose fail-closed named environment variables and keep workspace scripts deterministic.
-- **NON-FUNCTIONAL REQUIREMENTS:** frozen lockfile, supported Node/pnpm versions, license/security review and minimal dependency footprint.
+- **FUNCTIONAL REQUIREMENTS:** verify and pin an Auth0 Next.js SDK version compatible with the repository's Next.js `16.2.10`, install only approved runtime/test packages, expose fail-closed named environment variables and keep workspace scripts deterministic.
+- **NON-FUNCTIONAL REQUIREMENTS:** frozen lockfile, documented Auth0 SDK/Next.js 16.2.10 compatibility evidence, supported Node/pnpm versions, license/security review and minimal dependency footprint.
 - **OUT OF SCOPE:** provider/verifier/UI implementation, schema changes and broad dependency updates.
-- **ACCEPTANCE CRITERIA:** frozen install succeeds; dependency tree contains only approved additions; missing production configuration has a defined fail-closed validation path; no source code changed.
+- **ACCEPTANCE CRITERIA:** frozen install succeeds; the selected Auth0 SDK version is verified against Next.js 16.2.10 before AUTH-005; dependency tree contains only approved additions; missing production configuration has a defined fail-closed validation path; no source code changed.
 - **REQUIRED TESTS:** `pnpm install --frozen-lockfile`, dependency/version inspection, `pnpm lint`, `pnpm typecheck`.
 - **DELIVERABLES:** manifests/lockfile, environment template and dependency decision with exact versions.
 
@@ -154,10 +154,10 @@ Contract freeze and dependency setup are serial. TASK-AUTH-003 and TASK-AUTH-005
 - **OBJECTIVE:** provide accessible desktop/mobile authentication UX and remove production dependence on the public fixed-token variable.
 - **BACKGROUND:** frontend has no login/session provider and API runtime reads `NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN`.
 - **DEPENDENCIES:** TASK-AUTH-002 `DONE`; frozen state/API contract from TASK-AUTH-001. May proceed with contract fixtures while TASK-AUTH-003/004 run.
-- **ALLOWED FILES:** new auth routes/components/model under `apps/frontend/app/**` and `apps/frontend/src/features/auth/**`, `apps/frontend/src/lib/api/api-runtime.ts`, `apps/frontend/src/lib/api/design-session.ts`, exact shared layout/navigation files required by approved UX, co-located frontend tests, `docs/INTERACTION_TEST_PLAN.md`.
+- **ALLOWED FILES:** new auth routes/components/model under `apps/frontend/app/**` and `apps/frontend/src/features/auth/**`; exact `apps/frontend/proxy.ts`; `apps/frontend/src/lib/api/api-runtime.ts`; `apps/frontend/src/lib/api/design-session.ts`; exact shared layout/navigation files required by approved UX; co-located frontend tests; `docs/INTERACTION_TEST_PLAN.md`. `apps/frontend/proxy.ts` is writable only for the Next.js 16 Auth0 network boundary, rolling Cookie Session handling, and auth-route interception; this does not grant write access to the rest of the `apps/frontend` root.
 - **FORBIDDEN FILES:** backend, packages/database, shared Design/Bracelet/Three contracts, package manifests/lockfile, unrelated page redesigns, CI.
 - **CANONICAL REFERENCES:** approved session state/API contract, current typed API client/error envelope, UI design system, existing responsive navigation.
-- **ARCHITECTURE CONSTRAINTS:** reusable credentials remain server-only; no localStorage/sessionStorage token; one session authority; protected navigation preserves intended return path without open redirects.
+- **ARCHITECTURE CONSTRAINTS:** the Auth0 Next.js SDK authenticated-encrypted, HttpOnly, host-only Cookie Session is the sole session mode; browser JavaScript never reads Tokens; no Redis/persistent SessionStore/session database/AuthSession Prisma model; protected navigation preserves intended return path without open redirects. The public contract remains `POST /auth/logout` with exact Origin validation: an SDK default route or method must not silently replace it.
 - **FUNCTIONAL REQUIREMENTS:** sign-in initiation, callback/loading/error state, session restoration, authenticated identity affordance, logout, expiry recovery and protected-route prompts.
 - **NON-FUNCTIONAL REQUIREMENTS:** 375×812 and 1440×900 responsive behavior, keyboard/focus management, WCAG labels/status announcements, no hydration secret leakage and bounded loading state.
 - **OUT OF SCOPE:** profile redesign, address/favorites migration, payment/community/3D, provider account settings and unrelated component refactors.
@@ -227,12 +227,8 @@ PASS. No two agents implement the same backend, frontend, schema, contract, lock
 
 ## Dispatch readiness
 
-The specs are human-readable and assignable without re-explaining intent, but dispatch is blocked because:
+TASK-AUTH-001 remains `REVIEW` with `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`. This review-fix commit does not mark it `DONE` and starts no implementation task.
 
-1. the repository baseline is `NOT READY`;
-2. governance and two canonical contract conflicts are not integrated/resolved on `main`;
-3. provider, callback domains and browser session topology require Product Owner approval and implementation validation.
+TASK-AUTH-002 remains `BACKLOG`. It may transition to `READY` only after SOL integrates TASK-AUTH-001 and records TASK-AUTH-001 as `DONE`; AUTH-002 must then verify the final Auth0 SDK version against Next.js 16.2.10 before any AUTH-005 work.
 
-Do not move TASK-AUTH-001 or any child task to `IN_PROGRESS` until those gates are recorded as closed.
-
-`NOT_READY_FOR_DISPATCH`
+TASK-AUTH-003 through TASK-AUTH-007 remain `BACKLOG` and continue to follow the registered dependency DAG. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.
