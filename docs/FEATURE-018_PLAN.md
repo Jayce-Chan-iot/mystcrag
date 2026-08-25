@@ -2,7 +2,7 @@
 
 **Priority:** P0 for commercial release<br>
 **Recommended next Feature:** yes, and the only major Feature selected<br>
-**Dispatch state:** AUTH-001 contract frozen; implementation tasks remain gated by SOL review and the task DAG<br>
+**Dispatch state:** AUTH-001 contract integrated; AUTH-002 dependency/configuration freeze is ready; implementation remains gated by the task DAG<br>
 **Contract marker:** `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`
 
 ## Objective

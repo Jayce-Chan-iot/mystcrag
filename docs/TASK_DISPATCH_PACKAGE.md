@@ -2,8 +2,8 @@
 
 **Feature:** FEAT-018 Production Identity & Session<br>
 **Prepared by:** SOL / TASK-AUDIT-001<br>
-**Package state:** AUTH-001 contract frozen; AUTH-002 through AUTH-007 implementation pending<br>
-**Blocking gates:** TASK-AUTH-001 SOL review before AUTH-002 starts; later tasks follow the registered DAG<br>
+**Package state:** AUTH-001 integrated contract frozen; AUTH-002 ready; AUTH-003 through AUTH-007 implementation pending<br>
+**Blocking gates:** AUTH-002 must freeze the dependency/configuration surface before any implementation task; later tasks follow the registered DAG<br>
 **Contract marker:** `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`
 
 Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. No AUTH-002 through AUTH-007 Worker Agent has been dispatched.
@@ -227,8 +227,8 @@ PASS. No two agents implement the same backend, frontend, schema, contract, lock
 
 ## Dispatch readiness
 
-TASK-AUTH-001 remains `REVIEW` with `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`. This review-fix commit does not mark it `DONE` and starts no implementation task.
+TASK-AUTH-001 is `DONE` with `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`; SOL accepted contract candidate `10d1f5df44f6dff84034d09c7a5e93a2234ae745` for local integration.
 
-TASK-AUTH-002 remains `BACKLOG`. It may transition to `READY` only after SOL integrates TASK-AUTH-001 and records TASK-AUTH-001 as `DONE`; AUTH-002 must then verify the final Auth0 SDK version against Next.js 16.2.10 before any AUTH-005 work.
+TASK-AUTH-002 is `READY`. It must verify the final Auth0 SDK version against Next.js 16.2.10 and freeze dependencies/configuration before any AUTH-003/004/005 work.
 
 TASK-AUTH-003 through TASK-AUTH-007 remain `BACKLOG` and continue to follow the registered dependency DAG. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.

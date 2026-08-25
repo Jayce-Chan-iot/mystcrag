@@ -450,7 +450,7 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 - Approval status: `APPROVED`
 - Approved by: Product Owner
 - Approval date: 2026-08-25
-- Implementation branch or commit: `task/auth-001-identity-contract`; contract commit recorded at handoff. State is `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`, not Feature acceptance.
+- Implementation branch or commit: `task/auth-001-identity-contract`; SOL-accepted contract candidate `10d1f5df44f6dff84034d09c7a5e93a2234ae745`, integrated by its local `main` descendant. State is `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`, not Feature acceptance.
 
 ---
 
