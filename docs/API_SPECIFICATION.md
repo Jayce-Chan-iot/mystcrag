@@ -26,7 +26,19 @@ Owner-scoped routes use `403 FORBIDDEN` with a generic message when a verified a
 
 The built-in signed-token provider is for explicitly enabled test/development use only. It requires `NODE_ENV=test|development`, `MYSTCRAG_AUTH_PROVIDER=signed-test`, `MYSTCRAG_ENABLE_SIGNED_TEST_AUTH=true`, and configured signing secret, issuer, and audience values. It is rejected in production even when the opt-in flag is present. Production startup without a supported authentication provider fails safely rather than falling back to a fixed, anonymous, header-derived, or test actor.
 
+### Implemented Fastify verification boundary (TASK-AUTH-004)
+
+The production Auth0 resource-server boundary is implemented in the Backend. With `MYSTCRAG_AUTH_PROVIDER=auth0`, `MYSTCRAG_AUTH_ISSUER` (an exact HTTPS issuer URL), and `MYSTCRAG_AUTH_AUDIENCE` configured, startup builds an RS256 Access Token verifier (`jose@6.2.10`) that validates signature, exact issuer, required audience, expiry with at most 60 seconds of clock skew, and a non-empty subject. Incomplete configuration (missing/non-HTTPS issuer, missing audience), an unselected provider in production, `signed-test` outside test/development opt-in, or an unknown provider name all fail startup before the listener opens; there is no fallback provider. These environment variables are Backend-owned; the BFF/frontend never reads them.
+
+Keys are fetched from the issuer's HTTPS-only `/.well-known/jwks.json`. Connect and read timeouts are 2 seconds each within a 5-second total request budget. A successful key set is cached for at most 15 minutes, and a shorter provider `Cache-Control: max-age` directive shortens the cache further. An unknown `kid` triggers at most one bounded refresh; a failed refresh is negative-cached for 30 seconds, and concurrent verifications share the single in-flight request. While a TTL-fresh cached key set exists, verification continues during a provider outage. With no usable cached key set and JWKS unavailable, verification fails closed as `500 INTERNAL_ERROR` and is never classified as a forged credential.
+
+On every successful verification the provider-neutral identity is mapped through the AUTH-003 `ExternalIdentityRepository` by unique `(issuer, subject)` to an internal `User.id`; that internal id — never the provider subject — becomes `request.actorContext.actorId` for owner-scoped services. Optional `email`/`email_verified`/`name` claims are forwarded only as profile hints; they never participate in lookup, merging, or authorization, and no additional UserInfo call is made. A database/mapping failure returns `500 INTERNAL_ERROR`. Backend JWT verification cannot instantly observe Auth0-side grant revocation: the boundary reliably rejects expired tokens, and a revoked grant's Access Token is rejected no later than its 15-minute expiry; no denylist, introspection polling, or server-side session store exists in the Backend.
+
+Backend-internal failure logs record only the failure category, request id, signing `kid`, and timing. Tokens, Authorization headers, raw claims, provider profiles, and subject values are never logged.
+
 ### Browser authentication endpoints
+
+The endpoints in this section belong to the BFF/browser session (TASK-AUTH-005) and are not yet implemented; TASK-AUTH-004 delivered only the Fastify resource-server boundary described above.
 
 | Endpoint | Success contract | Failure and cache contract |
 | --- | --- | --- |
