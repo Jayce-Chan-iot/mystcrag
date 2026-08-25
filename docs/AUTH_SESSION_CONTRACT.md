@@ -259,8 +259,8 @@ These are mandatory pass/fail probes, not open product decisions:
 
 | Probe | Owner/task | PASS condition | FAIL action |
 | --- | --- | --- | --- |
-| Select exact supported Auth0 Next.js/server and JWT libraries/versions | SOL / AUTH-002 | One supported version per dependency; Node/Next compatibility and licenses verified; no duplicate SDK | Block AUTH-003/005; revise dependency decision, not this topology |
-| Preserve public `POST /auth/logout` despite SDK default routes | FRONTEND + SOL / AUTH-002, AUTH-005 | GET cannot mutate/logout; POST enforces Origin and clears local session before upstream logout | Block handoff; implement explicit wrapper/custom route or select compliant supported integration |
+| Select exact supported Auth0 Next.js/server and JWT libraries/versions | SOL / AUTH-002 | PASS candidate: Auth0 SDK `4.27.0`, `jose` `6.2.10`, Playwright `1.62.1`; Node 22, Next `16.2.10`, React `19.2.7`, TypeScript `6.0.3`, license, frozen install, audit and single-version pnpm tree verified in AUTH-002 | Block AUTH-003/005; revise dependency decision, not this topology |
+| Preserve public `POST /auth/logout` despite SDK default routes | FRONTEND + SOL / AUTH-002, AUTH-005 | AUTH-002 confirmed SDK `4.27.0` dispatches its built-in logout only for GET. AUTH-005 must keep GET from mutating/logout, enforce Origin on POST, and clear local session before upstream logout through an explicit wrapper/custom route | Block handoff; implement the explicit wrapper/custom route; the default route alone is non-compliant |
 | Encrypted Cookie Session and rolling behavior | FRONTEND / AUTH-005 | Captured headers prove name/flags/path/lifetimes; cookie is authenticated ciphertext, rolling activity reissues it without extending absolute expiry, and active logout immediately clears the current browser cookie | Block AUTH-006 |
 | Access-token custody | FRONTEND + QA / AUTH-005, AUTH-006 | No token in HTML/RSC/browser storage/URL/client bundles; BFF adds Bearer only server-to-server | Block release |
 | Concurrent provisioning | DATABASE / AUTH-003 | Real PostgreSQL 20-way test produces one mapping and one User, no orphan | Block AUTH-004 |

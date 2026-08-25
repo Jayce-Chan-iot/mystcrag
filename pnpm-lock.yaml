@@ -4,10 +4,16 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  jose: 6.2.10
+
 importers:
 
   .:
     devDependencies:
+      '@playwright/test':
+        specifier: 1.62.1
+        version: 1.62.1
       turbo:
         specifier: ^2.5.6
         version: 2.10.5
@@ -41,6 +47,9 @@ importers:
       fastify:
         specifier: ^5.10.0
         version: 5.10.0
+      jose:
+        specifier: 6.2.10
+        version: 6.2.10
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -63,6 +72,9 @@ importers:
       '@antv/g6':
         specifier: ^5.1.1
         version: 5.1.1
+      '@auth0/nextjs-auth0':
+        specifier: 4.27.0
+        version: 4.27.0(next@16.2.10(@babel/core@7.29.7)(@playwright/test@1.62.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@mystcrag/bracelet-engine':
         specifier: workspace:*
         version: link:../../packages/bracelet-engine
@@ -77,7 +89,7 @@ importers:
         version: link:../../packages/ui
       next:
         specifier: ^16.2.10
-        version: 16.2.10(@babel/core@7.29.7)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        version: 16.2.10(@babel/core@7.29.7)(@playwright/test@1.62.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -368,7 +380,7 @@ importers:
         version: link:../design-contract
       crawlee:
         specifier: ^3.13.0
-        version: 3.18.1(@types/node@22.20.1)
+        version: 3.18.1(@types/node@22.20.1)(playwright@1.62.1)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -530,6 +542,13 @@ packages:
 
   '@asamuzakjp/css-color@3.2.0':
     resolution: {integrity: sha512-K1A6z8tS3XsmCMM86xoWdn7Fkdn9m6RSVtocUrJYIwZnFVkng/PvkEoWtOWmP+Scc6saYWHWZYbndEEXxl24jw==}
+
+  '@auth0/nextjs-auth0@4.27.0':
+    resolution: {integrity: sha512-QS3fxhRa/dspkUMDdzuZwCdBnN2pHYoBqNlibKFwlRhyUnh2eqGtKXf01TTD38cLXTxg/Cx6+nJhjxBjiVv5Yw==}
+    peerDependencies:
+      next: ^14.2.35 || ~15.0.7 || ~15.1.11 || ~15.2.8 || ~15.3.8 || ~15.4.10 || ~15.5.9 || ^16.0.10
+      react: ^18.0.0 || ~19.0.1 ||  ~19.1.2 || ^19.2.1
+      react-dom: ^18.0.0 || ~19.0.1 || ~19.1.2 || ^19.2.1
 
   '@babel/code-frame@7.29.7':
     resolution: {integrity: sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==}
@@ -728,6 +747,10 @@ packages:
 
   '@dimforge/rapier3d-compat@0.12.0':
     resolution: {integrity: sha512-uekIGetywIgopfD97oDL5PfeezkFpNhwlzlaEYNOA0N6ghdsOvh/HYjSMek5Q2O1PYvRSDFcqFVJl4r4ZBwOow==}
+
+  '@edge-runtime/cookies@5.0.2':
+    resolution: {integrity: sha512-Sd8LcWpZk/SWEeKGE8LT6gMm5MGfX/wm+GPnh1eBEtCpya3vYqn37wYknwAHw92ONoyyREl1hJwxV/Qx2DWNOg==}
+    engines: {node: '>=16'}
 
   '@electric-sql/pglite-socket@0.1.3':
     resolution: {integrity: sha512-LAciWM0M1dCL8hlsxu2venbVZcdxema0BtDfpWYVqr+Y468UADw0pFWidhKw1M8sfJ8rdLT71tjMmnirf/IZRQ==}
@@ -1280,8 +1303,16 @@ packages:
     resolution: {integrity: sha512-nn5ozdjYQpUCZlWGuxcJY/KpxkWQs4DcbMCmKojjyrYDEAGy4Ce19NN4v5MduafTwJlbKc99UA8YhSVqq9yPZA==}
     engines: {node: '>=12.4.0'}
 
+  '@panva/hkdf@1.2.1':
+    resolution: {integrity: sha512-6oclG6Y3PiDFcoyk8srjLfVKyMfVCKJ27JwNPViuXziFpmdz+MZnZN/aKY0JGXgYuO/VghU0jcOAZgWXZ1Dmrw==}
+
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
+
+  '@playwright/test@1.62.1':
+    resolution: {integrity: sha512-DTcUc8qii+cpHvtOwggMtBRMjKZHXYWdw8syRYu2vtzuq4Wxphqq4NfCs5Zt44L6mA8rfDfj+PHnxFc/FeK6mQ==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   '@prisma/adapter-pg@7.9.0':
     resolution: {integrity: sha512-kPYuFvNTlqnaFf2UpXBBG3ycTT3PL76uSZtLFBEwDytjMMUW8ZHrsb9cSNIarzdPW5EXWmBOeOq9/MVjMtbWkA==}
@@ -3099,6 +3130,11 @@ packages:
     resolution: {integrity: sha512-EQsFzMUJkCKGr1ePqlYADkIUmHW1s3ZXr5Yqy6wbGrfUCphpl2maM/kyOIRA2HpP3AaFQTZXD4ldjek+nccddA==}
     engines: {node: '>=14.14'}
 
+  fsevents@2.3.2:
+    resolution: {integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==}
+    engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
+    os: [darwin]
+
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
@@ -3519,8 +3555,8 @@ packages:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
     hasBin: true
 
-  jose@6.2.9:
-    resolution: {integrity: sha512-XrchZOFZUl/T3vTwRe8XK+cJrGtMF4th1ARnDfwbBXFKThGhlsxEE4Zu03AD/bjJSt/9jT/mxrOCkJWOg77aPA==}
+  jose@6.2.10:
+    resolution: {integrity: sha512-iiW7J9qRFlGxvCOIBDBDxFePQSn7ZMAnrYGhrrOo6siO/MIqwfyilLR27pkfDgUk+raLuzADS8A3S/KLBisc0g==}
 
   jquery@3.7.1:
     resolution: {integrity: sha512-m4avr8yL8kmFN8psrbFFFmB/If14iN5o9nw/NgnnM+kybDJpRsAynV2BsfpTYrTRysYUdADVD7CkUUizgkpLfg==}
@@ -3903,6 +3939,9 @@ packages:
   nwsapi@2.2.24:
     resolution: {integrity: sha512-7YRhZ3jS45LwmSCT4b2sVFHt/WuovaktDU07QrtOBY2PXskss5a9jfmR9jptyumwXST+rFjrmppMY1KT/yn35A==}
 
+  oauth4webapi@3.8.7:
+    resolution: {integrity: sha512-4RxcKxXjuItDFZ20RRPf4YTw3kpeXJyCgJFxVzJ068A7PNJ18st2Dg90tlC1LkSDS0GecroagCLHYEIVUhCAkw==}
+
   object-assign@4.1.1:
     resolution: {integrity: sha512-rJgTQnkUnH1sFw8yT6VSU3zD3sWmu6sZhIseY8VX+GRu3P6F7Fu+JNDoXfklElbLJSnc3FUQHVe4cU5hj+BcUg==}
     engines: {node: '>=0.10.0'}
@@ -3952,6 +3991,9 @@ packages:
   onetime@5.1.2:
     resolution: {integrity: sha512-kbpaSSGJTWdAY5KPVeMOKXSrPtr8C8C7wodJbcsd51jRnmD+GZu8Y0VoU6Dm5Z4vWr0Ig/1NKuWRKf7j5aaYSg==}
     engines: {node: '>=6'}
+
+  openid-client@6.8.7:
+    resolution: {integrity: sha512-gtKthNu7evSBvTdrrlHb4F3Fi9dcwlb5QaITlCs+9mfpvuOi0Q3qtBf5+iY4sEP8hy1qCoAdxBNPDcmZeVSDzQ==}
 
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
@@ -4107,6 +4149,16 @@ packages:
 
   pkg-types@2.3.1:
     resolution: {integrity: sha512-y+ichcgc2LrADuhLNAx8DFjVfgz91pRxfZdI3UDhxHvcVEZsenLO+7XaU5vOp0u/7V/wZ+plyuQxtrDlZJ+yeg==}
+
+  playwright-core@1.62.1:
+    resolution: {integrity: sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  playwright@1.62.1:
+    resolution: {integrity: sha512-0M+L3LAD8/nm554LOla9Ayx0j0tmFZ0FBcoQ7F1VuVHpM/XpiC8RcDzBQB8W5+hA8L22THxELzeF+2WcUzvcLg==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   possible-typed-array-names@1.1.0:
     resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
@@ -4639,6 +4691,11 @@ packages:
 
   svg-path-parser@1.1.0:
     resolution: {integrity: sha512-jGCUqcQyXpfe38R7RFfhrMyfXcBmpMNJI/B+4CE9/Unkh98UporAc461GTthv+TVDuZXsBx7/WiwJb1Oh4tt4A==}
+
+  swr@2.5.1:
+    resolution: {integrity: sha512-BRw55e8r0B7SpDN20CAzoQAHl7y1yP7/Zt7oqUjMv0vSt2u2Xnkm88Ws+VypbV9BXHQVuSuyVq7zMjO16wSExw==}
+    peerDependencies:
+      react: ^16.11.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
   symbol-tree@3.2.4:
     resolution: {integrity: sha512-9QNk5KwDF+Bvz+PyObkmSYjI5ksVUYtjW7AU22r2NKcfLJcXp96hkDWU3+XndOsUb+AQ9QhfzfCT2O+CNWT5Tw==}
@@ -5185,6 +5242,18 @@ snapshots:
       '@csstools/css-tokenizer': 3.0.4
       lru-cache: 10.4.3
 
+  '@auth0/nextjs-auth0@4.27.0(next@16.2.10(@babel/core@7.29.7)(@playwright/test@1.62.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+    dependencies:
+      '@edge-runtime/cookies': 5.0.2
+      '@panva/hkdf': 1.2.1
+      jose: 6.2.10
+      next: 16.2.10(@babel/core@7.29.7)(@playwright/test@1.62.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      oauth4webapi: 3.8.7
+      openid-client: 6.8.7
+      react: 19.2.7
+      react-dom: 19.2.7(react@19.2.7)
+      swr: 2.5.1(react@19.2.7)
+
   '@babel/code-frame@7.29.7':
     dependencies:
       '@babel/helper-validator-identifier': 7.29.7
@@ -5308,14 +5377,14 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@crawlee/browser-pool@3.18.1':
+  '@crawlee/browser-pool@3.18.1(playwright@1.62.1)':
     dependencies:
       '@apify/log': 2.5.49
       '@apify/timeout': 0.4.9
       '@crawlee/core': 3.18.1
       '@crawlee/types': 3.18.1
       fingerprint-generator: 2.1.88
-      fingerprint-injector: 2.1.88
+      fingerprint-injector: 2.1.88(playwright@1.62.1)
       lodash.merge: 4.6.2
       nanoid: 3.3.16
       ow: 0.28.2
@@ -5324,19 +5393,23 @@ snapshots:
       quick-lru: 5.1.1
       tiny-typed-emitter: 2.1.0
       tslib: 2.8.1
+    optionalDependencies:
+      playwright: 1.62.1
     transitivePeerDependencies:
       - supports-color
 
-  '@crawlee/browser@3.18.1':
+  '@crawlee/browser@3.18.1(playwright@1.62.1)':
     dependencies:
       '@apify/timeout': 0.4.9
       '@crawlee/basic': 3.18.1
-      '@crawlee/browser-pool': 3.18.1
+      '@crawlee/browser-pool': 3.18.1(playwright@1.62.1)
       '@crawlee/types': 3.18.1
       '@crawlee/utils': 3.18.1
       ow: 0.28.2
       tslib: 2.8.1
       type-fest: 4.41.0
+    optionalDependencies:
+      playwright: 1.62.1
     transitivePeerDependencies:
       - supports-color
 
@@ -5458,13 +5531,13 @@ snapshots:
       proper-lockfile: 4.1.2
       tslib: 2.8.1
 
-  '@crawlee/playwright@3.18.1':
+  '@crawlee/playwright@3.18.1(playwright@1.62.1)':
     dependencies:
       '@apify/datastructures': 2.0.6
       '@apify/log': 2.5.49
       '@apify/timeout': 0.4.9
-      '@crawlee/browser': 3.18.1
-      '@crawlee/browser-pool': 3.18.1
+      '@crawlee/browser': 3.18.1(playwright@1.62.1)
+      '@crawlee/browser-pool': 3.18.1(playwright@1.62.1)
       '@crawlee/core': 3.18.1
       '@crawlee/types': 3.18.1
       '@crawlee/utils': 3.18.1
@@ -5477,16 +5550,18 @@ snapshots:
       string-comparison: 1.3.0
       tslib: 2.8.1
       type-fest: 4.41.0
+    optionalDependencies:
+      playwright: 1.62.1
     transitivePeerDependencies:
       - puppeteer
       - supports-color
 
-  '@crawlee/puppeteer@3.18.1':
+  '@crawlee/puppeteer@3.18.1(playwright@1.62.1)':
     dependencies:
       '@apify/datastructures': 2.0.6
       '@apify/log': 2.5.49
-      '@crawlee/browser': 3.18.1
-      '@crawlee/browser-pool': 3.18.1
+      '@crawlee/browser': 3.18.1(playwright@1.62.1)
+      '@crawlee/browser-pool': 3.18.1(playwright@1.62.1)
       '@crawlee/types': 3.18.1
       '@crawlee/utils': 3.18.1
       cheerio: 1.0.0-rc.12
@@ -5551,6 +5626,8 @@ snapshots:
   '@csstools/css-tokenizer@3.0.4': {}
 
   '@dimforge/rapier3d-compat@0.12.0': {}
+
+  '@edge-runtime/cookies@5.0.2': {}
 
   '@electric-sql/pglite-socket@0.1.3(@electric-sql/pglite@0.4.3)':
     dependencies:
@@ -5898,7 +5975,7 @@ snapshots:
       express: 5.2.1
       express-rate-limit: 8.6.2(express@5.2.1)
       hono: 4.13.3
-      jose: 6.2.9
+      jose: 6.2.10
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
@@ -5958,7 +6035,13 @@ snapshots:
 
   '@nolyfill/is-core-module@1.0.39': {}
 
+  '@panva/hkdf@1.2.1': {}
+
   '@pinojs/redact@0.4.0': {}
+
+  '@playwright/test@1.62.1':
+    dependencies:
+      playwright: 1.62.1
 
   '@prisma/adapter-pg@7.9.0':
     dependencies:
@@ -7067,11 +7150,11 @@ snapshots:
       object-assign: 4.1.1
       vary: 1.1.2
 
-  crawlee@3.18.1(@types/node@22.20.1):
+  crawlee@3.18.1(@types/node@22.20.1)(playwright@1.62.1):
     dependencies:
       '@crawlee/basic': 3.18.1
-      '@crawlee/browser': 3.18.1
-      '@crawlee/browser-pool': 3.18.1
+      '@crawlee/browser': 3.18.1(playwright@1.62.1)
+      '@crawlee/browser-pool': 3.18.1(playwright@1.62.1)
       '@crawlee/cheerio': 3.18.1
       '@crawlee/cli': 3.18.1(@types/node@22.20.1)
       '@crawlee/core': 3.18.1
@@ -7079,11 +7162,13 @@ snapshots:
       '@crawlee/jsdom': 3.18.1
       '@crawlee/linkedom': 3.18.1
       '@crawlee/memory-storage': 3.18.1
-      '@crawlee/playwright': 3.18.1
-      '@crawlee/puppeteer': 3.18.1
+      '@crawlee/playwright': 3.18.1(playwright@1.62.1)
+      '@crawlee/puppeteer': 3.18.1(playwright@1.62.1)
       '@crawlee/utils': 3.18.1
       import-local: 3.2.0
       tslib: 2.8.1
+    optionalDependencies:
+      playwright: 1.62.1
     transitivePeerDependencies:
       - '@types/node'
       - bufferutil
@@ -7962,10 +8047,12 @@ snapshots:
       header-generator: 2.1.88
       tslib: 2.8.1
 
-  fingerprint-injector@2.1.88:
+  fingerprint-injector@2.1.88(playwright@1.62.1):
     dependencies:
       fingerprint-generator: 2.1.88
       tslib: 2.8.1
+    optionalDependencies:
+      playwright: 1.62.1
 
   flat-cache@4.0.1:
     dependencies:
@@ -7996,6 +8083,9 @@ snapshots:
       graceful-fs: 4.2.11
       jsonfile: 6.2.1
       universalify: 2.0.1
+
+  fsevents@2.3.2:
+    optional: true
 
   fsevents@2.3.3:
     optional: true
@@ -8467,7 +8557,7 @@ snapshots:
 
   jiti@2.7.0: {}
 
-  jose@6.2.9: {}
+  jose@6.2.10: {}
 
   jquery@3.7.1: {}
 
@@ -8777,7 +8867,7 @@ snapshots:
 
   negotiator@1.0.0: {}
 
-  next@16.2.10(@babel/core@7.29.7)(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
+  next@16.2.10(@babel/core@7.29.7)(@playwright/test@1.62.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
     dependencies:
       '@next/env': 16.2.10
       '@swc/helpers': 0.5.15
@@ -8796,6 +8886,7 @@ snapshots:
       '@next/swc-linux-x64-musl': 16.2.10
       '@next/swc-win32-arm64-msvc': 16.2.10
       '@next/swc-win32-x64-msvc': 16.2.10
+      '@playwright/test': 1.62.1
       sharp: 0.34.5
     transitivePeerDependencies:
       - '@babel/core'
@@ -8821,6 +8912,8 @@ snapshots:
       boolbase: 2.0.0
 
   nwsapi@2.2.24: {}
+
+  oauth4webapi@3.8.7: {}
 
   object-assign@4.1.1: {}
 
@@ -8879,6 +8972,11 @@ snapshots:
   onetime@5.1.2:
     dependencies:
       mimic-fn: 2.1.0
+
+  openid-client@6.8.7:
+    dependencies:
+      jose: 6.2.10
+      oauth4webapi: 3.8.7
 
   optionator@0.9.4:
     dependencies:
@@ -9056,6 +9154,14 @@ snapshots:
       confbox: 0.2.4
       exsolve: 1.1.0
       pathe: 2.0.3
+
+  playwright-core@1.62.1: {}
+
+  playwright@1.62.1:
+    dependencies:
+      playwright-core: 1.62.1
+    optionalDependencies:
+      fsevents: 2.3.2
 
   possible-typed-array-names@1.1.0: {}
 
@@ -9645,6 +9751,12 @@ snapshots:
       react: 19.2.7
 
   svg-path-parser@1.1.0: {}
+
+  swr@2.5.1(react@19.2.7):
+    dependencies:
+      dequal: 2.0.3
+      react: 19.2.7
+      use-sync-external-store: 1.6.0(react@19.2.7)
 
   symbol-tree@3.2.4: {}
 

@@ -2,11 +2,11 @@
 
 **Feature:** FEAT-018 Production Identity & Session<br>
 **Prepared by:** SOL / TASK-AUDIT-001<br>
-**Package state:** AUTH-001 integrated contract frozen; AUTH-002 ready; AUTH-003 through AUTH-007 implementation pending<br>
-**Blocking gates:** AUTH-002 must freeze the dependency/configuration surface before any implementation task; later tasks follow the registered DAG<br>
+**Package state:** AUTH-001 integrated contract frozen; AUTH-002 dependency/configuration candidate in REVIEW; AUTH-003 through AUTH-007 implementation pending<br>
+**Blocking gates:** AUTH-002 must be SOL-integrated and registered DONE before AUTH-003 or AUTH-005 becomes READY; later tasks follow the registered DAG<br>
 **Contract marker:** `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`
 
-Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. No AUTH-002 through AUTH-007 Worker Agent has been dispatched.
+Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. AUTH-002 is in SOL review; no AUTH-003 through AUTH-007 Worker Agent has been dispatched.
 
 ## Task DAG
 
@@ -97,7 +97,7 @@ Contract freeze and dependency setup are serial. TASK-AUTH-003 and TASK-AUTH-005
 - **OUT OF SCOPE:** provider/verifier/UI implementation, schema changes and broad dependency updates.
 - **ACCEPTANCE CRITERIA:** frozen install succeeds; the selected Auth0 SDK version is verified against Next.js 16.2.10 before AUTH-005; dependency tree contains only approved additions; missing production configuration has a defined fail-closed validation path; no source code changed.
 - **REQUIRED TESTS:** `pnpm install --frozen-lockfile`, dependency/version inspection, `pnpm lint`, `pnpm typecheck`.
-- **DELIVERABLES:** manifests/lockfile, environment template and dependency decision with exact versions.
+- **DELIVERABLES:** manifests/lockfile, environment template and dependency decision with exact versions. AUTH-002 review candidate freezes Auth0 SDK `4.27.0`, Backend `jose` `6.2.10`, root Playwright `1.62.1`, and a pnpm 11 `jose: 6.2.10` single-version override; official peer metadata covers Next `16.2.10` and React `19.2.7`.
 
 ## TASK-AUTH-003
 
@@ -229,6 +229,6 @@ PASS. No two agents implement the same backend, frontend, schema, contract, lock
 
 TASK-AUTH-001 is `DONE` with `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`; SOL accepted contract candidate `10d1f5df44f6dff84034d09c7a5e93a2234ae745` for local integration.
 
-TASK-AUTH-002 is `READY`. It must verify the final Auth0 SDK version against Next.js 16.2.10 and freeze dependencies/configuration before any AUTH-003/004/005 work.
+TASK-AUTH-002 is `REVIEW`. Its candidate verifies Auth0 SDK `4.27.0` against Next.js `16.2.10`, freezes the three exact dependencies and the authoritative `MYSTCRAG_*` configuration mapping, and records the SDK's Next.js 16 `proxy.ts` plus GET-logout differences. It must be SOL-integrated and registered `DONE` before any AUTH-003/004/005 work.
 
 TASK-AUTH-003 through TASK-AUTH-007 remain `BACKLOG` and continue to follow the registered dependency DAG. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.
