@@ -41,6 +41,17 @@ function isJwksShape(value: unknown): value is JsonWebKeySet {
   return keys.every((key) => typeof key === "object" && key !== null);
 }
 
+function hasUniqueKids(jwks: JsonWebKeySet): boolean {
+  const kids = new Set<string>();
+  for (const key of jwks.keys) {
+    const kid = key.kid;
+    if (kid === undefined) continue;
+    if (typeof kid !== "string" || kids.has(kid)) return false;
+    kids.add(kid);
+  }
+  return true;
+}
+
 function maxAgeMsFromCacheControl(cacheControl: string | null): number | null {
   if (!cacheControl) return null;
   const match = /max-age\s*=\s*(\d+)/i.exec(cacheControl);
@@ -72,51 +83,87 @@ async function httpsJwksTransport(
       fail("The JWKS endpoint must use HTTPS.");
     }
     const agent = new https.Agent({ keepAlive: false });
+
+    let connectTimer: NodeJS.Timeout | undefined;
+    let readTimer: NodeJS.Timeout | undefined;
+    let totalTimer: NodeJS.Timeout | undefined;
+    let settled = false;
+
+    const clearTimers = () => {
+      clearTimeout(connectTimer);
+      clearTimeout(readTimer);
+      clearTimeout(totalTimer);
+    };
+    const settle = (settleFn: (value: never) => void, value: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      init.signal.removeEventListener("abort", onAbort);
+      settleFn(value as never);
+    };
+    const onAbort = () => {
+      request.destroy();
+      settle(reject, new ProviderUnavailableError("The JWKS request was aborted."));
+    };
+
     const request = https.request(
       parsed,
       { method: "GET", agent, headers: { accept: "application/json" } },
       (response) => {
         clearTimeout(connectTimer);
-        const chunks: Buffer[] = [];
-        response.setTimeout(readTimeoutMs, () => {
+        readTimer = setTimeout(() => {
           request.destroy();
-          reject(new ProviderUnavailableError("The JWKS read phase timed out."));
-        });
+          settle(reject, new ProviderUnavailableError("The JWKS read phase timed out."));
+        }, readTimeoutMs);
+        readTimer.unref();
+        const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer) => {
           chunks.push(chunk);
         });
         response.on("end", () => {
           const body = Buffer.concat(chunks).toString("utf8");
-          resolve({
+          settle(resolve, {
             status: response.statusCode ?? 0,
             cacheControl: response.headers["cache-control"] ?? null,
             json: async () => JSON.parse(body)
           });
         });
+        response.on("error", (error: Error) => {
+          settle(reject, new ProviderUnavailableError("The JWKS response failed.", { cause: error }));
+        });
       }
     );
 
-    const connectTimer = setTimeout(() => {
+    connectTimer = setTimeout(() => {
       request.destroy();
-      reject(new ProviderUnavailableError("The JWKS connect phase timed out."));
+      settle(reject, new ProviderUnavailableError("The JWKS connect phase timed out."));
     }, connectTimeoutMs);
-    const totalTimer = setTimeout(() => {
+    totalTimer = setTimeout(() => {
       request.destroy();
-      reject(new ProviderUnavailableError("The JWKS request exceeded its total budget."));
+      settle(reject, new ProviderUnavailableError("The JWKS request exceeded its total budget."));
     }, totalTimeoutMs);
     connectTimer.unref();
     totalTimer.unref();
 
     request.on("socket", (socket) => {
-      socket.on("connect", () => clearTimeout(connectTimer));
+      socket.once("connect", () => clearTimeout(connectTimer));
     });
     request.on("error", (error) => {
       if (init.signal.aborted) {
-        reject(new ProviderUnavailableError("The JWKS request was aborted."));
+        settle(reject, new ProviderUnavailableError("The JWKS request was aborted."));
         return;
       }
-      reject(new ProviderUnavailableError("The JWKS request failed.", { cause: error }));
+      settle(
+        reject,
+        new ProviderUnavailableError("The JWKS request failed.", { cause: error })
+      );
     });
+
+    if (init.signal.aborted) {
+      onAbort();
+      return;
+    }
+    init.signal.addEventListener("abort", onAbort, { once: true });
     request.end();
   });
 }
@@ -130,6 +177,7 @@ export class JwksKeySource {
   readonly #requestTimeoutMs: number;
   #cache: CachedKeySet | null = null;
   #failureAt: number | null = null;
+  #unknownKidCooldownUntil: number | null = null;
   #inflight: Promise<JsonWebKeySet> | null = null;
 
   constructor(options: JwksKeySourceOptions) {
@@ -144,43 +192,58 @@ export class JwksKeySource {
   async getJwks(kid?: string): Promise<JsonWebKeySet> {
     const nowMs = this.#now();
     const cached = this.#cache;
-    if (
-      cached &&
-      nowMs < cached.fetchedAt + cached.ttlMs &&
-      (kid === undefined || hasKid(cached.jwks, kid))
-    ) {
-      return cached.jwks;
-    }
-    if (this.#inflight) {
+
+    if (cached && nowMs < cached.fetchedAt + cached.ttlMs) {
+      if (kid === undefined || hasKid(cached.jwks, kid)) {
+        return cached.jwks;
+      }
+      if (this.#inflight) {
+        return this.#inflight;
+      }
+      if (
+        this.#unknownKidCooldownUntil !== null &&
+        nowMs < this.#unknownKidCooldownUntil
+      ) {
+        // A bounded refresh already confirmed this key set within the cooldown
+        // window; answer from it so the caller can classify the kid as unknown
+        // without contacting the provider.
+        return cached.jwks;
+      }
+    } else if (this.#inflight) {
       return this.#inflight;
     }
+
     if (
       this.#failureAt !== null &&
       nowMs - this.#failureAt < this.#negativeCacheMs
     ) {
       fail("JWKS refresh is suppressed by the negative cache after a recent failure.");
     }
+
     this.#inflight = this.#refresh().finally(() => {
       this.#inflight = null;
     });
-    return this.#inflight;
+    const jwks = await this.#inflight;
+    if (kid !== undefined && !hasKid(jwks, kid)) {
+      // Global cooldown: one successful bounded refresh proved the kid is not
+      // in the current key set, so further unknown-kid refreshes are suppressed
+      // for the cooldown window. Known cached keys keep verifying above.
+      this.#unknownKidCooldownUntil = this.#now() + this.#negativeCacheMs;
+    }
+    return jwks;
   }
 
   async #refresh(): Promise<JsonWebKeySet> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.#requestTimeoutMs);
-    timer.unref();
+    let budgetTimer: NodeJS.Timeout | undefined;
+    const budget = new Promise<never>((_, reject) => {
+      budgetTimer = setTimeout(() => {
+        controller.abort();
+        reject(new ProviderUnavailableError("The JWKS request exceeded its total budget."));
+      }, this.#requestTimeoutMs);
+      budgetTimer.unref();
+    });
     try {
-      const budget = new Promise<never>((_, reject) => {
-        const budgetTimer = setTimeout(
-          () =>
-            reject(
-              new ProviderUnavailableError("The JWKS request exceeded its total budget.")
-            ),
-          this.#requestTimeoutMs
-        );
-        budgetTimer.unref();
-      });
       const response = await Promise.race([
         this.#transport(this.#url, { signal: controller.signal }),
         budget
@@ -191,6 +254,9 @@ export class JwksKeySource {
       const body = await Promise.race([response.json(), budget]);
       if (!isJwksShape(body)) {
         fail("The JWKS endpoint returned a malformed key set.");
+      }
+      if (!hasUniqueKids(body)) {
+        fail("The JWKS endpoint returned a key set with duplicate or invalid kids.");
       }
       const providerMaxAgeMs = maxAgeMsFromCacheControl(response.cacheControl);
       const ttlMs = Math.min(
@@ -208,7 +274,7 @@ export class JwksKeySource {
       }
       fail("The JWKS request failed.", error);
     } finally {
-      clearTimeout(timer);
+      clearTimeout(budgetTimer);
     }
   }
 }

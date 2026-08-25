@@ -11,11 +11,14 @@ import {
   ProviderUnavailableError,
   type CredentialRejectionReason
 } from "./auth-errors.js";
-import type { AuthProvider, VerifiedAuthClaims } from "./auth-provider.js";
+import type { AccessTokenVerifier, VerifiedAuthClaims } from "./auth-provider.js";
 import type { JsonWebKeySet, JwksKeySource } from "./jwks-key-source.js";
 
 const AUTH0_CLOCK_SKEW_SECONDS = 60;
 const AUTH0_SIGNING_ALGORITHM = "RS256";
+const KID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const MAX_EMAIL_HINT_LENGTH = 254;
+const MAX_DISPLAY_NAME_HINT_LENGTH = 128;
 
 export type Auth0AccessTokenVerifierOptions = {
   readonly issuer: string;
@@ -24,8 +27,17 @@ export type Auth0AccessTokenVerifierOptions = {
   readonly now?: () => Date;
 };
 
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+function safeKid(value: unknown): string | undefined {
+  return typeof value === "string" && KID_PATTERN.test(value) ? value : undefined;
+}
+
+function profileHint(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value
+    .trim()
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, "");
+  return normalized.length > 0 && normalized.length <= maxLength ? normalized : undefined;
 }
 
 function rejectionFor(
@@ -75,7 +87,7 @@ function rejectionFor(
   });
 }
 
-export class Auth0AccessTokenVerifier implements AuthProvider {
+export class Auth0AccessTokenVerifier implements AccessTokenVerifier {
   readonly #issuer: string;
   readonly #audience: string;
   readonly #keySource: Auth0AccessTokenVerifierOptions["keySource"];
@@ -98,10 +110,10 @@ export class Auth0AccessTokenVerifier implements AuthProvider {
         throw new CredentialRejectedError("malformed");
       }
       if (header.alg !== AUTH0_SIGNING_ALGORITHM) {
-        throw new CredentialRejectedError("algorithm", header.kid);
+        throw new CredentialRejectedError("algorithm", safeKid(header.kid));
       }
-      kid = header.kid;
-      if (typeof kid !== "string" || kid.length === 0) {
+      kid = safeKid(header.kid);
+      if (!kid) {
         throw new CredentialRejectedError("malformed");
       }
 
@@ -135,8 +147,8 @@ export class Auth0AccessTokenVerifier implements AuthProvider {
       const emailVerified =
         typeof payload.email_verified === "boolean" ? payload.email_verified : undefined;
 
-      const email = nonEmptyString(payload.email);
-      const displayName = nonEmptyString(payload.name);
+      const email = profileHint(payload.email, MAX_EMAIL_HINT_LENGTH);
+      const displayName = profileHint(payload.name, MAX_DISPLAY_NAME_HINT_LENGTH);
 
       return {
         subject: payload.sub,

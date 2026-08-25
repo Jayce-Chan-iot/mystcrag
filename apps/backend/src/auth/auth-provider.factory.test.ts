@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { Auth0AccessTokenVerifier } from "./auth0-access-token-verifier.js";
-import { createAuthProviderFromEnvironment } from "./auth-provider.factory.js";
+import { CredentialRejectedError } from "./auth-errors.js";
+import { createAccessTokenVerifierFromEnvironment } from "./auth-provider.factory.js";
 import {
   SignedTestTokenAuthProvider,
   signTestAccessToken
@@ -24,14 +25,19 @@ const productionAuth0Environment = {
   MYSTCRAG_AUTH_AUDIENCE: "https://api.mystcrag.example.com"
 };
 
+const developmentAuth0Environment = {
+  ...productionAuth0Environment,
+  NODE_ENV: "development"
+};
+
 test("signed test identities require an explicit test or development opt-in", () => {
   assert.ok(
-    createAuthProviderFromEnvironment(configuredTestEnvironment) instanceof
+    createAccessTokenVerifierFromEnvironment(configuredTestEnvironment) instanceof
       SignedTestTokenAuthProvider
   );
   assert.throws(
     () =>
-      createAuthProviderFromEnvironment({
+      createAccessTokenVerifierFromEnvironment({
         ...configuredTestEnvironment,
         MYSTCRAG_ENABLE_SIGNED_TEST_AUTH: "false"
       }),
@@ -39,7 +45,7 @@ test("signed test identities require an explicit test or development opt-in", ()
   );
   assert.throws(
     () =>
-      createAuthProviderFromEnvironment({
+      createAccessTokenVerifierFromEnvironment({
         ...configuredTestEnvironment,
         NODE_ENV: "production"
       }),
@@ -47,7 +53,7 @@ test("signed test identities require an explicit test or development opt-in", ()
   );
   assert.throws(
     () =>
-      createAuthProviderFromEnvironment({
+      createAccessTokenVerifierFromEnvironment({
         ...configuredTestEnvironment,
         NODE_ENV: "staging"
       }),
@@ -57,7 +63,7 @@ test("signed test identities require an explicit test or development opt-in", ()
 
 test("production fails safely when authentication is not configured", () => {
   assert.throws(
-    () => createAuthProviderFromEnvironment({ NODE_ENV: "production" }),
+    () => createAccessTokenVerifierFromEnvironment({ NODE_ENV: "production" }),
     /not configured/
   );
 });
@@ -65,7 +71,7 @@ test("production fails safely when authentication is not configured", () => {
 test("an unsupported provider is rejected", () => {
   assert.throws(
     () =>
-      createAuthProviderFromEnvironment({
+      createAccessTokenVerifierFromEnvironment({
         ...productionAuth0Environment,
         MYSTCRAG_AUTH_PROVIDER: "oauth-proxy"
       }),
@@ -74,14 +80,14 @@ test("an unsupported provider is rejected", () => {
 });
 
 test("a fully configured production auth0 environment builds the auth0 verifier", () => {
-  const provider = createAuthProviderFromEnvironment(productionAuth0Environment);
-  assert.ok(provider instanceof Auth0AccessTokenVerifier);
+  const verifier = createAccessTokenVerifierFromEnvironment(productionAuth0Environment);
+  assert.ok(verifier instanceof Auth0AccessTokenVerifier);
 });
 
 test("auth0 configuration without an issuer fails closed", () => {
   const { MYSTCRAG_AUTH_ISSUER: _issuer, ...withoutIssuer } = productionAuth0Environment;
   assert.throws(
-    () => createAuthProviderFromEnvironment(withoutIssuer),
+    () => createAccessTokenVerifierFromEnvironment(withoutIssuer),
     /MYSTCRAG_AUTH_ISSUER/
   );
 });
@@ -90,32 +96,82 @@ test("auth0 configuration without an audience fails closed", () => {
   const { MYSTCRAG_AUTH_AUDIENCE: _audience, ...withoutAudience } =
     productionAuth0Environment;
   assert.throws(
-    () => createAuthProviderFromEnvironment(withoutAudience),
+    () => createAccessTokenVerifierFromEnvironment(withoutAudience),
     /MYSTCRAG_AUTH_AUDIENCE/
   );
 });
 
-test("auth0 issuer must be a parseable HTTPS URL", () => {
+test("the auth0 issuer must be the exact canonical HTTPS form", () => {
+  const rejectedIssuers = [
+    "http://mystcrag-tenant.auth0.example.com/",
+    "not a url",
+    "ftp://mystcrag-tenant.auth0.example.com/",
+    "https://mystcrag-tenant.auth0.example.com",
+    "https://mystcrag-tenant.auth0.example.com/#fragment",
+    "https://mystcrag-tenant.auth0.example.com/?query=1",
+    "https://mystcrag-tenant.auth0.example.com/path/",
+    "https://user:pass@mystcrag-tenant.auth0.example.com/",
+    "https://localhost/",
+    "https://LOCALHOST/",
+    "https://localhost./",
+    "https://127.0.0.1/",
+    "https://127.0.0.7/",
+    "https://127.1/",
+    "https://[::1]/",
+    "https://[0:0:0:0:0:0:0:1]/",
+    "https://[::ffff:127.0.0.1]/"
+  ];
+  for (const issuer of rejectedIssuers) {
+    assert.throws(
+      () =>
+        createAccessTokenVerifierFromEnvironment({
+          ...productionAuth0Environment,
+          MYSTCRAG_AUTH_ISSUER: issuer
+        }),
+      { message: /MYSTCRAG_AUTH_ISSUER/ },
+      `issuer=${issuer} must be rejected`
+    );
+  }
+});
+
+test("custom-domain canonical HTTPS issuers are accepted", () => {
+  for (const issuer of [
+    "https://auth.mystcrag.example.com/",
+    "https://mystcrag-tenant.auth0.example.com/"
+  ]) {
+    const verifier = createAccessTokenVerifierFromEnvironment({
+      ...productionAuth0Environment,
+      MYSTCRAG_AUTH_ISSUER: issuer
+    });
+    assert.ok(verifier instanceof Auth0AccessTokenVerifier, `issuer=${issuer}`);
+  }
+});
+
+test("development and test also require an HTTPS auth0 issuer", () => {
   assert.throws(
     () =>
-      createAuthProviderFromEnvironment({
-        ...productionAuth0Environment,
+      createAccessTokenVerifierFromEnvironment({
+        ...developmentAuth0Environment,
         MYSTCRAG_AUTH_ISSUER: "http://mystcrag-tenant.auth0.example.com/"
       }),
-    /HTTPS/
+    /MYSTCRAG_AUTH_ISSUER/
   );
   assert.throws(
     () =>
-      createAuthProviderFromEnvironment({
-        ...productionAuth0Environment,
-        MYSTCRAG_AUTH_ISSUER: "not a url"
+      createAccessTokenVerifierFromEnvironment({
+        ...developmentAuth0Environment,
+        MYSTCRAG_AUTH_ISSUER: "https://localhost/"
       }),
     /MYSTCRAG_AUTH_ISSUER/
+  );
+  assert.ok(
+    createAccessTokenVerifierFromEnvironment(developmentAuth0Environment) instanceof
+      Auth0AccessTokenVerifier
   );
 });
 
 test("signed test provider rejects a token with an invalid signature", async () => {
-  const provider = createAuthProviderFromEnvironment(configuredTestEnvironment);
+  const verifier = createAccessTokenVerifierFromEnvironment(configuredTestEnvironment);
   const token = signTestAccessToken(
     {
       subject: "actor-owner",
@@ -126,5 +182,8 @@ test("signed test provider rejects a token with an invalid signature", async () 
     "different-mystcrag-auth-signing-secret-2026"
   );
 
-  await assert.rejects(() => provider.verifyAccessToken(token), /Invalid access token/);
+  await assert.rejects(
+    () => verifier.verifyAccessToken(token),
+    (error: unknown) => error instanceof CredentialRejectedError && error.reason === "signature"
+  );
 });

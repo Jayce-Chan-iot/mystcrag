@@ -106,6 +106,29 @@ test("production startup smoke matrix", { skip: !databaseUrl }, async (t) => {
     assert.match(outcome.output, /MYSTCRAG_AUTH_ISSUER/);
   });
 
+  await t.test("production refuses non-canonical or loopback auth0 issuers", async () => {
+    const rejectedIssuers = [
+      "https://localhost/",
+      "https://127.0.0.1/",
+      "https://[::1]/",
+      "https://mystcrag-tenant.auth0.example.com/?query=1",
+      "https://mystcrag-tenant.auth0.example.com/#fragment",
+      "https://mystcrag-tenant.auth0.example.com",
+      "http://mystcrag-tenant.auth0.example.com/"
+    ];
+    for (const issuer of rejectedIssuers) {
+      const outcome = await spawnBackend({
+        NODE_ENV: "production",
+        MYSTCRAG_AUTH_PROVIDER: "auth0",
+        MYSTCRAG_AUTH_ISSUER: issuer,
+        MYSTCRAG_AUTH_AUDIENCE: "https://api.mystcrag.example.com"
+      });
+
+      assert.notEqual(outcome.code, 0, `issuer=${issuer} must fail startup`);
+      assert.match(outcome.output, /MYSTCRAG_AUTH_ISSUER/, `issuer=${issuer}`);
+    }
+  });
+
   await t.test("a configured auth0 provider starts, protects routes, and stops cleanly", async () => {
     const port = await allocatePort();
     const env: Record<string, string> = {};

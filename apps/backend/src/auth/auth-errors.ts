@@ -11,6 +11,7 @@ export type CredentialRejectionReason =
 export const AUTH_CREDENTIAL_REJECTED = "AUTH_CREDENTIAL_REJECTED";
 export const AUTH_PROVIDER_UNAVAILABLE = "AUTH_PROVIDER_UNAVAILABLE";
 export const AUTH_IDENTITY_MAPPING_FAILED = "AUTH_IDENTITY_MAPPING_FAILED";
+export const AUTH_INTERNAL_ERROR = "AUTH_INTERNAL_ERROR";
 
 export class CredentialRejectedError extends Error {
   readonly category = AUTH_CREDENTIAL_REJECTED;
@@ -54,5 +55,5 @@ export function authErrorCategory(error: unknown): string {
   ) {
     return error.category;
   }
-  return AUTH_CREDENTIAL_REJECTED;
+  return AUTH_INTERNAL_ERROR;
 }

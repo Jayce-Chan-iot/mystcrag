@@ -14,16 +14,17 @@ import {
 } from "./authenticated-actor-provider.js";
 import {
   createAuthenticationPreHandler,
+  type AccessTokenVerifier,
   type ActorContext,
   type AuthProvider,
   type VerifiedAuthClaims
 } from "./auth-provider.js";
 
-type ScriptedProvider = AuthProvider & {
+type ScriptedVerifier = AccessTokenVerifier & {
   script: (token: string) => Promise<VerifiedAuthClaims>;
 };
 
-function scriptedProvider(script: ScriptedProvider["script"]): ScriptedProvider {
+function scriptedVerifier(script: ScriptedVerifier["script"]): ScriptedVerifier {
   return { verifyAccessToken: script, script };
 }
 
@@ -60,7 +61,7 @@ const BASE_CLAIMS: VerifiedAuthClaims = {
 test("a verified token is mapped to an internal actor before use", async () => {
   const identities = scriptedIdentities(async () => ({ actorId: "user-internal-1" }));
   const provider = new AuthenticatedActorProvider({
-    provider: scriptedProvider(async () => ({
+    provider: scriptedVerifier(async () => ({
       ...BASE_CLAIMS,
       email: "ada@mystcrag.example.com",
       emailVerified: true,
@@ -85,7 +86,7 @@ test("a verified token is mapped to an internal actor before use", async () => {
 test("profile hints are not forwarded when the token carries none", async () => {
   const identities = scriptedIdentities(async () => ({ actorId: "user-internal-2" }));
   const provider = new AuthenticatedActorProvider({
-    provider: scriptedProvider(async () => ({ ...BASE_CLAIMS })),
+    provider: scriptedVerifier(async () => ({ ...BASE_CLAIMS })),
     identities
   });
 
@@ -97,7 +98,7 @@ test("profile hints are not forwarded when the token carries none", async () => 
 test("an invalid token never reaches the identity mapping", async () => {
   const identities = scriptedIdentities(async () => ({ actorId: "user-internal-3" }));
   const provider = new AuthenticatedActorProvider({
-    provider: scriptedProvider(() =>
+    provider: scriptedVerifier(() =>
       Promise.reject(new CredentialRejectedError("signature", "kid-a"))
     ),
     identities
@@ -113,7 +114,7 @@ test("an invalid token never reaches the identity mapping", async () => {
 test("provider unavailability never reaches the identity mapping", async () => {
   const identities = scriptedIdentities(async () => ({ actorId: "user-internal-4" }));
   const provider = new AuthenticatedActorProvider({
-    provider: scriptedProvider(() =>
+    provider: scriptedVerifier(() =>
       Promise.reject(new ProviderUnavailableError("jwks outage"))
     ),
     identities
@@ -128,7 +129,7 @@ test("identity mapping failure is classified as an internal error", async () => 
     throw new Error("database unavailable");
   });
   const provider = new AuthenticatedActorProvider({
-    provider: scriptedProvider(async () => ({ ...BASE_CLAIMS })),
+    provider: scriptedVerifier(async () => ({ ...BASE_CLAIMS })),
     identities
   });
 
@@ -144,7 +145,7 @@ test("the same subject under a second issuer is a separate mapping input", async
   }));
   const issuerB = "https://tenant-b.auth0.example.com/";
   const provider = new AuthenticatedActorProvider({
-    provider: scriptedProvider(async (token) =>
+    provider: scriptedVerifier(async (token) =>
       token === "tenant-a" ? { ...BASE_CLAIMS } : { ...BASE_CLAIMS, issuer: issuerB }
     ),
     identities
@@ -181,7 +182,7 @@ async function statusAndBody(response: { statusCode: number; body: string }) {
 test("the pre-handler sets the internal actor id on the request", async () => {
   const identities = scriptedIdentities(async () => ({ actorId: "user-internal-10" }));
   const provider = new AuthenticatedActorProvider({
-    provider: scriptedProvider(async () => ({ ...BASE_CLAIMS })),
+    provider: scriptedVerifier(async () => ({ ...BASE_CLAIMS })),
     identities
   });
   const app = actorEchoApp(provider);
@@ -192,6 +193,11 @@ test("the pre-handler sets the internal actor id on the request", async () => {
 
   assert.equal(response.status, 200);
   assert.deepEqual(response.body, { actorId: "user-internal-10" });
+  assert.notEqual(
+    (response.body as { actorId: string }).actorId,
+    BASE_CLAIMS.subject,
+    "the provider subject must never surface as the actor id"
+  );
   assert.equal(identities.calls.length, 1);
   await app.close();
 });
@@ -199,7 +205,7 @@ test("the pre-handler sets the internal actor id on the request", async () => {
 test("the pre-handler rejects invalid credentials with the generic envelope", async () => {
   const identities = scriptedIdentities(async () => ({ actorId: "user-internal-11" }));
   const provider = new AuthenticatedActorProvider({
-    provider: scriptedProvider(() =>
+    provider: scriptedVerifier(() =>
       Promise.reject(new CredentialRejectedError("expired", "kid-a"))
     ),
     identities
@@ -223,7 +229,7 @@ test("the pre-handler rejects invalid credentials with the generic envelope", as
 test("the pre-handler rejects missing or malformed bearer credentials", async () => {
   const identities = scriptedIdentities(async () => ({ actorId: "user-internal-12" }));
   const provider = new AuthenticatedActorProvider({
-    provider: scriptedProvider(async () => ({ ...BASE_CLAIMS })),
+    provider: scriptedVerifier(async () => ({ ...BASE_CLAIMS })),
     identities
   });
   const app = actorEchoApp(provider);
@@ -247,7 +253,7 @@ test("the pre-handler rejects missing or malformed bearer credentials", async ()
 test("the pre-handler maps jwks unavailability to the internal error envelope", async () => {
   const identities = scriptedIdentities(async () => ({ actorId: "user-internal-13" }));
   const provider = new AuthenticatedActorProvider({
-    provider: scriptedProvider(() =>
+    provider: scriptedVerifier(() =>
       Promise.reject(new ProviderUnavailableError("jwks outage"))
     ),
     identities
@@ -269,7 +275,7 @@ test("the pre-handler maps identity mapping failure to the internal error envelo
     throw new Error("database unavailable");
   });
   const provider = new AuthenticatedActorProvider({
-    provider: scriptedProvider(async () => ({ ...BASE_CLAIMS })),
+    provider: scriptedVerifier(async () => ({ ...BASE_CLAIMS })),
     identities
   });
   const app = actorEchoApp(provider);
@@ -283,16 +289,39 @@ test("the pre-handler maps identity mapping failure to the internal error envelo
   await app.close();
 });
 
-test("a legacy provider without actor composition keeps its existing behavior", async () => {
-  const app = actorEchoApp(
-    scriptedProvider(async () => ({ ...BASE_CLAIMS }))
-  );
+test("a bare verifier without actor composition fails closed", async () => {
+  const bareVerifier = scriptedVerifier(async () => ({ ...BASE_CLAIMS }));
+  const app = actorEchoApp(bareVerifier as unknown as AuthProvider);
 
   const response = await statusAndBody(
     await app.inject({ method: "GET", url: "/me", headers: { authorization: "Bearer legacy" } })
   );
 
-  assert.equal(response.status, 200);
-  assert.deepEqual(response.body, { actorId: BASE_CLAIMS.subject });
+  assert.equal(response.status, 500);
+  assert.equal((response.body.error as { code: string }).code, "INTERNAL_ERROR");
+  assert.deepEqual(response.body, {
+    error: {
+      code: "INTERNAL_ERROR",
+      message: "An internal error occurred.",
+      requestId: (response.body.error as { requestId: string }).requestId
+    }
+  });
+  await app.close();
+});
+
+test("an unrecognized internal failure fails closed as an internal error", async () => {
+  const provider: AuthProvider = {
+    async authenticateAccessToken() {
+      throw new Error("unexpected internal state");
+    }
+  };
+  const app = actorEchoApp(provider);
+
+  const response = await statusAndBody(
+    await app.inject({ method: "GET", url: "/me", headers: { authorization: "Bearer t" } })
+  );
+
+  assert.equal(response.status, 500);
+  assert.equal((response.body.error as { code: string }).code, "INTERNAL_ERROR");
   await app.close();
 });

@@ -5,7 +5,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { createPrismaClient, ExternalIdentityRepository } from "@mystcrag/database";
 
 import { AuthenticatedActorProvider } from "./authenticated-actor-provider.js";
-import { actorIdFromVerifiedContext, createAuthenticationPreHandler, type AuthProvider } from "./auth-provider.js";
+import { actorIdFromVerifiedContext, createAuthenticationPreHandler, type AccessTokenVerifier } from "./auth-provider.js";
 import { SignedTestTokenAuthProvider, signTestAccessToken } from "./signed-test-auth-provider.js";
 import { DomainApiError, toApiErrorEnvelope } from "../contracts/api-error.js";
 
@@ -179,7 +179,7 @@ test(
       assert.equal(invalidToken.json().error.code, "UNAUTHORIZED");
       await harness.app.close();
 
-      const multiIssuerVerifier: AuthProvider = {
+      const multiIssuerVerifier: AccessTokenVerifier = {
         async verifyAccessToken(token) {
           try {
             return await verifierA.verifyAccessToken(token);

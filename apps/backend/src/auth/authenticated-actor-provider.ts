@@ -1,5 +1,5 @@
 import { IdentityMappingFailedError } from "./auth-errors.js";
-import type { ActorContext, AuthProvider, VerifiedAuthClaims } from "./auth-provider.js";
+import type { ActorContext, AuthProvider, AccessTokenVerifier } from "./auth-provider.js";
 
 export type ExternalIdentityMappingInput = {
   readonly issuer: string;
@@ -20,25 +20,21 @@ export type ExternalIdentityMappingPort = {
 };
 
 export type AuthenticatedActorProviderOptions = {
-  readonly provider: AuthProvider;
+  readonly provider: AccessTokenVerifier;
   readonly identities: ExternalIdentityMappingPort;
 };
 
 export class AuthenticatedActorProvider implements AuthProvider {
-  readonly #provider: AuthProvider;
+  readonly #verifier: AccessTokenVerifier;
   readonly #identities: ExternalIdentityMappingPort;
 
   constructor(options: AuthenticatedActorProviderOptions) {
-    this.#provider = options.provider;
+    this.#verifier = options.provider;
     this.#identities = options.identities;
   }
 
-  verifyAccessToken(token: string): Promise<VerifiedAuthClaims> {
-    return this.#provider.verifyAccessToken(token);
-  }
-
   async authenticateAccessToken(token: string): Promise<ActorContext> {
-    const claims = await this.#provider.verifyAccessToken(token);
+    const claims = await this.#verifier.verifyAccessToken(token);
     try {
       const mapping = await this.#identities.findOrProvisionExternalIdentity({
         issuer: claims.issuer,

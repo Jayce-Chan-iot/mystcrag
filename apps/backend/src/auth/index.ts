@@ -1,13 +1,13 @@
 export {
   actorIdFromVerifiedContext,
   createAuthenticationPreHandler,
-  type ActorAuthenticator,
+  type AccessTokenVerifier,
   type ActorContext,
   type AuthProvider,
   type VerifiedAuthClaims
 } from "./auth-provider.js";
 export {
-  createAuthProviderFromEnvironment,
+  createAccessTokenVerifierFromEnvironment,
   type AuthEnvironment
 } from "./auth-provider.factory.js";
 export { AuthenticatedActorProvider } from "./authenticated-actor-provider.js";
