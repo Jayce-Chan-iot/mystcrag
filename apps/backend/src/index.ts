@@ -1,6 +1,7 @@
 import { createApp } from "./app.js";
 import {
   DesignRepository,
+  ExternalIdentityRepository,
   KnowledgeRepository,
   KnowledgeUsageEventRepository,
   ProductRepository,
@@ -17,6 +18,7 @@ import { KnowledgeAdminApplicationService } from "./modules/knowledge-admin/know
 import { TarotAiRecommendationCopyPort, TarotService } from "./modules/tarot/tarot.service.js";
 import { TarotCopyService } from "@mystcrag/ai-agent/tarot";
 import { createAuthProviderFromEnvironment } from "./auth/auth-provider.factory.js";
+import { AuthenticatedActorProvider } from "./auth/authenticated-actor-provider.js";
 import { knowledgeUsageRecorderFromRepository } from "./observability/knowledge-usage-recorder.js";
 import {
   createDesignApplicationService,
@@ -28,10 +30,15 @@ const defaultPort = 4000;
 const configuredPort = Number(process.env.BACKEND_PORT ?? defaultPort);
 const port = Number.isInteger(configuredPort) && configuredPort > 0 ? configuredPort : defaultPort;
 
-const authProvider = createAuthProviderFromEnvironment();
+const configuredAuthProvider = createAuthProviderFromEnvironment();
 const tarotQuestionEncryption = createTarotQuestionEncryptionFromEnvironment(process.env);
 const database = createPrismaClient();
 await database.$connect();
+const externalIdentities = new ExternalIdentityRepository(database);
+const authProvider = new AuthenticatedActorProvider({
+  provider: configuredAuthProvider,
+  identities: externalIdentities
+});
 const designRepository = new DesignRepository(database);
 const productRepository = new ProductRepository(database);
 const designApplicationService = createDesignApplicationService(database);
