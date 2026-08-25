@@ -209,7 +209,7 @@ All variables are server-only and must not use `NEXT_PUBLIC_`.
 | `MYSTCRAG_AUTH_CLIENT_SECRET` | Environment-specific confidential client secret; secret manager only |
 | `MYSTCRAG_AUTH_CALLBACK_URL` | Exact absolute `${MYSTCRAG_APP_ORIGIN}/auth/callback`; must equal the environment Application allowlist entry |
 | `MYSTCRAG_AUTH_LOGOUT_URL` | Exact absolute allowed post-logout URL for the environment, normally `MYSTCRAG_APP_ORIGIN` |
-| `MYSTCRAG_AUTH_SESSION_SECRET` | At least 32 random bytes of entropy in the encoding required by the selected implementation; supports active/previous-key rotation |
+| `MYSTCRAG_AUTH_SESSION_SECRET` | At least 32 random bytes of entropy in the encoding required by the selected implementation; replacement is a controlled forced logout because FEAT-018 authorizes no previous-key overlap |
 
 JWKS rules: HTTPS only; connect/read timeout 2 seconds each and 5 seconds total; cache successful keys by issuer and `kid` for at most 15 minutes while honoring a shorter provider cache directive; unknown `kid` triggers one bounded refresh; negative results cache at most 30 seconds; stale keys may verify only while their previously cached entry remains within TTL. A fetch failure with no valid cached key fails closed as provider unavailable.
 
