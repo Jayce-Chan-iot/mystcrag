@@ -17,7 +17,7 @@
     "@mystcrag/design-contract": "workspace:*",
     "@mystcrag/three-engine": "workspace:*",
     "@mystcrag/ui": "workspace:*",
-    "next": "^16.2.10",
+    "next": "^16.2.12",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "recharts": "^3.10.1"
@@ -28,7 +28,7 @@
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
     "eslint": "^9.35.0",
-    "eslint-config-next": "^16.2.10",
+    "eslint-config-next": "^16.2.12",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.20.5",

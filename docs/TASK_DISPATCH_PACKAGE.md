@@ -92,12 +92,12 @@ Contract freeze and dependency setup are serial. TASK-AUTH-003 and TASK-AUTH-005
 - **FORBIDDEN FILES:** application source, Prisma, migrations, feature UI, business tests, CI, unrelated upgrades.
 - **CANONICAL REFERENCES:** approved `AUTH_SESSION_CONTRACT.md`, `DEPENDENCY_DECISIONS.md`, current workspace/CI configuration.
 - **ARCHITECTURE CONSTRAINTS:** one version per dependency; no duplicate auth SDK; no global state library unless contract proves necessity; secrets never receive `NEXT_PUBLIC_` prefix.
-- **FUNCTIONAL REQUIREMENTS:** verify and pin an Auth0 Next.js SDK version compatible with the repository's Next.js `16.2.10`, install only approved runtime/test packages, expose fail-closed named environment variables and keep workspace scripts deterministic.
-- **NON-FUNCTIONAL REQUIREMENTS:** frozen lockfile, documented Auth0 SDK/Next.js 16.2.10 compatibility evidence, supported Node/pnpm versions, license/security review and minimal dependency footprint.
+- **FUNCTIONAL REQUIREMENTS:** verify and pin an Auth0 Next.js SDK version compatible with the repository's security-patched Next.js `16.2.12`, install only approved runtime/test packages, expose fail-closed named environment variables and keep workspace scripts deterministic.
+- **NON-FUNCTIONAL REQUIREMENTS:** frozen lockfile, documented Auth0 SDK/Next.js 16.2.12 compatibility evidence, supported Node/pnpm versions, license/security review and minimal dependency footprint.
 - **OUT OF SCOPE:** provider/verifier/UI implementation, schema changes and broad dependency updates.
-- **ACCEPTANCE CRITERIA:** frozen install succeeds; the selected Auth0 SDK version is verified against Next.js 16.2.10 before AUTH-005; dependency tree contains only approved additions; missing production configuration has a defined fail-closed validation path; no source code changed.
+- **ACCEPTANCE CRITERIA:** frozen install succeeds; the selected Auth0 SDK version is verified against Next.js 16.2.12 before AUTH-005; dependency tree contains only approved additions and none of the Next.js High advisories patched by `>=16.2.11`; missing production configuration has a defined fail-closed validation path; no source code changed.
 - **REQUIRED TESTS:** `pnpm install --frozen-lockfile`, dependency/version inspection, `pnpm lint`, `pnpm typecheck`.
-- **DELIVERABLES:** manifests/lockfile, environment template and dependency decision with exact versions. AUTH-002 review candidate freezes Auth0 SDK `4.27.0`, Backend `jose` `6.2.10`, root Playwright `1.62.1`, and a pnpm 11 `jose: 6.2.10` single-version override; official peer metadata covers Next `16.2.10` and React `19.2.7`.
+- **DELIVERABLES:** manifests/lockfile, environment template and dependency decision with exact versions. AUTH-002 review candidate freezes security-patched Next `16.2.12` with matching `eslint-config-next@16.2.12`, Auth0 SDK `4.27.0`, Backend `jose` `6.2.10`, root Playwright `1.62.1`, and a pnpm 11 `jose: 6.2.10` single-version override; official peer metadata covers Next `16.2.12` and React `19.2.7`.
 
 ## TASK-AUTH-003
 
@@ -229,6 +229,6 @@ PASS. No two agents implement the same backend, frontend, schema, contract, lock
 
 TASK-AUTH-001 is `DONE` with `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`; SOL accepted contract candidate `10d1f5df44f6dff84034d09c7a5e93a2234ae745` for local integration.
 
-TASK-AUTH-002 is `REVIEW`. Its candidate verifies Auth0 SDK `4.27.0` against Next.js `16.2.10`, freezes the three exact dependencies and the authoritative `MYSTCRAG_*` configuration mapping, and records the SDK's Next.js 16 `proxy.ts` plus GET-logout differences. It must be SOL-integrated and registered `DONE` before any AUTH-003/004/005 work.
+TASK-AUTH-002 is `REVIEW`. Its repaired candidate verifies Auth0 SDK `4.27.0` against security-patched Next.js `16.2.12`, keeps matching `eslint-config-next@16.2.12`, freezes the three exact identity/test dependencies and the authoritative `MYSTCRAG_*` configuration mapping, and records the SDK's Next.js 16 `proxy.ts` plus GET-logout differences. The resolved tree contains none of the Proxy bypass or related Next.js High advisories patched by `>=16.2.11`. It must be SOL-integrated and registered `DONE` before any AUTH-003/004/005 work.
 
 TASK-AUTH-003 through TASK-AUTH-007 remain `BACKLOG` and continue to follow the registered dependency DAG. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.
