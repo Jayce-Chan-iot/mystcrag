@@ -2,11 +2,11 @@
 
 **Feature:** FEAT-018 Production Identity & Session<br>
 **Prepared by:** SOL / TASK-AUDIT-001<br>
-**Package state:** AUTH-001 integrated contract frozen; AUTH-002 dependency/configuration candidate in REVIEW; AUTH-003 through AUTH-007 implementation pending<br>
-**Blocking gates:** AUTH-002 must be SOL-integrated and registered DONE before AUTH-003 or AUTH-005 becomes READY; later tasks follow the registered DAG<br>
+**Package state:** AUTH-001 contract and AUTH-002 dependency/configuration baseline integrated; AUTH-003 and AUTH-005 ready; AUTH-004, AUTH-006 and AUTH-007 dependency-blocked<br>
+**Blocking gates:** AUTH-003 and AUTH-005 require separate registered owners, branches, worktrees and disjoint path locks; later tasks follow the registered DAG<br>
 **Contract marker:** `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`
 
-Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. AUTH-002 is in SOL review; no AUTH-003 through AUTH-007 Worker Agent has been dispatched.
+Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. SOL accepted AUTH-002 at `fbd7a540776c447289a05aeb20e50deefd8ea21a`; no AUTH-003 through AUTH-007 Worker implementation has started.
 
 ## Task DAG
 
@@ -229,6 +229,6 @@ PASS. No two agents implement the same backend, frontend, schema, contract, lock
 
 TASK-AUTH-001 is `DONE` with `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`; SOL accepted contract candidate `10d1f5df44f6dff84034d09c7a5e93a2234ae745` for local integration.
 
-TASK-AUTH-002 is `REVIEW`. Its repaired candidate verifies Auth0 SDK `4.27.0` against security-patched Next.js `16.2.12`, keeps matching `eslint-config-next@16.2.12`, freezes the three exact identity/test dependencies and the authoritative `MYSTCRAG_*` configuration mapping, and records the SDK's Next.js 16 `proxy.ts` plus GET-logout differences. The resolved tree contains none of the Proxy bypass or related Next.js High advisories patched by `>=16.2.11`. It must be SOL-integrated and registered `DONE` before any AUTH-003/004/005 work.
+TASK-AUTH-002 is `DONE`. SOL accepted repaired candidate `fbd7a540776c447289a05aeb20e50deefd8ea21a`, which verifies Auth0 SDK `4.27.0` against security-patched Next.js `16.2.12`, keeps matching `eslint-config-next@16.2.12`, freezes the three exact identity/test dependencies and the authoritative `MYSTCRAG_*` configuration mapping, and records the SDK's Next.js 16 `proxy.ts` plus GET-logout differences. The resolved tree contains none of the Proxy bypass or related Next.js High advisories patched by `>=16.2.11`.
 
-TASK-AUTH-003 through TASK-AUTH-007 remain `BACKLOG` and continue to follow the registered dependency DAG. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.
+TASK-AUTH-003 and TASK-AUTH-005 are `READY` and may run in parallel only after their respective owners claim the registered disjoint paths in dedicated worktrees. TASK-AUTH-004, TASK-AUTH-006 and TASK-AUTH-007 remain dependency-blocked and continue to follow the registered DAG. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.

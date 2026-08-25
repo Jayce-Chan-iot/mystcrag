@@ -50,10 +50,10 @@ Integration evidence: BASE-002 passed SOL review and is reachable at `be5646b418
 | TASK-REPO-002 | SOL | P2 | TASK-REPO-001 | `task/repo-002-branch-worktree-cleanup` | BACKLOG: review unique commits and clean branch/worktree metadata |
 | TASK-DOC-001 | SOL | P2 | all P1 decisions | `task/doc-001-current-architecture-refresh` | BACKLOG: update stale controlling architecture/status statements |
 | TASK-AUTH-001 | SOL | P0 | BASE-004 DONE; Product Owner approved Auth0 OIDC, environment-isolated callbacks and Next.js BFF secure-cookie topology on 2026-08-25 | `task/auth-001-identity-contract` | DONE: contract reviewed and accepted at `10d1f5df44f6dff84034d09c7a5e93a2234ae745`; `CONTRACT_FROZEN_IMPLEMENTATION_PENDING` |
-| TASK-AUTH-002 | SOL | P0 | TASK-AUTH-001 DONE | `task/auth-002-dependency-baseline` | REVIEW: security-patched Next `16.2.12`, exact identity dependencies, lockfile and `MYSTCRAG_*` environment mapping await SOL re-review/integration; AUTH-003/004/005 remain blocked until DONE |
-| TASK-AUTH-003 | DATABASE | P0 | TASK-AUTH-002 | `task/auth-003-identity-persistence` | BACKLOG: external identity mapping and idempotent User provisioning |
+| TASK-AUTH-002 | SOL | P0 | TASK-AUTH-001 DONE | `task/auth-002-dependency-baseline` | DONE: SOL accepted security-patched dependency/configuration baseline at `fbd7a540776c447289a05aeb20e50deefd8ea21a`; Next `16.2.12`, Auth0 SDK `4.27.0`, `jose` `6.2.10`, Playwright `1.62.1` |
+| TASK-AUTH-003 | DATABASE | P0 | TASK-AUTH-002 DONE | `task/auth-003-identity-persistence` | READY: external identity mapping and idempotent User provisioning; DATABASE owner must claim the registered branch/worktree before implementation |
 | TASK-AUTH-004 | BACKEND | P0 | TASK-AUTH-003 | `task/auth-004-backend-provider` | BACKLOG: production verifier and authenticated actor composition |
-| TASK-AUTH-005 | FRONTEND | P0 | TASK-AUTH-002 | `task/auth-005-frontend-session` | BACKLOG: login/session/logout UX; may parallel AUTH-003/004 on disjoint paths |
+| TASK-AUTH-005 | FRONTEND | P0 | TASK-AUTH-002 DONE | `task/auth-005-frontend-session` | READY: login/session/logout UX; may parallel AUTH-003/004 on disjoint paths after FRONTEND owner claims its registered branch/worktree |
 | TASK-AUTH-006 | QA | P0 | TASK-AUTH-004, TASK-AUTH-005 | `task/auth-006-security-e2e` | BACKLOG: isolated security, two-user and protected full-loop E2E gate |
 | TASK-AUTH-007 | SOL | P0 | TASK-AUTH-006 | `task/auth-007-final-integration` | BACKLOG: acceptance review, documentation reconciliation and integration |
 

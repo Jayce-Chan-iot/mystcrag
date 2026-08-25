@@ -8,7 +8,7 @@ The circle interaction remains on Pointer Events because dnd-kit would still req
 
 **Task:** TASK-AUTH-002<br>
 **Verified:** 2026-08-25<br>
-**State:** dependency/configuration candidate in `REVIEW`; no authentication runtime is implemented by this decision
+**State:** `DONE`; SOL accepted and integrated the dependency/configuration baseline; no authentication runtime is implemented by this decision
 
 ### Frozen packages
 
