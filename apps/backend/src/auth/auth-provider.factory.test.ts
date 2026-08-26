@@ -134,10 +134,34 @@ test("the auth0 issuer must be the exact canonical HTTPS form", () => {
   }
 });
 
+test("the auth0 issuer host must be an exact DNS hostname", () => {
+  const rejectedIssuers = [
+    "https://*.example.com/",
+    "https://tenant.*.auth0.example.com/",
+    "https://8.8.8.8/",
+    "https://0.0.0.0/",
+    "https://192.168.1.10/",
+    "https://[2001:db8::1]/",
+    "https://[fe80::1]/"
+  ];
+  for (const issuer of rejectedIssuers) {
+    assert.throws(
+      () =>
+        createAccessTokenVerifierFromEnvironment({
+          ...productionAuth0Environment,
+          MYSTCRAG_AUTH_ISSUER: issuer
+        }),
+      { message: /MYSTCRAG_AUTH_ISSUER/ },
+      `issuer=${issuer} must be rejected`
+    );
+  }
+});
+
 test("custom-domain canonical HTTPS issuers are accepted", () => {
   for (const issuer of [
     "https://auth.mystcrag.example.com/",
-    "https://mystcrag-tenant.auth0.example.com/"
+    "https://mystcrag-tenant.auth0.example.com/",
+    "https://login.mystcrag.example/"
   ]) {
     const verifier = createAccessTokenVerifierFromEnvironment({
       ...productionAuth0Environment,

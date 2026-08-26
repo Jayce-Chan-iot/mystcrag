@@ -13,37 +13,6 @@ function requireConfiguration(environment: AuthEnvironment, name: string): strin
   return value;
 }
 
-function isIpv4Loopback(host: string): boolean {
-  return isIP(host) === 4 && host.split(".")[0] === "127";
-}
-
-function isIpv6Loopback(host: string): boolean {
-  if (isIP(host) !== 6) return false;
-  const lower = host.toLowerCase();
-  if (lower === "::1" || lower === "0:0:0:0:0:0:0:1") return true;
-  if (lower.startsWith("::ffff:")) {
-    const tail = lower.slice("::ffff:".length);
-    if (isIP(tail) === 4) return isIpv4Loopback(tail);
-    const groups = tail.split(":");
-    if (groups.length === 2) {
-      const high = Number.parseInt(groups[0]!, 16);
-      const low = Number.parseInt(groups[1]!, 16);
-      if (Number.isFinite(high) && Number.isFinite(low)) {
-        return ((high << 16) | low) >>> 24 === 127;
-      }
-    }
-  }
-  return false;
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  if (hostname === "localhost" || hostname === "localhost.") return true;
-  const bare = hostname.startsWith("[") && hostname.endsWith("]")
-    ? hostname.slice(1, -1)
-    : hostname;
-  return isIpv4Loopback(bare) || isIpv6Loopback(bare);
-}
-
 function requireCanonicalAuth0Issuer(environment: AuthEnvironment): string {
   const raw = requireConfiguration(environment, "MYSTCRAG_AUTH_ISSUER");
   const invalid = (detail: string): Error =>
@@ -66,7 +35,17 @@ function requireCanonicalAuth0Issuer(environment: AuthEnvironment): string {
   if (issuer.hostname.length === 0) {
     throw invalid("a hostname is required");
   }
-  if (isLoopbackHost(issuer.hostname)) {
+  if (issuer.hostname.includes("*")) {
+    throw invalid("wildcard hostnames are not accepted as Auth0 issuers");
+  }
+  const bareHostname =
+    issuer.hostname.startsWith("[") && issuer.hostname.endsWith("]")
+      ? issuer.hostname.slice(1, -1)
+      : issuer.hostname;
+  if (isIP(bareHostname) !== 0) {
+    throw invalid("the issuer host must be a DNS hostname, not an IP literal");
+  }
+  if (bareHostname === "localhost" || bareHostname === "localhost.") {
     throw invalid("loopback hosts are not accepted as Auth0 issuers");
   }
   if (issuer.username !== "" || issuer.password !== "") {

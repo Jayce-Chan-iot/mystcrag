@@ -12,7 +12,7 @@ import {
   type CredentialRejectionReason
 } from "./auth-errors.js";
 import type { AccessTokenVerifier, VerifiedAuthClaims } from "./auth-provider.js";
-import type { JsonWebKeySet, JwksKeySource } from "./jwks-key-source.js";
+import { UnknownJwksKeyError, type JsonWebKeySet, type JwksKeySource } from "./jwks-key-source.js";
 
 const AUTH0_CLOCK_SKEW_SECONDS = 60;
 const AUTH0_SIGNING_ALGORITHM = "RS256";
@@ -44,6 +44,9 @@ function rejectionFor(
   error: unknown,
   kid: string | undefined
 ): CredentialRejectedError | ProviderUnavailableError {
+  if (error instanceof UnknownJwksKeyError) {
+    return new CredentialRejectedError("unknown_key", kid);
+  }
   if (
     error instanceof CredentialRejectedError ||
     error instanceof ProviderUnavailableError

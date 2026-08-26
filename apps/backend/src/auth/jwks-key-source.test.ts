@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ProviderUnavailableError } from "./auth-errors.js";
-import { JwksKeySource, type JwksTransport } from "./jwks-key-source.js";
+import { JwksKeySource, UnknownJwksKeyError, type JwksTransport } from "./jwks-key-source.js";
 
 type JwksResponse = {
   status: number;
@@ -267,18 +267,54 @@ test("the same unknown kid triggers exactly one bounded refresh", async () => {
   });
 
   await source.getJwks("kid-a");
-  const first = await source.getJwks("kid-unknown");
-  const second = await source.getJwks("kid-unknown");
+  await assert.rejects(source.getJwks("kid-unknown"), UnknownJwksKeyError);
+  await assert.rejects(source.getJwks("kid-unknown"), UnknownJwksKeyError);
+
+  assert.equal(calls(), 2, "initial fetch + one bounded refresh, never a third");
+});
+
+test("with max-age=0 the same unknown kid still triggers only one transport call", async () => {
+  let nowMs = 1_000_000;
+  const { transport, calls } = recordingTransport(() => ({
+    status: 200,
+    cacheControl: "max-age=0",
+    body: keySetFor(["kid-a"])
+  }));
+  const source = new JwksKeySource({
+    url: JWKS_URL,
+    transport,
+    now: () => nowMs
+  });
+
+  await assert.rejects(source.getJwks("kid-unknown"), UnknownJwksKeyError);
+  nowMs += 1_000;
+  await assert.rejects(source.getJwks("kid-unknown"), UnknownJwksKeyError);
 
   assert.equal(
-    first.keys.some((key) => key.kid === "kid-unknown"),
-    false
+    calls(),
+    1,
+    "the negative cooldown must hold even when the positive TTL is zero"
   );
-  assert.equal(
-    second.keys.some((key) => key.kid === "kid-unknown"),
-    false
-  );
-  assert.equal(calls(), 2, "initial fetch + one bounded refresh, never a third");
+});
+
+test("with max-age=0 different unknown kids still trigger only one transport call", async () => {
+  let nowMs = 1_000_000;
+  const { transport, calls } = recordingTransport(() => ({
+    status: 200,
+    cacheControl: "max-age=0",
+    body: keySetFor(["kid-a"])
+  }));
+  const source = new JwksKeySource({
+    url: JWKS_URL,
+    transport,
+    now: () => nowMs
+  });
+
+  await assert.rejects(source.getJwks("kid-unknown-1"), UnknownJwksKeyError);
+  nowMs += 1_000;
+  await assert.rejects(source.getJwks("kid-random-b"), UnknownJwksKeyError);
+
+  assert.equal(calls(), 1, "random kids must not bypass the cooldown via a zero TTL");
 });
 
 test("different unknown kids within the cooldown share the single refresh", async () => {
@@ -294,11 +330,37 @@ test("different unknown kids within the cooldown share the single refresh", asyn
   });
 
   await source.getJwks("kid-a");
-  await source.getJwks("kid-unknown-1");
-  await source.getJwks("kid-unknown-2");
-  await source.getJwks("kid-unknown-3");
+  await assert.rejects(source.getJwks("kid-unknown-1"), UnknownJwksKeyError);
+  await assert.rejects(source.getJwks("kid-unknown-2"), UnknownJwksKeyError);
+  await assert.rejects(source.getJwks("kid-unknown-3"), UnknownJwksKeyError);
 
   assert.equal(calls(), 2, "random kids must not bypass the global cooldown");
+});
+
+test("an unknown kid does not refresh while the cooldown outlives the positive TTL", async () => {
+  let nowMs = 1_000_000;
+  const { transport, calls } = recordingTransport(() => ({
+    status: 200,
+    cacheControl: "max-age=5",
+    body: keySetFor(["kid-a"])
+  }));
+  const source = new JwksKeySource({
+    url: JWKS_URL,
+    transport,
+    now: () => nowMs,
+    negativeCacheMs: 30_000
+  });
+
+  await source.getJwks("kid-a");
+  await assert.rejects(source.getJwks("kid-unknown"), UnknownJwksKeyError);
+  nowMs += 6_000;
+  await assert.rejects(source.getJwks("kid-random-9"), UnknownJwksKeyError);
+
+  assert.equal(
+    calls(),
+    2,
+    "the cooldown, not the expired positive TTL, decides whether to refresh"
+  );
 });
 
 test("after the cooldown expires a new kid gets one new bounded refresh", async () => {
@@ -315,9 +377,9 @@ test("after the cooldown expires a new kid gets one new bounded refresh", async 
   });
 
   await source.getJwks("kid-a");
-  await source.getJwks("kid-unknown");
+  await assert.rejects(source.getJwks("kid-unknown"), UnknownJwksKeyError);
   nowMs += 31_000;
-  await source.getJwks("kid-unknown-2");
+  await assert.rejects(source.getJwks("kid-unknown-2"), UnknownJwksKeyError);
 
   assert.equal(calls(), 3, "cooldown expiry allows exactly one new refresh");
 });
@@ -342,7 +404,7 @@ test("a rotated key is discovered after the cooldown expires", async () => {
   });
 
   await source.getJwks("kid-a");
-  await source.getJwks("kid-rotated");
+  await assert.rejects(source.getJwks("kid-rotated"), UnknownJwksKeyError);
   nowMs += 31_000;
   const rotated = await source.getJwks("kid-rotated");
 
@@ -367,11 +429,65 @@ test("a known cached key keeps verifying during the unknown-kid cooldown", async
   });
 
   await source.getJwks("kid-a");
-  await source.getJwks("kid-unknown");
+  await assert.rejects(source.getJwks("kid-unknown"), UnknownJwksKeyError);
   const known = await source.getJwks("kid-a");
 
   assert.equal(known.keys.some((key) => key.kid === "kid-a"), true);
   assert.equal(calls(), 2);
+});
+
+test("a known kid in an expired cache must refresh even during the cooldown", async () => {
+  let nowMs = 1_000_000;
+  const { transport, calls } = recordingTransport(() => ({
+    status: 200,
+    cacheControl: "max-age=5",
+    body: keySetFor(["kid-a"])
+  }));
+  const source = new JwksKeySource({
+    url: JWKS_URL,
+    transport,
+    now: () => nowMs,
+    negativeCacheMs: 30_000
+  });
+
+  await source.getJwks("kid-a");
+  await assert.rejects(source.getJwks("kid-unknown"), UnknownJwksKeyError);
+  nowMs += 6_000;
+  const refreshed = await source.getJwks("kid-a");
+
+  assert.equal(
+    refreshed.keys.some((key) => key.kid === "kid-a"),
+    true
+  );
+  assert.equal(calls(), 3, "an expired key set must never be reused");
+});
+
+test("an expired key set is never served after rotation removes the kid", async () => {
+  let nowMs = 1_000_000;
+  const responses: Array<() => JwksResponse> = [
+    () => ({ status: 200, cacheControl: "max-age=5", body: keySetFor(["kid-old"]) }),
+    () => ({ status: 200, cacheControl: "max-age=5", body: keySetFor(["kid-new"]) })
+  ];
+  const { transport, calls } = recordingTransport(() => {
+    const next = responses.shift();
+    if (!next) throw new Error("no more responses");
+    return next();
+  });
+  const source = new JwksKeySource({
+    url: JWKS_URL,
+    transport,
+    now: () => nowMs
+  });
+
+  await source.getJwks("kid-old");
+  nowMs += 6_000;
+  await assert.rejects(source.getJwks("kid-old"), UnknownJwksKeyError);
+
+  assert.equal(
+    calls(),
+    2,
+    "the retired kid must fail through a fresh refresh, never through the expired key"
+  );
 });
 
 test("concurrent unknown kids do not cause a refresh storm", async () => {
@@ -387,14 +503,15 @@ test("concurrent unknown kids do not cause a refresh storm", async () => {
   });
 
   await source.getJwks("kid-a");
-  const results = await Promise.all([
+  const results = await Promise.allSettled([
     source.getJwks("kid-x1"),
     source.getJwks("kid-x2"),
     source.getJwks("kid-x3")
   ]);
 
-  for (const jwks of results) {
-    assert.equal(jwks.keys.length, 1);
+  for (const result of results) {
+    assert.equal(result.status, "rejected");
+    assert.ok(result.reason instanceof UnknownJwksKeyError);
   }
   assert.equal(calls(), 2, "concurrent unknown kids share one in-flight refresh");
 });

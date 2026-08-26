@@ -106,7 +106,7 @@ test("production startup smoke matrix", { skip: !databaseUrl }, async (t) => {
     assert.match(outcome.output, /MYSTCRAG_AUTH_ISSUER/);
   });
 
-  await t.test("production refuses non-canonical or loopback auth0 issuers", async () => {
+  await t.test("production refuses non-canonical, wildcard, and IP-literal auth0 issuers", async () => {
     const rejectedIssuers = [
       "https://localhost/",
       "https://127.0.0.1/",
@@ -114,7 +114,11 @@ test("production startup smoke matrix", { skip: !databaseUrl }, async (t) => {
       "https://mystcrag-tenant.auth0.example.com/?query=1",
       "https://mystcrag-tenant.auth0.example.com/#fragment",
       "https://mystcrag-tenant.auth0.example.com",
-      "http://mystcrag-tenant.auth0.example.com/"
+      "http://mystcrag-tenant.auth0.example.com/",
+      "https://*.example.com/",
+      "https://0.0.0.0/",
+      "https://8.8.8.8/",
+      "https://[2001:db8::1]/"
     ];
     for (const issuer of rejectedIssuers) {
       const outcome = await spawnBackend({

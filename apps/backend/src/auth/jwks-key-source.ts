@@ -68,6 +68,18 @@ function fail(message: string, cause?: unknown): never {
   throw new ProviderUnavailableError(message, { cause });
 }
 
+/**
+ * Raised when the most recent successful JWKS refresh proves the requested
+ * signing key id is absent. Deliberately carries no kid value so attacker
+ * controlled header input never propagates through error paths.
+ */
+export class UnknownJwksKeyError extends Error {
+  constructor() {
+    super("The requested signing key id is not in the issuer's current key set.");
+    this.name = "UnknownJwksKeyError";
+  }
+}
+
 async function httpsJwksTransport(
   url: string,
   init: { signal: AbortSignal }
@@ -193,24 +205,29 @@ export class JwksKeySource {
     const nowMs = this.#now();
     const cached = this.#cache;
 
-    if (cached && nowMs < cached.fetchedAt + cached.ttlMs) {
+    if (cached !== null && nowMs < cached.fetchedAt + cached.ttlMs) {
       if (kid === undefined || hasKid(cached.jwks, kid)) {
         return cached.jwks;
       }
-      if (this.#inflight) {
-        return this.#inflight;
-      }
-      if (
-        this.#unknownKidCooldownUntil !== null &&
-        nowMs < this.#unknownKidCooldownUntil
-      ) {
-        // A bounded refresh already confirmed this key set within the cooldown
-        // window; answer from it so the caller can classify the kid as unknown
-        // without contacting the provider.
-        return cached.jwks;
-      }
-    } else if (this.#inflight) {
-      return this.#inflight;
+    }
+
+    if (
+      kid !== undefined &&
+      this.#unknownKidCooldownUntil !== null &&
+      nowMs < this.#unknownKidCooldownUntil &&
+      (cached === null || !hasKid(cached.jwks, kid))
+    ) {
+      // The most recent successful refresh already proved this kid is absent.
+      // The cooldown is a negative result that is independent of the positive
+      // key-set TTL: even an expired positive cache (for example max-age=0)
+      // must not trigger a new transport call for a kid the latest key set
+      // does not contain. A kid that did exist in the expired key set falls
+      // through to a refresh below, because expired keys never verify.
+      throw new UnknownJwksKeyError();
+    }
+
+    if (this.#inflight !== null) {
+      return this.#settleRefresh(this.#inflight, kid);
     }
 
     if (
@@ -220,15 +237,24 @@ export class JwksKeySource {
       fail("JWKS refresh is suppressed by the negative cache after a recent failure.");
     }
 
-    this.#inflight = this.#refresh().finally(() => {
+    const inflight = this.#refresh().finally(() => {
       this.#inflight = null;
     });
-    const jwks = await this.#inflight;
+    this.#inflight = inflight;
+    return this.#settleRefresh(inflight, kid);
+  }
+
+  async #settleRefresh(
+    inflight: Promise<JsonWebKeySet>,
+    kid?: string
+  ): Promise<JsonWebKeySet> {
+    const jwks = await inflight;
     if (kid !== undefined && !hasKid(jwks, kid)) {
-      // Global cooldown: one successful bounded refresh proved the kid is not
-      // in the current key set, so further unknown-kid refreshes are suppressed
-      // for the cooldown window. Known cached keys keep verifying above.
+      // One successful bounded refresh proved the kid is absent: record an
+      // independent global negative result. No attacker-supplied kid is ever
+      // stored, and known cached keys keep verifying through the fast path.
       this.#unknownKidCooldownUntil = this.#now() + this.#negativeCacheMs;
+      throw new UnknownJwksKeyError();
     }
     return jwks;
   }
