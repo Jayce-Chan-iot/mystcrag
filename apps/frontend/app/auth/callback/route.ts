@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getAuth0Client, getAuthConfig, generateRequestId } from "../../../src/features/auth/server/auth0-server";
 import { handleCallback, type CallbackDeps } from "../../../src/features/auth/server/callback";
+import { logAuthEvent } from "../../../src/features/auth/server/auth-events";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,8 @@ export const dynamic = "force-dynamic";
 const deps: CallbackDeps = {
   middleware: (request) => getAuth0Client().middleware(request),
   getConfig: () => getAuthConfig(),
-  generateRequestId
+  generateRequestId,
+  logAuthEvent
 };
 
 export async function GET(request: NextRequest) {

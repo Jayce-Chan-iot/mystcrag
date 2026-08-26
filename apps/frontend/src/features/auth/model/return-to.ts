@@ -75,3 +75,13 @@ export function validateReturnTo(value: string | undefined | null): string {
 
   return value;
 }
+
+/**
+ * True when a supplied (non-empty) returnTo was rejected by validation and replaced by
+ * the safe fallback. Used to emit the privacy-safe `auth.open_redirect_rejected` event;
+ * callers must never log the raw value itself.
+ */
+export function isReturnToRejected(rawReturnTo: string | undefined | null): boolean {
+  if (!rawReturnTo) return false;
+  return validateReturnTo(rawReturnTo) !== rawReturnTo;
+}

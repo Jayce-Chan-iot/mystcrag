@@ -2,7 +2,8 @@
  * Logout contract tests (route-level logic of app/auth/logout/route.ts).
  *
  * Coverage:
- * - GET → 405 and never mutates cookies.
+ * - GET → unified-envelope 405 ({error:{code,message,requestId}}, Allow: POST,
+ *   Cache-Control: no-store) and never mutates cookies.
  * - POST validates exact Origin first; missing/mismatched Origin → 403, no cookies.
  * - Success → real 303 See Other to the server-constructed Auth0 logout URL.
  * - Never returns 200 inline-script HTML.
@@ -18,12 +19,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { handleLogoutGet, handleLogoutPost, buildUpstreamLogoutUrl, type LogoutDeps } from "./logout";
-import { makeConfig, makeDevConfig, makeRequest } from "./auth-test-fixtures";
+import { makeConfig, makeDevConfig, makeRequest, noopAuthEventLogger } from "./auth-test-fixtures";
+import type { AuthEventLogger } from "./auth-events";
 
-function makeDeps(config = makeConfig()): LogoutDeps {
+function makeDeps(config = makeConfig(), logAuthEvent: AuthEventLogger = noopAuthEventLogger): LogoutDeps {
   return {
     getConfig: () => config,
-    generateRequestId: () => "req-out"
+    generateRequestId: () => "req-out",
+    logAuthEvent
   };
 }
 
@@ -33,11 +36,20 @@ const SESSION_COOKIES =
 
 // --- GET is 405 and non-mutating ---
 
-test("GET /auth/logout returns 405 and never sets cookies", () => {
+test("GET /auth/logout returns the unified 405 envelope and never sets cookies", async () => {
   const response = handleLogoutGet(makeDeps());
   assert.equal(response.status, 405);
   assert.equal(response.headers.get("allow"), "POST");
+  assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(response.headers.getSetCookie().length, 0);
+  const body = await response.json();
+  assert.deepEqual(body, {
+    error: {
+      code: "METHOD_NOT_ALLOWED",
+      message: "Use POST for logout.",
+      requestId: "req-out"
+    }
+  });
 });
 
 // --- Origin validation ---
@@ -202,7 +214,8 @@ test("config failure surfaces as 500, not a redirect", () => {
     getConfig: () => {
       throw new Error("invalid config");
     },
-    generateRequestId: () => "req-out"
+    generateRequestId: () => "req-out",
+    logAuthEvent: noopAuthEventLogger
   };
   const request = makeRequest("https://app.mystcrag.com/auth/logout", {
     method: "POST",

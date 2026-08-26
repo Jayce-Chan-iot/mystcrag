@@ -118,9 +118,6 @@ importers:
       eslint-config-next:
         specifier: ^16.2.12
         version: 16.2.12(@typescript-eslint/parser@8.64.0(eslint@9.39.5(jiti@2.7.0))(typescript@6.0.3))(eslint@9.39.5(jiti@2.7.0))(typescript@6.0.3)
-      happy-dom:
-        specifier: ^20.11.6
-        version: 20.11.6
       postcss:
         specifier: ^8.5.6
         version: 8.5.20
@@ -1829,12 +1826,6 @@ packages:
   '@types/webxr@0.5.24':
     resolution: {integrity: sha512-h8fgEd/DpoS9CBrjEQXR+dIDraopAEfu4wYVNY2tEPwk60stPWhvZMf4Foo5FakuQ7HFZoa8WceaWFervK2Ovg==}
 
-  '@types/whatwg-mimetype@3.0.2':
-    resolution: {integrity: sha512-c2AKvDT8ToxLIOUlN51gTiHXflsfIFisS4pO7pDPoKouJCESkhZnEy623gwP9laCy5lnLDAw1vAzu2vM2YLOrA==}
-
-  '@types/ws@8.18.1':
-    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
-
   '@typescript-eslint/eslint-plugin@8.64.0':
     resolution: {integrity: sha512-CGvQPBxN3wZLu6Rz2kFUpZeoCm78xUic92ck39KPePkO1NPOwjCqdQnm5Q87tpWw9vcBvW8XLrDXjH9PWYtJ3Q==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
@@ -2245,10 +2236,6 @@ packages:
 
   bubblesets-js@2.3.4:
     resolution: {integrity: sha512-DyMjHmpkS2+xcFNtyN00apJYL3ESdp9fTrkDr5+9Qg/GPqFmcWgGsK1akZnttE1XFxJ/VMy4DNNGMGYtmFp1Sg==}
-
-  buffer-image-size@0.6.4:
-    resolution: {integrity: sha512-nEh+kZOPY1w+gcCMobZ6ETUp9WfibndnosbpwB1iJk/8Gt5ZF2bhS6+B6bPYz424KtwsR6Rflc3tCz1/ghX2dQ==}
-    engines: {node: '>=4.0'}
 
   buffer@5.7.1:
     resolution: {integrity: sha512-EHcyIPBQ4BSGlvjB16k5KgAJ27CIsHY/2JBmCRReo48y9rQ3MaUzWX3KVlBa4U7MyX02HdVj0K7C3WaB3ju7FQ==}
@@ -3253,10 +3240,6 @@ packages:
 
   graphmatch@1.1.1:
     resolution: {integrity: sha512-5ykVn/EXM1hF0XCaWh05VbYvEiOL2lY1kBxZtaYsyvjp7cmWOU1XsAdfQBwClraEofXDT197lFbXOEVMHpvQOg==}
-
-  happy-dom@20.11.6:
-    resolution: {integrity: sha512-Hldbg8AdAa5a5oDcZpjqnGitp7JB0hqWmfv/8qr+kft4vzSD8BHsbdRfzYvL/0QcbKcURC/yyoygbeDQarPvYg==}
-    engines: {node: '>=20.0.0'}
 
   has-ansi@2.0.0:
     resolution: {integrity: sha512-C8vBJ8DwUCx19vhm7urhTuUsr4/IyP6l4VzNQDv+ryHQObW3TTTp9yB68WpYgRe2bbaGuZ/se74IqFeVnMnLZg==}
@@ -4942,10 +4925,6 @@ packages:
     engines: {node: '>=18'}
     deprecated: Use @exodus/bytes instead for a more spec-conformant and faster implementation
 
-  whatwg-mimetype@3.0.0:
-    resolution: {integrity: sha512-nt+N2dzIutVRxARx1nghPKGv1xHikU7HKdfafKkLNLindmPU/ch3U31NOCGGA/dmPcmb1VlofO0vnKAcsm0o/Q==}
-    engines: {node: '>=12'}
-
   whatwg-mimetype@4.0.0:
     resolution: {integrity: sha512-QaKxh0eNIi2mE9p2vEdzfagOKHCcj1pJ56EEHGQOVxp8r9/iszLUUV7v89x9O1p/T+NlTM5W7jW6+cz4Fq1YVg==}
     engines: {node: '>=18'}
@@ -6555,12 +6534,6 @@ snapshots:
 
   '@types/webxr@0.5.24': {}
 
-  '@types/whatwg-mimetype@3.0.2': {}
-
-  '@types/ws@8.18.1':
-    dependencies:
-      '@types/node': 22.20.1
-
   '@typescript-eslint/eslint-plugin@8.64.0(@typescript-eslint/parser@8.64.0(eslint@9.39.5(jiti@2.7.0))(typescript@6.0.3))(eslint@9.39.5(jiti@2.7.0))(typescript@6.0.3)':
     dependencies:
       '@eslint-community/regexpp': 4.12.2
@@ -7008,10 +6981,6 @@ snapshots:
       update-browserslist-db: 1.2.3(browserslist@4.28.6)
 
   bubblesets-js@2.3.4: {}
-
-  buffer-image-size@0.6.4:
-    dependencies:
-      '@types/node': 22.20.1
 
   buffer@5.7.1:
     dependencies:
@@ -8244,19 +8213,6 @@ snapshots:
       lodash: 4.18.1
 
   graphmatch@1.1.1: {}
-
-  happy-dom@20.11.6:
-    dependencies:
-      '@types/node': 22.20.1
-      '@types/whatwg-mimetype': 3.0.2
-      '@types/ws': 8.18.1
-      buffer-image-size: 0.6.4
-      entities: 7.0.1
-      whatwg-mimetype: 3.0.0
-      ws: 8.21.3
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
 
   has-ansi@2.0.0:
     dependencies:
@@ -10061,8 +10017,6 @@ snapshots:
   whatwg-encoding@3.1.1:
     dependencies:
       iconv-lite: 0.6.3
-
-  whatwg-mimetype@3.0.0: {}
 
   whatwg-mimetype@4.0.0: {}
 

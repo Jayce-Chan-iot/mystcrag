@@ -27,6 +27,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { AuthConfig } from "../model/auth-config";
 import { buildClearCookieHeaders } from "./session-cookies";
+import type { AuthEventLogger } from "./auth-events";
 
 // Minimal header allowlist copied from the browser request. Anything not listed here —
 // including cookie, authorization, host, content-length and forwarding headers — is never
@@ -52,6 +53,8 @@ export type BffDeps = {
   touchSession(request: NextRequest): Promise<string[]>;
   fetch(url: string, init: RequestInit): Promise<Response>;
   generateRequestId(): string;
+  /** Privacy-safe auth event logging (whitelisted fields only). */
+  logAuthEvent: AuthEventLogger;
 };
 
 type ErrorKind = "unauthorized" | "internal";
@@ -63,23 +66,28 @@ const UNAUTHORIZED_TOKEN_CODES = new Set([
   "missing_refresh_token"
 ]);
 
-// OAuth provider codes that mean a refresh grant was explicitly rejected/revoked
-// (as opposed to a transient outage).
+// OAuth provider codes that mean the refresh grant itself was explicitly rejected or
+// revoked (invalid_grant = expired/revoked grant material; access_denied = explicit
+// grant-denied/revoked semantics). Anything else behind failed_to_refresh_token —
+// invalid_client, unauthorized_client, invalid_request, invalid_scope, server_error,
+// temporarily_unavailable, transport/discovery failures, missing or unknown cause — is
+// a configuration/infrastructure failure: the decrypted session is preserved.
 const REFRESH_REJECTION_CODES = new Set([
   "invalid_grant",
-  "invalid_client",
-  "unauthorized_client",
-  "access_denied",
-  "invalid_request"
+  "access_denied"
 ]);
 
 /**
  * Classifies a getAccessToken failure.
  *
- * - Missing/expired session, missing refresh token, or an explicit provider renewal
- *   rejection → "unauthorized" (clear the session).
- * - Discovery/JWKS failures, transport failures, and ambiguous renewal failures →
- *   "internal" (preserve the decrypted session for retry).
+ * - Missing/expired session, missing refresh token, or an explicit provider grant
+ *   rejection/revocation (invalid_grant, access_denied) → "unauthorized" (clear the
+ *   session).
+ * - failed_to_refresh_token with any other cause (client configuration errors,
+ *   authorization-server outages, transport/discovery failures) and missing or unknown
+ *   causes → "internal": configuration/infrastructure failures must never log the user
+ *   out; the decrypted session is preserved for retry.
+ * - discovery_error and anything unknown are treated as transient → preserve session.
  */
 export function classifyTokenError(error: unknown): ErrorKind {
   const code = typeof (error as { code?: unknown })?.code === "string"
@@ -199,6 +207,11 @@ export async function handleBffRequest(
     accessToken = result.token;
   } catch (error) {
     if (classifyTokenError(error) === "unauthorized") {
+      deps.logAuthEvent("auth.renewal_rejected", {
+        category: "renewal_revoked",
+        requestId,
+        outcome: "failure"
+      });
       const response = errorEnvelope(401, "UNAUTHORIZED", "Authentication is required.", requestId);
       for (const cookie of buildClearCookieHeaders(request, config, false)) {
         response.headers.append("Set-Cookie", cookie);
@@ -206,6 +219,11 @@ export async function handleBffRequest(
       appendSinkCookies(response, sink);
       return response;
     }
+    deps.logAuthEvent("auth.dependency_failed", {
+      category: "dependency",
+      requestId,
+      outcome: "failure"
+    });
     const response = errorEnvelope(500, "INTERNAL_ERROR", "Authentication service unavailable.", requestId);
     // Preserve cookies already produced by rolling/rotation for this valid session.
     for (const cookie of rollingCookies) {
@@ -259,6 +277,11 @@ export async function handleBffRequest(
   //    session main cookie, chunks and SDK legacy cookies. Rolling/rotation cookies are
   //    intentionally NOT re-appended — they would resurrect the invalidated session.
   if (backendResponse.status === 401) {
+    deps.logAuthEvent("auth.renewal_rejected", {
+      category: "revocation_observed",
+      requestId,
+      outcome: "failure"
+    });
     const response = errorEnvelope(401, "UNAUTHORIZED", "Session is no longer valid.", requestId);
     for (const cookie of buildClearCookieHeaders(request, config, false)) {
       response.headers.append("Set-Cookie", cookie);

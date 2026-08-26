@@ -2,59 +2,64 @@
 
 import * as React from "react";
 import { useSession } from "../hooks/use-session";
+import { AUTH_STATUS_CLASSES, resolveAuthStatusView } from "./auth-status-view";
 
+/**
+ * Thin renderer over the pure AuthStatus view model. Every aria role/live region,
+ * label, text and class contract lives in `auth-status-view.ts` and is covered by
+ * `auth-status.test.tsx`.
+ */
 export function AuthStatus() {
   const { status, session, login, logout } = useSession();
+  const view = resolveAuthStatusView(status, session?.user);
 
-  if (status === "loading") {
+  if (view.state === "loading") {
     return (
-      <div className="flex items-center gap-2 text-sm text-[var(--muted)]" role="status" aria-live="polite">
-        <span className="animate-pulse">加载中...</span>
+      <div className={AUTH_STATUS_CLASSES.loadingRow} role={view.role} aria-live={view.ariaLive}>
+        <span className="animate-pulse">{view.text}</span>
       </div>
     );
   }
 
-  if (status === "error") {
+  if (view.state === "error") {
     return (
-      <div className="flex min-w-0 items-center gap-2 text-sm text-red-600" role="alert" aria-live="assertive">
-        <span className="shrink-0">会话错误</span>
+      <div className={AUTH_STATUS_CLASSES.errorRow} role={view.role} aria-live={view.ariaLive}>
+        <span className="shrink-0">{view.text}</span>
         <button
           type="button"
           onClick={() => login()}
-          className="inline-flex min-h-11 shrink-0 items-center rounded px-2 underline hover:no-underline focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2"
-          aria-label="重新登录"
+          className={view.action.className}
+          aria-label={view.action.ariaLabel}
         >
-          重新登录
+          {view.action.label}
         </button>
       </div>
     );
   }
 
-  if (status === "unauthenticated") {
+  if (view.state === "unauthenticated") {
     return (
       <button
         type="button"
         onClick={() => login()}
-        className="inline-flex min-h-11 items-center rounded-md px-4 py-2 text-sm font-medium text-[var(--accent-deep)] transition hover:bg-[var(--accent)]/10 focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2"
-        aria-label="登录"
+        className={view.action.className}
+        aria-label={view.action.ariaLabel}
       >
-        登录
+        {view.action.label}
       </button>
     );
   }
 
-  // Authenticated
-  const displayName = session?.user?.displayName || session?.user?.email || "用户";
   return (
-    <div className="flex min-w-0 items-center gap-3" role="status" aria-live="polite">
-      <span className="min-w-0 max-w-[10rem] truncate text-sm text-[var(--foreground)] sm:max-w-[16rem]" title={displayName}>{displayName}</span>
+    <div className={view.rowClassName} role={view.role} aria-live={view.ariaLive}>
+      <span className={view.displayNameClassName} title={view.displayName}>{view.displayName}</span>
       <button
         type="button"
         onClick={() => logout()}
-        className="inline-flex min-h-11 shrink-0 items-center rounded-md px-4 py-2 text-sm font-medium text-[var(--muted)] transition hover:bg-[var(--muted)]/10 focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2"
-        aria-label="退出登录"
+        className={view.action.className}
+        aria-label={view.action.ariaLabel}
       >
-        退出
+        {view.action.label}
       </button>
     </div>
   );

@@ -22,10 +22,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { AuthConfig } from "../model/auth-config";
 import { buildClearCookieHeaders } from "./session-cookies";
+import type { AuthEventLogger } from "./auth-events";
 
 export type LogoutDeps = {
   getConfig(): AuthConfig;
   generateRequestId(): string;
+  /** Privacy-safe auth event logging (whitelisted fields only). */
+  logAuthEvent: AuthEventLogger;
 };
 
 /**
@@ -44,12 +47,14 @@ export function buildUpstreamLogoutUrl(
 }
 
 /**
- * GET /auth/logout must never mutate session state.
+ * GET /auth/logout must never mutate session state. The 405 uses the unified error
+ * envelope (`{error:{code,message,requestId}}`) with Allow: POST and Cache-Control:
+ * no-store, and never touches any cookie.
  */
 export function handleLogoutGet(deps: LogoutDeps): NextResponse {
-  deps.generateRequestId();
+  const requestId = deps.generateRequestId();
   return NextResponse.json(
-    { error: { code: "METHOD_NOT_ALLOWED", message: "Use POST for logout." } },
+    { error: { code: "METHOD_NOT_ALLOWED", message: "Use POST for logout.", requestId } },
     { status: 405, headers: { "Cache-Control": "no-store", Allow: "POST" } }
   );
 }
@@ -93,5 +98,6 @@ export function handleLogoutPost(request: NextRequest, deps: LogoutDeps): NextRe
   response.headers.set("Location", upstreamLogoutUrl);
   response.headers.set("Cache-Control", "no-store");
   response.headers.set("Pragma", "no-cache");
+  deps.logAuthEvent("auth.logout", { category: "authentication", requestId, outcome: "success" });
   return response;
 }

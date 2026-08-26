@@ -1,12 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuth0Client } from "../../../src/features/auth/server/auth0-server";
-import { validateReturnTo } from "../../../src/features/auth/model/return-to";
+import { isReturnToRejected, validateReturnTo } from "../../../src/features/auth/model/return-to";
+import { logAuthEvent } from "../../../src/features/auth/server/auth-events";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const returnTo = validateReturnTo(request.nextUrl.searchParams.get("returnTo"));
+    const rawReturnTo = request.nextUrl.searchParams.get("returnTo");
+    const returnTo = validateReturnTo(rawReturnTo);
+    if (isReturnToRejected(rawReturnTo)) {
+      // A malicious/malformed returnTo was sanitized to the safe fallback. Log the
+      // rejection only — never the raw value itself.
+      logAuthEvent("auth.open_redirect_rejected", { category: "open_redirect", outcome: "failure" });
+    }
     const auth0Client = getAuth0Client();
     const redirectResponse = await auth0Client.startInteractiveLogin({ returnTo });
 

@@ -4,20 +4,25 @@
  * The SDK performs state/nonce/PKCE/code validation and session creation. This module wraps
  * the SDK result and classifies it against the frozen contract instead of trusting the URL:
  *
- * Classification matrix (SDK code | wrapped OAuth2 cause code):
+ * Classification matrix (SDK code | wrapped OAuth2 cause code), matching the real
+ * Auth0 Next.js SDK 4.27 error shapes:
  * - missing_state / invalid_state (replayed or forged state) → 401.
- * - issuer_validation_error / session_domain_mismatch (issuer mismatch) → 401.
+ * - issuer_validation_error / session_domain_mismatch / domain_validation_error
+ *   (issuer or session-domain rejection) → 401.
  * - session_expired (login transaction expired) → 401.
- * - authorization_error | authorization_code_grant_error with a denial/invalid-grant
- *   cause (access_denied, login_required, invalid_grant, invalid_request, ...) → 401.
- *   Invalid/replayed nonce, PKCE verifier mismatch and invalid/replayed authorization
- *   codes surface here as provider invalid_grant/invalid_request causes.
- * - authorization_error | authorization_code_grant_error with server_error /
- *   temporarily_unavailable cause → 500.
- * - discovery_error, authorization_code_grant_request_error (transport/preparation
- *   failure), invalid_configuration, JWKS/dependency outage → 500.
- * - Unknown codes or unknown causes fail closed as 500 (the decrypted session, if any,
- *   is never cleared on 500).
+ * - Provider-declared user denial (access_denied, login_required, interaction_required,
+ *   consent_required, account_selection_required) → 401.
+ * - authorization_error / authorization_code_grant_error wrapping:
+ *   - a denial cause or invalid_grant (invalid/replayed nonce, PKCE verifier or code) → 401;
+ *   - `unknown_error`, which SDK 4.27 assigns when its own local
+ *     authorization-response / code-response validation throws → 401;
+ *   - invalid_client, unauthorized_client, invalid_scope, invalid_request,
+ *     server_error, temporarily_unavailable → 500;
+ *   - any other or missing cause → 500 (fail closed).
+ * - discovery_error, authorization_code_grant_request_error (transport),
+ *   invalid_configuration, domain_resolution_error, JWKS/dependency outage → 500.
+ * - Unknown top-level SDK/runtime exceptions and unknown provider extension codes →
+ *   500 (the decrypted session, if any, is never cleared on 500).
  *
  * Only internal whitelisted classifications (UNAUTHORIZED / INTERNAL_ERROR) are ever
  * emitted — raw provider codes and error details never leave the server.
@@ -35,20 +40,24 @@ import { NextRequest, NextResponse } from "next/server";
 import type { AuthConfig } from "../model/auth-config";
 import { buildClearTransactionCookieHeaders } from "./session-cookies";
 import { CALLBACK_ERROR_HEADER } from "./auth0-server";
+import type { AuthEventLogger } from "./auth-events";
 
 export type CallbackDeps = {
   middleware(request: NextRequest): Promise<Response>;
   getConfig(): AuthConfig;
   generateRequestId(): string;
+  /** Privacy-safe auth event logging (whitelisted fields only, no provider detail). */
+  logAuthEvent: AuthEventLogger;
 };
 
 // SDK top-level codes that mean the local transaction itself was rejected/forged or
-// the issuer claim cannot be trusted → authentication failure (401).
+// the issuer/session-domain claim cannot be trusted → authentication failure (401).
 const AUTH_TOP_LEVEL_CODES = new Set([
   "missing_state",
   "invalid_state",
   "issuer_validation_error",
   "session_domain_mismatch",
+  "domain_validation_error",
   "session_expired"
 ]);
 
@@ -58,30 +67,36 @@ const CAUSE_CLASSIFIED_CODES = new Set([
   "authorization_code_grant_error"
 ]);
 
-// Provider codes meaning the end-user/authorization-server rejected the transaction, or
-// the grant material (state/nonce/PKCE/code) was invalid or replayed → 401.
-const DENIAL_CAUSE_CODES = new Set([
+// Wrapped causes meaning the transaction itself was rejected: provider-declared user
+// denial, or invalid/replayed grant material (state/nonce/PKCE/code). `unknown_error`
+// is what SDK 4.27 assigns when its own local authorization-response or code-response
+// validation throws inside these known wrappers → still an authentication failure.
+const AUTHENTICATION_REJECTION_CAUSE_CODES = new Set([
   "access_denied",
   "login_required",
   "interaction_required",
   "consent_required",
   "account_selection_required",
   "invalid_grant",
-  "invalid_request",
-  "invalid_scope",
-  "invalid_client",
-  "unauthorized_client"
+  "unknown_error"
 ]);
 
-// Provider codes meaning a transient authorization-server outage → 500.
-const OUTAGE_CAUSE_CODES = new Set([
-  "server_error",
-  "temporarily_unavailable"
+// Provider-declared denial codes arriving as a bare top-level OAuth2Error → 401.
+const PROVIDER_DENIAL_TOP_LEVEL_CODES = new Set([
+  "access_denied",
+  "login_required",
+  "interaction_required",
+  "consent_required",
+  "account_selection_required"
 ]);
 
 /**
  * Classifies a callback failure from the SDK error code plus the wrapped OAuth2 cause
- * code. Never trusts URL parameters; never leaks provider detail.
+ * code. Never trusts URL parameters; never leaks provider detail. Wrapped causes that
+ * are client-configuration/authorization-server failures (invalid_client,
+ * unauthorized_client, invalid_scope, invalid_request, server_error,
+ * temporarily_unavailable), missing or unknown, fail closed as "internal" so a valid
+ * decrypted session is never cleared.
  */
 export function classifyCallbackError(
   code: string,
@@ -91,18 +106,16 @@ export function classifyCallbackError(
     return "unauthorized";
   }
   if (CAUSE_CLASSIFIED_CODES.has(code)) {
-    if (causeCode && DENIAL_CAUSE_CODES.has(causeCode)) return "unauthorized";
-    if (causeCode && OUTAGE_CAUSE_CODES.has(causeCode)) return "internal";
-    // Unknown cause behind a grant failure → fail closed as infrastructure error and
-    // preserve any decrypted session.
+    if (causeCode && AUTHENTICATION_REJECTION_CAUSE_CODES.has(causeCode)) return "unauthorized";
+    // Dependency/configuration causes, missing causes and unknown provider extension
+    // codes → fail closed as infrastructure error and preserve any decrypted session.
     return "internal";
   }
-  // Bare OAuth2Error carrying a provider denial code directly.
-  if (DENIAL_CAUSE_CODES.has(code)) {
+  if (PROVIDER_DENIAL_TOP_LEVEL_CODES.has(code)) {
     return "unauthorized";
   }
   // discovery_error, authorization_code_grant_request_error, invalid_configuration,
-  // domain errors, JWKS/transport failures and anything unknown → infrastructure outage.
+  // domain_resolution_error, JWKS/transport failures and anything unknown → outage.
   return "internal";
 }
 
@@ -157,6 +170,10 @@ export async function handleCallback(request: NextRequest, deps: CallbackDeps): 
         response.headers.append("Set-Cookie", cookie);
       }
     }
+    deps.logAuthEvent(
+      kind === "unauthorized" ? "auth.callback_failed" : "auth.dependency_failed",
+      { category: kind === "unauthorized" ? "authentication" : "dependency", requestId, outcome: "failure" }
+    );
     return response;
   }
 
@@ -176,6 +193,10 @@ export async function handleCallback(request: NextRequest, deps: CallbackDeps): 
         response.headers.append("Set-Cookie", cookie);
       }
     }
+    deps.logAuthEvent(
+      kind === "unauthorized" ? "auth.callback_failed" : "auth.dependency_failed",
+      { category: kind === "unauthorized" ? "authentication" : "dependency", requestId, outcome: "failure" }
+    );
     return response;
   }
 
@@ -189,5 +210,6 @@ export async function handleCallback(request: NextRequest, deps: CallbackDeps): 
   copySetCookies(response, sdkResponse);
   response.headers.set("Cache-Control", "no-store");
   response.headers.set("Pragma", "no-cache");
+  deps.logAuthEvent("auth.sign_in", { category: "authentication", requestId, outcome: "success" });
   return response;
 }

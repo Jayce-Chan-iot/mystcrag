@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getAuth0Client, getAuthConfig, generateRequestId, touchSession } from "../../../src/features/auth/server/auth0-server";
 import { handleBffRequest, type BffDeps } from "../../../src/features/auth/server/bff";
+import { logAuthEvent } from "../../../src/features/auth/server/auth-events";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,8 @@ const deps: BffDeps = {
   getAccessToken: (request, sink) => getAuth0Client().getAccessToken(request, sink),
   touchSession,
   fetch: (url, init) => fetch(url, init),
-  generateRequestId
+  generateRequestId,
+  logAuthEvent
 };
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {

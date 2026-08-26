@@ -17,7 +17,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { validateReturnTo } from "./return-to";
+import { isReturnToRejected, validateReturnTo } from "./return-to";
 
 test("valid same-origin relative paths are accepted", () => {
   assert.equal(validateReturnTo("/"), "/");
@@ -103,4 +103,18 @@ test("paths with unicode characters are accepted", () => {
   assert.equal(validateReturnTo("/水晶"), "/水晶");
   assert.equal(validateReturnTo("/设计/手串"), "/设计/手串");
   assert.equal(validateReturnTo("/path?name=玄矶"), "/path?name=玄矶");
+});
+
+test("isReturnToRejected flags only supplied values that validation replaced", () => {
+  // Absent values are not rejections (they simply fall back to "/").
+  assert.equal(isReturnToRejected(undefined), false);
+  assert.equal(isReturnToRejected(null), false);
+  assert.equal(isReturnToRejected(""), false);
+  // Valid paths pass through unchanged.
+  assert.equal(isReturnToRejected("/design/abc#preview"), false);
+  // Open-redirect attempts are detected without exposing the raw value.
+  assert.equal(isReturnToRejected("https://evil.example/phish"), true);
+  assert.equal(isReturnToRejected("//evil.example"), true);
+  assert.equal(isReturnToRejected("/\\evil"), true);
+  assert.equal(isReturnToRejected("%252F%252Fevil.com"), true);
 });

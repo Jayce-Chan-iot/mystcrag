@@ -19,7 +19,8 @@ import test from "node:test";
 import type { SessionData } from "@auth0/nextjs-auth0/types";
 
 import { handleSessionRequest, type SessionDeps } from "./session";
-import { makeConfig, makeRequest } from "./auth-test-fixtures";
+import { makeConfig, makeRequest, noopAuthEventLogger } from "./auth-test-fixtures";
+import type { AuthEventLogger } from "./auth-events";
 
 // Simulates the Set-Cookie produced by the SDK's real rolling write.
 function rollingCookie(maxAge: number): string {
@@ -28,7 +29,7 @@ function rollingCookie(maxAge: number): string {
 
 function makeDeps(
   session: () => Promise<SessionData | null>,
-  options: { touch?: () => Promise<string[]> } = {}
+  options: { touch?: () => Promise<string[]>; logAuthEvent?: AuthEventLogger } = {}
 ): { deps: SessionDeps; touchCalls: { count: number } } {
   const touchCalls = { count: 0 };
   const deps: SessionDeps = {
@@ -45,7 +46,8 @@ function makeDeps(
       }
       return [rollingCookie(28800)];
     },
-    generateRequestId: () => "req-sess"
+    generateRequestId: () => "req-sess",
+    logAuthEvent: options.logAuthEvent ?? noopAuthEventLogger
   };
   return { deps, touchCalls };
 }

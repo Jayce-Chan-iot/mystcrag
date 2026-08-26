@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getAuthConfig, generateRequestId } from "../../../src/features/auth/server/auth0-server";
 import { handleLogoutGet, handleLogoutPost, type LogoutDeps } from "../../../src/features/auth/server/logout";
+import { logAuthEvent } from "../../../src/features/auth/server/auth-events";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,8 @@ export const dynamic = "force-dynamic";
 
 const deps: LogoutDeps = {
   getConfig: () => getAuthConfig(),
-  generateRequestId
+  generateRequestId,
+  logAuthEvent
 };
 
 export async function GET() {

@@ -1,6 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { buildLoginHref, buildLogoutFormSpec, buildReturnTo, type BrowserLocation } from "../model/auth-actions";
+import {
+  INITIAL_SESSION_STATUS,
+  classifySessionResponse,
+  reduceSessionStatus,
+  type SessionStatus
+} from "../model/session-status";
+
+export type { SessionStatus };
 
 export type SessionState = {
   authenticated: boolean;
@@ -12,8 +21,6 @@ export type SessionState = {
   idleExpiresAt?: string;
   absoluteExpiresAt?: string;
 };
-
-export type SessionStatus = "loading" | "authenticated" | "unauthenticated" | "error";
 
 async function fetchSessionData(): Promise<{ status: SessionStatus; session: SessionState | null }> {
   const response = await fetch("/auth/session", {
@@ -27,7 +34,7 @@ async function fetchSessionData(): Promise<{ status: SessionStatus; session: Ses
 
   const data: SessionState = await response.json();
   return {
-    status: data.authenticated ? "authenticated" : "unauthenticated",
+    status: classifySessionResponse(data),
     session: data
   };
 }
@@ -39,11 +46,11 @@ async function fetchSessionData(): Promise<{ status: SessionStatus; session: Ses
  */
 export function currentReturnTo(): string {
   const { pathname, search, hash } = window.location;
-  return `${pathname}${search}${hash}`;
+  return buildReturnTo({ pathname, search, hash });
 }
 
 export function useSession() {
-  const [status, setStatus] = useState<SessionStatus>("loading");
+  const [status, setStatus] = useState<SessionStatus>(INITIAL_SESSION_STATUS);
   const [session, setSession] = useState<SessionState | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const mountedRef = useRef(true);
@@ -61,7 +68,7 @@ export function useSession() {
     }).catch((err) => {
       if (!cancelled && mountedRef.current) {
         setError(err instanceof Error ? err : new Error("Unknown error"));
-        setStatus("error");
+        setStatus((current) => reduceSessionStatus(current, { type: "failed" }));
       }
     });
 
@@ -77,8 +84,11 @@ export function useSession() {
    * simply produces returnTo="/". Server-side validation is the single trust boundary.
    */
   const login = useCallback((returnTo?: string) => {
-    const target = returnTo ?? currentReturnTo();
-    window.location.href = `/auth/login?returnTo=${encodeURIComponent(target)}`;
+    const location: BrowserLocation = window.location;
+    const href = returnTo !== undefined
+      ? `/auth/login?returnTo=${encodeURIComponent(returnTo)}`
+      : buildLoginHref(location);
+    window.location.href = href;
   }, []);
 
   /**
@@ -87,17 +97,18 @@ export function useSession() {
    * (not a fetch following a cross-origin 303).
    */
   const logout = useCallback(() => {
+    const spec = buildLogoutFormSpec();
     const form = document.createElement("form");
-    form.method = "POST";
-    form.action = "/auth/logout";
-    form.style.display = "none";
+    form.method = spec.method;
+    form.action = spec.action;
+    form.style.display = spec.display;
     document.body.appendChild(form);
     form.submit();
   }, []);
 
   const refresh = useCallback(async () => {
     try {
-      setStatus("loading");
+      setStatus((current) => reduceSessionStatus(current, { type: "reset" }));
       const result = await fetchSessionData();
       if (mountedRef.current) {
         setStatus(result.status);
@@ -107,7 +118,7 @@ export function useSession() {
     } catch (err) {
       if (mountedRef.current) {
         setError(err instanceof Error ? err : new Error("Unknown error"));
-        setStatus("error");
+        setStatus((current) => reduceSessionStatus(current, { type: "failed" }));
       }
     }
   }, []);

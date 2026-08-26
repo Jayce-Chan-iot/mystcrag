@@ -4,6 +4,26 @@
 
 import { NextRequest } from "next/server";
 import type { AuthConfig } from "../model/auth-config";
+import { createAuthEventLogger, type AuthEventLogger, type AuthEventRecord } from "./auth-events";
+
+/** No-op logger for tests that do not assert on auth events. */
+export const noopAuthEventLogger: AuthEventLogger = () => {};
+
+export type CapturedAuthEvents = {
+  readonly logger: AuthEventLogger;
+  readonly records: AuthEventRecord[];
+};
+
+/** Captures privacy-sanitized auth event records for assertions. */
+export function makeAuthEventCapture(): CapturedAuthEvents {
+  const records: AuthEventRecord[] = [];
+  return {
+    logger: createAuthEventLogger((record) => {
+      records.push(record);
+    }),
+    records
+  };
+}
 
 export function makeConfig(overrides: Partial<AuthConfig> = {}): AuthConfig {
   return {

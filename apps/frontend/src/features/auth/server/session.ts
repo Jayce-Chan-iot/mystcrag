@@ -23,6 +23,7 @@ import type { SessionData } from "@auth0/nextjs-auth0/types";
 import type { AuthConfig } from "../model/auth-config";
 import { buildClearCookieHeaders, hasSessionCookie } from "./session-cookies";
 import { getSessionCookieName, parseSessionCookieMaxAge, projectSessionState } from "./auth0-server";
+import type { AuthEventLogger } from "./auth-events";
 
 export type SessionDeps = {
   getConfig(): AuthConfig;
@@ -33,6 +34,8 @@ export type SessionDeps = {
    */
   touchSession(request: NextRequest): Promise<string[]>;
   generateRequestId(): string;
+  /** Privacy-safe auth event logging (whitelisted fields only). */
+  logAuthEvent: AuthEventLogger;
 };
 
 export async function handleSessionRequest(
@@ -48,6 +51,11 @@ export async function handleSessionRequest(
   } catch {
     // SDK/runtime dependency failure. MUST return 500 — never fake anonymity, and never
     // clear a cookie that might still decrypt after a transient outage.
+    deps.logAuthEvent("auth.dependency_failed", {
+      category: "dependency",
+      requestId,
+      outcome: "failure"
+    });
     return NextResponse.json(
       { error: { code: "INTERNAL_ERROR", message: "Session service unavailable.", requestId } },
       { status: 500, headers: { "Cache-Control": "no-store", "Pragma": "no-cache" } }
@@ -62,6 +70,11 @@ export async function handleSessionRequest(
     try {
       rollingCookies = await deps.touchSession(request);
     } catch {
+      deps.logAuthEvent("auth.dependency_failed", {
+        category: "dependency",
+        requestId,
+        outcome: "failure"
+      });
       return NextResponse.json(
         { error: { code: "INTERNAL_ERROR", message: "Session service unavailable.", requestId } },
         { status: 500, headers: { "Cache-Control": "no-store", "Pragma": "no-cache" } }
@@ -89,6 +102,11 @@ export async function handleSessionRequest(
     for (const cookie of buildClearCookieHeaders(request, config, false)) {
       response.headers.append("Set-Cookie", cookie);
     }
+    deps.logAuthEvent("auth.session_invalid", {
+      category: "session_expired_or_malformed",
+      requestId,
+      outcome: "failure"
+    });
   }
   return response;
 }
