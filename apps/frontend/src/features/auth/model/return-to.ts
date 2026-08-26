@@ -51,13 +51,20 @@ export function validateReturnTo(value: string | undefined | null): string {
   try {
     let current = value;
     let previous = value;
-    // Iteratively decode until stable (catches multi-layer encoding)
+    // Iteratively decode until stable (catchs multi-layer encoding)
     for (let i = 0; i < 10; i++) {
       current = decodeURIComponent(current);
       if (current === previous) break;
       previous = current;
       // Re-validate at each decode level
-      if (SCHEME_PATTERN.test(current) || AUTHORITY_PATTERN.test(current) || BACKSLASH_PATTERN.test(current) || CONTROL_CHAR_PATTERN.test(current) || !current.startsWith("/") || current.startsWith("///")) {
+      if (
+        SCHEME_PATTERN.test(current) ||
+        AUTHORITY_PATTERN.test(current) ||
+        BACKSLASH_PATTERN.test(current) ||
+        CONTROL_CHAR_PATTERN.test(current) ||
+        !current.startsWith("/") ||
+        current.startsWith("///")
+      ) {
         return "/";
       }
     }

@@ -136,7 +136,7 @@ test("all Tarot operations send the canonical protected routes and bodies", asyn
     calls.push({ input: String(input), ...(init ? { init } : {}) });
     return jsonResponse(responses[calls.length - 1]);
   }) as typeof fetch;
-  const client = createTarotApiClient({ accessToken: "verified-test-token", fetcher });
+  const client = createTarotApiClient({ fetcher });
 
   const createRequest = { requestId: "request-create", spreadType: "PAST_PRESENT_FUTURE", theme: "SELF_GROWTH" } as const;
   const selectRequest = { requestId: "request-select", slot: "PAST", displayedPosition: 4, expectedRevision: 1, operationId: "select-past-1" } as const;
@@ -174,7 +174,6 @@ test("all Tarot operations send the canonical protected routes and bodies", asyn
 test("missing session cookie results in 401 from BFF proxy", async () => {
   // Note: Client no longer checks for accessToken; BFF proxy returns 401 if no session
   const client = createTarotApiClient({
-    accessToken: "",
     fetcher: (async () => jsonResponse({ error: { code: "UNAUTHORIZED", message: "Authentication is required.", requestId: "req-1" } }, 401)) as typeof fetch
   });
 
@@ -186,7 +185,6 @@ test("missing session cookie results in 401 from BFF proxy", async () => {
 
 test("invalid successful Backend payload is rejected at the response boundary", async () => {
   const client = createTarotApiClient({
-    accessToken: "verified-test-token",
     fetcher: (async () => jsonResponse({ requestId: "request-get", session: { ...drawingSession, privateDeckState: {} } })) as typeof fetch
   });
 
@@ -199,7 +197,6 @@ test("invalid successful Backend payload is rejected at the response boundary", 
 for (const code of ["CONFLICT", "INVENTORY_CHANGED", "PRICE_CHANGED", "COMPLIANCE_BLOCKED"] as const) {
   test(`${code} Backend errors remain stable Frontend states`, async () => {
     const client = createTarotApiClient({
-      accessToken: "verified-test-token",
       fetcher: (async () => jsonResponse({ error: { code, message: code, requestId: "request-error" } }, 409)) as typeof fetch
     });
 
@@ -212,7 +209,6 @@ for (const code of ["CONFLICT", "INVENTORY_CHANGED", "PRICE_CHANGED", "COMPLIANC
 
 test("disabled Tarot creation preserves the 501 NOT_IMPLEMENTED state with actionable copy", async () => {
   const client = createTarotApiClient({
-    accessToken: "verified-test-token",
     fetcher: (async () =>
       jsonResponse(
         {
@@ -255,7 +251,6 @@ test("recommendation questions are sent ephemerally without browser persistence"
   Object.defineProperty(globalThis, "sessionStorage", { configurable: true, value: { setItem: () => { sessionWrites += 1; } } });
   try {
     const client = createTarotApiClient({
-      accessToken: "verified-test-token",
       fetcher: (async () => jsonResponse({ requestId: "request-recommend", session: recommendedSession })) as typeof fetch
     });
     await client.recommendations(drawingSession.sessionId, {

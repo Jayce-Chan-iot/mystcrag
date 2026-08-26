@@ -1,9 +1,11 @@
 /**
  * Validates and resolves MYSTCRAG_* authentication configuration.
  *
- * Contract: all variables are server-only and must not use NEXT_PUBLIC_.
- * Production/staging: fail closed if any required variable is missing or invalid.
- * Development/test: loopback HTTP and signed-test are permitted with explicit opt-in.
+ * Contract:
+ * - All variables are server-only and must not use NEXT_PUBLIC_.
+ * - No implicit AUTH0_* / APP_BASE_URL fallbacks.
+ * - Production/staging: fail closed if any required variable is missing or invalid.
+ * - Development/test: loopback HTTP and signed-test are permitted with explicit opt-in.
  */
 
 export type AuthConfig = {
@@ -27,19 +29,8 @@ export type AuthConfigError = {
 };
 
 const HEX_64_PATTERN = /^[0-9a-f]{64}$/i;
-
-function isValidHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return Boolean(
-      (url.protocol === "https:" || url.protocol === "http:") &&
-      url.host &&
-      !url.pathname.includes("@")
-    );
-  } catch {
-    return false;
-  }
-}
+const WILDCARD_PATTERN = /\*/;
+const IP_LITERAL_PATTERN = /^\[.*\]$|^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 
 function isValidHttpOrigin(value: string): boolean {
   try {
@@ -57,11 +48,47 @@ function isValidHttpOrigin(value: string): boolean {
   }
 }
 
+function isHttpsOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && Boolean(url.host) &&
+      !url.pathname.includes("@") && url.pathname === "/" &&
+      !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
 function isLoopbackOrigin(origin: string): boolean {
   try {
     const url = new URL(origin);
     const host = url.hostname;
     return host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".localhost");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validates an Auth0 issuer URL.
+ * Must be canonical https://dns-host/ form with trailing slash.
+ * No path, query, fragment, credentials, wildcard, or IP literals.
+ */
+function isValidAuthIssuer(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return false;
+    if (!url.host) return false;
+    if (url.username || url.password) return false;
+    if (url.pathname !== "/") return false;
+    if (url.search) return false;
+    if (url.hash) return false;
+    if (WILDCARD_PATTERN.test(url.host)) return false;
+    if (IP_LITERAL_PATTERN.test(url.hostname)) return false;
+    if (url.hostname === "localhost" || url.hostname.endsWith(".localhost")) return false;
+    // Must end with trailing slash (canonical form)
+    if (!value.endsWith("/")) return false;
+    return true;
   } catch {
     return false;
   }
@@ -83,7 +110,7 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
   const authCallbackUrl = env.MYSTCRAG_AUTH_CALLBACK_URL?.trim() ?? "";
   const authLogoutUrl = env.MYSTCRAG_AUTH_LOGOUT_URL?.trim() ?? "";
   const authSessionSecret = env.MYSTCRAG_AUTH_SESSION_SECRET?.trim() ?? "";
-  const backendOrigin = (env.MYSTCRAG_BACKEND_ORIGIN ?? env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:4000").replace(/\/$/, "");
+  const backendOrigin = env.MYSTCRAG_BACKEND_ORIGIN?.replace(/\/$/, "") ?? "";
   const enableSignedTestAuth = env.MYSTCRAG_ENABLE_SIGNED_TEST_AUTH === "true";
 
   const nodeEnv: string = env.NODE_ENV ?? "development";
@@ -94,6 +121,8 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
     errors.push("MYSTCRAG_APP_ORIGIN is required");
   } else if (!isValidHttpOrigin(appOrigin)) {
     errors.push("MYSTCRAG_APP_ORIGIN must be an absolute origin without path/query/fragment");
+  } else if (isProduction && !isHttpsOrigin(appOrigin)) {
+    errors.push("MYSTCRAG_APP_ORIGIN must be HTTPS in production/staging");
   } else if (isProduction && isLoopbackOrigin(appOrigin)) {
     errors.push("MYSTCRAG_APP_ORIGIN cannot be loopback in production/staging");
   }
@@ -112,15 +141,8 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
   // Validate authIssuer
   if (!authIssuer) {
     errors.push("MYSTCRAG_AUTH_ISSUER is required");
-  } else if (authProvider === "auth0") {
-    try {
-      const url = new URL(authIssuer);
-      if (url.protocol !== "https:" || !url.host || url.pathname.includes("@")) {
-        errors.push("MYSTCRAG_AUTH_ISSUER must be a valid HTTPS URL for auth0 provider");
-      }
-    } catch {
-      errors.push("MYSTCRAG_AUTH_ISSUER must be a valid HTTPS URL for auth0 provider");
-    }
+  } else if (authProvider === "auth0" && !isValidAuthIssuer(authIssuer)) {
+    errors.push("MYSTCRAG_AUTH_ISSUER must be canonical https://dns-host/ with trailing slash, no path/query/fragment/credentials/wildcard/IP");
   }
 
   // Validate authAudience
@@ -138,31 +160,25 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
     }
   }
 
-  // Validate authCallbackUrl
+  // Validate authCallbackUrl — must exactly equal ${appOrigin}/auth/callback
   if (!authCallbackUrl) {
     errors.push("MYSTCRAG_AUTH_CALLBACK_URL is required");
-  } else {
-    const isLoopback = isLoopbackOrigin(authCallbackUrl);
-    const isValidUrl = isValidHttpUrl(authCallbackUrl);
-    
-    if (!isValidUrl) {
-      errors.push("MYSTCRAG_AUTH_CALLBACK_URL must be a valid URL");
-    } else if (isProduction && isLoopback) {
-      errors.push("MYSTCRAG_AUTH_CALLBACK_URL cannot be loopback in production/staging");
-    }
+  } else if (appOrigin && authCallbackUrl !== `${appOrigin}/auth/callback`) {
+    errors.push("MYSTCRAG_AUTH_CALLBACK_URL must exactly equal MYSTCRAG_APP_ORIGIN + '/auth/callback'");
   }
 
-  // Validate authLogoutUrl
+  // Validate authLogoutUrl — must be same-origin approved post-logout URL
   if (!authLogoutUrl) {
     errors.push("MYSTCRAG_AUTH_LOGOUT_URL is required");
-  } else {
-    const isLoopback = isLoopbackOrigin(authLogoutUrl);
-    const isValidUrl = isValidHttpUrl(authLogoutUrl);
-    
-    if (!isValidUrl) {
+  } else if (appOrigin) {
+    try {
+      const logoutUrl = new URL(authLogoutUrl);
+      const appUrl = new URL(appOrigin);
+      if (logoutUrl.origin !== appUrl.origin) {
+        errors.push("MYSTCRAG_AUTH_LOGOUT_URL must be same-origin as MYSTCRAG_APP_ORIGIN");
+      }
+    } catch {
       errors.push("MYSTCRAG_AUTH_LOGOUT_URL must be a valid URL");
-    } else if (isProduction && isLoopback) {
-      errors.push("MYSTCRAG_AUTH_LOGOUT_URL cannot be loopback in production/staging");
     }
   }
 
@@ -171,6 +187,17 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
     errors.push("MYSTCRAG_AUTH_SESSION_SECRET is required");
   } else if (!HEX_64_PATTERN.test(authSessionSecret)) {
     errors.push("MYSTCRAG_AUTH_SESSION_SECRET must be exactly 64 hexadecimal characters (32 random bytes)");
+  }
+
+  // Validate backendOrigin — must be explicitly configured, no fallbacks
+  if (!backendOrigin) {
+    errors.push("MYSTCRAG_BACKEND_ORIGIN is required");
+  } else if (!isValidHttpOrigin(backendOrigin)) {
+    errors.push("MYSTCRAG_BACKEND_ORIGIN must be a valid absolute origin");
+  } else if (isProduction && !isHttpsOrigin(backendOrigin)) {
+    errors.push("MYSTCRAG_BACKEND_ORIGIN must be HTTPS in production/staging");
+  } else if (isProduction && isLoopbackOrigin(backendOrigin)) {
+    errors.push("MYSTCRAG_BACKEND_ORIGIN cannot be loopback in production/staging");
   }
 
   if (errors.length > 0) {

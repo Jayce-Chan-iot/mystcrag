@@ -2,60 +2,75 @@
  * Next.js 16 proxy.ts for Auth0 SDK network boundary.
  *
  * Contract: this file is the sole network boundary for Auth0 SDK in Next.js 16.
- * It handles rolling session cookie reissue for all matched routes.
- * Auth callback is delegated to the SDK middleware.
- * The matcher must be wide enough to support rolling session cookie reissue.
+ * - Uses a broad matcher to enable rolling session cookie reissue on all page navigations.
+ * - Excludes static assets, image optimization, and metadata files.
+ * - Calls auth0.middleware(request) for page navigations to enable session rolling.
+ * - Explicitly blocks unauthorized SDK paths (profile, access-token, connect, etc.).
+ * - GET /auth/logout is NOT delegated to SDK default GET logout.
+ * - POST /auth/logout is handled by the frozen Contract wrapper (route handler).
+ * - /auth/callback is handled by its own route handler (not delegated here).
+ * - Error logs never output raw Auth0 errors, code/state/query, tokens, or claims.
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getAuth0Client } from "./src/lib/auth/auth0-server";
+import { getAuth0Client } from "./src/features/auth/server/auth0-server";
 
-// Matcher for Auth0 SDK routes and rolling session
+// Broad matcher for rolling session support.
+// Excludes static assets, image optimization, and metadata files.
 export const config = {
   matcher: [
-    "/auth/:path*",
-    "/api/:path*"
+    "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|manifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ]
 };
+
+// SDK paths that must be explicitly blocked (dummy paths configured in SDK)
+const BLOCKED_SDK_PATHS = new Set([
+  "/auth/__sdk_login",
+  "/auth/__sdk_logout",
+  "/auth/__sdk_profile",
+  "/auth/__sdk_access_token",
+  "/auth/__sdk_bcl"
+]);
+
+// Paths that should NOT go through SDK middleware
+// (they are handled by their own route handlers)
+const PASSTHROUGH_PATHS = new Set([
+  "/auth/callback",
+  "/auth/login",
+  "/auth/logout",
+  "/auth/session"
+]);
 
 export default async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Delegate /auth/callback to the Auth0 SDK middleware for OAuth code exchange.
-  // Other /auth/** paths are handled by our custom route handlers.
-  if (pathname === "/auth/callback") {
-    try {
-      const auth0Client = getAuth0Client();
-      return await auth0Client.middleware(request);
-    } catch (error) {
-      console.error("Auth0 callback middleware error:", error);
-      return NextResponse.json(
-        { error: { code: "INTERNAL_ERROR", message: "Authentication callback failed." } },
-        { status: 500, headers: { "Cache-Control": "no-store", "Pragma": "no-cache" } }
-      );
-    }
+  // Block unauthorized SDK paths — return 404 to hide their existence
+  if (BLOCKED_SDK_PATHS.has(pathname)) {
+    return new NextResponse(null, { status: 404 });
   }
 
-  // For /api/** routes, check session and add indicator header
+  // Auth route handlers are managed by their own route files.
+  // Do NOT delegate to SDK middleware for these paths.
+  if (PASSTHROUGH_PATHS.has(pathname)) {
+    return NextResponse.next();
+  }
+
+  // API routes pass through — BFF route handler manages auth
   if (pathname.startsWith("/api/")) {
-    try {
-      const auth0Client = getAuth0Client();
-      const session = await auth0Client.getSession(request);
-      if (session) {
-        const response = NextResponse.next({
-          request: {
-            headers: new Headers(request.headers)
-          }
-        });
-        response.headers.set("x-mystcrag-session", "authenticated");
-        return response;
-      }
-    } catch {
-      // Session check failure should not block the request.
-      // BFF route handler will handle authentication.
-    }
+    return NextResponse.next();
   }
 
-  // Pass through all other requests
-  return NextResponse.next();
+  // For all other requests (page navigations), delegate to SDK middleware
+  // for rolling session cookie reissue.
+  // The SDK reads the existing session, extends it, and sets new cookies
+  // in the response. This is how rolling session actually works.
+  try {
+    const auth0Client = getAuth0Client();
+    return await auth0Client.middleware(request);
+  } catch {
+    // Session rolling failure — pass through without blocking the request.
+    // Do NOT log raw error details (may contain tokens or claims).
+    console.error("Auth0 session rolling failed");
+    return NextResponse.next();
+  }
 }

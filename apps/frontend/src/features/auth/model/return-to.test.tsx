@@ -1,3 +1,19 @@
+/**
+ * returnTo path validation tests.
+ *
+ * Coverage:
+ * - Valid same-origin relative paths
+ * - Undefined/null/empty fallback
+ * - Absolute URL rejection
+ * - Protocol-relative rejection
+ * - Backslash rejection
+ * - Control character rejection
+ * - Encoded authority/scheme bypass
+ * - Double-encoded attacks
+ * - Malformed encoding rejection
+ * - Unicode path acceptance
+ */
+
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -60,6 +76,10 @@ test("encoded authority bypass is rejected", () => {
 
 test("encoded scheme bypass is rejected", () => {
   assert.equal(validateReturnTo("%6Aavascript:alert(1)"), "/");
+});
+
+test("query parameters with encoded external URLs are preserved as-is", () => {
+  // The query parameter value is part of the path, not a redirect target
   assert.equal(validateReturnTo("/path?redirect=%68ttps://evil.com"), "/path?redirect=%68ttps://evil.com");
 });
 

@@ -127,7 +127,6 @@ export interface TarotApiClient {
 
 export type TarotApiClientOptions = {
   fetcher?: FetchLike;
-  accessToken?: string;
 };
 
 export function createTarotApiClient({

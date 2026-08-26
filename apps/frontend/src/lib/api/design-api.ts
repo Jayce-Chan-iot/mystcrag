@@ -133,7 +133,6 @@ async function callApi<T>(
 
 export type DesignApiClientOptions = {
   fetcher?: FetchLike;
-  accessToken?: string;
   useMock?: boolean;
 };
 

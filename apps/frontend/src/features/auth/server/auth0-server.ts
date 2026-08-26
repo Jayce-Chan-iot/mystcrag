@@ -5,11 +5,12 @@
  * and does not rely on implicit AUTH0_* or APP_BASE_URL aliases.
  * Initializes the SDK with authenticated-encrypted, HttpOnly, host-only Cookie Session
  * with rolling: true, inactivityDuration: 28800, absoluteDuration: 604800.
+ * Secure flag is explicitly set, never auto-inferred.
  */
 
 import { Auth0Client } from "@auth0/nextjs-auth0/server";
 import type { SessionData } from "@auth0/nextjs-auth0/types";
-import { resolveAuthConfig, type AuthConfig } from "./auth-config";
+import { resolveAuthConfig, type AuthConfig } from "../model/auth-config";
 
 let auth0Client: Auth0Client | null = null;
 let cachedConfig: AuthConfig | null = null;
@@ -21,6 +22,12 @@ function isProductionLike(): boolean {
 
 function getCookieName(): string {
   return isProductionLike() ? "__Host-mystcrag_session" : "mystcrag_session";
+}
+
+function getSecureFlag(): boolean {
+  // Explicit: production/staging always Secure=true
+  // Development/test: Secure=false (loopback HTTP only)
+  return isProductionLike();
 }
 
 export function getAuth0Client(): Auth0Client {
@@ -46,14 +53,14 @@ export function getAuth0Client(): Auth0Client {
     clientSecret: config.authClientSecret,
     appBaseUrl: config.appOrigin,
     secret: config.authSessionSecret,
-    
+
     // Authorization parameters — OIDC Authorization Code + PKCE S256
     authorizationParameters: {
       audience: config.authAudience,
       scope: "openid profile email",
       response_type: "code"
     },
-    
+
     // Session configuration
     session: {
       rolling: true,
@@ -62,20 +69,20 @@ export function getAuth0Client(): Auth0Client {
       cookie: {
         name: getCookieName(),
         sameSite: "lax",
-        path: "/"
+        path: "/",
+        secure: getSecureFlag()
         // Domain intentionally omitted for host-only cookie
-        // Secure is auto-detected from appBaseUrl protocol by SDK
-        // HttpOnly is always true (SDK default, not exposed)
+        // HttpOnly is always true (SDK default, not exposed in SessionCookieOptions)
       }
     },
-    
+
     // Disable access token endpoint (browser should never receive tokens)
     enableAccessTokenEndpoint: false,
 
     // Route configuration:
     // - callback: real path, handled by proxy.ts → middleware delegation
-    // - login/logout: dummy paths (our route handlers at /auth/login, /auth/logout use startInteractiveLogin)
-    // - profile/accessToken/backChannelLogout: disabled (not exposed to browser)
+    // - login/logout: dummy paths (our route handlers use SDK methods directly)
+    // - profile/accessToken/backChannelLogout: dummy paths (blocked by proxy.ts)
     routes: {
       login: "/auth/__sdk_login",
       callback: "/auth/callback",
@@ -109,6 +116,11 @@ export type SessionState = {
   readonly absoluteExpiresAt?: string;
 };
 
+/**
+ * Projects internal SDK session to safe public session state.
+ * Never exposes: issuer, subject/sub, audience, tokens, internal User.id,
+ * session id, SDK raw claims/profile, or authorization details.
+ */
 export function projectSessionState(session: SessionData | null | undefined): SessionState {
   if (!session) {
     return { authenticated: false };
@@ -121,11 +133,14 @@ export function projectSessionState(session: SessionData | null | undefined): Se
     ...(typeof session.user.email_verified === "boolean" ? { emailVerified: session.user.email_verified } : {})
   };
 
-  // Calculate expiry timestamps from session internal data
+  // Calculate expiry timestamps from real session data
   const now = Math.floor(Date.now() / 1000);
   const createdAt = session.internal.createdAt;
-  const idleExpiresAt = new Date((now + 28800) * 1000).toISOString();
   const absoluteExpiresAt = new Date((createdAt + 604800) * 1000).toISOString();
+
+  // idleExpiresAt: min(now + inactivityDuration, absoluteExpiresAt)
+  const idleExpiry = Math.min(now + 28800, createdAt + 604800);
+  const idleExpiresAt = new Date(idleExpiry * 1000).toISOString();
 
   return {
     authenticated: true,
@@ -133,4 +148,16 @@ export function projectSessionState(session: SessionData | null | undefined): Se
     idleExpiresAt,
     absoluteExpiresAt
   };
+}
+
+/**
+ * Generates a stable request ID for error envelopes.
+ * Uses crypto.randomUUID when available, falls back to timestamp-based ID.
+ */
+export function generateRequestId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
 }

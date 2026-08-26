@@ -66,22 +66,18 @@ export function useSession() {
     window.location.href = url;
   }, []);
 
-  const logout = useCallback(async () => {
-    try {
-      const response = await fetch("/auth/logout", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" }
-      });
-
-      if (response.ok || response.status === 303) {
-        window.location.reload();
-      } else {
-        throw new Error(`Logout failed: ${response.status}`);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error("Unknown error"));
-    }
+  /**
+   * Logout uses a top-level POST navigation via a dynamically created form.
+   * This ensures the browser follows the 303 redirect from Auth0
+   * (not a fetch following a cross-origin 303).
+   */
+  const logout = useCallback(() => {
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = "/auth/logout";
+    form.style.display = "none";
+    document.body.appendChild(form);
+    form.submit();
   }, []);
 
   const refresh = useCallback(async () => {
