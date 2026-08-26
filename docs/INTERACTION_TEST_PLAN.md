@@ -144,7 +144,7 @@ Every P0 browser case records:
 
 ## AUTH-005 Authentication interaction matrix
 
-Status: `FINAL_DELTA_VERIFIED` (2026-08-27, SOL final delta repair).
+Status: `FINAL_DELTA_VERIFIED` (2026-08-27, SOL final delta + evidence closure repair).
 
 Execution methods used below:
 
@@ -159,44 +159,68 @@ Execution methods used below:
   is tested as a real ReactElement: serialized markup (`react-dom/server`
   `renderToStaticMarkup`) proves role/aria-live/aria-label/class/text output,
   and the rendered buttons' `onClick` handlers are invoked directly, proving
-  each login/logout callback fires exactly once. The logout DOM form
-  creation/submission is the single injectable helper `submitLogoutForm`,
-  tested against a lightweight fake document (method=POST, action=/auth/logout,
-  append-then-submit, submit once); `useSession` calls this exact helper.
+  each login/logout callback fires exactly once. The real hook-to-action wiring
+  is proven against the single composition boundary `AuthStatusFromSession`
+  (the component `AuthStatus` hands the `useSession()` result to, with no
+  top-level remapping): unauthenticated/error controls invoke ONLY login,
+  authenticated control invokes ONLY logout, they are never swapped, and
+  loading renders no action. The logout DOM form creation/submission is the
+  single injectable helper `submitLogoutForm`, tested against a lightweight
+  fake document (method=POST, action=/auth/logout, append-then-submit, submit
+  once); `useSession` calls this exact helper.
 - `route`: module-level contract tests for callback/session/logout/login/BFF/
   page-proxy/cookie logic against the real Auth0 Next.js SDK 4.27.0 error
   shapes (`src/features/auth/server/*.test.tsx`), including privacy-safe auth
-  event wiring with distinct semantics (session missing vs session
-  expired/malformed vs renewal rejected/revoked vs Backend verification
-  failure vs dependency failure vs origin rejection vs session rotation) and
-  fail-closed 500 behavior for page-proxy and configuration failures.
-- `browser`: real headless Chromium (playwright) against `next dev` on
-  http://localhost:3100 (development environment → `mystcrag_session`,
-  Secure=false loopback HTTP). Authenticated state used a real SDK-encrypted
-  session cookie produced by the SDK test utility `generateSessionCookie`
-  with the server's session secret.
+  event wiring with distinct semantics: session missing (`missing_session` AND
+  no known session cookie on the request) vs session expired/malformed
+  (`missing_session` with a stale main/chunk/legacy cookie present,
+  `session_expired`, and `missing_refresh_token` — the session cannot continue
+  but NO provider revoke was observed) vs renewal rejected/revoked (ONLY an
+  explicit provider `invalid_grant`/`access_denied` behind
+  `failed_to_refresh_token`) vs Backend verification failure vs dependency
+  failure vs origin rejection vs session rotation; plus fail-closed 500
+  behavior for page-proxy and configuration failures.
+- `browser`: HISTORICAL one-off manual run (2026-08-26) using real headless
+  Chromium (playwright) against `next dev` on http://localhost:3100
+  (development environment → `mystcrag_session`, Secure=false loopback HTTP).
+  Authenticated state used a real SDK-encrypted session cookie produced by the
+  SDK test utility `generateSessionCookie` with the server's session secret.
+  No committed, executable Playwright smoke exists in this repository (see the
+  record below); repeatable automation belongs to TASK-AUTH-006.
 
-Browser smoke reproduction:
+Historical manual browser smoke record (NOT a reproducible script):
 
-```bash
-pnpm --filter @mystcrag/frontend dev   # serves http://localhost:3100
-```
+This section records a one-off MANUAL browser smoke executed on 2026-08-26
+against `next dev` on http://localhost:3100. The repository currently contains
+NO committed, executable AUTH-005 Playwright smoke, so starting the dev server
+alone does NOT reproduce these assertions. Repeatable automated desktop/mobile,
+two-user and real-Auth0 flows are explicitly deferred to TASK-AUTH-006.
 
-- Viewports: 375×812 (mobile) and 1440×900 (desktop).
-- Assertions: primary actions visible and keyboard-focusable; login/logout
-  controls measured height ≥ 44px (`min-h-11`); `scrollWidth == clientWidth`
-  (no horizontal overflow); long displayName truncates inside bounded widths.
-- Result: all assertions passed during the execution run of 2026-08-26.
-- Screenshots taken during that run were transient verification artifacts
-  only; per `docs/governance/QA_EVIDENCE_RETENTION.md` they were not
-  committed and are not retained in this repository.
+Manual procedure that was executed on 2026-08-26:
+
+1. Start the dev server: `pnpm --filter @mystcrag/frontend dev`
+   (serves http://localhost:3100).
+2. Drive real Chromium (playwright) at viewports 375×812 (mobile) and
+   1440×900 (desktop).
+3. Seed the authenticated state with a real SDK-encrypted session cookie
+   generated by the SDK test utility `generateSessionCookie` using the
+   server's session secret (development cookie name `mystcrag_session`).
+4. Assert: primary actions visible and keyboard-focusable; login/logout
+   controls measured height ≥ 44px (`min-h-11`); `scrollWidth == clientWidth`
+   (no horizontal overflow); long displayName truncates inside bounded widths.
+
+- Result: all assertions passed during that one-off run of 2026-08-26.
+- Evidence was transient: screenshots were not committed (per
+  `docs/governance/QA_EVIDENCE_RETENTION.md`) and no fixture/script was
+  retained, so this record CANNOT be independently reproduced from the current
+  repository state.
 
 Live end-to-end Auth0 authorize/callback flows require real provider
 credentials and remain NOT executed; those rows are marked `route` only.
 
 | ID | Interaction | Required behavior | Status / evidence |
 | --- | --- | --- | --- |
-| AUTH-001 | Page navigation triggers rolling session | SDK middleware reissues session cookie with extended idle expiry; absolute ceiling is not extended. | PASS (`route` + `browser`). BFF and /auth/session invoke the real SDK middleware touch; fail closed 500 on rolling failure; idleExpiresAt parsed from the real rolling Max-Age; ceiling tests prove 7d is never extended; actually-produced rolling Set-Cookie emits auth.session_rotation. Page-proxy SDK/config failure fails closed with stable 500 (never `NextResponse.next()`), no Set-Cookie, auth.dependency_failed. Live smoke: /auth/session with a valid SDK cookie returned a fresh `mystcrag_session` Set-Cookie. |
+| AUTH-001 | Page navigation triggers rolling session | SDK middleware reissues session cookie with extended idle expiry; absolute ceiling is not extended. | PASS (`route` + `browser`). BFF and /auth/session invoke the real SDK middleware touch; fail closed 500 on rolling failure; idleExpiresAt parsed from the real rolling Max-Age; ceiling tests prove 7d is never extended; actually-produced rolling Set-Cookie emits auth.session_rotation. Page-proxy SDK/config failure fails closed with stable 500 (never `NextResponse.next()`), no Set-Cookie, auth.dependency_failed. Live smoke (2026-08-26 manual record above, not reproducible from this repository): /auth/session with a valid SDK cookie returned a fresh `mystcrag_session` Set-Cookie. |
 | AUTH-002 | GET /auth/login with valid returnTo | Redirects to Auth0 with Cache-Control: no-store and Pragma: no-cache. | PASS (`route`): handler tests prove returnTo forwarding, no-store/Pragma, and a single requestId shared by response and structured log. |
 | AUTH-003 | GET /auth/login with malicious returnTo | returnTo is sanitized to `/`; user is redirected to Auth0 with safe fallback. | PASS (`route`): absolute URLs, `//`, backslash and encoded bypasses rejected server-side; rejection logs auth.open_redirect_rejected with the requestId and never the raw returnTo. |
 | AUTH-004 | GET /auth/callback with valid code | 303 redirect to validated returnTo; session cookie is set. | PASS (`route`): success is a real 303; SDK transaction/session Set-Cookie preserved. Live IdP exchange not executed. |
@@ -213,7 +237,7 @@ credentials and remain NOT executed; those rows are marked `route` only.
 | AUTH-015 | BFF /api/** with missing session | Returns 401 UNAUTHORIZED. | PASS (`route`): missing/invalid sessions are never rolled. |
 | AUTH-016 | BFF mutation with wrong Origin | Returns 403 FORBIDDEN before any token operation. | PASS (`route`): exact Origin check precedes rolling/session/token work; rolling is never invoked on rejection. |
 | AUTH-017 | Browser API client does not send Authorization | Design/Tarot API clients do not set Authorization header; BFF adds it server-side. | PASS (`route`). |
-| AUTH-018 | AuthStatus component states | Shows loading, anonymous (login button), authenticated (name + logout), and error states. | PASS (`component`): the actual presentational renderer `AuthStatusPresenter` is tested as a real ReactElement — serialized markup proves role=status/alert, aria-live polite/assertive, aria-labels, display-name fallback/truncation class, touch-target (`min-h-11`) and overflow-bounding contracts; invoking the rendered buttons' onClick proves login/logout callbacks fire exactly once; `AuthStatus` provably renders through the presenter. Native `<button>` keyboard focusability is a platform guarantee. |
+| AUTH-018 | AuthStatus component states | Shows loading, anonymous (login button), authenticated (name + logout), and error states. | PASS (`component`): the actual presentational renderer `AuthStatusPresenter` is tested as a real ReactElement — serialized markup proves role=status/alert, aria-live polite/assertive, aria-labels, display-name fallback/truncation class, touch-target (`min-h-11`) and overflow-bounding contracts; invoking the rendered buttons' onClick proves login/logout callbacks fire exactly once. The real hook-to-action wiring is proven against the single composition boundary `AuthStatusFromSession` (which `AuthStatus` hands the `useSession()` result to): unauthenticated/error controls invoke ONLY login, the authenticated control invokes ONLY logout, they are never swapped, and loading offers no action. Native `<button>` keyboard focusability is a platform guarantee. |
 | AUTH-019 | Logout via top-level POST navigation | Logout uses form submission (not fetch); the browser follows the server 303 to Auth0. | PASS (`component`): the single injectable helper `submitLogoutForm` is tested against a fake document — method=POST, action=/auth/logout, body append before submit, submit exactly once; `useSession` calls this exact helper. |
 | AUTH-020 | 375×812 mobile smoke | AuthStatus header controls are accessible; login/logout buttons meet minimum touch target. | PASS (`browser`, executed 2026-08-26): anonymous / authenticated / error-recovery primary actions visible and focusable, measured height 44px (min-h-11), `scrollWidth == clientWidth == 375` (no horizontal overflow), long-displayName truncation bounded. Screenshots were transient and not retained in the repository. |
 | AUTH-021 | 1440×900 desktop smoke | AuthStatus displays user name and logout in the header navigation. | PASS (`browser`, executed 2026-08-26): same assertions at 1440×900; displayName rendered, logout visible/focusable, no horizontal overflow. Screenshots were transient and not retained in the repository. |
@@ -221,7 +245,10 @@ credentials and remain NOT executed; those rows are marked `route` only.
 Not executed in this repair (recorded honestly, not marked PASS):
 
 - Live Auth0 authorize → callback → session E2E with real provider credentials.
-- Error state at 500 returned by the server (the browser smoke simulated the
-  error state by aborting the /auth/session request; the 500 envelope itself is
-  covered by `route` tests).
+- A committed, executable Playwright smoke for AUTH-005; the 2026-08-26
+  browser run above is a historical manual record only. Repeatable automated
+  desktop/mobile, two-user and real-Auth0 flows belong to TASK-AUTH-006.
+- Error state at 500 returned by the server (the 2026-08-26 browser run
+  simulated the error state by aborting the /auth/session request; the 500
+  envelope itself is covered by `route` tests).
 - Real-device touch input; touch targets verified by measured CSS height only.

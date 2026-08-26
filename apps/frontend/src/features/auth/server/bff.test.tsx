@@ -291,18 +291,33 @@ test("classifyTokenError maps discovery/unknown failures to internal", () => {
 });
 
 test("resolveTokenFailureEvent keeps distinct log semantics per token failure class", () => {
+  // missing_session WITHOUT any known session cookie → session missing.
   assert.deepEqual(resolveTokenFailureEvent({ code: "missing_session" }), {
     event: "auth.session_missing",
     category: "session_missing"
+  });
+  assert.deepEqual(resolveTokenFailureEvent({ code: "missing_session" }, { sessionCookiePresent: false }), {
+    event: "auth.session_missing",
+    category: "session_missing"
+  });
+  // missing_session WITH a main/chunk/legacy session cookie → the cookie is stale,
+  // corrupted or undecryptable: session expired/malformed, NOT missing.
+  assert.deepEqual(resolveTokenFailureEvent({ code: "missing_session" }, { sessionCookiePresent: true }), {
+    event: "auth.session_invalid",
+    category: "session_expired_or_malformed"
   });
   assert.deepEqual(resolveTokenFailureEvent({ code: "session_expired" }), {
     event: "auth.session_invalid",
     category: "session_expired_or_malformed"
   });
+  // missing_refresh_token: the session cannot continue, but no provider revoke was
+  // observed — conservative session_expired_or_malformed, never renewal_revoked.
   assert.deepEqual(resolveTokenFailureEvent({ code: "missing_refresh_token" }), {
-    event: "auth.renewal_rejected",
-    category: "renewal_revoked"
+    event: "auth.session_invalid",
+    category: "session_expired_or_malformed"
   });
+  // ONLY an explicit provider invalid_grant/access_denied behind failed_to_refresh_token
+  // counts as an observed renewal rejection/revocation.
   for (const cause of ["invalid_grant", "access_denied"]) {
     assert.deepEqual(
       resolveTokenFailureEvent({ code: "failed_to_refresh_token", cause: { code: cause } }),
@@ -313,6 +328,10 @@ test("resolveTokenFailureEvent keeps distinct log semantics per token failure cl
   // Configuration/infrastructure causes and unknown errors are dependency failures.
   assert.deepEqual(
     resolveTokenFailureEvent({ code: "failed_to_refresh_token", cause: { code: "invalid_client" } }),
+    { event: "auth.dependency_failed", category: "dependency" }
+  );
+  assert.deepEqual(
+    resolveTokenFailureEvent({ code: "failed_to_refresh_token", cause: { code: "server_error" } }),
     { event: "auth.dependency_failed", category: "dependency" }
   );
   assert.deepEqual(resolveTokenFailureEvent({ code: "discovery_error" }), {

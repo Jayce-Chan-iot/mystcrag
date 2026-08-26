@@ -26,7 +26,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import type { AuthConfig } from "../model/auth-config";
-import { buildClearCookieHeaders } from "./session-cookies";
+import { buildClearCookieHeaders, hasSessionCookie } from "./session-cookies";
 import type { AuthEventCategory, AuthEventLogger, AuthEventName } from "./auth-events";
 
 // Minimal header allowlist copied from the browser request. Anything not listed here —
@@ -117,23 +117,40 @@ function extractTokenErrorCode(error: unknown): string | undefined {
 /**
  * Maps a getAccessToken failure to its privacy-safe auth event. The semantics are
  * deliberately distinct:
- * - missing_session → session missing (NOT renewal rejection);
- * - session_expired → session expired/malformed;
- * - missing_refresh_token / explicit provider grant rejection or revocation
- *   (invalid_grant, access_denied behind failed_to_refresh_token) → renewal
- *   rejected/revoked;
+ * - missing_session WITHOUT any known session cookie on the request → session missing.
+ *   The Auth0 SDK emits missing_session for BOTH "no cookie at all" and "a stale,
+ *   corrupted or undecryptable cookie is present", so the event is resolved together
+ *   with `hasSessionCookie(request, config)`: a present main/chunk/legacy cookie means
+ *   session expired/malformed, NOT missing.
+ * - session_expired → session expired/malformed.
+ * - missing_refresh_token → the session cannot be continued, but NO provider revocation
+ *   was observed: conservative session expired/malformed semantics (never
+ *   renewal_revoked).
+ * - failed_to_refresh_token whose underlying cause is an explicit provider grant
+ *   rejection or revocation (invalid_grant, access_denied) → renewal rejected/revoked.
  * - anything else (configuration/infrastructure) → dependency failure.
+ *
+ * HTTP classification, cookie cleanup and the privacy whitelist are unaffected by this
+ * mapping.
  */
-export function resolveTokenFailureEvent(error: unknown): { event: AuthEventName; category: AuthEventCategory } {
+export function resolveTokenFailureEvent(
+  error: unknown,
+  options: { sessionCookiePresent?: boolean } = {}
+): { event: AuthEventName; category: AuthEventCategory } {
   const code = extractTokenErrorCode(error);
   if (code === "missing_session") {
+    if (options.sessionCookiePresent) {
+      return { event: "auth.session_invalid", category: "session_expired_or_malformed" };
+    }
     return { event: "auth.session_missing", category: "session_missing" };
   }
   if (code === "session_expired") {
     return { event: "auth.session_invalid", category: "session_expired_or_malformed" };
   }
   if (code === "missing_refresh_token") {
-    return { event: "auth.renewal_rejected", category: "renewal_revoked" };
+    // Accurate, conservative semantics: the session cannot continue. No provider
+    // revoke was observed, so this is NOT renewal_revoked.
+    return { event: "auth.session_invalid", category: "session_expired_or_malformed" };
   }
   if (code === "failed_to_refresh_token") {
     const cause = (error as { cause?: { code?: unknown } })?.cause;
@@ -289,8 +306,12 @@ export async function handleBffRequest(
   } catch (error) {
     if (classifyTokenError(error) === "unauthorized") {
       // Distinct semantics per token failure class (never one bucket): session missing
-      // vs session expired/malformed vs renewal rejected/revoked.
-      const failureEvent = resolveTokenFailureEvent(error);
+      // (no session cookie on the request) vs session expired/malformed (cookie present
+      // but stale/corrupted/undecryptable, session_expired, or missing_refresh_token)
+      // vs renewal rejected/revoked (explicit provider invalid_grant/access_denied).
+      const failureEvent = resolveTokenFailureEvent(error, {
+        sessionCookiePresent: hasSessionCookie(request, config)
+      });
       deps.logAuthEvent(failureEvent.event, {
         category: failureEvent.category,
         requestId,

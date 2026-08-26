@@ -10,11 +10,14 @@
  *   - auth.callback_failed (authentication) on callback 401;
  *   - auth.dependency_failed (dependency) on callback/session/BFF/login/proxy/logout
  *     configuration or SDK failures;
- *   - auth.session_invalid (session_expired_or_malformed) on invalid-cookie clearing
- *     and on session_expired token failures;
- *   - auth.session_missing (session_missing) on missing_session token failures;
- *   - auth.renewal_rejected (renewal_revoked) on refresh grant rejection/revocation
- *     and missing_refresh_token;
+ *   - auth.session_invalid (session_expired_or_malformed) on invalid-cookie clearing,
+ *     on session_expired token failures, on missing_refresh_token (session cannot
+ *     continue; no provider revoke observed) and on missing_session when a session
+ *     main/chunk/legacy cookie is present (stale/corrupted/undecryptable);
+ *   - auth.session_missing (session_missing) ONLY on missing_session token failures
+ *     when the request carries no known session cookie;
+ *   - auth.renewal_rejected (renewal_revoked) ONLY on an explicit provider refresh
+ *     grant rejection/revocation (invalid_grant/access_denied);
  *   - auth.verification_failed (verification_failed) on Backend token verification 401;
  *   - auth.origin_rejected (origin_rejected) on BFF mutation and POST logout Origin
  *     rejections;
@@ -308,7 +311,7 @@ test("BFF refresh grant rejection logs auth.renewal_rejected (renewal_revoked)",
   ]);
 });
 
-test("BFF missing_session logs auth.session_missing (not renewal rejection)", async () => {
+test("BFF missing_session WITHOUT any session cookie logs auth.session_missing", async () => {
   const capture = makeAuthEventCapture();
   const request = makeRequest("https://app.mystcrag.com/api/designs");
   const deps = makeBffDeps({
@@ -321,6 +324,54 @@ test("BFF missing_session logs auth.session_missing (not renewal rejection)", as
   assert.equal(response.status, 401);
   assert.deepEqual(capture.records, [
     { event: "auth.session_missing", category: "session_missing", requestId: "req-log", outcome: "failure" }
+  ]);
+});
+
+test("BFF missing_session WITH the main session cookie logs auth.session_invalid (expired/malformed)", async () => {
+  const capture = makeAuthEventCapture();
+  // The SDK emits missing_session for stale/corrupted/undecryptable cookies too, so a
+  // present main cookie must NOT be logged as "missing".
+  const request = makeRequest("https://app.mystcrag.com/api/designs", {
+    cookieHeader: "__Host-mystcrag_session=stale-or-corrupted-ciphertext"
+  });
+  const deps = makeBffDeps({
+    token: async () => {
+      throw { code: "missing_session" };
+    },
+    logAuthEvent: capture.logger
+  });
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 401);
+  assert.deepEqual(capture.records, [
+    {
+      event: "auth.session_invalid",
+      category: "session_expired_or_malformed",
+      requestId: "req-log",
+      outcome: "failure"
+    }
+  ]);
+});
+
+test("BFF missing_session WITH only a chunk session cookie logs auth.session_invalid (expired/malformed)", async () => {
+  const capture = makeAuthEventCapture();
+  const request = makeRequest("https://app.mystcrag.com/api/designs", {
+    cookieHeader: "__Host-mystcrag_session__0=stale-chunk-ciphertext"
+  });
+  const deps = makeBffDeps({
+    token: async () => {
+      throw { code: "missing_session" };
+    },
+    logAuthEvent: capture.logger
+  });
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 401);
+  assert.deepEqual(capture.records, [
+    {
+      event: "auth.session_invalid",
+      category: "session_expired_or_malformed",
+      requestId: "req-log",
+      outcome: "failure"
+    }
   ]);
 });
 
@@ -345,7 +396,7 @@ test("BFF session_expired logs auth.session_invalid (session_expired_or_malforme
   ]);
 });
 
-test("BFF missing_refresh_token logs auth.renewal_rejected (renewal_revoked)", async () => {
+test("BFF missing_refresh_token logs auth.session_invalid (never renewal_revoked)", async () => {
   const capture = makeAuthEventCapture();
   const request = makeRequest("https://app.mystcrag.com/api/designs");
   const deps = makeBffDeps({
@@ -356,8 +407,15 @@ test("BFF missing_refresh_token logs auth.renewal_rejected (renewal_revoked)", a
   });
   const response = await handleBffRequest(request, ["designs"], deps);
   assert.equal(response.status, 401);
+  // The session cannot continue, but no provider revoke was observed: conservative
+  // session_expired_or_malformed semantics, NOT renewal_revoked.
   assert.deepEqual(capture.records, [
-    { event: "auth.renewal_rejected", category: "renewal_revoked", requestId: "req-log", outcome: "failure" }
+    {
+      event: "auth.session_invalid",
+      category: "session_expired_or_malformed",
+      requestId: "req-log",
+      outcome: "failure"
+    }
   ]);
 });
 
