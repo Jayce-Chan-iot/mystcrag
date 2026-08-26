@@ -15,7 +15,7 @@ import test from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { projectSessionState, generateRequestId, isSecureCookie, getSessionCookieName } from "./auth0-server";
+import { projectSessionState, generateRequestId, isSecureCookie, getSessionCookieName, parseSessionCookieMaxAge } from "./auth0-server";
 import { makeConfig, makeDevConfig } from "./auth-test-fixtures";
 
 // --- Session safe projection ---
@@ -217,6 +217,8 @@ test("browser API client does not set Authorization header", () => {
 test("isSecureCookie is true for HTTPS app origins in any environment", () => {
   assert.equal(isSecureCookie(makeConfig()), true);
   assert.equal(isSecureCookie(makeConfig({ appOrigin: "https://staging.mystcrag.com" })), true);
+  // Development HTTPS is still Secure.
+  assert.equal(isSecureCookie(makeConfig({ appOrigin: "https://localhost:3000", environment: "development" })), true);
 });
 
 test("isSecureCookie is false only for development/test loopback HTTP origins", () => {
@@ -227,9 +229,69 @@ test("isSecureCookie fails closed on unparsable origins", () => {
   assert.equal(isSecureCookie(makeConfig({ appOrigin: "not-a-url" })), true);
 });
 
-test("getSessionCookieName uses __Host- prefix exactly when cookies are Secure", () => {
+test("getSessionCookieName follows environment classification, never the protocol", () => {
+  // production/staging → __Host- prefix (HTTPS enforced by config validation).
   assert.equal(getSessionCookieName(makeConfig()), "__Host-mystcrag_session");
+  assert.equal(
+    getSessionCookieName(makeConfig({ appOrigin: "https://staging.mystcrag.com", environment: "staging" })),
+    "__Host-mystcrag_session"
+  );
+  // development/test → plain name even over HTTPS.
   assert.equal(getSessionCookieName(makeDevConfig()), "mystcrag_session");
+  assert.equal(
+    getSessionCookieName(makeConfig({ appOrigin: "https://localhost:3000", environment: "development" })),
+    "mystcrag_session"
+  );
+  assert.equal(
+    getSessionCookieName(makeConfig({ appOrigin: "https://localhost:3000", environment: "test" })),
+    "mystcrag_session"
+  );
+});
+
+// --- Rolling Max-Age parsing ---
+
+test("parseSessionCookieMaxAge extracts the Max-Age really written for the session cookie", () => {
+  const setCookies = [
+    "__Host-mystcrag_session=abc; Max-Age=28800; Path=/; SameSite=Lax; HttpOnly; Secure",
+    "other=1; Max-Age=5; Path=/"
+  ];
+  assert.equal(parseSessionCookieMaxAge(setCookies, "__Host-mystcrag_session"), 28800);
+});
+
+test("parseSessionCookieMaxAge matches chunked writes and ignores unrelated cookies", () => {
+  const setCookies = [
+    "unrelated=1; Max-Age=99; Path=/",
+    "__Host-mystcrag_session__0=chunk; Max-Age=3600; Path=/; SameSite=Lax; HttpOnly; Secure"
+  ];
+  assert.equal(parseSessionCookieMaxAge(setCookies, "__Host-mystcrag_session"), 3600);
+  assert.equal(parseSessionCookieMaxAge(["unrelated=1; Max-Age=99"], "__Host-mystcrag_session"), null);
+  assert.equal(parseSessionCookieMaxAge([], "__Host-mystcrag_session"), null);
+});
+
+test("projectSessionState honors the rolling Max-Age really written", () => {
+  const now = Math.floor(Date.now() / 1000);
+  const mockSession = {
+    user: { name: "Test", email: "test@example.com", email_verified: true },
+    internal: { createdAt: now - 100 }
+  };
+  const result = projectSessionState(mockSession as never, 3600);
+  const idleExpiry = new Date(result.idleExpiresAt!).getTime() / 1000;
+  // Must equal now + the written Max-Age, not a fabricated now+8h.
+  assert.ok(Math.abs(idleExpiry - (now + 3600)) < 5, `idleExpiresAt should be ~now+3600, got ${idleExpiry}`);
+});
+
+test("projectSessionState caps rollingMaxAge at the absolute ceiling", () => {
+  const now = Math.floor(Date.now() / 1000);
+  // Session 6.9 days old: only ~0.1 day left until the absolute ceiling; a (wrong)
+  // written Max-Age of 28800 must not push idleExpiresAt beyond absoluteExpiresAt.
+  const mockSession = {
+    user: { name: "Test", email: "test@example.com", email_verified: true },
+    internal: { createdAt: now - Math.floor(6.9 * 86400) }
+  };
+  const result = projectSessionState(mockSession as never, 28800);
+  const idleExpiry = new Date(result.idleExpiresAt!).getTime();
+  const absoluteExpiry = new Date(result.absoluteExpiresAt!).getTime();
+  assert.ok(idleExpiry <= absoluteExpiry);
 });
 
 // --- Helper ---

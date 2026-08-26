@@ -323,3 +323,23 @@ test("auth0 requires client secret", () => {
     "MYSTCRAG_AUTH_CLIENT_SECRET"
   );
 });
+
+// --- Environment classification (cookie NAME source, independent of Secure) ---
+
+test("environment classification is resolved reliably from NODE_ENV", () => {
+  assert.equal(resolveAuthConfig(validAuth0Config).environment, "production");
+  assert.equal(
+    resolveAuthConfig({ ...validAuth0Config, NODE_ENV: "staging" }).environment,
+    "staging"
+  );
+  assert.equal(resolveAuthConfig(validSignedTestConfig).environment, "development");
+  assert.equal(
+    resolveAuthConfig({ ...validSignedTestConfig, NODE_ENV: "test" }).environment,
+    "test"
+  );
+  // Unknown NODE_ENV values fall back to development (never production semantics).
+  assert.equal(
+    resolveAuthConfig({ ...validSignedTestConfig, NODE_ENV: "something-else" }).environment,
+    "development"
+  );
+});

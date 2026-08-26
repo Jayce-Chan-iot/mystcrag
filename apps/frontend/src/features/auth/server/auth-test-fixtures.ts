@@ -8,6 +8,7 @@ import type { AuthConfig } from "../model/auth-config";
 export function makeConfig(overrides: Partial<AuthConfig> = {}): AuthConfig {
   return {
     appOrigin: "https://app.mystcrag.com",
+    environment: "production",
     authProvider: "auth0",
     authIssuer: "https://mystcrag.auth0.com/",
     authAudience: "mystcrag-backend",
@@ -25,6 +26,7 @@ export function makeConfig(overrides: Partial<AuthConfig> = {}): AuthConfig {
 export function makeDevConfig(overrides: Partial<AuthConfig> = {}): AuthConfig {
   return makeConfig({
     appOrigin: "http://localhost:3000",
+    environment: "development",
     authCallbackUrl: "http://localhost:3000/auth/callback",
     authLogoutUrl: "http://localhost:3000",
     backendOrigin: "http://127.0.0.1:4000",

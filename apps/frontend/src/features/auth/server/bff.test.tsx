@@ -8,6 +8,9 @@
  * - Path boundary rejects literal, encoded and double-encoded traversal.
  * - Origin validation happens BEFORE any token operation.
  * - Token errors: 401 (clears invalid session) vs 500 (preserves session).
+ * - Real SDK passive rolling: triggered on accepted requests, merged into responses,
+ *   fails closed with 500, and never runs before the Origin check for mutations.
+ * - Backend 401 invalidates the local session (clears cookies); Backend 403 preserves it.
  * - SDK session-rotation Set-Cookie propagates on success AND on terminating
  *   responses, including backend-unavailable.
  * - Backend Set-Cookie is never forwarded to the browser.
@@ -28,26 +31,44 @@ type FetchCapture = {
   calls: number;
 };
 
+// Simulates the Set-Cookie produced by the SDK's real rolling write.
+const ROLLING_COOKIE = "__Host-mystcrag_session=rolled; Max-Age=28800; Path=/; SameSite=Lax; HttpOnly; Secure";
+
 function makeDeps(options: {
   token?: () => Promise<{ token: string }>;
   backend?: () => Response;
   fetchError?: boolean;
-}): { deps: BffDeps; fetchCapture: FetchCapture; tokenCalls: { count: number } } {
+  /** Skip the simulated token-rotation Set-Cookie (token set unchanged). */
+  rotate?: boolean;
+  /** Override the rolling behavior; default writes the rolling cookie. */
+  touch?: () => Promise<string[]>;
+}): { deps: BffDeps; fetchCapture: FetchCapture; tokenCalls: { count: number }; touchCalls: { count: number } } {
   const config = makeConfig();
   const fetchCapture: FetchCapture = { calls: 0 };
   const tokenCalls = { count: 0 };
+  const touchCalls = { count: 0 };
 
   const deps: BffDeps = {
     getConfig: () => config,
     getAccessToken: async (request, sink) => {
       tokenCalls.count += 1;
       void request;
-      // Simulate SDK session rotation writing Set-Cookie into the sink response.
-      sink.headers.append("Set-Cookie", "rotated=1; Path=/; HttpOnly; Secure");
+      if (options.rotate !== false) {
+        // Simulate SDK session rotation writing Set-Cookie into the sink response.
+        sink.headers.append("Set-Cookie", "rotated=1; Path=/; HttpOnly; Secure");
+      }
       if (options.token) {
         return options.token();
       }
       return { token: "token-abc" };
+    },
+    touchSession: async (request) => {
+      touchCalls.count += 1;
+      void request;
+      if (options.touch) {
+        return options.touch();
+      }
+      return [ROLLING_COOKIE];
     },
     fetch: async (url, init) => {
       fetchCapture.calls += 1;
@@ -66,7 +87,7 @@ function makeDeps(options: {
     generateRequestId: () => "req-test"
   };
 
-  return { deps, fetchCapture, tokenCalls };
+  return { deps, fetchCapture, tokenCalls, touchCalls };
 }
 
 // --- Path boundary ---
@@ -330,4 +351,112 @@ test("sink response is never returned directly (NextResponse sink works)", async
   const sink = new NextResponse();
   sink.headers.append("Set-Cookie", "probe=1");
   assert.equal(sink.headers.getSetCookie().length, 1);
+});
+
+// --- Real SDK passive rolling ---
+
+test("rolling cookie is written even when the Access Token is unchanged", async () => {
+  // rotate:false → getAccessToken does NOT write any rotation cookie; the rolling
+  // Set-Cookie must still reach the response.
+  const { deps, touchCalls } = makeDeps({ rotate: false });
+  const request = makeRequest("https://app.mystcrag.com/api/designs");
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 200);
+  assert.equal(touchCalls.count, 1);
+  assert.ok(response.headers.getSetCookie().includes(ROLLING_COOKIE));
+});
+
+test("rolling failure fails closed with stable 500 (never a silent passthrough)", async () => {
+  const { deps, fetchCapture } = makeDeps({
+    touch: async () => {
+      throw new Error("session store unavailable");
+    }
+  });
+  const request = makeRequest("https://app.mystcrag.com/api/designs");
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 500);
+  const body = await response.json();
+  assert.equal(body.error.code, "INTERNAL_ERROR");
+  assert.equal(body.error.requestId, "req-test");
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  // The Backend must never be contacted when rolling fails.
+  assert.equal(fetchCapture.calls, 0);
+});
+
+test("mutation with wrong Origin never calls rolling", async () => {
+  const { deps, touchCalls, tokenCalls } = makeDeps({});
+  const request = makeRequest("https://app.mystcrag.com/api/designs", {
+    method: "POST",
+    headers: { origin: "https://evil.example.com" },
+    body: "{}"
+  });
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 403);
+  assert.equal(touchCalls.count, 0);
+  assert.equal(tokenCalls.count, 0);
+});
+
+test("missing session is not rolled into a fake session (rolling writes nothing)", async () => {
+  // The real SDK only writes rolling cookies when it decrypted a valid session; the
+  // BFF must forward exactly what rolling produced — nothing here.
+  const { deps } = makeDeps({
+    rotate: false,
+    touch: async () => [],
+    token: async () => {
+      throw { code: "missing_session" };
+    }
+  });
+  const request = makeRequest("https://app.mystcrag.com/api/designs");
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 401);
+  assert.equal(response.headers.getSetCookie().filter((c) => !c.includes("Max-Age=0")).length, 0);
+});
+
+// --- Backend 401 invalidates the local session ---
+
+test("Backend 401 invalidates the local session and clears session + legacy cookies", async () => {
+  const { deps } = makeDeps({
+    backend: () => new Response(JSON.stringify({ error: "token rejected" }), { status: 401 })
+  });
+  const request = makeRequest("https://app.mystcrag.com/api/designs", {
+    cookieHeader:
+      "__Host-mystcrag_session=cipher; __Host-mystcrag_session__0=chunk; appSession=legacy; appSession.0=legacychunk; unrelated=keep"
+  });
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 401);
+  const body = await response.json();
+  assert.equal(body.error.code, "UNAUTHORIZED");
+  assert.equal(body.error.requestId, "req-test");
+  const setCookies = response.headers.getSetCookie();
+  assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session=; Max-Age=0")));
+  assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session__0=; Max-Age=0")));
+  assert.ok(setCookies.some((c) => c.startsWith("appSession=; Max-Age=0")));
+  assert.ok(setCookies.some((c) => c.startsWith("appSession.0=; Max-Age=0")));
+  // Unrelated cookies untouched; rolling/rotation cookies NOT re-appended.
+  assert.ok(!setCookies.some((c) => c.startsWith("unrelated")));
+  assert.ok(!setCookies.some((c) => c === ROLLING_COOKIE));
+  assert.ok(!setCookies.some((c) => c.startsWith("rotated=")));
+});
+
+test("Backend 403 preserves the session (no cookie clearing)", async () => {
+  const { deps } = makeDeps({
+    backend: () => new Response(JSON.stringify({ error: "forbidden" }), { status: 403 })
+  });
+  const request = makeRequest("https://app.mystcrag.com/api/designs", {
+    cookieHeader: "__Host-mystcrag_session=cipher"
+  });
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 403);
+  const setCookies = response.headers.getSetCookie();
+  assert.ok(!setCookies.some((c) => c.includes("Max-Age=0")));
+  // Rolling + rotation cookies still propagate for the preserved session.
+  assert.ok(setCookies.includes(ROLLING_COOKIE));
+});
+
+test("rolling cookies survive backend outage (502)", async () => {
+  const { deps } = makeDeps({ fetchError: true });
+  const request = makeRequest("https://app.mystcrag.com/api/designs");
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 502);
+  assert.ok(response.headers.getSetCookie().includes(ROLLING_COOKIE));
 });

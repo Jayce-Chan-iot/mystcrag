@@ -6,9 +6,10 @@
  * - POST validates exact Origin first; missing/mismatched Origin → 403, no cookies.
  * - Success → real 303 See Other to the server-constructed Auth0 logout URL.
  * - Never returns 200 inline-script HTML.
- * - Real SDK cookie cleanup: session main cookie, `{name}__{index}` chunks and
- *   `__txn_*` transaction cookies present on the request, with deletion attributes
- *   mirroring creation attributes (Path, SameSite, HttpOnly, Secure/host-only).
+ * - Real SDK cookie cleanup: session main cookie, `{name}__{index}` chunks, SDK legacy
+ *   `appSession`/`appSession.N` cookies and `__txn_*` transaction cookies present on
+ *   the request, with deletion attributes mirroring creation attributes (Path, SameSite,
+ *   HttpOnly, Secure/host-only).
  * - Secure derives from the verified app origin, not NODE_ENV.
  * - Repeated POSTs are idempotent.
  */
@@ -27,7 +28,8 @@ function makeDeps(config = makeConfig()): LogoutDeps {
 }
 
 const SESSION_COOKIES =
-  "__Host-mystcrag_session=cipher; __Host-mystcrag_session__0=chunk0; __Host-mystcrag_session__1=chunk1; __txn_state123=txn; unrelated=keep";
+  "__Host-mystcrag_session=cipher; __Host-mystcrag_session__0=chunk0; __Host-mystcrag_session__1=chunk1; " +
+  "appSession=legacy; appSession.0=legacychunk; __txn_state123=txn; unrelated=keep";
 
 // --- GET is 405 and non-mutating ---
 
@@ -105,7 +107,7 @@ test("POST never returns 200 HTML", () => {
 
 // --- Real SDK cookie cleanup ---
 
-test("POST clears session main cookie, SDK chunks and transaction cookies", () => {
+test("POST clears session main cookie, SDK chunks, legacy cookies and transaction cookies", () => {
   const request = makeRequest("https://app.mystcrag.com/auth/logout", {
     method: "POST",
     headers: { origin: "https://app.mystcrag.com" },
@@ -117,6 +119,9 @@ test("POST clears session main cookie, SDK chunks and transaction cookies", () =
   assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session=; ")));
   assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session__0=; ")));
   assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session__1=; ")));
+  // SDK legacy cookies (v3) are also recognized and cleared.
+  assert.ok(setCookies.some((c) => c.startsWith("appSession=; ")));
+  assert.ok(setCookies.some((c) => c.startsWith("appSession.0=; ")));
   assert.ok(setCookies.some((c) => c.startsWith("__txn_state123=; ")));
 
   // Deletion attributes mirror creation attributes.

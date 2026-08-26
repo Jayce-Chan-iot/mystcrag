@@ -3,6 +3,12 @@
  *
  * Frozen contract:
  * - Returns the real session projection (never issuer/subject/audience/tokens/claims).
+ * - A successfully decrypted session use triggers the SDK's REAL passive rolling; all
+ *   Set-Cookie produced by the rolling write are merged into the response. Rolling
+ *   failure fails closed with a stable 500 (never a silent passthrough) and never
+ *   clears the still-valid session. The projected idleExpiresAt matches the Max-Age
+ *   really written by the rolling response.
+ * - Missing/invalid sessions are never rolled.
  * - Expired, malformed, or authentication-tag-invalid cookies produce
  *   `200 {"authenticated": false}` AND the invalid cookie is cleared. The SDK returns
  *   null for both "no cookie" and "undecryptable cookie", so this module inspects the
@@ -16,11 +22,16 @@ import { NextRequest, NextResponse } from "next/server";
 import type { SessionData } from "@auth0/nextjs-auth0/types";
 import type { AuthConfig } from "../model/auth-config";
 import { buildClearCookieHeaders, hasSessionCookie } from "./session-cookies";
-import { projectSessionState } from "./auth0-server";
+import { getSessionCookieName, parseSessionCookieMaxAge, projectSessionState } from "./auth0-server";
 
 export type SessionDeps = {
   getConfig(): AuthConfig;
   getSession(request: NextRequest): Promise<SessionData | null | undefined>;
+  /**
+   * Triggers the SDK's real passive session rolling and returns its Set-Cookie headers.
+   * Must throw on SDK failure (the caller fails closed with 500).
+   */
+  touchSession(request: NextRequest): Promise<string[]>;
   generateRequestId(): string;
 };
 
@@ -44,9 +55,28 @@ export async function handleSessionRequest(
   }
 
   if (session) {
-    return NextResponse.json(projectSessionState(session), {
+    // Valid session use → real SDK passive rolling. Fail closed on rolling failure:
+    // never return a 200 projection while the session persistence layer is broken, and
+    // never clear a session that decrypted successfully.
+    let rollingCookies: string[];
+    try {
+      rollingCookies = await deps.touchSession(request);
+    } catch {
+      return NextResponse.json(
+        { error: { code: "INTERNAL_ERROR", message: "Session service unavailable.", requestId } },
+        { status: 500, headers: { "Cache-Control": "no-store", "Pragma": "no-cache" } }
+      );
+    }
+
+    // idleExpiresAt must equal the cookie expiry really written by this rolling response.
+    const rollingMaxAge = parseSessionCookieMaxAge(rollingCookies, getSessionCookieName(config));
+    const response = NextResponse.json(projectSessionState(session, rollingMaxAge), {
       headers: { "Cache-Control": "no-store", "Pragma": "no-cache" }
     });
+    for (const cookie of rollingCookies) {
+      response.headers.append("Set-Cookie", cookie);
+    }
+    return response;
   }
 
   // No session. If the request still carries a session cookie it is expired/malformed/

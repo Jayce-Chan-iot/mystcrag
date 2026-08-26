@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getAuth0Client, generateRequestId } from "../../../src/features/auth/server/auth0-server";
+import { getAuth0Client, getAuthConfig, generateRequestId } from "../../../src/features/auth/server/auth0-server";
 import { handleCallback, type CallbackDeps } from "../../../src/features/auth/server/callback";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +14,7 @@ export const dynamic = "force-dynamic";
 
 const deps: CallbackDeps = {
   middleware: (request) => getAuth0Client().middleware(request),
+  getConfig: () => getAuthConfig(),
   generateRequestId
 };
 

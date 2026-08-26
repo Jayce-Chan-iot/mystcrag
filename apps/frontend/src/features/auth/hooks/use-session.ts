@@ -32,6 +32,16 @@ async function fetchSessionData(): Promise<{ status: SessionStatus; session: Ses
   };
 }
 
+/**
+ * The returnTo value for login navigations: the current location exactly as the user
+ * sees it (pathname + search + hash). The server validates it via `validateReturnTo`
+ * (absolute URLs, `//`, backslashes and encoded bypasses are rejected server-side).
+ */
+export function currentReturnTo(): string {
+  const { pathname, search, hash } = window.location;
+  return `${pathname}${search}${hash}`;
+}
+
 export function useSession() {
   const [status, setStatus] = useState<SessionStatus>("loading");
   const [session, setSession] = useState<SessionState | null>(null);
@@ -61,9 +71,14 @@ export function useSession() {
     };
   }, []);
 
+  /**
+   * Login always saves the current location (pathname + search + hash) as returnTo so
+   * protected pages restore their exact position after authentication. The home page
+   * simply produces returnTo="/". Server-side validation is the single trust boundary.
+   */
   const login = useCallback((returnTo?: string) => {
-    const url = returnTo ? `/auth/login?returnTo=${encodeURIComponent(returnTo)}` : "/auth/login";
-    window.location.href = url;
+    const target = returnTo ?? currentReturnTo();
+    window.location.href = `/auth/login?returnTo=${encodeURIComponent(target)}`;
   }, []);
 
   /**

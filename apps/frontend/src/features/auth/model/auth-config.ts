@@ -8,8 +8,16 @@
  * - Development/test: loopback HTTP and signed-test are permitted with explicit opt-in.
  */
 
+export type AuthEnvironment = "production" | "staging" | "development" | "test";
+
 export type AuthConfig = {
   readonly appOrigin: string;
+  /**
+   * Reliable environment classification resolved once from NODE_ENV. Cookie NAME is
+   * derived exclusively from this field (never from the URL protocol), while the
+   * cookie Secure flag is derived exclusively from the app origin protocol.
+   */
+  readonly environment: AuthEnvironment;
   readonly authProvider: "auth0" | "signed-test";
   readonly authIssuer: string;
   readonly authAudience: string;
@@ -126,6 +134,11 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
 
   const nodeEnv: string = env.NODE_ENV ?? "development";
   const isProduction = nodeEnv === "production" || nodeEnv === "staging";
+  const environment: AuthEnvironment =
+    nodeEnv === "production" ? "production"
+    : nodeEnv === "staging" ? "staging"
+    : nodeEnv === "test" ? "test"
+    : "development";
 
   // Validate appOrigin
   if (!appOrigin) {
@@ -228,6 +241,7 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
 
   return {
     appOrigin,
+    environment,
     authProvider: authProvider as "auth0" | "signed-test",
     authIssuer,
     authAudience,

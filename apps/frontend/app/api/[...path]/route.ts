@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getAuth0Client, getAuthConfig, generateRequestId } from "../../../src/features/auth/server/auth0-server";
+import { getAuth0Client, getAuthConfig, generateRequestId, touchSession } from "../../../src/features/auth/server/auth0-server";
 import { handleBffRequest, type BffDeps } from "../../../src/features/auth/server/bff";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +13,7 @@ export const dynamic = "force-dynamic";
 const deps: BffDeps = {
   getConfig: () => getAuthConfig(),
   getAccessToken: (request, sink) => getAuth0Client().getAccessToken(request, sink),
+  touchSession,
   fetch: (url, init) => fetch(url, init),
   generateRequestId
 };

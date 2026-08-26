@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getAuth0Client, getAuthConfig, generateRequestId } from "../../../src/features/auth/server/auth0-server";
+import { getAuth0Client, getAuthConfig, generateRequestId, touchSession } from "../../../src/features/auth/server/auth0-server";
 import { handleSessionRequest, type SessionDeps } from "../../../src/features/auth/server/session";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +16,7 @@ export const dynamic = "force-dynamic";
 const deps: SessionDeps = {
   getConfig: () => getAuthConfig(),
   getSession: (request) => getAuth0Client().getSession(request),
+  touchSession,
   generateRequestId
 };
 

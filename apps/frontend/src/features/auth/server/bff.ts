@@ -12,8 +12,15 @@
  * - getAccessToken failures are classified: missing/expired/revoked/renewal-rejection →
  *   401 (and the invalid session cookie is cleared); provider/JWKS/SDK outage → 500 (the
  *   decrypted session is preserved).
- * - Any Set-Cookie produced by the SDK (session rotation) is propagated on success and on
- *   terminating responses, including backend-unavailable responses.
+ * - Every accepted request triggers the SDK's REAL passive session rolling (middleware
+ *   default-case touch) after the Origin check and before any token operation; rolling
+ *   failure fails closed with a stable 500. Rolling can never extend the 7d absolute
+ *   expiry (the SDK caps maxAge at createdAt + absoluteDuration).
+ * - Any Set-Cookie produced by the SDK (rolling + session rotation) is propagated on
+ *   success and on terminating responses, including backend-unavailable responses.
+ * - A Backend 401 (after the BFF attached the Bearer token) invalidates the local
+ *   session: stable UNAUTHORIZED envelope + clearing of the session main cookie, chunks
+ *   and SDK legacy cookies. Backend 403 preserves the session.
  * - Backend Set-Cookie is never forwarded to the browser.
  */
 
@@ -38,6 +45,11 @@ const ALLOWED_HEADERS = new Set([
 export type BffDeps = {
   getConfig(): AuthConfig;
   getAccessToken(request: NextRequest, sink: NextResponse): Promise<{ token: string }>;
+  /**
+   * Triggers the SDK's real passive session rolling and returns the Set-Cookie headers
+   * it produced. Must throw on SDK failure (the caller fails closed with 500).
+   */
+  touchSession(request: NextRequest): Promise<string[]>;
   fetch(url: string, init: RequestInit): Promise<Response>;
   generateRequestId(): string;
 };
@@ -168,7 +180,18 @@ export async function handleBffRequest(
     body = await request.text();
   }
 
-  // 4. Obtain the access token server-side; capture any SDK session-rotation Set-Cookie.
+  // 4. Real SDK passive rolling BEFORE any token operation (Origin was already checked
+  //    above for mutations). The SDK only writes when it decrypted a valid session, so
+  //    missing/invalid sessions are never rolled. Rolling failure fails closed — never a
+  //    silent passthrough.
+  let rollingCookies: string[];
+  try {
+    rollingCookies = await deps.touchSession(request);
+  } catch {
+    return errorEnvelope(500, "INTERNAL_ERROR", "Session service unavailable.", requestId);
+  }
+
+  // 5. Obtain the access token server-side; capture any SDK session-rotation Set-Cookie.
   const sink = new NextResponse();
   let accessToken: string;
   try {
@@ -184,6 +207,10 @@ export async function handleBffRequest(
       return response;
     }
     const response = errorEnvelope(500, "INTERNAL_ERROR", "Authentication service unavailable.", requestId);
+    // Preserve cookies already produced by rolling/rotation for this valid session.
+    for (const cookie of rollingCookies) {
+      response.headers.append("Set-Cookie", cookie);
+    }
     appendSinkCookies(response, sink);
     return response;
   }
@@ -197,7 +224,7 @@ export async function handleBffRequest(
     return response;
   }
 
-  // 5. Build forwarded headers from the allowlist; attach the Bearer token server-side.
+  // 6. Build forwarded headers from the allowlist; attach the Bearer token server-side.
   const headers = new Headers();
   for (const [key, value] of request.headers.entries()) {
     if (ALLOWED_HEADERS.has(key.toLowerCase())) {
@@ -207,7 +234,7 @@ export async function handleBffRequest(
   headers.set("authorization", `Bearer ${accessToken}`);
   headers.delete("content-length"); // let fetch compute it from the body
 
-  // 6. Forward to the Backend.
+  // 7. Forward to the Backend.
   let backendResponse: Response;
   try {
     backendResponse = await deps.fetch(backendUrl.toString(), {
@@ -217,13 +244,31 @@ export async function handleBffRequest(
       cache: "no-store"
     });
   } catch {
-    // Backend unreachable. Never drop session-rotation cookies already produced by the SDK.
+    // Backend unreachable. Never drop rolling/rotation cookies already produced by the SDK.
     const response = errorEnvelope(502, "INTERNAL_ERROR", "Backend service unavailable.", requestId);
+    for (const cookie of rollingCookies) {
+      response.headers.append("Set-Cookie", cookie);
+    }
     appendSinkCookies(response, sink);
     return response;
   }
 
-  // 7. Assemble the response: safe Backend headers (no Set-Cookie) + SDK rotation cookies.
+  // 8. A Backend 401 (after the BFF attached the server-side Bearer token) means the
+  //    Backend observed an invalid/expired/wrong-issuer/wrong-audience/bad-signature/
+  //    revoked token. Invalidate the local session: stable envelope + clearing of the
+  //    session main cookie, chunks and SDK legacy cookies. Rolling/rotation cookies are
+  //    intentionally NOT re-appended — they would resurrect the invalidated session.
+  if (backendResponse.status === 401) {
+    const response = errorEnvelope(401, "UNAUTHORIZED", "Session is no longer valid.", requestId);
+    for (const cookie of buildClearCookieHeaders(request, config, false)) {
+      response.headers.append("Set-Cookie", cookie);
+    }
+    return response;
+  }
+
+  // 9. Assemble the response: safe Backend headers (no Set-Cookie) + SDK cookies.
+  //    Rolling cookies first, rotation cookies last: if the token set was rotated the
+  //    rotation carries the newer session and wins in Set-Cookie order.
   const responseHeaders = new Headers();
   for (const [key, value] of backendResponse.headers.entries()) {
     const lowerKey = key.toLowerCase();
@@ -238,6 +283,9 @@ export async function handleBffRequest(
     statusText: backendResponse.statusText,
     headers: responseHeaders
   });
+  for (const cookie of rollingCookies) {
+    response.headers.append("Set-Cookie", cookie);
+  }
   appendSinkCookies(response, sink);
   return response;
 }

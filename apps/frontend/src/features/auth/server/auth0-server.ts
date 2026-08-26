@@ -6,9 +6,11 @@
  * Initializes the SDK with authenticated-encrypted, HttpOnly, host-only Cookie Session
  * with rolling: true, inactivityDuration: 28800, absoluteDuration: 604800.
  *
- * Cookie Secure flag and name are derived from the verified app origin (HTTPS → Secure
- * + __Host- prefix), never from NODE_ENV alone. This keeps deletion attributes aligned
- * with creation attributes.
+ * Cookie Secure flag is derived from the verified app origin protocol (HTTPS → Secure,
+ * in any environment) while the cookie NAME is derived from the resolved environment
+ * classification (production/staging → `__Host-mystcrag_session`; development/test →
+ * `mystcrag_session`). The two decisions are independent: a development HTTPS origin
+ * uses `mystcrag_session; Secure`. Deletion attributes always mirror creation attributes.
  *
  * The `onCallback` hook returns a real 303 See Other on success and, on failure, a
  * sentinel response carrying the typed SDK error code in a private header so the
@@ -17,12 +19,13 @@
 
 import { Auth0Client } from "@auth0/nextjs-auth0/server";
 import type { SessionData } from "@auth0/nextjs-auth0/types";
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { resolveAuthConfig, type AuthConfig } from "../model/auth-config";
 
 /**
- * Private response header used to carry the SDK callback error code from the
- * `onCallback` hook to the callback route for classification. The callback route
+ * Private response header used to carry the typed SDK callback error classification from
+ * the `onCallback` hook to the callback route. Format: `{sdkCode}|{causeCode}` where
+ * causeCode is the wrapped OAuth2 provider code (may be empty). The callback route
  * always strips it before the response leaves the server.
  */
 export const CALLBACK_ERROR_HEADER = "x-mystcrag-callback-error";
@@ -44,11 +47,17 @@ export function isSecureCookie(config: AuthConfig): boolean {
 }
 
 /**
- * Session cookie name. The `__Host-` prefix is only valid with Secure + Path=/ + no
- * Domain, so it is used exactly when cookies are Secure.
+ * Session cookie NAME, chosen by environment classification only — never by protocol.
+ *
+ * - production/staging → `__Host-mystcrag_session` (the `__Host-` prefix requires
+ *   Secure + Path=/ + no Domain, all of which production/staging always satisfy).
+ * - development/test → `mystcrag_session`, even when the dev origin happens to be
+ *   HTTPS (in which case the cookie still carries the Secure flag).
  */
 export function getSessionCookieName(config: AuthConfig): string {
-  return isSecureCookie(config) ? "__Host-mystcrag_session" : "mystcrag_session";
+  return config.environment === "production" || config.environment === "staging"
+    ? "__Host-mystcrag_session"
+    : "mystcrag_session";
 }
 
 export function getAuth0Client(): Auth0Client {
@@ -114,9 +123,14 @@ export function getAuth0Client(): Auth0Client {
         const code = typeof (error as { code?: unknown }).code === "string"
           ? (error as { code: string }).code
           : "callback_error";
+        // Preserve the wrapped OAuth2 cause code (e.g. the provider code behind
+        // authorization_error / authorization_code_grant_error) so the callback route
+        // can classify 401 vs 500 without trusting URL parameters.
+        const cause = (error as { cause?: { code?: unknown } })?.cause;
+        const causeCode = typeof cause?.code === "string" ? cause.code : "";
         return new NextResponse(null, {
           status: 500,
-          headers: { [CALLBACK_ERROR_HEADER]: code }
+          headers: { [CALLBACK_ERROR_HEADER]: `${code}|${causeCode}` }
         });
       }
       const appBaseUrl = ctx.appBaseUrl;
@@ -164,6 +178,44 @@ export function getAuthConfig(): AuthConfig {
   return cachedConfig;
 }
 
+/**
+ * Triggers the SDK's real passive session rolling for a request by routing it through
+ * the SDK middleware default case (the pathname matches no SDK route). The SDK then:
+ *
+ *   if (sessionStore.isRolling && await sessionStore.shouldRollSession(req)) {
+ *     const { error, session } = await getSessionWithDomainCheck(req.cookies);
+ *     if (!error && session) await sessionStore.set(req.cookies, res.cookies, session);
+ *   }
+ *
+ * `sessionStore.set` rewrites the session cookie with
+ * `maxAge = min(now + inactivityDuration, createdAt + absoluteDuration) - now`, so the
+ * 8h idle rolling can never extend the 7d absolute expiry. Missing/invalid sessions are
+ * not rolled (the SDK only writes when it decrypted a valid session).
+ *
+ * Returns the Set-Cookie header strings produced by the rolling write (possibly empty
+ * when nothing needed rotation). Throws on SDK failure — callers MUST fail closed.
+ */
+export async function touchSession(request: NextRequest): Promise<string[]> {
+  const response = await getAuth0Client().middleware(request);
+  return response.headers.getSetCookie?.() ?? [];
+}
+
+/**
+ * Extracts the Max-Age actually written by an SDK rolling Set-Cookie for the session
+ * cookie (main name or `{name}__0` chunk). Used to make the projected idleExpiresAt
+ * match the real cookie expiry instead of a fabricated now+8h. Returns null when the
+ * rolling response carried no session cookie (e.g. nothing to roll).
+ */
+export function parseSessionCookieMaxAge(setCookies: readonly string[], sessionName: string): number | null {
+  for (const setCookie of setCookies) {
+    const namePart = setCookie.slice(0, setCookie.indexOf("="));
+    if (namePart !== sessionName && !namePart.startsWith(`${sessionName}__`)) continue;
+    const match = /;\s*Max-Age=(\d+)/i.exec(setCookie);
+    if (match) return Number(match[1]);
+  }
+  return null;
+}
+
 export type SessionUser = {
   displayName?: string;
   email?: string;
@@ -181,8 +233,16 @@ export type SessionState = {
  * Projects internal SDK session to safe public session state.
  * Never exposes: issuer, subject/sub, audience, tokens, internal User.id,
  * session id, SDK raw claims/profile, or authorization details.
+ *
+ * `rollingMaxAge` (when provided) is the Max-Age actually written by the SDK rolling
+ * response for this request; idleExpiresAt must equal that real cookie expiry. The
+ * fallback mirrors the SDK's own `calculateMaxAge(createdAt)` formula:
+ * `min(now + inactivityDuration, createdAt + absoluteDuration)`.
  */
-export function projectSessionState(session: SessionData | null | undefined): SessionState {
+export function projectSessionState(
+  session: SessionData | null | undefined,
+  rollingMaxAge?: number | null
+): SessionState {
   if (!session) {
     return { authenticated: false };
   }
@@ -199,8 +259,11 @@ export function projectSessionState(session: SessionData | null | undefined): Se
   const createdAt = session.internal.createdAt;
   const absoluteExpiresAt = new Date((createdAt + 604800) * 1000).toISOString();
 
-  // idleExpiresAt: min(now + inactivityDuration, absoluteExpiresAt)
-  const idleExpiry = Math.min(now + 28800, createdAt + 604800);
+  // idleExpiresAt: prefer the Max-Age really written by the rolling response; otherwise
+  // replicate the SDK formula (which itself caps at the absolute ceiling).
+  const idleExpiry = typeof rollingMaxAge === "number"
+    ? now + Math.min(rollingMaxAge, createdAt + 604800 - now)
+    : Math.min(now + 28800, createdAt + 604800);
   const idleExpiresAt = new Date(idleExpiry * 1000).toISOString();
 
   return {
