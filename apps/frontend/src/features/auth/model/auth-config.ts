@@ -38,11 +38,22 @@ function isValidHttpOrigin(value: string): boolean {
     return Boolean(
       (url.protocol === "https:" || url.protocol === "http:") &&
       url.host &&
+      !url.username &&
+      !url.password &&
       !url.pathname.includes("@") &&
       url.pathname === "/" &&
       !url.search &&
       !url.hash
     );
+  } catch {
+    return false;
+  }
+}
+
+function hasCredentials(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return Boolean(url.username || url.password);
   } catch {
     return false;
   }
@@ -120,11 +131,13 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
   if (!appOrigin) {
     errors.push("MYSTCRAG_APP_ORIGIN is required");
   } else if (!isValidHttpOrigin(appOrigin)) {
-    errors.push("MYSTCRAG_APP_ORIGIN must be an absolute origin without path/query/fragment");
+    errors.push("MYSTCRAG_APP_ORIGIN must be an absolute origin without path/query/fragment/credentials");
   } else if (isProduction && !isHttpsOrigin(appOrigin)) {
     errors.push("MYSTCRAG_APP_ORIGIN must be HTTPS in production/staging");
   } else if (isProduction && isLoopbackOrigin(appOrigin)) {
     errors.push("MYSTCRAG_APP_ORIGIN cannot be loopback in production/staging");
+  } else if (!isProduction && !isHttpsOrigin(appOrigin) && !isLoopbackOrigin(appOrigin)) {
+    errors.push("MYSTCRAG_APP_ORIGIN HTTP is only allowed for loopback in development/test");
   }
 
   // Validate authProvider
@@ -167,9 +180,11 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
     errors.push("MYSTCRAG_AUTH_CALLBACK_URL must exactly equal MYSTCRAG_APP_ORIGIN + '/auth/callback'");
   }
 
-  // Validate authLogoutUrl — must be same-origin approved post-logout URL
+  // Validate authLogoutUrl — must be same-origin approved post-logout URL without credentials
   if (!authLogoutUrl) {
     errors.push("MYSTCRAG_AUTH_LOGOUT_URL is required");
+  } else if (hasCredentials(authLogoutUrl)) {
+    errors.push("MYSTCRAG_AUTH_LOGOUT_URL must not contain username/password credentials");
   } else if (appOrigin) {
     try {
       const logoutUrl = new URL(authLogoutUrl);
@@ -193,11 +208,13 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
   if (!backendOrigin) {
     errors.push("MYSTCRAG_BACKEND_ORIGIN is required");
   } else if (!isValidHttpOrigin(backendOrigin)) {
-    errors.push("MYSTCRAG_BACKEND_ORIGIN must be a valid absolute origin");
+    errors.push("MYSTCRAG_BACKEND_ORIGIN must be a valid absolute origin without credentials");
   } else if (isProduction && !isHttpsOrigin(backendOrigin)) {
     errors.push("MYSTCRAG_BACKEND_ORIGIN must be HTTPS in production/staging");
   } else if (isProduction && isLoopbackOrigin(backendOrigin)) {
     errors.push("MYSTCRAG_BACKEND_ORIGIN cannot be loopback in production/staging");
+  } else if (!isProduction && !isHttpsOrigin(backendOrigin) && !isLoopbackOrigin(backendOrigin)) {
+    errors.push("MYSTCRAG_BACKEND_ORIGIN HTTP is only allowed for loopback in development/test");
   }
 
   if (errors.length > 0) {

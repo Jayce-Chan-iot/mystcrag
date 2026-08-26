@@ -45,7 +45,6 @@ export function AuthStatus() {
 
   // Authenticated
   const displayName = session?.user?.displayName || session?.user?.email || "用户";
-  
   return (
     <div className="flex items-center gap-3" role="status" aria-live="polite">
       <span className="text-sm text-[var(--foreground)]">{displayName}</span>

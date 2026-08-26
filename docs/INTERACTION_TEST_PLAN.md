@@ -155,17 +155,17 @@ Status: `IMPLEMENTED` — not yet feature-PASS; pending full integration verific
 | AUTH-005 | GET /auth/callback with provider error | Returns 401 UNAUTHORIZED with stable error envelope and requestId. |
 | AUTH-006 | GET /auth/callback with infrastructure failure | Returns 500 INTERNAL_ERROR with error envelope and requestId. |
 | AUTH-007 | GET /auth/logout | Returns 405 METHOD_NOT_ALLOWED without modifying any cookie. |
-| AUTH-008 | POST /auth/logout with valid Origin | Clears all session/transaction cookies; returns HTML form that navigates to Auth0 logout. |
+| AUTH-008 | POST /auth/logout with valid Origin | Clears session/transaction cookies present on the request; returns 303 See Other to the server-constructed Auth0/OIDC logout URL (never 200 inline-script HTML). |
 | AUTH-009 | POST /auth/logout with missing/wrong Origin | Returns 403 FORBIDDEN. |
-| AUTH-010 | POST /auth/logout repeated | Idempotent — repeated POSTs produce the same cookie clearing and redirect. |
+| AUTH-010 | POST /auth/logout repeated | Idempotent — repeated POSTs produce the same 303 logout sequence. |
 | AUTH-011 | GET /auth/session with valid session | Returns 200 with authenticated:true, safe user projection, real idleExpiresAt and absoluteExpiresAt. |
-| AUTH-012 | GET /auth/session with no/expired cookie | Returns 200 with authenticated:false. |
+| AUTH-012 | GET /auth/session with no/expired cookie | Returns 200 with authenticated:false; expired/malformed cookies are cleared. |
 | AUTH-013 | GET /auth/session with dependency failure | Returns 500 INTERNAL_ERROR (not authenticated:false). |
 | AUTH-014 | BFF /api/** with valid session | Proxies to backend with server-side Bearer token; response has Cache-Control: no-store. |
 | AUTH-015 | BFF /api/** with missing session | Returns 401 UNAUTHORIZED. |
 | AUTH-016 | BFF mutation with wrong Origin | Returns 403 FORBIDDEN before any token operation. |
 | AUTH-017 | Browser API client does not send Authorization | Design/Tarot API clients do not set Authorization header; BFF adds it server-side. |
 | AUTH-018 | AuthStatus component states | Shows loading, anonymous (login button), authenticated (name + logout), and error states. |
-| AUTH-019 | Logout via top-level POST navigation | Logout uses form submission (not fetch) to enable cross-origin 303 following. |
+| AUTH-019 | Logout via top-level POST navigation | Logout uses form submission (not fetch); the browser follows the server 303 to Auth0. |
 | AUTH-020 | 375×812 mobile smoke | AuthStatus header controls are accessible; login/logout buttons meet minimum touch target. |
 | AUTH-021 | 1440×900 desktop smoke | AuthStatus displays user name and logout in the header navigation. |

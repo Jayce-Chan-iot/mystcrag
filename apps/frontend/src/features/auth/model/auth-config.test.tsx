@@ -97,6 +97,48 @@ test("development allows HTTP loopback app origin", () => {
   assert.equal(config.appOrigin, "http://localhost:3000");
 });
 
+test("development rejects HTTP non-loopback app origin", () => {
+  expectConfigError(
+    () => resolveAuthConfig({
+      ...validSignedTestConfig,
+      MYSTCRAG_APP_ORIGIN: "http://192.168.1.10:3000",
+      MYSTCRAG_AUTH_CALLBACK_URL: "http://192.168.1.10:3000/auth/callback",
+      MYSTCRAG_AUTH_LOGOUT_URL: "http://192.168.1.10:3000"
+    }),
+    "HTTP is only allowed for loopback"
+  );
+});
+
+test("development rejects HTTP non-loopback backend origin", () => {
+  expectConfigError(
+    () => resolveAuthConfig({ ...validSignedTestConfig, MYSTCRAG_BACKEND_ORIGIN: "http://10.0.0.5:4000" }),
+    "HTTP is only allowed for loopback"
+  );
+});
+
+// --- Credentials rejection ---
+
+test("app origin rejects embedded username/password", () => {
+  expectConfigError(
+    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_APP_ORIGIN: "https://user:pass@mystcrag.com" }),
+    "MYSTCRAG_APP_ORIGIN"
+  );
+});
+
+test("backend origin rejects embedded username/password", () => {
+  expectConfigError(
+    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_BACKEND_ORIGIN: "https://user:pass@api.mystcrag.com" }),
+    "MYSTCRAG_BACKEND_ORIGIN"
+  );
+});
+
+test("logout URL rejects embedded username/password", () => {
+  expectConfigError(
+    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_LOGOUT_URL: "https://user:pass@mystcrag.com" }),
+    "credentials"
+  );
+});
+
 // --- Issuer validation ---
 
 test("issuer must be HTTPS", () => {

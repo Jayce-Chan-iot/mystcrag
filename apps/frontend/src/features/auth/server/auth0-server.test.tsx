@@ -15,7 +15,8 @@ import test from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { projectSessionState, generateRequestId } from "./auth0-server";
+import { projectSessionState, generateRequestId, isSecureCookie, getSessionCookieName } from "./auth0-server";
+import { makeConfig, makeDevConfig } from "./auth-test-fixtures";
 
 // --- Session safe projection ---
 
@@ -209,6 +210,26 @@ test("browser API client does not set Authorization header", () => {
     false,
     "Browser API client should not set Authorization header"
   );
+});
+
+// --- Cookie Secure flag and session cookie name derivation ---
+
+test("isSecureCookie is true for HTTPS app origins in any environment", () => {
+  assert.equal(isSecureCookie(makeConfig()), true);
+  assert.equal(isSecureCookie(makeConfig({ appOrigin: "https://staging.mystcrag.com" })), true);
+});
+
+test("isSecureCookie is false only for development/test loopback HTTP origins", () => {
+  assert.equal(isSecureCookie(makeDevConfig()), false);
+});
+
+test("isSecureCookie fails closed on unparsable origins", () => {
+  assert.equal(isSecureCookie(makeConfig({ appOrigin: "not-a-url" })), true);
+});
+
+test("getSessionCookieName uses __Host- prefix exactly when cookies are Secure", () => {
+  assert.equal(getSessionCookieName(makeConfig()), "__Host-mystcrag_session");
+  assert.equal(getSessionCookieName(makeDevConfig()), "mystcrag_session");
 });
 
 // --- Helper ---
