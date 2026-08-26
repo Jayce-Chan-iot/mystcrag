@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { DevelopmentModeBadge } from "../src/components/development-mode-badge";
+import { AuthStatus } from "../src/features/auth/components/auth-status";
 import { isTarotFeatureEnabled } from "../src/lib/api/api-runtime";
 import { MobileBottomNav } from "../components/mobile-bottom-nav";
 import "./globals.css";
@@ -43,30 +43,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
                 </Link>
               ))}
             </div>
-            <Link
-              aria-label="个人中心"
-              className="inline-flex h-11 w-11 items-center justify-center rounded-full transition hover:opacity-85 lg:hidden"
-              href="/profile"
-            >
-              <Image
-                alt=""
-                className="h-9 w-9 rounded-full border border-[var(--border)] object-cover"
-                height={36}
-                priority
-                src="/avatars/demo-user.webp"
-                width={36}
-              />
-            </Link>
-            <Link
-              aria-label="个人中心"
-              className="hidden h-11 w-11 items-center justify-center rounded-full text-[var(--muted)] transition hover:text-[var(--accent)] lg:inline-flex"
-              href="/profile"
-            >
-              <svg aria-hidden="true" fill="none" height="22" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="22">
-                <circle cx="12" cy="8.2" r="3.9" />
-                <path d="M4.8 20.2c1-3.4 3.9-5.3 7.2-5.3s6.2 1.9 7.2 5.3" />
-              </svg>
-            </Link>
+            <AuthStatus />
           </nav>
         </header>
         <div className="pb-[3.4rem] lg:pb-0" data-content-shell="true">

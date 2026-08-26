@@ -160,8 +160,9 @@ test("all Tarot operations send the canonical protected routes and bodies", asyn
     "/api/tarot/sessions/tarot%2Fsession%201/save"
   ]);
   assert.deepEqual(calls.map((call) => call.init?.method), ["POST", "POST", "POST", "POST", "GET", "POST"]);
-  assert.equal((calls[0]?.init?.headers as Record<string, string>).authorization, "Bearer verified-test-token");
-  assert.equal((calls[4]?.init?.headers as Record<string, string>).authorization, "Bearer verified-test-token");
+  // Note: Authorization header is no longer set by the client; BFF proxy adds it from session cookie
+  assert.equal(Object.hasOwn(calls[0]?.init?.headers as object, "authorization"), false);
+  assert.equal(Object.hasOwn(calls[4]?.init?.headers as object, "authorization"), false);
   assert.equal(Object.hasOwn(calls[0]?.init?.headers as object, "x-actor-id"), false);
   assert.deepEqual(JSON.parse(String(calls[3]?.init?.body)), recommendationRequest);
   assert.equal(calls[4]?.init?.body, undefined);
@@ -170,21 +171,17 @@ test("all Tarot operations send the canonical protected routes and bodies", asyn
   assert.equal(restored.cardBack.assetFile, "CardBack.png");
 });
 
-test("missing verified credential fails before network traffic", async () => {
-  let called = false;
+test("missing session cookie results in 401 from BFF proxy", async () => {
+  // Note: Client no longer checks for accessToken; BFF proxy returns 401 if no session
   const client = createTarotApiClient({
     accessToken: "",
-    fetcher: (async () => {
-      called = true;
-      return jsonResponse({});
-    }) as typeof fetch
+    fetcher: (async () => jsonResponse({ error: { code: "UNAUTHORIZED", message: "Authentication is required.", requestId: "req-1" } }, 401)) as typeof fetch
   });
 
   await assert.rejects(
     client.get("tarot-session-1"),
     (error: unknown) => error instanceof FrontendApiError && error.code === "UNAUTHORIZED"
   );
-  assert.equal(called, false);
 });
 
 test("invalid successful Backend payload is rejected at the response boundary", async () => {

@@ -23,7 +23,6 @@ import {
   type SelectTarotCardResponse
 } from "@mystcrag/design-contract";
 
-import { resolveAccessToken } from "./api-runtime";
 import { FrontendApiError, type FrontendErrorCode } from "./frontend-api-error";
 
 type FetchLike = typeof fetch;
@@ -76,20 +75,15 @@ async function callApi<T>(
   path: string,
   schema: RuntimeSchema<T>,
   options: { method?: "GET" | "POST"; body?: unknown },
-  fetcher: FetchLike,
-  accessToken: string
+  fetcher: FetchLike
 ): Promise<T> {
-  if (!accessToken) {
-    throw new FrontendApiError("UNAUTHORIZED", "A verified Mystcrag session credential is required.");
-  }
-
+  // Authorization is handled by the BFF proxy using the Auth0 session cookie.
   let response: Response;
   try {
     response = await fetcher(path, {
       method: options.method ?? "POST",
       headers: {
-        ...(options.body === undefined ? {} : { "content-type": "application/json" }),
-        authorization: `Bearer ${accessToken}`
+        ...(options.body === undefined ? {} : { "content-type": "application/json" })
       },
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
       cache: "no-store"
@@ -137,8 +131,7 @@ export type TarotApiClientOptions = {
 };
 
 export function createTarotApiClient({
-  fetcher = fetch,
-  accessToken = resolveAccessToken()
+  fetcher = fetch
 }: TarotApiClientOptions = {}): TarotApiClient {
   const sessionPath = (sessionId: string) =>
     `/api/tarot/sessions/${encodeURIComponent(sessionId)}`;
@@ -150,8 +143,7 @@ export function createTarotApiClient({
         "/api/tarot/sessions",
         CreateTarotSessionResponseSchema,
         { body: request },
-        fetcher,
-        accessToken
+        fetcher
       );
     },
 
@@ -161,8 +153,7 @@ export function createTarotApiClient({
         `${sessionPath(sessionId)}/select`,
         SelectTarotCardResponseSchema,
         { body: request },
-        fetcher,
-        accessToken
+        fetcher
       );
     },
 
@@ -172,8 +163,7 @@ export function createTarotApiClient({
         `${sessionPath(sessionId)}/reveal`,
         RevealTarotSessionResponseSchema,
         { body: request },
-        fetcher,
-        accessToken
+        fetcher
       );
     },
 
@@ -183,8 +173,7 @@ export function createTarotApiClient({
         `${sessionPath(sessionId)}/recommendations`,
         GenerateTarotRecommendationsResponseSchema,
         { body: request },
-        fetcher,
-        accessToken
+        fetcher
       );
     },
 
@@ -193,8 +182,7 @@ export function createTarotApiClient({
         sessionPath(sessionId),
         GetTarotSessionResponseSchema,
         { method: "GET" },
-        fetcher,
-        accessToken
+        fetcher
       );
     },
 
@@ -204,8 +192,7 @@ export function createTarotApiClient({
         `${sessionPath(sessionId)}/save`,
         SaveTarotSessionResponseSchema,
         { body: request },
-        fetcher,
-        accessToken
+        fetcher
       );
     }
   };

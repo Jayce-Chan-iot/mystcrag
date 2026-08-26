@@ -45,7 +45,8 @@ test("real generate request sends complete questionnaire answers and budget to B
   assert.equal(sent.maxBudgetMinor, 49_900);
   assert.deepEqual(sent.excludedProductIds, ["product-quartz-round-10"]);
   assert.equal(sent.personalizationConsent, true);
-  assert.equal((calls[0]?.init?.headers as Record<string, string>).authorization, "Bearer verified-test-token");
+  // Note: Authorization header is no longer set by the client; BFF proxy adds it from session cookie
+  assert.equal(Object.hasOwn(calls[0]?.init?.headers as object, "authorization"), false);
   assert.equal(Object.hasOwn(calls[0]?.init?.headers as object, "x-actor-id"), false);
 });
 
@@ -206,11 +207,10 @@ test("production mode cannot enable or silently fall back to Mock", () => {
   assert.equal(resolveAccessToken(), process.env.NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN?.trim() ?? "");
 });
 
-test("missing verified credential fails before network traffic", async () => {
-  let called = false;
-  const client = createDesignApiClient({ accessToken: "", useMock: false, fetcher: (async () => { called = true; return jsonResponse({}); }) as typeof fetch });
+test("missing session cookie results in 401 from BFF proxy", async () => {
+  // Note: Client no longer checks for accessToken; BFF proxy returns 401 if no session
+  const client = createDesignApiClient({ accessToken: "", useMock: false, fetcher: (async () => jsonResponse({ error: { code: "UNAUTHORIZED", message: "Authentication is required.", requestId: "req-1" } }, 401)) as typeof fetch });
   await assert.rejects(client.get(design.designId), (error: unknown) => error instanceof FrontendApiError && error.code === "UNAUTHORIZED");
-  assert.equal(called, false);
 });
 
 test("invalid Backend success payload is rejected instead of displayed", async () => {
