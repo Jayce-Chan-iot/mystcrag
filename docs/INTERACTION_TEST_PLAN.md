@@ -144,20 +144,32 @@ Every P0 browser case records:
 
 ## AUTH-005 Authentication interaction matrix
 
-Status: `FINAL_REPAIR_VERIFIED` (2026-08-26, SOL post-review targeted repair).
+Status: `FINAL_DELTA_VERIFIED` (2026-08-27, SOL final delta repair).
 
 Execution methods used below:
 
-- `component`: pure view-model/action/state-machine contract tests discovered
-  by the repository runner `tsx --test src/**/*.test.tsx`:
+- `component`: contract tests discovered by the repository runner
+  `tsx --test src/**/*.test.tsx`:
   `src/features/auth/components/auth-status.test.tsx`,
+  `src/features/auth/browser/logout-form.test.tsx`,
   `src/features/auth/model/auth-actions.test.tsx`,
   `src/features/auth/model/session-status.test.tsx`.
-  No DOM and no component test framework is used; `AuthStatus` is a thin
-  renderer over the tested view model.
-- `route`: module-level contract tests for callback/session/logout/BFF/cookie
-  logic against the real Auth0 Next.js SDK 4.27.0 error shapes
-  (`src/features/auth/server/*.test.tsx`).
+  No DOM library and no component test framework is used. The presentational
+  renderer `AuthStatusPresenter` (the single renderer consumed by `AuthStatus`)
+  is tested as a real ReactElement: serialized markup (`react-dom/server`
+  `renderToStaticMarkup`) proves role/aria-live/aria-label/class/text output,
+  and the rendered buttons' `onClick` handlers are invoked directly, proving
+  each login/logout callback fires exactly once. The logout DOM form
+  creation/submission is the single injectable helper `submitLogoutForm`,
+  tested against a lightweight fake document (method=POST, action=/auth/logout,
+  append-then-submit, submit once); `useSession` calls this exact helper.
+- `route`: module-level contract tests for callback/session/logout/login/BFF/
+  page-proxy/cookie logic against the real Auth0 Next.js SDK 4.27.0 error
+  shapes (`src/features/auth/server/*.test.tsx`), including privacy-safe auth
+  event wiring with distinct semantics (session missing vs session
+  expired/malformed vs renewal rejected/revoked vs Backend verification
+  failure vs dependency failure vs origin rejection vs session rotation) and
+  fail-closed 500 behavior for page-proxy and configuration failures.
 - `browser`: real headless Chromium (playwright) against `next dev` on
   http://localhost:3100 (development environment → `mystcrag_session`,
   Secure=false loopback HTTP). Authenticated state used a real SDK-encrypted
@@ -184,25 +196,25 @@ credentials and remain NOT executed; those rows are marked `route` only.
 
 | ID | Interaction | Required behavior | Status / evidence |
 | --- | --- | --- | --- |
-| AUTH-001 | Page navigation triggers rolling session | SDK middleware reissues session cookie with extended idle expiry; absolute ceiling is not extended. | PASS (`route` + `browser`). BFF and /auth/session invoke the real SDK middleware touch; fail closed 500 on rolling failure; idleExpiresAt parsed from the real rolling Max-Age; ceiling tests prove 7d is never extended. Live smoke: /auth/session with a valid SDK cookie returned a fresh `mystcrag_session` Set-Cookie. |
-| AUTH-002 | GET /auth/login with valid returnTo | Redirects to Auth0 with Cache-Control: no-store and Pragma: no-cache. | PASS (`route`). |
-| AUTH-003 | GET /auth/login with malicious returnTo | returnTo is sanitized to `/`; user is redirected to Auth0 with safe fallback. | PASS (`route`): absolute URLs, `//`, backslash and encoded bypasses rejected server-side. |
+| AUTH-001 | Page navigation triggers rolling session | SDK middleware reissues session cookie with extended idle expiry; absolute ceiling is not extended. | PASS (`route` + `browser`). BFF and /auth/session invoke the real SDK middleware touch; fail closed 500 on rolling failure; idleExpiresAt parsed from the real rolling Max-Age; ceiling tests prove 7d is never extended; actually-produced rolling Set-Cookie emits auth.session_rotation. Page-proxy SDK/config failure fails closed with stable 500 (never `NextResponse.next()`), no Set-Cookie, auth.dependency_failed. Live smoke: /auth/session with a valid SDK cookie returned a fresh `mystcrag_session` Set-Cookie. |
+| AUTH-002 | GET /auth/login with valid returnTo | Redirects to Auth0 with Cache-Control: no-store and Pragma: no-cache. | PASS (`route`): handler tests prove returnTo forwarding, no-store/Pragma, and a single requestId shared by response and structured log. |
+| AUTH-003 | GET /auth/login with malicious returnTo | returnTo is sanitized to `/`; user is redirected to Auth0 with safe fallback. | PASS (`route`): absolute URLs, `//`, backslash and encoded bypasses rejected server-side; rejection logs auth.open_redirect_rejected with the requestId and never the raw returnTo. |
 | AUTH-004 | GET /auth/callback with valid code | 303 redirect to validated returnTo; session cookie is set. | PASS (`route`): success is a real 303; SDK transaction/session Set-Cookie preserved. Live IdP exchange not executed. |
 | AUTH-005 | GET /auth/callback with provider error | Returns 401 UNAUTHORIZED with stable error envelope and requestId. | PASS (`route`): real SDK 4.27 shapes — missing/invalid state, issuer/session-domain rejection, session_expired, provider denial codes, grant error + invalid_grant, SDK-local `unknown_error` inside authorization_error / authorization_code_grant_error wrappers → 401 with transaction-material cleanup; no provider detail leakage. |
 | AUTH-006 | GET /auth/callback with infrastructure failure | Returns 500 INTERNAL_ERROR with error envelope and requestId. | PASS (`route`): discovery_error, authorization_code_grant_request_error, invalid_configuration, transport/JWKS outage, wrapped server_error / temporarily_unavailable / invalid_client / unauthorized_client / invalid_scope / invalid_request, unknown top-level exceptions and unknown provider codes → 500; existing decrypted session never cleared. |
 | AUTH-007 | GET /auth/logout | Returns 405 METHOD_NOT_ALLOWED without modifying any cookie. | PASS (`route`): unified envelope `{error:{code,message,requestId}}`, Allow: POST, Cache-Control: no-store, zero Set-Cookie. |
 | AUTH-008 | POST /auth/logout with valid Origin | Clears session/transaction cookies present on the request; returns 303 See Other to the server-constructed Auth0/OIDC logout URL (never 200 inline-script HTML). | PASS (`route`): clears current name, `{name}__N` chunks, SDK legacy `appSession`/`appSession.N`, `__txn_*`; unrelated cookies untouched. |
-| AUTH-009 | POST /auth/logout with missing/wrong Origin | Returns 403 FORBIDDEN. | PASS (`route`). |
+| AUTH-009 | POST /auth/logout with missing/wrong Origin | Returns 403 FORBIDDEN. | PASS (`route`): rejection logs auth.origin_rejected (same for BFF mutations). |
 | AUTH-010 | POST /auth/logout repeated | Idempotent — repeated POSTs produce the same 303 logout sequence. | PASS (`route`). |
 | AUTH-011 | GET /auth/session with valid session | Returns 200 with authenticated:true, safe user projection, real idleExpiresAt and absoluteExpiresAt. | PASS (`route` + `browser`): live response carried safe projection only (no sub/tokens) and idle/absolute expiry. |
 | AUTH-012 | GET /auth/session with no/expired cookie | Returns 200 with authenticated:false; expired/malformed cookies are cleared. | PASS (`route`). |
-| AUTH-013 | GET /auth/session with dependency failure | Returns 500 INTERNAL_ERROR (not authenticated:false). | PASS (`route`): rolling failure fails closed to a stable 500; never `NextResponse.next()`. |
+| AUTH-013 | GET /auth/session with dependency failure | Returns 500 INTERNAL_ERROR (not authenticated:false). | PASS (`route`): rolling failure AND `getConfig()` resolution failure fail closed to a stable 500 with no cookie clearing; never `NextResponse.next()`, never faked anonymity. |
 | AUTH-014 | BFF /api/** with valid session | Proxies to backend with server-side Bearer token; response has Cache-Control: no-store. | PASS (`route`): accepted requests trigger SDK rolling and merge rolling Set-Cookie; Backend 401 invalidates the local session (403 preserves). |
 | AUTH-015 | BFF /api/** with missing session | Returns 401 UNAUTHORIZED. | PASS (`route`): missing/invalid sessions are never rolled. |
 | AUTH-016 | BFF mutation with wrong Origin | Returns 403 FORBIDDEN before any token operation. | PASS (`route`): exact Origin check precedes rolling/session/token work; rolling is never invoked on rejection. |
 | AUTH-017 | Browser API client does not send Authorization | Design/Tarot API clients do not set Authorization header; BFF adds it server-side. | PASS (`route`). |
-| AUTH-018 | AuthStatus component states | Shows loading, anonymous (login button), authenticated (name + logout), and error states. | PASS (`component`): view-model tests cover loading/unauthenticated/authenticated/error states, aria status/alert regions, accessible labels, display-name fallback chain, touch-target (`min-h-11`) and overflow-bounding class contracts; native `<button>` keyboard focusability is a platform guarantee. |
-| AUTH-019 | Logout via top-level POST navigation | Logout uses form submission (not fetch); the browser follows the server 303 to Auth0. | PASS (`component`): tested `LOGOUT_FORM_SPEC` (method POST, action `/auth/logout`); the hook builds the form exclusively from this spec. |
+| AUTH-018 | AuthStatus component states | Shows loading, anonymous (login button), authenticated (name + logout), and error states. | PASS (`component`): the actual presentational renderer `AuthStatusPresenter` is tested as a real ReactElement — serialized markup proves role=status/alert, aria-live polite/assertive, aria-labels, display-name fallback/truncation class, touch-target (`min-h-11`) and overflow-bounding contracts; invoking the rendered buttons' onClick proves login/logout callbacks fire exactly once; `AuthStatus` provably renders through the presenter. Native `<button>` keyboard focusability is a platform guarantee. |
+| AUTH-019 | Logout via top-level POST navigation | Logout uses form submission (not fetch); the browser follows the server 303 to Auth0. | PASS (`component`): the single injectable helper `submitLogoutForm` is tested against a fake document — method=POST, action=/auth/logout, body append before submit, submit exactly once; `useSession` calls this exact helper. |
 | AUTH-020 | 375×812 mobile smoke | AuthStatus header controls are accessible; login/logout buttons meet minimum touch target. | PASS (`browser`, executed 2026-08-26): anonymous / authenticated / error-recovery primary actions visible and focusable, measured height 44px (min-h-11), `scrollWidth == clientWidth == 375` (no horizontal overflow), long-displayName truncation bounded. Screenshots were transient and not retained in the repository. |
 | AUTH-021 | 1440×900 desktop smoke | AuthStatus displays user name and logout in the header navigation. | PASS (`browser`, executed 2026-08-26): same assertions at 1440×900; displayName rendered, logout visible/focusable, no horizontal overflow. Screenshots were transient and not retained in the repository. |
 

@@ -10,13 +10,19 @@
  * - The SDK's hard-coded `/me/` and `/my-org/` browser endpoints are blocked here.
  * - API routes are never delegated to SDK middleware; the custom BFF route handler is
  *   the sole authority for /api/**.
- * - Page navigations call auth0.middleware(request) for rolling session reissue.
- * - Error logs never output raw Auth0 errors, code/state/query, tokens, or claims.
+ * - Page navigations call auth0.middleware(request) for rolling session reissue. On any
+ *   configuration/SDK failure the page FAILS CLOSED with a stable 500 envelope (never
+ *   NextResponse.next()), without clearing or overwriting cookies.
+ * - All testable behavior lives in src/features/auth/server/**; this file is a thin
+ *   adapter. Error logs never output raw Auth0 errors, code/state/query, tokens, or
+ *   claims.
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getAuth0Client } from "./src/features/auth/server/auth0-server";
+import { getAuth0Client, generateRequestId } from "./src/features/auth/server/auth0-server";
 import { decideProxyRoute } from "./src/features/auth/server/proxy-routes";
+import { handleProxyPageRolling } from "./src/features/auth/server/proxy-page";
+import { logAuthEvent } from "./src/features/auth/server/auth-events";
 
 // Broad matcher for rolling session support.
 // Excludes static assets, image optimization, and metadata files.
@@ -42,13 +48,11 @@ export default async function proxy(request: NextRequest) {
   // Page navigations: delegate to SDK middleware for rolling session cookie reissue.
   // The SDK reads the existing session, extends it, and sets the new cookie in the
   // response. Rolling never extends the absolute expiry (enforced by the SDK store).
-  try {
-    const auth0Client = getAuth0Client();
-    return await auth0Client.middleware(request);
-  } catch {
-    // Session rolling failure — pass through without blocking the request.
-    // Do NOT log raw error details (may contain tokens or claims).
-    console.error("Auth0 session rolling failed");
-    return NextResponse.next();
-  }
+  // getAuth0Client()/middleware failures fail closed inside handleProxyPageRolling
+  // (stable 500, never NextResponse.next(), no cookie clearing).
+  return handleProxyPageRolling(request, {
+    middleware: (pageRequest) => getAuth0Client().middleware(pageRequest),
+    generateRequestId,
+    logAuthEvent
+  });
 }

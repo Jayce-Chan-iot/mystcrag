@@ -7,7 +7,12 @@
  * raw provider profiles, provider error descriptions, raw callback queries or returnTo
  * values, subject/issuer raw values, claims, or email/display name.
  *
- * This module enforces that whitelist structurally:
+ * Event semantics are deliberately distinct (never collapsed into one bucket):
+ * - session missing vs session expired/malformed vs renewal rejected/revoked vs
+ *   Backend token verification failure vs dependency failure vs origin rejection vs
+ *   open-redirect rejection vs session rotation.
+ *
+ * This module enforces the privacy whitelist structurally:
  * - Event names and categories are closed literal sets; unknown values throw.
  * - The record builder copies ONLY the whitelisted fields (event, category, requestId,
  *   outcome) — any extra property on the input is dropped, so an accidental caller
@@ -21,7 +26,11 @@ export const AUTH_EVENT_NAMES = [
   "auth.callback_failed",
   "auth.dependency_failed",
   "auth.session_invalid",
+  "auth.session_missing",
+  "auth.session_rotation",
   "auth.renewal_rejected",
+  "auth.verification_failed",
+  "auth.origin_rejected",
   "auth.open_redirect_rejected"
 ] as const;
 
@@ -30,9 +39,12 @@ export type AuthEventName = (typeof AUTH_EVENT_NAMES)[number];
 export const AUTH_EVENT_CATEGORIES = [
   "authentication",
   "dependency",
+  "session_missing",
   "session_expired_or_malformed",
+  "session_rotation",
   "renewal_revoked",
-  "revocation_observed",
+  "verification_failed",
+  "origin_rejected",
   "open_redirect"
 ] as const;
 

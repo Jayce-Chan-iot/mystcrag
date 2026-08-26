@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { buildLoginHref, buildLogoutFormSpec, buildReturnTo, type BrowserLocation } from "../model/auth-actions";
+import { buildLoginHref, buildReturnTo, type BrowserLocation } from "../model/auth-actions";
+import { submitLogoutForm } from "../browser/logout-form";
 import {
   INITIAL_SESSION_STATUS,
   classifySessionResponse,
@@ -94,16 +95,11 @@ export function useSession() {
   /**
    * Logout uses a top-level POST navigation via a dynamically created form.
    * This ensures the browser follows the 303 redirect from Auth0
-   * (not a fetch following a cross-origin 303).
+   * (not a fetch following a cross-origin 303). The DOM form creation/submission is
+   * the single tested helper `submitLogoutForm`.
    */
   const logout = useCallback(() => {
-    const spec = buildLogoutFormSpec();
-    const form = document.createElement("form");
-    form.method = spec.method;
-    form.action = spec.action;
-    form.style.display = spec.display;
-    document.body.appendChild(form);
-    form.submit();
+    submitLogoutForm(document);
   }, []);
 
   const refresh = useCallback(async () => {

@@ -21,8 +21,8 @@ import test from "node:test";
 import { NextResponse } from "next/server";
 import { AccessTokenError, OAuth2Error } from "@auth0/nextjs-auth0/errors";
 
-import { handleBffRequest, resolveBackendUrl, classifyTokenError, type BffDeps } from "./bff";
-import { makeConfig, makeRequest, noopAuthEventLogger } from "./auth-test-fixtures";
+import { handleBffRequest, resolveBackendUrl, classifyTokenError, resolveTokenFailureEvent, type BffDeps } from "./bff";
+import { makeAuthEventCapture, makeConfig, makeRequest, noopAuthEventLogger } from "./auth-test-fixtures";
 import type { AuthEventLogger } from "./auth-events";
 
 type FetchCapture = {
@@ -288,6 +288,83 @@ test("real SDK AccessTokenError shapes classify per the refresh matrix", () => {
 test("classifyTokenError maps discovery/unknown failures to internal", () => {
   assert.equal(classifyTokenError({ code: "discovery_error" }), "internal");
   assert.equal(classifyTokenError(new Error("network")), "internal");
+});
+
+test("resolveTokenFailureEvent keeps distinct log semantics per token failure class", () => {
+  assert.deepEqual(resolveTokenFailureEvent({ code: "missing_session" }), {
+    event: "auth.session_missing",
+    category: "session_missing"
+  });
+  assert.deepEqual(resolveTokenFailureEvent({ code: "session_expired" }), {
+    event: "auth.session_invalid",
+    category: "session_expired_or_malformed"
+  });
+  assert.deepEqual(resolveTokenFailureEvent({ code: "missing_refresh_token" }), {
+    event: "auth.renewal_rejected",
+    category: "renewal_revoked"
+  });
+  for (const cause of ["invalid_grant", "access_denied"]) {
+    assert.deepEqual(
+      resolveTokenFailureEvent({ code: "failed_to_refresh_token", cause: { code: cause } }),
+      { event: "auth.renewal_rejected", category: "renewal_revoked" },
+      cause
+    );
+  }
+  // Configuration/infrastructure causes and unknown errors are dependency failures.
+  assert.deepEqual(
+    resolveTokenFailureEvent({ code: "failed_to_refresh_token", cause: { code: "invalid_client" } }),
+    { event: "auth.dependency_failed", category: "dependency" }
+  );
+  assert.deepEqual(resolveTokenFailureEvent({ code: "discovery_error" }), {
+    event: "auth.dependency_failed",
+    category: "dependency"
+  });
+  assert.deepEqual(resolveTokenFailureEvent(new Error("boom")), {
+    event: "auth.dependency_failed",
+    category: "dependency"
+  });
+});
+
+test("getConfig() throwing returns stable 500 before any side effect and preserves cookies", async () => {
+  const capture = makeAuthEventCapture();
+  const fetchCapture = { calls: 0 };
+  const deps: BffDeps = {
+    getConfig: () => {
+      throw new Error("MYSTCRAG_* configuration invalid");
+    },
+    getAccessToken: async () => {
+      throw new Error("must never run");
+    },
+    touchSession: async () => {
+      throw new Error("must never run");
+    },
+    fetch: async () => {
+      fetchCapture.calls += 1;
+      return new Response("{}", { status: 200 });
+    },
+    generateRequestId: () => "req-test",
+    logAuthEvent: capture.logger
+  };
+  const request = makeRequest("https://app.mystcrag.com/api/designs", {
+    method: "POST",
+    headers: { origin: makeConfig().appOrigin },
+    cookieHeader: "__Host-mystcrag_session=cipher",
+    body: "{}"
+  });
+  const response = await handleBffRequest(request, ["designs"], deps);
+
+  assert.equal(response.status, 500);
+  const body = await response.json();
+  assert.deepEqual(body, {
+    error: { code: "INTERNAL_ERROR", message: "Authentication service unavailable.", requestId: "req-test" }
+  });
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  // No cookie clearing on configuration failure; no session/token operation happened.
+  assert.equal(response.headers.getSetCookie().length, 0);
+  assert.equal(fetchCapture.calls, 0);
+  assert.deepEqual(capture.records, [
+    { event: "auth.dependency_failed", category: "dependency", requestId: "req-test", outcome: "failure" }
+  ]);
 });
 
 test("refresh infrastructure failure returns stable 500 and never logs the user out", async () => {

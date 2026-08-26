@@ -13,8 +13,11 @@
  *   `200 {"authenticated": false}` AND the invalid cookie is cleared. The SDK returns
  *   null for both "no cookie" and "undecryptable cookie", so this module inspects the
  *   request to detect an invalid cookie that must be cleared.
+ * - Configuration resolution failure is a dependency failure: stable 500 INTERNAL_ERROR,
+ *   never fake anonymity, and no cookie is cleared (it might still be valid).
  * - SDK/runtime dependency failures produce 500 INTERNAL_ERROR and never fake anonymity;
  *   a successfully decrypted session is preserved (no cookie clearing).
+ * - An actually-produced rolling Set-Cookie emits auth.session_rotation.
  * - Response always uses Cache-Control: no-store and Pragma: no-cache.
  */
 
@@ -43,7 +46,23 @@ export async function handleSessionRequest(
   deps: SessionDeps
 ): Promise<NextResponse> {
   const requestId = deps.generateRequestId();
-  const config = deps.getConfig();
+
+  let config: AuthConfig;
+  try {
+    config = deps.getConfig();
+  } catch {
+    // Configuration resolution failure is a dependency failure: never fake anonymity,
+    // never clear a cookie that might still be valid.
+    deps.logAuthEvent("auth.dependency_failed", {
+      category: "dependency",
+      requestId,
+      outcome: "failure"
+    });
+    return NextResponse.json(
+      { error: { code: "INTERNAL_ERROR", message: "Session service unavailable.", requestId } },
+      { status: 500, headers: { "Cache-Control": "no-store", "Pragma": "no-cache" } }
+    );
+  }
 
   let session: SessionData | null | undefined;
   try {
@@ -88,6 +107,13 @@ export async function handleSessionRequest(
     });
     for (const cookie of rollingCookies) {
       response.headers.append("Set-Cookie", cookie);
+    }
+    if (rollingCookies.length > 0) {
+      deps.logAuthEvent("auth.session_rotation", {
+        category: "session_rotation",
+        requestId,
+        outcome: "success"
+      });
     }
     return response;
   }

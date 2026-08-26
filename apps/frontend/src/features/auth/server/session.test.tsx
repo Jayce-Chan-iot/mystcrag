@@ -19,7 +19,7 @@ import test from "node:test";
 import type { SessionData } from "@auth0/nextjs-auth0/types";
 
 import { handleSessionRequest, type SessionDeps } from "./session";
-import { makeConfig, makeRequest, noopAuthEventLogger } from "./auth-test-fixtures";
+import { makeAuthEventCapture, makeConfig, makeRequest, noopAuthEventLogger } from "./auth-test-fixtures";
 import type { AuthEventLogger } from "./auth-events";
 
 // Simulates the Set-Cookie produced by the SDK's real rolling write.
@@ -198,4 +198,34 @@ test("dependency failure returns 500 and never fakes anonymity", async () => {
   // The successfully-decryptable session must NOT be cleared on transient outage.
   assert.equal(response.headers.getSetCookie().length, 0);
   assert.equal(response.headers.get("cache-control"), "no-store");
+});
+
+test("getConfig() throwing returns stable 500 INTERNAL_ERROR and preserves cookies", async () => {
+  const request = makeRequest("https://app.mystcrag.com/auth/session", {
+    cookieHeader: "__Host-mystcrag_session=cipher"
+  });
+  const capture = makeAuthEventCapture();
+  const deps: SessionDeps = {
+    getConfig: () => {
+      throw new Error("MYSTCRAG_* configuration invalid");
+    },
+    getSession: async () => null,
+    touchSession: async () => [],
+    generateRequestId: () => "req-sess",
+    logAuthEvent: capture.logger
+  };
+  const response = await handleSessionRequest(request, deps);
+
+  assert.equal(response.status, 500);
+  const body = await response.json();
+  assert.deepEqual(body, {
+    error: { code: "INTERNAL_ERROR", message: "Session service unavailable.", requestId: "req-sess" }
+  });
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("pragma"), "no-cache");
+  // A possibly-still-valid cookie is never cleared on configuration failure.
+  assert.equal(response.headers.getSetCookie().length, 0);
+  assert.deepEqual(capture.records, [
+    { event: "auth.dependency_failed", category: "dependency", requestId: "req-sess", outcome: "failure" }
+  ]);
 });

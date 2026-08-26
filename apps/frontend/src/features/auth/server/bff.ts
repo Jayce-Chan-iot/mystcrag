@@ -27,7 +27,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { AuthConfig } from "../model/auth-config";
 import { buildClearCookieHeaders } from "./session-cookies";
-import type { AuthEventLogger } from "./auth-events";
+import type { AuthEventCategory, AuthEventLogger, AuthEventName } from "./auth-events";
 
 // Minimal header allowlist copied from the browser request. Anything not listed here —
 // including cookie, authorization, host, content-length and forwarding headers — is never
@@ -108,6 +108,43 @@ export function classifyTokenError(error: unknown): ErrorKind {
   return "internal";
 }
 
+function extractTokenErrorCode(error: unknown): string | undefined {
+  return typeof (error as { code?: unknown })?.code === "string"
+    ? (error as { code: string }).code
+    : undefined;
+}
+
+/**
+ * Maps a getAccessToken failure to its privacy-safe auth event. The semantics are
+ * deliberately distinct:
+ * - missing_session → session missing (NOT renewal rejection);
+ * - session_expired → session expired/malformed;
+ * - missing_refresh_token / explicit provider grant rejection or revocation
+ *   (invalid_grant, access_denied behind failed_to_refresh_token) → renewal
+ *   rejected/revoked;
+ * - anything else (configuration/infrastructure) → dependency failure.
+ */
+export function resolveTokenFailureEvent(error: unknown): { event: AuthEventName; category: AuthEventCategory } {
+  const code = extractTokenErrorCode(error);
+  if (code === "missing_session") {
+    return { event: "auth.session_missing", category: "session_missing" };
+  }
+  if (code === "session_expired") {
+    return { event: "auth.session_invalid", category: "session_expired_or_malformed" };
+  }
+  if (code === "missing_refresh_token") {
+    return { event: "auth.renewal_rejected", category: "renewal_revoked" };
+  }
+  if (code === "failed_to_refresh_token") {
+    const cause = (error as { cause?: { code?: unknown } })?.cause;
+    const causeCode = typeof cause?.code === "string" ? cause.code : undefined;
+    if (causeCode && REFRESH_REJECTION_CODES.has(causeCode)) {
+      return { event: "auth.renewal_rejected", category: "renewal_revoked" };
+    }
+  }
+  return { event: "auth.dependency_failed", category: "dependency" };
+}
+
 /**
  * Validates a catch-all API path and resolves it to a Backend URL, or returns null when the
  * path could escape `/api/**`.
@@ -155,13 +192,47 @@ function appendSinkCookies(target: NextResponse, sink: NextResponse): void {
   }
 }
 
+/**
+ * Emits auth.session_rotation only when the response actually carries rolling/rotation
+ * Set-Cookie produced by the SDK. Called only on paths that preserve the session
+ * (never on the 401 session-clearing paths).
+ */
+function logRotationIfProduced(
+  logAuthEvent: AuthEventLogger,
+  requestId: string,
+  rollingCookies: string[],
+  sinkCookies: string[]
+): void {
+  if (rollingCookies.length > 0 || sinkCookies.length > 0) {
+    logAuthEvent("auth.session_rotation", {
+      category: "session_rotation",
+      requestId,
+      outcome: "success"
+    });
+  }
+}
+
 export async function handleBffRequest(
   request: NextRequest,
   path: readonly string[],
   deps: BffDeps
 ): Promise<NextResponse> {
   const requestId = deps.generateRequestId();
-  const config = deps.getConfig();
+
+  let config: AuthConfig;
+  try {
+    config = deps.getConfig();
+  } catch {
+    // Configuration resolution failure: stable 500 before any side effect. No cookie is
+    // cleared (it might still be valid).
+    deps.logAuthEvent("auth.dependency_failed", {
+      category: "dependency",
+      requestId,
+      outcome: "failure"
+    });
+    return errorEnvelope(500, "INTERNAL_ERROR", "Authentication service unavailable.", requestId);
+  }
+
   const method = request.method.toUpperCase();
 
   // 1. Path boundary — before any side effect.
@@ -178,6 +249,11 @@ export async function handleBffRequest(
   if (isMutation) {
     const origin = request.headers.get("origin");
     if (!origin || origin !== config.appOrigin) {
+      deps.logAuthEvent("auth.origin_rejected", {
+        category: "origin_rejected",
+        requestId,
+        outcome: "failure"
+      });
       return errorEnvelope(403, "FORBIDDEN", "Origin validation failed.", requestId);
     }
   }
@@ -196,6 +272,11 @@ export async function handleBffRequest(
   try {
     rollingCookies = await deps.touchSession(request);
   } catch {
+    deps.logAuthEvent("auth.dependency_failed", {
+      category: "dependency",
+      requestId,
+      outcome: "failure"
+    });
     return errorEnvelope(500, "INTERNAL_ERROR", "Session service unavailable.", requestId);
   }
 
@@ -207,8 +288,11 @@ export async function handleBffRequest(
     accessToken = result.token;
   } catch (error) {
     if (classifyTokenError(error) === "unauthorized") {
-      deps.logAuthEvent("auth.renewal_rejected", {
-        category: "renewal_revoked",
+      // Distinct semantics per token failure class (never one bucket): session missing
+      // vs session expired/malformed vs renewal rejected/revoked.
+      const failureEvent = resolveTokenFailureEvent(error);
+      deps.logAuthEvent(failureEvent.event, {
+        category: failureEvent.category,
         requestId,
         outcome: "failure"
       });
@@ -230,6 +314,7 @@ export async function handleBffRequest(
       response.headers.append("Set-Cookie", cookie);
     }
     appendSinkCookies(response, sink);
+    logRotationIfProduced(deps.logAuthEvent, requestId, rollingCookies, sink.headers.getSetCookie?.() ?? []);
     return response;
   }
 
@@ -268,6 +353,7 @@ export async function handleBffRequest(
       response.headers.append("Set-Cookie", cookie);
     }
     appendSinkCookies(response, sink);
+    logRotationIfProduced(deps.logAuthEvent, requestId, rollingCookies, sink.headers.getSetCookie?.() ?? []);
     return response;
   }
 
@@ -277,8 +363,10 @@ export async function handleBffRequest(
   //    session main cookie, chunks and SDK legacy cookies. Rolling/rotation cookies are
   //    intentionally NOT re-appended — they would resurrect the invalidated session.
   if (backendResponse.status === 401) {
-    deps.logAuthEvent("auth.renewal_rejected", {
-      category: "revocation_observed",
+    // Backend token verification failure — distinct from renewal rejection: the BFF's
+    // own session renewal succeeded; the Backend observed an unusable token.
+    deps.logAuthEvent("auth.verification_failed", {
+      category: "verification_failed",
       requestId,
       outcome: "failure"
     });
@@ -310,5 +398,6 @@ export async function handleBffRequest(
     response.headers.append("Set-Cookie", cookie);
   }
   appendSinkCookies(response, sink);
+  logRotationIfProduced(deps.logAuthEvent, requestId, rollingCookies, sink.headers.getSetCookie?.() ?? []);
   return response;
 }

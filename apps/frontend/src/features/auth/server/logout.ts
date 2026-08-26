@@ -66,6 +66,13 @@ export function handleLogoutPost(request: NextRequest, deps: LogoutDeps): NextRe
   try {
     config = deps.getConfig();
   } catch {
+    // Configuration resolution failure: stable 500, no cookie touched, privacy-safe
+    // dependency event.
+    deps.logAuthEvent("auth.dependency_failed", {
+      category: "dependency",
+      requestId,
+      outcome: "failure"
+    });
     return NextResponse.json(
       { error: { code: "INTERNAL_ERROR", message: "Authentication service unavailable.", requestId } },
       { status: 500, headers: { "Cache-Control": "no-store" } }
@@ -75,6 +82,11 @@ export function handleLogoutPost(request: NextRequest, deps: LogoutDeps): NextRe
   // 1. Exact Origin equality — fail closed before anything else.
   const origin = request.headers.get("origin");
   if (!origin || origin !== config.appOrigin) {
+    deps.logAuthEvent("auth.origin_rejected", {
+      category: "origin_rejected",
+      requestId,
+      outcome: "failure"
+    });
     return NextResponse.json(
       { error: { code: "FORBIDDEN", message: "Origin validation failed.", requestId } },
       { status: 403, headers: { "Cache-Control": "no-store" } }

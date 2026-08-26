@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { handleLogoutGet, handleLogoutPost, buildUpstreamLogoutUrl, type LogoutDeps } from "./logout";
-import { makeConfig, makeDevConfig, makeRequest, noopAuthEventLogger } from "./auth-test-fixtures";
+import { makeAuthEventCapture, makeConfig, makeDevConfig, makeRequest, noopAuthEventLogger } from "./auth-test-fixtures";
 import type { AuthEventLogger } from "./auth-events";
 
 function makeDeps(config = makeConfig(), logAuthEvent: AuthEventLogger = noopAuthEventLogger): LogoutDeps {
@@ -69,15 +69,19 @@ test("POST with missing Origin returns 403 and clears nothing", () => {
   });
 });
 
-test("POST with mismatched Origin returns 403 and clears nothing", () => {
+test("POST with mismatched Origin returns 403, clears nothing and logs auth.origin_rejected", () => {
+  const capture = makeAuthEventCapture();
   const request = makeRequest("https://app.mystcrag.com/auth/logout", {
     method: "POST",
     headers: { origin: "https://evil.example.com" },
     cookieHeader: SESSION_COOKIES
   });
-  const response = handleLogoutPost(request, makeDeps());
+  const response = handleLogoutPost(request, makeDeps(makeConfig(), capture.logger));
   assert.equal(response.status, 403);
   assert.equal(response.headers.getSetCookie().length, 0);
+  assert.deepEqual(capture.records, [
+    { event: "auth.origin_rejected", category: "origin_rejected", requestId: "req-out", outcome: "failure" }
+  ]);
 });
 
 // --- Success: real 303 to server-constructed logout URL ---
@@ -209,18 +213,32 @@ test("buildUpstreamLogoutUrl uses only client id and allowlisted post-logout URL
   assert.equal(url, "https://mystcrag.auth0.com/oidc/logout?client_id=cid&post_logout_redirect_uri=https%3A%2F%2Fapp.mystcrag.com");
 });
 
-test("config failure surfaces as 500, not a redirect", () => {
+test("config failure surfaces as stable 500 envelope with dependency event, not a redirect", () => {
+  const capture = makeAuthEventCapture();
   const deps: LogoutDeps = {
     getConfig: () => {
       throw new Error("invalid config");
     },
     generateRequestId: () => "req-out",
-    logAuthEvent: noopAuthEventLogger
+    logAuthEvent: capture.logger
   };
   const request = makeRequest("https://app.mystcrag.com/auth/logout", {
     method: "POST",
-    headers: { origin: "https://app.mystcrag.com" }
+    headers: { origin: "https://app.mystcrag.com" },
+    cookieHeader: SESSION_COOKIES
   });
   const response = handleLogoutPost(request, deps);
   assert.equal(response.status, 500);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  const body = response.json();
+  // No cookie is touched on configuration failure.
+  assert.equal(response.headers.getSetCookie().length, 0);
+  assert.deepEqual(capture.records, [
+    { event: "auth.dependency_failed", category: "dependency", requestId: "req-out", outcome: "failure" }
+  ]);
+  return body.then((parsed) => {
+    assert.deepEqual(parsed, {
+      error: { code: "INTERNAL_ERROR", message: "Authentication service unavailable.", requestId: "req-out" }
+    });
+  });
 });
