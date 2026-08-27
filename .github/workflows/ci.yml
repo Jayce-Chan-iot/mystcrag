@@ -35,3 +35,52 @@ jobs:
         run: pnpm test
       - name: Production builds
         run: pnpm build
+
+  # AUTH-006 — isolated authentication security and full-loop E2E gate.
+  # One command boots its own isolated resources (database, synthetic OIDC provider,
+  # backend, frontend) via the Playwright global setup in tests/auth-e2e; nothing from
+  # a developer machine is reused. All secrets are generated in memory per run.
+  auth-006-security-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        # The migrations require the pgvector extension, hence the pgvector image.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Only the admin endpoint is pinned; the gate derives its own isolated database
+      # name from the per-run id and drops it in teardown.
+      AUTH006_DATABASE_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.4.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+      - name: AUTH-006 isolated security and full-loop E2E gate
+        run: pnpm exec playwright test --config tests/auth-e2e/playwright.config.ts
+      - name: Retain run evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auth-006-run-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/playwright/auth-006/
+          retention-days: 7
+          if-no-files-found: ignore
