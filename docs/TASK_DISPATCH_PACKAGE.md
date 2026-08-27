@@ -2,11 +2,11 @@
 
 **Feature:** FEAT-018 Production Identity & Session<br>
 **Prepared by:** SOL / TASK-AUDIT-001<br>
-**Package state:** AUTH-001 through AUTH-004 integrated; AUTH-005 ready; AUTH-006 waits for AUTH-005; AUTH-007 remains dependency-blocked<br>
-**Blocking gates:** AUTH-005 requires its registered owner, branch, worktree and exact path lock; AUTH-006 starts only after AUTH-005 is integrated; AUTH-007 remains last<br>
-**Contract marker:** `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`
+**Package state:** AUTH-001 through AUTH-005 integrated; AUTH-006 ready for an isolated QA claim; AUTH-007 remains dependency-blocked<br>
+**Blocking gates:** AUTH-006 requires its registered owner, branch, worktree and exact QA/CI path lock; AUTH-007 remains last and starts only after AUTH-006 green evidence<br>
+**Contract marker:** `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`
 
-Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. SOL accepted AUTH-002 at `fbd7a540776c447289a05aeb20e50deefd8ea21a`, AUTH-003 at `ab54703fba59173ab9197aaae82215d93abf4f86`, and AUTH-004 at `14cb9ef3d1c37113bf2d07df72044023c440137f`; AUTH-005 is the remaining implementation lane before AUTH-006.
+Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. SOL accepted AUTH-002 at `fbd7a540776c447289a05aeb20e50deefd8ea21a`, AUTH-003 at `ab54703fba59173ab9197aaae82215d93abf4f86`, AUTH-004 at `14cb9ef3d1c37113bf2d07df72044023c440137f`, and integrated AUTH-005 final candidate `071c1700328de3551976eaa42ea361e5028028a2`. AUTH-006 is now the only implementation/evidence lane before final SOL acceptance.
 
 ## Task DAG
 
@@ -233,4 +233,6 @@ TASK-AUTH-002 is `DONE`. SOL accepted repaired candidate `fbd7a540776c447289a05a
 
 TASK-AUTH-003 is `DONE`. SOL accepted final candidate `ab54703fba59173ab9197aaae82215d93abf4f86` after real PostgreSQL migration and 20-way concurrency verification, explicit delete/update RESTRICT assertions, no orphan User, and zero `external_identities_user_id_fkey` schema drift.
 
-TASK-AUTH-004 is `DONE`. SOL accepted final candidate `14cb9ef3d1c37113bf2d07df72044023c440137f` after independent wildcard/IP issuer probes, TTL-independent unknown-key cooldown probes, real PostgreSQL identity/owner isolation, production-start smoke, Backend 180/180 tests and full workspace validation. TASK-AUTH-005 remains `READY`; TASK-AUTH-006 is blocked only by AUTH-005 and TASK-AUTH-007 remains last. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.
+TASK-AUTH-004 is `DONE`. SOL accepted final candidate `14cb9ef3d1c37113bf2d07df72044023c440137f` after independent wildcard/IP issuer probes, TTL-independent unknown-key cooldown probes, real PostgreSQL identity/owner isolation, production-start smoke, Backend 180/180 tests and full workspace validation.
+
+TASK-AUTH-005 is `DONE`. SOL accepted and fast-forward integrated final candidate `071c1700328de3551976eaa42ea361e5028028a2` after independent no-findings review, Frontend 397/397 tests, lint, typecheck, production build and full workspace validation. TASK-AUTH-006 is `READY` for its isolated QA claim; TASK-AUTH-007 remains last. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.

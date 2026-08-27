@@ -2,8 +2,8 @@
 
 **Priority:** P0 for commercial release<br>
 **Recommended next Feature:** yes, and the only major Feature selected<br>
-**Dispatch state:** AUTH-001 contract integrated; AUTH-002 dependency/configuration freeze is ready; implementation remains gated by the task DAG<br>
-**Contract marker:** `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`
+**Dispatch state:** AUTH-001 through AUTH-005 integrated; AUTH-006 isolated security/full-loop E2E is ready; AUTH-007 remains the final acceptance gate<br>
+**Contract marker:** `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`
 
 ## Objective
 
@@ -15,13 +15,12 @@ As a customer, I can sign in, return to the app, access only my saved work and o
 
 ## Current state
 
-- Backend protected routes require a Bearer token through one `AuthProvider` interface.
-- Verified subject becomes `actorId`; repositories apply actor-scoped queries.
-- `SignedTestTokenAuthProvider` verifies signature, issuer, audience and expiry, and cannot start in production.
-- Prisma `User` owns designs, revisions, publications, orders and Tarot sessions.
-- Test fixtures pre-create users whose IDs match actor subjects.
-- Frontend reads `NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN`, which is public build-time configuration rather than a user session.
-- Runtime still has no production provider, login/callback/logout UX, refresh/revocation implementation, external-identity mapping or idempotent user provisioning path; their contract is now frozen in `AUTH_SESSION_CONTRACT.md`.
+- Backend protected routes accept only verified internal actors through the composed Auth0/JWKS verification and external-identity mapping boundary.
+- Provider `(issuer, subject)` identities map idempotently to internal `User.id`; repositories continue applying actor-scoped queries.
+- `SignedTestTokenAuthProvider` remains development/test-only and cannot start in production.
+- Frontend uses the Auth0 SDK authenticated-encrypted, host-only HttpOnly Cookie Session and same-origin BFF; browser JavaScript receives no production Token.
+- Login, callback, session restoration/rolling, exact-Origin POST logout, expiry/renewal handling and accessible desktop/mobile session affordances are implemented.
+- AUTH-006 must now prove the integrated stack twice from a clean checkout, including responsive browser flows, expiry/revocation/provider outage, production-start negatives and two-user isolation. Only AUTH-007 may issue final Feature acceptance.
 
 ## Gap
 
