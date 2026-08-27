@@ -2,8 +2,8 @@
 
 **Feature:** FEAT-018 Production Identity & Session<br>
 **Prepared by:** SOL / TASK-AUDIT-001<br>
-**Package state:** AUTH-001 through AUTH-005 integrated; AUTH-006 ready for an isolated QA claim; AUTH-007 remains dependency-blocked<br>
-**Blocking gates:** AUTH-006 requires its registered owner, branch, worktree and exact QA/CI path lock; AUTH-007 remains last and starts only after AUTH-006 green evidence<br>
+**Package state:** AUTH-001 through AUTH-005 integrated; AUTH-006 registered `IN_PROGRESS` for GLM on its isolated QA branch; AUTH-007 remains dependency-blocked<br>
+**Blocking gates:** AUTH-006 owns only its exact QA/CI/evidence paths; AUTH-007 remains last and starts only after AUTH-006 green evidence<br>
 **Contract marker:** `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`
 
 Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. SOL accepted AUTH-002 at `fbd7a540776c447289a05aeb20e50deefd8ea21a`, AUTH-003 at `ab54703fba59173ab9197aaae82215d93abf4f86`, AUTH-004 at `14cb9ef3d1c37113bf2d07df72044023c440137f`, and integrated AUTH-005 final candidate `071c1700328de3551976eaa42ea361e5028028a2`. AUTH-006 is now the only implementation/evidence lane before final SOL acceptance.
@@ -176,7 +176,7 @@ Contract freeze and dependency setup are serial. TASK-AUTH-003 and TASK-AUTH-005
 - **OBJECTIVE:** prove the integrated business, security, responsive and regression acceptance on an isolated stack and make it repeatable in CI.
 - **BACKGROUND:** current CI has no browser E2E and the audit browser run was partial because a user-owned dev server shared `.next` output.
 - **DEPENDENCIES:** TASK-AUTH-004 and TASK-AUTH-005 `DONE`; integrated test candidate available.
-- **ALLOWED FILES:** `tests/**`, a dedicated auth/E2E test directory, test-only fixtures/scripts, `.github/workflows/ci.yml`, test output ignore policy; no production source except a separately approved testability seam.
+- **ALLOWED FILES:** exact `tests/auth-e2e/**` for the suite, configuration, fixtures, runbook and test-only scripts; exact `.github/workflows/ci.yml`; exact `.gitignore` only for AUTH-006 generated-artifact policy; exact `docs/AUTH_006_SECURITY_E2E_REPORT.md`; no production source except a separately approved testability seam registered before editing.
 - **FORBIDDEN FILES:** business behavior, Prisma schema/migrations, app package manifests/lockfile, production provider configuration/secrets, unrelated CI jobs.
 - **CANONICAL REFERENCES:** FEAT-018 final acceptance, Interaction Test Plan, Security/Privacy contract, current PostgreSQL test wrapper.
 - **ARCHITECTURE CONSTRAINTS:** isolated database and build/runtime output; synthetic provider/test tenant only; no production credentials; deterministic cleanup limited to explicit test resources.
@@ -235,4 +235,4 @@ TASK-AUTH-003 is `DONE`. SOL accepted final candidate `ab54703fba59173ab9197aaae
 
 TASK-AUTH-004 is `DONE`. SOL accepted final candidate `14cb9ef3d1c37113bf2d07df72044023c440137f` after independent wildcard/IP issuer probes, TTL-independent unknown-key cooldown probes, real PostgreSQL identity/owner isolation, production-start smoke, Backend 180/180 tests and full workspace validation.
 
-TASK-AUTH-005 is `DONE`. SOL accepted and fast-forward integrated final candidate `071c1700328de3551976eaa42ea361e5028028a2` after independent no-findings review, Frontend 397/397 tests, lint, typecheck, production build and full workspace validation. TASK-AUTH-006 is `READY` for its isolated QA claim; TASK-AUTH-007 remains last. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.
+TASK-AUTH-005 is `DONE`. SOL accepted and fast-forward integrated final candidate `071c1700328de3551976eaa42ea361e5028028a2` after independent no-findings review, Frontend 397/397 tests, lint, typecheck, production build and full workspace validation. TASK-AUTH-006 is registered `IN_PROGRESS` for GLM with exact isolated QA/CI/evidence paths; TASK-AUTH-007 remains last. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.
