@@ -2,11 +2,11 @@
 
 **Feature:** FEAT-018 Production Identity & Session<br>
 **Prepared by:** SOL / TASK-AUDIT-001<br>
-**Package state:** AUTH-001 through AUTH-005 integrated; AUTH-006 registered `IN_PROGRESS` for GLM on its isolated QA branch; AUTH-007 remains dependency-blocked<br>
-**Blocking gates:** AUTH-006 owns only its exact QA/CI/evidence paths; AUTH-007 remains last and starts only after AUTH-006 green evidence<br>
+**Package state:** AUTH-001 through AUTH-005 integrated; AUTH-006 candidate `3bbf8058d6a236064567ed9f0e9b3bd74597ac42` is `BLOCKED` after deterministic 30/32 production-build runs; AUTH-008 is registered `IN_PROGRESS` for Qwen to repair the BFF mutation/session-rolling defect; AUTH-007 remains dependency-blocked<br>
+**Blocking gates:** AUTH-008 owns only four exact frontend auth files; AUTH-006 retains its branch without a path lock while blocked, then rebases and repairs its QA/CI evidence after AUTH-008 lands; AUTH-007 remains last and starts only after two clean 32/32 AUTH-006 runs<br>
 **Contract marker:** `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`
 
-Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. SOL accepted AUTH-002 at `fbd7a540776c447289a05aeb20e50deefd8ea21a`, AUTH-003 at `ab54703fba59173ab9197aaae82215d93abf4f86`, AUTH-004 at `14cb9ef3d1c37113bf2d07df72044023c440137f`, and integrated AUTH-005 final candidate `071c1700328de3551976eaa42ea361e5028028a2`. AUTH-006 is now the only implementation/evidence lane before final SOL acceptance.
+Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. SOL accepted AUTH-002 at `fbd7a540776c447289a05aeb20e50deefd8ea21a`, AUTH-003 at `ab54703fba59173ab9197aaae82215d93abf4f86`, AUTH-004 at `14cb9ef3d1c37113bf2d07df72044023c440137f`, and integrated AUTH-005 final candidate `071c1700328de3551976eaa42ea361e5028028a2`. AUTH-006 exposed a production-only body-stream/session-rolling failure and remains red; the narrow AUTH-008 frontend repair must land before AUTH-006 can rebase and produce final evidence.
 
 ## Task DAG
 
@@ -33,15 +33,23 @@ Baseline P0 DONE + Product Owner inputs
           |                    |
           +---------+----------+
                     v
-              TASK-AUTH-006
-          isolated security/E2E
+         TASK-AUTH-006 red gate
+          30/32; defect found
+                    |
+                    v
+              TASK-AUTH-008
+       BFF mutation rolling repair
+                    |
+                    v
+         TASK-AUTH-006 rebase/rerun
+          two clean 32/32 gates
                     |
                     v
               TASK-AUTH-007
           SOL review/integration
 ```
 
-Contract freeze and dependency setup are serial. TASK-AUTH-003 and TASK-AUTH-005 may run in parallel. TASK-AUTH-004 may continue while TASK-AUTH-005 runs because their writable paths are disjoint. TASK-AUTH-006 waits for backend and frontend. TASK-AUTH-007 is always last.
+Contract freeze and dependency setup are serial. TASK-AUTH-003 and TASK-AUTH-005 may run in parallel. TASK-AUTH-004 may continue while TASK-AUTH-005 runs because their writable paths are disjoint. TASK-AUTH-006 waits for backend and frontend. The red AUTH-006 gate discovered TASK-AUTH-008, which now lands before AUTH-006 rebases and reruns. TASK-AUTH-007 is always last.
 
 ## Assignment summary
 
@@ -53,6 +61,7 @@ Contract freeze and dependency setup are serial. TASK-AUTH-003 and TASK-AUTH-005
 | TASK-AUTH-004 | BACKEND | GLM | Lane A; after database mapping |
 | TASK-AUTH-005 | FRONTEND | Qwen | Parallel lane B |
 | TASK-AUTH-006 | QA | GLM | SERIAL after lanes A+B |
+| TASK-AUTH-008 | FRONTEND | Qwen | SERIAL repair discovered by AUTH-006; lands before AUTH-006 rebase |
 | TASK-AUTH-007 | SOL | SOL | SERIAL final review/integration |
 
 ## TASK-AUTH-001
@@ -187,6 +196,28 @@ Contract freeze and dependency setup are serial. TASK-AUTH-003 and TASK-AUTH-005
 - **REQUIRED TESTS:** full install/lint/typecheck/test/build, fresh PostgreSQL migrations/constraints, browser suite at 1440×900 and 375×812, production-start/config-negative smoke.
 - **DELIVERABLES:** deterministic E2E/security suite, CI gate, fixture/runbook and concise evidence report.
 
+## TASK-AUTH-008
+
+- **TASK ID:** TASK-AUTH-008
+- **TITLE:** Repair production BFF mutation session rolling
+- **FEATURE:** FEAT-018
+- **OWNER TYPE:** FRONTEND
+- **RECOMMENDED AGENT:** Qwen
+- **BRANCH:** `task/auth-008-bff-mutation-session-repair`
+- **OBJECTIVE:** preserve authenticated mutation bodies across real Auth0 SDK passive session rolling in the Next.js production build.
+- **BACKGROUND:** AUTH-006 candidate `3bbf8058d6a236064567ed9f0e9b3bd74597ac42` and an independent SOL replay both produce 30/32: D1 and E1 receive a stable 500 at the first body-bearing authenticated mutation because `request.text()` consumes the stream before the SDK may reconstruct the `NextRequest` across Turbopack chunks.
+- **DEPENDENCIES:** TASK-AUTH-005 `DONE`; TASK-AUTH-006 red-gate evidence available; this repair lands before TASK-AUTH-006 rebases.
+- **ALLOWED FILES:** exact `apps/frontend/src/features/auth/server/bff.ts`, exact `apps/frontend/src/features/auth/server/auth0-server.ts`, exact `apps/frontend/src/features/auth/server/bff.test.tsx`, exact `apps/frontend/src/features/auth/server/auth0-server.test.tsx`.
+- **FORBIDDEN FILES:** every other frontend file; AUTH-006 `tests/auth-e2e/**`, CI and evidence; manifests/lockfile; backend/database/Prisma; provider production configuration/secrets; governance and unrelated docs.
+- **CANONICAL REFERENCES:** frozen Auth Session Contract; accepted AUTH-005 BFF/session behavior; AUTH-006 D1/E1 failure evidence; Auth0 SDK 4.27 middleware semantics.
+- **ARCHITECTURE CONSTRAINTS:** Origin validation remains before session/token side effects; the real SDK continues passive rolling; browser JavaScript never receives reusable tokens; no second session implementation, bundler bypass, retry or weakened failure semantics.
+- **FUNCTIONAL REQUIREMENTS:** a body-bearing authenticated mutation rolls the session and forwards the original payload; response rolling cookies propagate; GET/HEAD, missing/expired/revoked sessions and Backend 401/403 behavior remain unchanged.
+- **NON-FUNCTIONAL REQUIREMENTS:** fail closed with privacy-safe no-store envelopes; no token/cookie/error-detail logging; production build compatibility; minimal diff in the four locked files.
+- **OUT OF SCOPE:** AUTH-006 harness repair, Auth0/provider configuration, dependency upgrades, broad auth refactors, backend/database changes and AUTH-007.
+- **ACCEPTANCE CRITERIA:** a regression fails on baseline `4cac24cb1ebf29bc96bc4ab24c3b7a0fd6593fd1` and passes on the candidate using production request types; body fidelity, rolling cookie propagation and Origin-before-side-effect order are asserted; all existing auth semantics remain green.
+- **REQUIRED TESTS:** frontend auth/full tests, frontend lint, typecheck and production build, `git diff --check`, exact path-scope inspection and `pnpm validate`.
+- **DELIVERABLES:** minimal production repair, regression coverage, clean candidate commit and handoff evidence; no merge to `main` by the worker.
+
 ## TASK-AUTH-007
 
 - **TASK ID:** TASK-AUTH-007
@@ -219,6 +250,8 @@ Contract freeze and dependency setup are serial. TASK-AUTH-003 and TASK-AUTH-005
 | AUTH-004 / AUTH-005 | Backend/API doc vs frontend/interaction doc; no shared runtime state implementation | Parallel safe after AUTH-003 for backend lane |
 | AUTH-003 / AUTH-004 | Backend consumes identity repository | `SERIAL_EXECUTION_REQUIRED` |
 | AUTH-004/005 / AUTH-006 | E2E depends on both implementations and auth fixtures | `SERIAL_EXECUTION_REQUIRED` |
+| AUTH-006 red gate / AUTH-008 | AUTH-008 is defined by the production failure discovered by AUTH-006 | `SERIAL_EXECUTION_REQUIRED` |
+| AUTH-008 / AUTH-006 rebase | Final E2E evidence must exercise the integrated repair; QA paths remain disjoint from frontend repair paths | `SERIAL_EXECUTION_REQUIRED` |
 | AUTH-006 / AUTH-007 | Final review depends on complete evidence | `SERIAL_EXECUTION_REQUIRED` |
 
 ## One task = one owner result

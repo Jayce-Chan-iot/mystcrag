@@ -54,8 +54,9 @@ Integration evidence: BASE-002 passed SOL review and is reachable at `be5646b418
 | TASK-AUTH-003 | DATABASE / GLM | P0 | TASK-AUTH-002 DONE | `task/auth-003-identity-persistence` | DONE: SOL accepted final candidate `ab54703fba59173ab9197aaae82215d93abf4f86`; additive `ExternalIdentity`, canonical find-or-provision API, PostgreSQL 20-way concurrency, no-orphan proof, explicit delete/update RESTRICT and zero identity-constraint drift all PASS |
 | TASK-AUTH-004 | BACKEND / GLM | P0 | TASK-AUTH-003 DONE | `task/auth-004-backend-provider` | DONE: SOL accepted final candidate `14cb9ef3d1c37113bf2d07df72044023c440137f`; Auth0 RS256/JWKS verification, fail-closed configuration, TTL-independent unknown-key cooldown, durable internal actor composition, real PostgreSQL identity isolation and production-start smoke all PASS |
 | TASK-AUTH-005 | FRONTEND / Qwen | P0 | TASK-AUTH-002, TASK-AUTH-003, TASK-AUTH-004 DONE | `task/auth-005-frontend-session` | DONE: SOL accepted and fast-forward integrated final candidate `071c1700328de3551976eaa42ea361e5028028a2`; secure-cookie BFF/session lifecycle, token custody, fail-closed dependency handling, privacy-safe events, frontend 397/397 tests, production build and full workspace validation PASS |
-| TASK-AUTH-006 | QA / GLM | P0 | TASK-AUTH-004, TASK-AUTH-005 DONE | `task/auth-006-security-e2e` | IN_PROGRESS: GLM owns exact `tests/auth-e2e/**`, exact `.github/workflows/ci.yml`, exact `.gitignore` only for AUTH-006 generated-artifact policy, and exact `docs/AUTH_006_SECURITY_E2E_REPORT.md`; all production source, manifests/lockfile, Prisma schema/migrations, provider secrets/configuration and unrelated CI/docs remain locked |
-| TASK-AUTH-007 | SOL | P0 | TASK-AUTH-006 | `task/auth-007-final-integration` | BACKLOG: acceptance review, documentation reconciliation and integration |
+| TASK-AUTH-006 | QA / GLM | P0 | TASK-AUTH-004, TASK-AUTH-005 DONE; TASK-AUTH-008 merge required after deterministic production failure | `task/auth-006-security-e2e` | BLOCKED: candidate `3bbf8058d6a236064567ed9f0e9b3bd74597ac42` and SOL replay both produce 30/32 with D1/E1 failing on authenticated mutation session rolling; retain the branch, but no path lock remains while blocked. After TASK-AUTH-008 lands, GLM must rebase latest `main`, repair the independently reviewed harness/CI isolation and evidence-upload issues within the original exact AUTH-006 paths, and produce two clean 32/32 runs before REVIEW |
+| TASK-AUTH-007 | SOL | P0 | TASK-AUTH-006 DONE | `task/auth-007-final-integration` | BACKLOG: acceptance review, documentation reconciliation and integration; must not start while AUTH-006 is blocked or red |
+| TASK-AUTH-008 | FRONTEND / Qwen | P0 | TASK-AUTH-005 DONE; production defect discovered by TASK-AUTH-006 candidate `3bbf8058d6a236064567ed9f0e9b3bd74597ac42` | `task/auth-008-bff-mutation-session-repair` | IN_PROGRESS: Qwen exclusively owns exact `apps/frontend/src/features/auth/server/bff.ts`, exact `apps/frontend/src/features/auth/server/auth0-server.ts`, exact `apps/frontend/src/features/auth/server/bff.test.tsx`, and exact `apps/frontend/src/features/auth/server/auth0-server.test.tsx`; all other frontend files, AUTH-006 QA/CI/evidence paths, manifests/lockfile, backend/database/Prisma, provider configuration, governance and unrelated docs remain locked |
 
 ## Acceptance gates
 
@@ -152,11 +153,21 @@ Integration evidence: BASE-002 passed SOL review and is reachable at `be5646b418
 ### TASK-AUTH-001 — production identity
 
 - TASK-AUTH-001 through TASK-AUTH-007 use the exact scopes, dependencies and measurable gates in `docs/TASK_DISPATCH_PACKAGE.md`.
+- TASK-AUTH-008 is the narrowly registered production-defect repair discovered by the red TASK-AUTH-006 gate; its exact scope and acceptance gate are authoritative in this registry and mirrored in the dispatch package.
 - Approved threat model, identity provider and browser session topology exist before dependency or implementation tasks.
 - Protected APIs use production-verifiable identity, collision-safe internal actor mapping, authorization and expiry/revocation.
 - Reusable credentials never enter browser storage/client bundles; development/test actor paths cannot be enabled in production.
 - Security, privacy, API, database, deployment, rollback and operational recovery docs match the integrated code.
 - Only TASK-AUTH-007 may record `FEATURE ACCEPTANCE: PASS` after isolated desktop/mobile E2E and two-user isolation pass.
+
+### TASK-AUTH-008 — BFF mutation session rolling repair
+
+- Preserve Origin validation before every session/token side effect and preserve the frozen server-controlled secure-cookie topology.
+- Authenticated mutation bodies remain byte-for-byte available to the backend while the real Auth0 SDK performs passive rolling; no consumed, disturbed or locked body stream is handed to SDK reconstruction.
+- Rolling `Set-Cookie`, no-store failure envelopes, token custody and distinct 401/403/500 semantics remain unchanged.
+- Add a regression that fails on baseline `4cac24cb1ebf29bc96bc4ab24c3b7a0fd6593fd1` and passes after the repair, covering a body-bearing mutation through the production request types rather than a bodyless mock.
+- Frontend auth tests, frontend lint/typecheck/production build and `pnpm validate` pass; no AUTH-006 test or CI assertion is weakened.
+- TASK-AUTH-008 lands before GLM rebases TASK-AUTH-006; only two subsequent clean 32/32 AUTH-006 runs can unblock TASK-AUTH-007.
 
 ## Task transition rules
 
