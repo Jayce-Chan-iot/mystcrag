@@ -3,8 +3,9 @@
  *
  * 1. stops every process this run started — backend, both frontends, negative-config
  *    spawns, provider, CONNECT relay, TLS reverse proxies. Recovered pids are verified
- *    against the run-scoped ownership signature (ps command line) BEFORE any signal;
- *    a foreign (recycled) pid is never signalled. Any stop failure fails the run.
+ *    against the run-scoped ownership signature — CURRENT command line AND run-scoped
+ *    working directory — BEFORE any signal; a foreign (recycled) pid is never
+ *    signalled and fails teardown loudly. Any stop failure fails the run.
  * 2. verifies every port of the run-scoped plan was released, and drops + verifies
  *    gone the isolated database (name pattern asserted before any CREATE/DROP).
  *    Cleanup failures are never swallowed: the gate fails.

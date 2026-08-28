@@ -727,9 +727,41 @@ export async function startIsolatedStack(): Promise<RunState> {
     await writeRunState(state);
     return state;
   } catch (error) {
-    await stopIsolatedStack().catch(() => undefined);
-    throw error;
+    // Cleanup MUST still run when setup fails (live processes, bound ports, the
+    // isolated database, temp dirs) — but a cleanup failure is NEVER swallowed:
+    // leftover resources must not hide behind the original setup error.
+    let cleanupError: unknown = null;
+    try {
+      await stopIsolatedStack();
+    } catch (failure) {
+      cleanupError = failure;
+    }
+    throw buildSetupFailure(error, cleanupError);
   }
+}
+
+/**
+ * Combines a failed setup with the outcome of the cleanup that setup failure
+ * triggered. Cleanup succeeded → the original setup error propagates unchanged.
+ * Cleanup failed too → an AggregateError carrying BOTH errors, so residual
+ * processes/ports/database can never hide behind the setup error. Run-state and
+ * stack logs stay on disk (stopIsolatedStack keeps writing stoppedAt) for
+ * diagnosis. Exported for the narrow H7 regression.
+ */
+export function buildSetupFailure(setupError: unknown, cleanupError: unknown): unknown {
+  if (cleanupError === null || cleanupError === undefined) {
+    return setupError;
+  }
+  const errors = [
+    setupError instanceof Error ? setupError : new Error(String(setupError)),
+    cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError))
+  ];
+  return new AggregateError(
+    errors,
+    "AUTH-006 setup FAILED and the subsequent cleanup FAILED too — processes, ports or the isolated " +
+      "database may still be live. The setup error and the cleanup error are both attached; " +
+      "run-state.json and the stack logs under the run directory are retained for diagnosis"
+  );
 }
 
 export async function writeRunState(state: RunState): Promise<void> {
@@ -787,20 +819,24 @@ async function waitForPidGone(pid: number, timeoutMs: number): Promise<boolean> 
 
 /**
  * Signals a pid recovered from run-state.json. The pid is verified against the
- * run-scoped ownership signature FIRST: a recycled pid (foreign command line) is
- * never signalled and fails teardown instead.
+ * run-scoped ownership signature FIRST — command line AND the run-scoped working
+ * directory — so a recycled pid (foreign command line) or a foreign same-command
+ * process (wrong cwd) is never signalled and fails teardown instead.
+ * Exported for the H5b regression, which drives the REAL stop path.
  */
-async function stopRecoveredPid(spec: {
+export async function stopRecoveredPid(spec: {
   label: string;
   pid?: number;
   patterns: RegExp[];
+  cwd?: string;
 }): Promise<void> {
   if (typeof spec.pid !== "number") return;
-  const check = await verifyProcessOwnership({ pid: spec.pid, patterns: spec.patterns });
+  const check = await verifyProcessOwnership({ pid: spec.pid, patterns: spec.patterns, cwd: spec.cwd });
   if (check.kind === "gone") return;
   if (check.kind === "foreign") {
     throw new Error(
-      `refusing to signal ${spec.label} pid ${spec.pid}: command line does not match this run (${check.command})`
+      `refusing to signal foreign/recycled ${spec.label} pid ${spec.pid}: ${check.reason} ` +
+        `(current command: ${check.command}${check.cwd ? `; current cwd: ${check.cwd}` : ""})`
     );
   }
   process.kill(spec.pid, "SIGTERM");
@@ -810,19 +846,31 @@ async function stopRecoveredPid(spec: {
   throw new Error(`${spec.label} (pid ${spec.pid}) did not exit after SIGTERM and SIGKILL`);
 }
 
-function recoveredProcessSpecs(state: RunState): Array<{ label: string; pid?: number; patterns: RegExp[] }> {
+/**
+ * The recovery specs for a run-state: what teardown will verify, per recovered pid,
+ * before ANY signal. Every spec carries a run-scoped cwd expectation — the work
+ * directory embeds the unique run id — in addition to the command-line signature,
+ * because a generic `next start -p <port>` command alone can be reused by a
+ * foreign or recycled process that merely picked the same port.
+ * Exported for the H5b regression, which drives the REAL specs path.
+ */
+export function recoveredProcessSpecs(
+  state: RunState
+): Array<{ label: string; pid?: number; patterns: RegExp[]; cwd: string }> {
   const backendPattern = new RegExp(`${escapeRegExp(state.workDirs.backend)}/dist/index\\.js$`);
   return [
-    { label: "backend", pid: state.processes.backendPid, patterns: [backendPattern] },
+    { label: "backend", pid: state.processes.backendPid, patterns: [backendPattern], cwd: state.workDirs.backend },
     {
       label: "frontend",
       pid: state.processes.frontendPid,
-      patterns: [new RegExp(`next start -p ${state.ports.frontend}$`)]
+      patterns: [new RegExp(`next start -p ${state.ports.frontend}$`)],
+      cwd: state.workDirs.frontend
     },
     {
       label: "production frontend",
       pid: state.processes.frontendProdPid,
-      patterns: [new RegExp(`next start -p ${state.ports.frontendProd}$`)]
+      patterns: [new RegExp(`next start -p ${state.ports.frontendProd}$`)],
+      cwd: state.workDirs.frontend
     }
   ];
 }

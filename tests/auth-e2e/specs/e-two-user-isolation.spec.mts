@@ -2,23 +2,52 @@
  * Scenario E — Two-user isolation.
  *
  * Two genuinely independent browser contexts (separate cookie jars, separate
- * sessions) hold User A and User B. A owns a saved design and a Tarot session.
- * B must not be able to read, modify, save, clone, delete or order A's resources,
- * nor read A's Tarot session; missing and other-owner responses must be
- * indistinguishable; and no session/token material may cross from A's context
- * into B's. Both users must map to distinct internal actors.
+ * sessions) hold User A and User B. A owns a saved design, a Tarot session and an
+ * order. B must not be able to read, modify, save, clone, delete or order A's
+ * resources, nor read or select in A's Tarot session; for every owner-scoped
+ * operation the response to a FOREIGN resource and to a NONEXISTENT resource is
+ * compared directly (status AND stable error code) so no existence/ownership
+ * oracle leaks; after all of B's attacks A's resources are re-read and asserted
+ * byte-stable (design revision, order projection exact count and order contents,
+ * Tarot session revision/status), B's order projection stays at exactly zero, and
+ * no session/token material may cross from A's context into B's. Both users map
+ * to distinct internal actors.
+ *
+ * The foreign-vs-missing comparison is honest about product semantics: the
+ * backend repository filters every owner-scoped lookup by ownerId, so foreign
+ * and missing resources both surface as NOT_FOUND and the controller maps both
+ * to the same FORBIDDEN envelope. Where an operation is NOT owner-scoped by
+ * design (design generation, catalog), no comparison is claimed.
  */
 
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
-import { bffClient, generateDesignRequest } from "../helpers/api";
+import { bffClient, generateDesignRequest, type ApiResponse } from "../helpers/api";
 import { loginAsUser, readSessionCookie, syntheticUser } from "../helpers/login";
-import { createTarotSession } from "../helpers/tarot";
+import { createTarotSession, type TarotSession } from "../helpers/tarot";
 import { externalIdentities } from "../helpers/db";
 import { decryptSessionCookie } from "../helpers/sdk-cookies";
 
 function errorOf(response: { body: string }): { code?: string } {
   return (JSON.parse(response.body) as { error?: { code?: string } }).error ?? {};
+}
+
+/**
+ * The no-oracle proof for one owner-scoped operation: the response B receives for
+ * A's (foreign) resource must be indistinguishable from the response for a
+ * resource that does not exist at all — same HTTP status AND same stable error
+ * code. Any difference hands B an ownership oracle.
+ */
+function expectNoOracle(
+  label: string,
+  foreign: ApiResponse,
+  missing: ApiResponse
+): void {
+  expect(foreign.status, `${label}: foreign vs missing status must match`).toBe(missing.status);
+  expect(
+    errorOf(foreign).code,
+    `${label}: foreign vs missing error code must match`
+  ).toBe(errorOf(missing).code);
 }
 
 async function newIsolatedContext(page: Page): Promise<BrowserContext> {
@@ -52,6 +81,11 @@ test.describe("E. two-user isolation", () => {
       expect(save.status).toBe(200);
 
       const tarotA = await createTarotSession(pageA);
+      const tarotAInitial = await apiA.get(
+        `/api/tarot/sessions/${encodeURIComponent(tarotA.sessionId)}`
+      );
+      expect(tarotAInitial.status).toBe(200);
+      const tarotASnapshot = tarotAInitial.json<{ session: TarotSession }>().session;
 
       // --- A owns a real Order placed from A's own design. ---
       const generateJson = generate.json<{
@@ -84,6 +118,7 @@ test.describe("E. two-user isolation", () => {
       expect(orderAProjection, "A's order must appear in A's own projection").toBeDefined();
       expect(orderAProjection!.design.designId).toBe(designA.designId);
       expect(orderAProjection!.totalAmountMinor).toBe(generateJson.design.pricing.totalPriceMinor);
+      const ordersABeforeAttacks = projectedA.length;
 
       // --- User B logs in inside a completely separate context. ---
       await loginAsUser(pageB, userB);
@@ -108,43 +143,76 @@ test.describe("E. two-user isolation", () => {
         "A's design/order identifiers must not appear anywhere in B's order response"
       ).not.toContain(designA.designId);
 
-      // B cannot READ A's design — and the response is indistinguishable from missing.
+      // A missing design id that B will probe with, for the no-oracle comparisons.
+      const missingDesignId = "auth006-e-design-that-does-not-exist";
+
+      // B cannot READ A's design — and foreign vs missing are indistinguishable.
       const readForeign = await apiB.getDesign(designA.designId);
-      const readMissing = await apiB.getDesign("auth006-e-design-that-does-not-exist");
+      const readMissing = await apiB.getDesign(missingDesignId);
       expect(readForeign.status).toBe(403);
       expect(readMissing.status).toBe(403);
-      expect(errorOf(readForeign).code, "other-owner and missing must leak no difference").toBe(errorOf(readMissing).code);
+      expectNoOracle("design read", readForeign, readMissing);
       expect(errorOf(readForeign).code).toBe("FORBIDDEN");
 
-      // B cannot SAVE over A's design.
+      // B cannot SAVE over A's design — save is owner-scoped, so a missing target
+      // answers the same as a foreign one.
       const saveForeign = await apiB.saveDesign({
         requestId: `auth006-e-save2-${crypto.randomUUID()}`,
         design: generate.json<{ design: Record<string, unknown> }>().design
       });
+      const saveMissing = await apiB.saveDesign({
+        requestId: `auth006-e-save-missing-${crypto.randomUUID()}`,
+        design: {
+          ...generate.json<{ design: Record<string, unknown> }>().design,
+          designId: missingDesignId
+        }
+      });
       expect(saveForeign.status).toBe(403);
+      expectNoOracle("design save", saveForeign, saveMissing);
 
-      // B cannot CLONE, UPDATE or DELETE A's design.
+      // B cannot CLONE A's design.
       const cloneForeign = await apiB.cloneDesign({
         requestId: `auth006-e-clone-${crypto.randomUUID()}`,
         designId: designA.designId,
         expectedRevision: designA.revision
       });
+      const cloneMissing = await apiB.cloneDesign({
+        requestId: `auth006-e-clone-missing-${crypto.randomUUID()}`,
+        designId: missingDesignId,
+        expectedRevision: designA.revision
+      });
       expect(cloneForeign.status).toBe(403);
+      expectNoOracle("design clone", cloneForeign, cloneMissing);
 
+      // B cannot UPDATE A's design.
       const updateForeign = await apiB.updateDesign({
         requestId: `auth006-e-update-${crypto.randomUUID()}`,
         designId: designA.designId,
         expectedRevision: designA.revision,
         operations: [{ operation: "MOVE_COMPONENT", componentId: "auth006-e-nonexistent", targetPositionIndex: 0 }]
       });
+      const updateMissing = await apiB.updateDesign({
+        requestId: `auth006-e-update-missing-${crypto.randomUUID()}`,
+        designId: missingDesignId,
+        expectedRevision: designA.revision,
+        operations: [{ operation: "MOVE_COMPONENT", componentId: "auth006-e-nonexistent", targetPositionIndex: 0 }]
+      });
       expect(updateForeign.status).toBe(403);
+      expectNoOracle("design update", updateForeign, updateMissing);
 
+      // B cannot DELETE A's design.
       const deleteForeign = await apiB.deleteDesign({
         requestId: `auth006-e-delete-${crypto.randomUUID()}`,
         designId: designA.designId,
         expectedRevision: designA.revision
       });
+      const deleteMissing = await apiB.deleteDesign({
+        requestId: `auth006-e-delete-missing-${crypto.randomUUID()}`,
+        designId: missingDesignId,
+        expectedRevision: designA.revision
+      });
       expect(deleteForeign.status).toBe(403);
+      expectNoOracle("design delete", deleteForeign, deleteMissing);
 
       // B cannot ORDER A's design.
       const orderForeign = await apiB.createOrder({
@@ -154,11 +222,27 @@ test.describe("E. two-user isolation", () => {
         expectedPricingVersion: (generate.json<{ design: { pricing: { pricingVersion: string } } }>().design.pricing.pricingVersion),
         expectedTotalPriceMinor: generate.json<{ design: { pricing: { totalPriceMinor: number } } }>().design.pricing.totalPriceMinor
       });
+      const orderMissing = await apiB.createOrder({
+        requestId: `auth006-e-order-missing-${crypto.randomUUID()}`,
+        design: {
+          ...generate.json<{ design: Record<string, unknown> }>().design,
+          designId: missingDesignId
+        },
+        expectedRevision: designA.revision,
+        expectedPricingVersion: (generate.json<{ design: { pricing: { pricingVersion: string } } }>().design.pricing.pricingVersion),
+        expectedTotalPriceMinor: generate.json<{ design: { pricing: { totalPriceMinor: number } } }>().design.pricing.totalPriceMinor
+      });
       expect(orderForeign.status).toBe(403);
+      expectNoOracle("order from design", orderForeign, orderMissing);
 
-      // B cannot read or mutate A's Tarot session.
+      // B cannot read or mutate A's Tarot session — both are owner-scoped.
       const tarotForeign = await apiB.get(`/api/tarot/sessions/${encodeURIComponent(tarotA.sessionId)}`);
+      const tarotMissing = await apiB.get(
+        "/api/tarot/sessions/auth006-e-tarot-session-that-does-not-exist"
+      );
       expect(tarotForeign.status).toBe(403);
+      expectNoOracle("tarot session read", tarotForeign, tarotMissing);
+
       const tarotSelectForeign = await apiB.post(
         `/api/tarot/sessions/${encodeURIComponent(tarotA.sessionId)}/select`,
         {
@@ -169,9 +253,20 @@ test.describe("E. two-user isolation", () => {
           operationId: `auth006-e-tarot-op-${crypto.randomUUID()}`
         }
       );
+      const tarotSelectMissing = await apiB.post(
+        "/api/tarot/sessions/auth006-e-tarot-session-that-does-not-exist/select",
+        {
+          requestId: `auth006-e-tarot-missing-${crypto.randomUUID()}`,
+          slot: "GUIDANCE",
+          displayedPosition: 7,
+          expectedRevision: tarotA.revision,
+          operationId: `auth006-e-tarot-missing-op-${crypto.randomUUID()}`
+        }
+      );
       expect(tarotSelectForeign.status).toBe(403);
+      expectNoOracle("tarot session select", tarotSelectForeign, tarotSelectMissing);
 
-      // --- A's resources are untouched after all of B's attempts. ---
+      // --- A's design is untouched after all of B's attempts. ---
       const listA = await apiA.listDesigns();
       expect(listA.status).toBe(200);
       const stillThere = listA.json<{ designs: Array<{ design: { designId: string; revision: number } }> }>().designs;
@@ -179,10 +274,23 @@ test.describe("E. two-user isolation", () => {
       expect(surviving, "A's design must still exist").toBeDefined();
       expect(surviving!.design.revision, "A's design revision must be unchanged").toBe(designA.revision);
 
-      // A's Order survived B's attacks byte-for-byte (id, status, amount, design).
+      // --- A's Tarot session is untouched: re-read and compare the full state. ---
+      const tarotAAfter = await apiA.get(`/api/tarot/sessions/${encodeURIComponent(tarotA.sessionId)}`);
+      expect(tarotAAfter.status, "A must still be able to read A's own Tarot session").toBe(200);
+      const tarotAAfterSnapshot = tarotAAfter.json<{ session: TarotSession }>().session;
+      expect(tarotAAfterSnapshot.sessionId).toBe(tarotASnapshot.sessionId);
+      expect(tarotAAfterSnapshot.revision, "A's Tarot revision must be unchanged by B's attacks").toBe(
+        tarotASnapshot.revision
+      );
+      expect(tarotAAfterSnapshot.status, "A's Tarot status must be unchanged by B's attacks").toBe(
+        tarotASnapshot.status
+      );
+
+      // --- A's order projection is untouched: exact count and exact contents. ---
       const ordersAAfter = await apiA.listOrders();
       expect(ordersAAfter.status).toBe(200);
       const projectedAAfter = ordersAAfter.json<{ orders: OrderEntry[] }>().orders;
+      expect(projectedAAfter.length, "A's order projection count must be unchanged").toBe(ordersABeforeAttacks);
       const orderAAfter = projectedAAfter.find((entry) => entry.orderId === orderAJson.orderId);
       expect(orderAAfter, "A's order must still exist after B's attacks").toBeDefined();
       expect(orderAAfter!.status).toBe(orderAProjection!.status);
@@ -190,6 +298,14 @@ test.describe("E. two-user isolation", () => {
       expect(orderAAfter!.totalAmountMinor).toBe(orderAProjection!.totalAmountMinor);
       expect(orderAAfter!.createdAt).toBe(orderAProjection!.createdAt);
       expect(orderAAfter!.design.designId).toBe(designA.designId);
+
+      // --- B's order projection is still exactly empty: no attack created anything. ---
+      const ordersBAfter = await apiB.listOrders();
+      expect(ordersBAfter.status).toBe(200);
+      expect(
+        ordersBAfter.json<{ orders: unknown[] }>().orders,
+        "B's order projection must still be exactly empty after all attacks"
+      ).toHaveLength(0);
 
       // --- No session/token material crosses from A's context into B's. ---
       const cookieA = await readSessionCookie(pageA);

@@ -85,6 +85,7 @@ jobs:
       - name: AUTH-006 isolated security and full-loop E2E gate
         run: pnpm exec playwright test --config tests/auth-e2e/playwright.config.mts
       - name: Sanitize run evidence on failure
+        id: sanitize_auth006
         if: failure()
         run: >
           node tests/auth-e2e/scripts/sanitize-evidence.mjs
@@ -93,12 +94,21 @@ jobs:
           --secret "$AUTH006_CLIENT_SECRET"
           --secret "$AUTH006_SESSION_SECRET"
           --secret "$AUTH006_ADMIN_TOKEN"
+      # The upload is DOUBLE-gated: the gate must have failed (failure()) AND the
+      # sanitizer must have completed successfully (outcome == 'success'). When the
+      # sanitizer itself fails — a detected violation or an internal error — its
+      # outcome is 'failure' (or 'cancelled') and this step is skipped: a partial
+      # or unverified sanitized directory must never be published. GitHub Actions
+      # evaluates steps.<id>.outcome only for steps that have already concluded,
+      # so a skipped sanitizer here means the gate passed and failure() is false
+      # anyway.
       - name: Retain sanitized run evidence on failure
-        if: failure()
+        if: failure() && steps.sanitize_auth006.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: auth-006-run-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          # ONLY the sanitized, explicitly allowlisted directory is ever uploaded.
+          # ONLY the sanitized, explicitly allowlisted directory is ever uploaded,
+          # and only after the sanitizer exited 0 over the FULL run directory.
           # The raw run directory (TLS keys, traces, logs) stays on the runner.
           path: output/playwright/auth-006-sanitized/
           retention-days: 7
