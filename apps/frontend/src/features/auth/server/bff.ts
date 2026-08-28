@@ -5,10 +5,12 @@
  * - The browser never sees Access/Refresh/ID tokens; the BFF attaches the short-lived
  *   Bearer token server-to-server.
  * - Origin validation happens BEFORE any session/token operation for mutations.
- * - The request body is read exactly once, by the business forwarding path only, and
- *   the same value is forwarded. SDK session/token operations receive a standalone
- *   bodyless request with identical URL/method/headers (see buildSessionSdkRequest),
- *   so a consumed, disturbed or locked body stream can never reach the SDK.
+ * - The request body is read exactly once as RAW BYTES (arrayBuffer), by the business
+ *   forwarding path only, and the same bytes are forwarded to the Backend — never
+ *   decoded/re-encoded (text() would strip a UTF-8 BOM and replace invalid UTF-8).
+ *   SDK session/token operations receive a standalone bodyless request with identical
+ *   URL/method and body-independent headers (see buildSessionSdkRequest), so a
+ *   consumed, disturbed or locked body stream can never reach the SDK.
  * - Content-Length is never forwarded or computed by hand; the server fetch generates it.
  * - The target path cannot escape `/api/**` via `..`, percent-encoding, or backslashes,
  *   and the final URL is re-asserted against the configured backend origin.
@@ -214,8 +216,11 @@ function appendSinkCookies(target: NextResponse, sink: NextResponse): void {
 
 /**
  * Builds the standalone request handed to every SDK session/token operation (passive
- * rolling and getAccessToken). It preserves the URL (incl. query), method and ALL
- * headers (incl. the session cookie) but intentionally carries NO body.
+ * rolling and getAccessToken). It preserves the URL (incl. query), method and all
+ * body-independent headers (incl. the session cookie and the business Content-Type)
+ * but intentionally carries NO body. Body-framing headers (content-length,
+ * transfer-encoding) are dropped: a bodyless request must never advertise a non-zero
+ * Content-Length or a chunked framing, which would form a contradictory request.
  *
  * Why this is required: in Next.js 16 Turbopack production builds the `NextRequest`
  * constructor bundled with the Auth0 SDK can differ from the one the app chunks
@@ -235,6 +240,9 @@ function appendSinkCookies(target: NextResponse, sink: NextResponse): void {
 export function buildSessionSdkRequest(request: NextRequest): NextRequest {
   const headers = new Headers();
   for (const [key, value] of request.headers.entries()) {
+    const lowerKey = key.toLowerCase();
+    // Body-framing headers describe a body this request intentionally does not carry.
+    if (lowerKey === "content-length" || lowerKey === "transfer-encoding") continue;
     headers.append(key, value);
   }
   return new NextRequest(request.url, { method: request.method, headers });
@@ -311,10 +319,12 @@ export async function handleBffRequest(
   //    stream, regardless of how the SDK normalizes it across bundler chunks.
   const sdkRequest = buildSessionSdkRequest(request);
 
-  // 4. Read the request body exactly once — business forwarding path only.
-  let body: string | undefined;
+  // 4. Read the request body exactly once as RAW BYTES — business forwarding path only.
+  //    arrayBuffer() never decodes/re-encodes, so a UTF-8 BOM, invalid UTF-8 sequences
+  //    and NUL bytes survive byte-for-byte; text() would corrupt all three.
+  let body: ArrayBuffer | undefined;
   if (isMutation) {
-    body = await request.text();
+    body = await request.arrayBuffer();
   }
 
   // 5. Real SDK passive rolling BEFORE any token operation (Origin was already checked

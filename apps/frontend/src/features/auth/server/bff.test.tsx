@@ -2,8 +2,9 @@
  * BFF proxy contract tests (route-level logic of app/api/[...path]/route.ts).
  *
  * Coverage:
- * - Mutation body is read exactly once and the same value reaches the Backend
- *   (regression for the double `request.text()` bug).
+ * - Mutation body is read exactly once as RAW BYTES (arrayBuffer) and the same bytes
+ *   reach the Backend — never decoded/re-encoded (regression for the double
+ *   `request.text()` bug AND for text()'s BOM-stripping/invalid-UTF-8 replacement).
  * - Browser Content-Length / Cookie headers are never hand-forwarded.
  * - Path boundary rejects literal, encoded and double-encoded traversal.
  * - Origin validation happens BEFORE any token operation.
@@ -11,9 +12,11 @@
  * - Real SDK passive rolling: triggered on accepted requests, merged into responses,
  *   fails closed with 500, and never runs before the Origin check for mutations.
  * - AUTH-008 regression: body-bearing mutations complete session rolling through the
- *   SDK request-normalization seam. The SDK receives a bodyless request, so a
- *   consumed/disturbed/locked body stream can never reach SDK reconstruction
- *   (fails on baseline 4cac24cb, passes with buildSessionSdkRequest).
+ *   SDK request-normalization seam. The SDK receives a bodyless request WITHOUT
+ *   body-framing headers, so a consumed/disturbed/locked body stream can never reach
+ *   SDK reconstruction (fails on baseline 4cac24cb, passes with buildSessionSdkRequest).
+ * - Byte-for-byte body fidelity: UTF-8 BOM, non-UTF-8 (0xFF), NUL and JSON bytes reach
+ *   the Backend fetch capture unchanged (raw Uint8Array comparison, never via strings).
  * - Backend 401 invalidates the local session (clears cookies); Backend 403 preserves it.
  * - SDK session-rotation Set-Cookie propagates on success AND on terminating
  *   responses, including backend-unavailable.
@@ -40,9 +43,21 @@ type FetchCapture = {
   url?: string;
   method?: string;
   headers?: Headers;
-  body?: string;
+  /** Raw bytes handed to the Backend fetch (byte-fidelity assertions). */
+  bodyBytes?: Uint8Array;
   calls: number;
 };
+
+/** Captures the forwarded body as raw bytes without decoding it. */
+function toBodyBytes(body: BodyInit | null | undefined): Uint8Array | undefined {
+  if (body == null) return undefined;
+  if (body instanceof ArrayBuffer) return new Uint8Array(body);
+  if (ArrayBuffer.isView(body)) {
+    return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+  }
+  if (typeof body === "string") return new TextEncoder().encode(body);
+  return undefined;
+}
 
 // Simulates the Set-Cookie produced by the SDK's real rolling write.
 const ROLLING_COOKIE = "__Host-mystcrag_session=rolled; Max-Age=28800; Path=/; SameSite=Lax; HttpOnly; Secure";
@@ -93,7 +108,7 @@ function makeDeps(options: {
       fetchCapture.url = url;
       fetchCapture.method = init.method;
       fetchCapture.headers = new Headers(init.headers);
-      fetchCapture.body = typeof init.body === "string" ? init.body : undefined;
+      fetchCapture.bodyBytes = toBodyBytes(init.body);
       return options.backend ? options.backend() : new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { "content-type": "application/json" }
@@ -170,9 +185,14 @@ test("POST body is read exactly once and the same value reaches the Backend", as
   const response = await handleBffRequest(request, ["designs"], deps);
 
   // A double-read implementation throws "Body is unusable" or forwards the wrong
-  // body; either way this assertion fails.
+  // body; either way this assertion fails. Bytes must match byte-for-byte, and the
+  // normal JSON payload must still parse for the Backend.
   assert.equal(response.status, 200);
-  assert.equal(fetchCapture.body, payload);
+  assert.deepEqual(fetchCapture.bodyBytes, new TextEncoder().encode(payload));
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(fetchCapture.bodyBytes)), {
+    name: "amethyst-bracelet",
+    beads: 12
+  });
   assert.equal(fetchCapture.url, "https://api.mystcrag.com/api/designs");
   assert.equal(fetchCapture.method, "POST");
 });
@@ -188,7 +208,7 @@ test("PUT/PATCH/DELETE bodies reach the Backend", async () => {
     });
     const response = await handleBffRequest(request, ["items", "9"], deps);
     assert.equal(response.status, 200);
-    assert.equal(fetchCapture.body, payload);
+    assert.deepEqual(fetchCapture.bodyBytes, new TextEncoder().encode(payload));
     assert.equal(fetchCapture.method, method);
   }
 });
@@ -679,17 +699,25 @@ function sdkNormalize(input: NextRequest): NextRequest {
   });
 }
 
-test("buildSessionSdkRequest preserves URL/method/headers and carries no body", () => {
-  const request = makeRequest("https://app.mystcrag.com/api/designs?draft=1", {
+test("buildSessionSdkRequest preserves URL/method/body-independent headers and carries no body or framing headers", () => {
+  const headers = new Headers({
+    origin: makeConfig().appOrigin,
+    "content-type": "application/json",
+    "x-request-id": "rid-9",
+    // Real browser mutation requests carry body-framing headers; the bodyless SDK
+    // request must drop them or it would advertise a body it does not carry.
+    "content-length": "17",
+    "transfer-encoding": "chunked"
+  });
+  headers.set("cookie", "__Host-mystcrag_session=cipher");
+  const request = new NextRequest("https://app.mystcrag.com/api/designs?draft=1", {
     method: "POST",
-    headers: {
-      origin: makeConfig().appOrigin,
-      "content-type": "application/json",
-      "x-request-id": "rid-9"
-    },
-    cookieHeader: "__Host-mystcrag_session=cipher",
+    headers,
     body: "{\"name\":\"amethyst\"}"
   });
+  assert.equal(request.headers.get("content-length"), "17");
+  assert.equal(request.headers.get("transfer-encoding"), "chunked");
+
   const sdkRequest = buildSessionSdkRequest(request);
   assert.equal(sdkRequest.url, "https://app.mystcrag.com/api/designs?draft=1");
   assert.equal(sdkRequest.method, "POST");
@@ -698,8 +726,10 @@ test("buildSessionSdkRequest preserves URL/method/headers and carries no body", 
   assert.equal(sdkRequest.headers.get("x-request-id"), "rid-9");
   assert.equal(sdkRequest.headers.get("cookie"), "__Host-mystcrag_session=cipher");
   assert.equal(sdkRequest.cookies.get("__Host-mystcrag_session")?.value, "cipher");
-  // No business body may ever reach the SDK.
+  // No business body and no body-framing headers may ever reach the SDK.
   assert.equal(sdkRequest.body, null);
+  assert.equal(sdkRequest.headers.get("content-length"), null);
+  assert.equal(sdkRequest.headers.get("transfer-encoding"), null);
   // The original request's body stream is untouched by building the SDK request.
   assert.equal(request.bodyUsed, false);
 });
@@ -770,14 +800,40 @@ test("AUTH-008: touchSession and getAccessToken never receive a consumed/locked 
   assert.equal(tokenRequest.body, null);
 });
 
-test("AUTH-008: mutation body reaches the Backend byte-for-byte after rolling", async () => {
+test("AUTH-008: mutation body reaches the Backend byte-for-byte (BOM, 0xFF, NUL, JSON)", async () => {
   const { deps, fetchCapture } = makeDeps({});
-  // Unicode, emoji, quotes, backslashes and a NUL: byte fidelity.
-  const payload = JSON.stringify({
-    name: "玄矶·紫水晶\"手链\"",
-    note: "a\\b\n🔮\u0000end",
-    beads: ["白水晶", "amethyst"]
+  // Raw bytes that text() would corrupt: a UTF-8 BOM (stripped by text()), an invalid
+  // UTF-8 byte 0xFF (replaced with U+FFFD → EF BF BD) and a NUL byte, surrounding
+  // normal JSON/Unicode content. Compared as raw bytes — never via strings.
+  const jsonBytes = new TextEncoder().encode('{"name":"玄矶·紫水晶","beads":["白水晶","amethyst"]}');
+  const rawBytes = new Uint8Array([
+    0xef, 0xbb, 0xbf, // UTF-8 BOM
+    ...jsonBytes,
+    0xff, // invalid UTF-8 continuation
+    0x00, // NUL
+    0x7b, 0x7d // "{}"
+  ]);
+  const request = makeRequest("https://app.mystcrag.com/api/designs", {
+    method: "POST",
+    headers: { origin: makeConfig().appOrigin, "content-type": "application/json" },
+    cookieHeader: "__Host-mystcrag_session=cipher",
+    body: rawBytes
   });
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 200);
+  assert.equal(fetchCapture.calls, 1);
+  // Byte-for-byte equality with the browser request bytes.
+  assert.ok(fetchCapture.bodyBytes, "Backend received no body");
+  assert.deepEqual(fetchCapture.bodyBytes, rawBytes);
+  assert.equal(fetchCapture.bodyBytes.length, rawBytes.length);
+  // Proof that a text()-based read would have produced different bytes.
+  const corrupted = new TextEncoder().encode(new TextDecoder().decode(rawBytes));
+  assert.notDeepEqual(corrupted, rawBytes);
+});
+
+test("AUTH-008: normal JSON mutations still parse for the Backend after byte forwarding", async () => {
+  const { deps, fetchCapture } = makeDeps({});
+  const payload = JSON.stringify({ name: "紫水晶手链", beads: 12, unicode: "🔮" });
   const request = makeRequest("https://app.mystcrag.com/api/designs", {
     method: "POST",
     headers: { origin: makeConfig().appOrigin, "content-type": "application/json" },
@@ -786,8 +842,17 @@ test("AUTH-008: mutation body reaches the Backend byte-for-byte after rolling", 
   });
   const response = await handleBffRequest(request, ["designs"], deps);
   assert.equal(response.status, 200);
-  assert.equal(fetchCapture.body, payload);
-  assert.equal(fetchCapture.calls, 1);
+  assert.deepEqual(fetchCapture.bodyBytes, new TextEncoder().encode(payload));
+  // The Backend can still parse the forwarded bytes as JSON.
+  assert.ok(fetchCapture.bodyBytes);
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(fetchCapture.bodyBytes)), {
+    name: "紫水晶手链",
+    beads: 12,
+    unicode: "🔮"
+  });
+  // No hand-computed Content-Length is forwarded.
+  assert.ok(fetchCapture.headers);
+  assert.equal(fetchCapture.headers.get("content-length"), null);
 });
 
 test("AUTH-008: Origin rejection stays before rolling/token/body side effects for body-bearing mutations", async () => {
