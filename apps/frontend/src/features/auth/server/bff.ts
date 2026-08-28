@@ -5,7 +5,10 @@
  * - The browser never sees Access/Refresh/ID tokens; the BFF attaches the short-lived
  *   Bearer token server-to-server.
  * - Origin validation happens BEFORE any session/token operation for mutations.
- * - The request body is read exactly once and the same value is forwarded.
+ * - The request body is read exactly once, by the business forwarding path only, and
+ *   the same value is forwarded. SDK session/token operations receive a standalone
+ *   bodyless request with identical URL/method/headers (see buildSessionSdkRequest),
+ *   so a consumed, disturbed or locked body stream can never reach the SDK.
  * - Content-Length is never forwarded or computed by hand; the server fetch generates it.
  * - The target path cannot escape `/api/**` via `..`, percent-encoding, or backslashes,
  *   and the final URL is re-asserted against the configured backend origin.
@@ -210,6 +213,34 @@ function appendSinkCookies(target: NextResponse, sink: NextResponse): void {
 }
 
 /**
+ * Builds the standalone request handed to every SDK session/token operation (passive
+ * rolling and getAccessToken). It preserves the URL (incl. query), method and ALL
+ * headers (incl. the session cookie) but intentionally carries NO body.
+ *
+ * Why this is required: in Next.js 16 Turbopack production builds the `NextRequest`
+ * constructor bundled with the Auth0 SDK can differ from the one the app chunks
+ * resolve, so the SDK's `input instanceof NextRequest` check (next-compat
+ * `toNextRequest`) fails and the SDK reconstructs via
+ * `new NextRequest(input.url, { method, headers, body: input.body, duplex })`.
+ * Once the BFF has read the mutation body (`request.text()`), that stream is
+ * disturbed/locked and the reconstruction throws
+ * "Response body object should not be disturbed or locked" — the AUTH-008 production
+ * failure (stable 500 "Session service unavailable." on every authenticated
+ * mutation). The SDK reads only cookies and URL for rolling and token operations and
+ * never the business body, so a bodyless request with identical URL/method/headers is
+ * semantically equivalent and can never hand the SDK a consumed, disturbed or locked
+ * stream — regardless of the instanceof outcome. The original request keeps its
+ * stream intact for the single business read used to forward the body byte-for-byte.
+ */
+export function buildSessionSdkRequest(request: NextRequest): NextRequest {
+  const headers = new Headers();
+  for (const [key, value] of request.headers.entries()) {
+    headers.append(key, value);
+  }
+  return new NextRequest(request.url, { method: request.method, headers });
+}
+
+/**
  * Emits auth.session_rotation only when the response actually carries rolling/rotation
  * Set-Cookie produced by the SDK. Called only on paths that preserve the session
  * (never on the 401 session-clearing paths).
@@ -275,19 +306,24 @@ export async function handleBffRequest(
     }
   }
 
-  // 3. Read the request body exactly once for mutations.
+  // 3. Build the standalone bodyless request for every SDK session/token operation
+  //    BEFORE any body consumption. It can never carry a consumed/disturbed/locked
+  //    stream, regardless of how the SDK normalizes it across bundler chunks.
+  const sdkRequest = buildSessionSdkRequest(request);
+
+  // 4. Read the request body exactly once — business forwarding path only.
   let body: string | undefined;
   if (isMutation) {
     body = await request.text();
   }
 
-  // 4. Real SDK passive rolling BEFORE any token operation (Origin was already checked
+  // 5. Real SDK passive rolling BEFORE any token operation (Origin was already checked
   //    above for mutations). The SDK only writes when it decrypted a valid session, so
   //    missing/invalid sessions are never rolled. Rolling failure fails closed — never a
   //    silent passthrough.
   let rollingCookies: string[];
   try {
-    rollingCookies = await deps.touchSession(request);
+    rollingCookies = await deps.touchSession(sdkRequest);
   } catch {
     deps.logAuthEvent("auth.dependency_failed", {
       category: "dependency",
@@ -297,11 +333,11 @@ export async function handleBffRequest(
     return errorEnvelope(500, "INTERNAL_ERROR", "Session service unavailable.", requestId);
   }
 
-  // 5. Obtain the access token server-side; capture any SDK session-rotation Set-Cookie.
+  // 6. Obtain the access token server-side; capture any SDK session-rotation Set-Cookie.
   const sink = new NextResponse();
   let accessToken: string;
   try {
-    const result = await deps.getAccessToken(request, sink);
+    const result = await deps.getAccessToken(sdkRequest, sink);
     accessToken = result.token;
   } catch (error) {
     if (classifyTokenError(error) === "unauthorized") {
@@ -348,7 +384,7 @@ export async function handleBffRequest(
     return response;
   }
 
-  // 6. Build forwarded headers from the allowlist; attach the Bearer token server-side.
+  // 7. Build forwarded headers from the allowlist; attach the Bearer token server-side.
   const headers = new Headers();
   for (const [key, value] of request.headers.entries()) {
     if (ALLOWED_HEADERS.has(key.toLowerCase())) {
@@ -358,7 +394,7 @@ export async function handleBffRequest(
   headers.set("authorization", `Bearer ${accessToken}`);
   headers.delete("content-length"); // let fetch compute it from the body
 
-  // 7. Forward to the Backend.
+  // 8. Forward to the Backend.
   let backendResponse: Response;
   try {
     backendResponse = await deps.fetch(backendUrl.toString(), {
@@ -378,7 +414,7 @@ export async function handleBffRequest(
     return response;
   }
 
-  // 8. A Backend 401 (after the BFF attached the server-side Bearer token) means the
+  // 9. A Backend 401 (after the BFF attached the server-side Bearer token) means the
   //    Backend observed an invalid/expired/wrong-issuer/wrong-audience/bad-signature/
   //    revoked token. Invalidate the local session: stable envelope + clearing of the
   //    session main cookie, chunks and SDK legacy cookies. Rolling/rotation cookies are
@@ -398,7 +434,7 @@ export async function handleBffRequest(
     return response;
   }
 
-  // 9. Assemble the response: safe Backend headers (no Set-Cookie) + SDK cookies.
+  // 10. Assemble the response: safe Backend headers (no Set-Cookie) + SDK cookies.
   //    Rolling cookies first, rotation cookies last: if the token set was rotated the
   //    rotation carries the newer session and wins in Set-Cookie order.
   const responseHeaders = new Headers();

@@ -10,6 +10,10 @@
  * - Token errors: 401 (clears invalid session) vs 500 (preserves session).
  * - Real SDK passive rolling: triggered on accepted requests, merged into responses,
  *   fails closed with 500, and never runs before the Origin check for mutations.
+ * - AUTH-008 regression: body-bearing mutations complete session rolling through the
+ *   SDK request-normalization seam. The SDK receives a bodyless request, so a
+ *   consumed/disturbed/locked body stream can never reach SDK reconstruction
+ *   (fails on baseline 4cac24cb, passes with buildSessionSdkRequest).
  * - Backend 401 invalidates the local session (clears cookies); Backend 403 preserves it.
  * - SDK session-rotation Set-Cookie propagates on success AND on terminating
  *   responses, including backend-unavailable.
@@ -18,10 +22,17 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { AccessTokenError, OAuth2Error } from "@auth0/nextjs-auth0/errors";
 
-import { handleBffRequest, resolveBackendUrl, classifyTokenError, resolveTokenFailureEvent, type BffDeps } from "./bff";
+import {
+  handleBffRequest,
+  resolveBackendUrl,
+  classifyTokenError,
+  resolveTokenFailureEvent,
+  buildSessionSdkRequest,
+  type BffDeps
+} from "./bff";
 import { makeAuthEventCapture, makeConfig, makeRequest, noopAuthEventLogger } from "./auth-test-fixtures";
 import type { AuthEventLogger } from "./auth-events";
 
@@ -639,4 +650,225 @@ test("rolling cookies survive backend outage (502)", async () => {
   const response = await handleBffRequest(request, ["designs"], deps);
   assert.equal(response.status, 502);
   assert.ok(response.headers.getSetCookie().includes(ROLLING_COOKIE));
+});
+
+// --- AUTH-008 regression: mutation body vs SDK session-rolling request lifecycle ---
+//
+// Production root cause: the BFF consumed the mutation body (request.text()) and then
+// handed the SAME request to the SDK middleware. In Next.js 16 Turbopack production
+// builds the SDK's `input instanceof NextRequest` check can fail across bundler chunks,
+// and the SDK reconstructs via `new NextRequest(input.url, { body: input.body, ... })`.
+// With the already-consumed stream that reconstruction throws
+// "Response body object should not be disturbed or locked" → stable 500 on every
+// authenticated mutation (AUTH-006 D1/E1). These tests use REAL NextRequest instances
+// with real body streams and a touchSession/getAccessToken faithful to the SDK's
+// reconstruction seam, so they FAIL on baseline 4cac24cb and PASS after the repair.
+
+/**
+ * Reproduces the Auth0 SDK's next-compat `toNextRequest` reconstruction from the
+ * request's own body stream. In production the Turbopack chunk split makes the
+ * `instanceof NextRequest` fast path fail, forcing exactly this reconstruction; doing
+ * it unconditionally makes the seam observable in unit tests.
+ */
+function sdkNormalize(input: NextRequest): NextRequest {
+  return new NextRequest(input.url, {
+    method: input.method,
+    headers: input.headers,
+    body: input.body,
+    duplex: "half"
+  });
+}
+
+test("buildSessionSdkRequest preserves URL/method/headers and carries no body", () => {
+  const request = makeRequest("https://app.mystcrag.com/api/designs?draft=1", {
+    method: "POST",
+    headers: {
+      origin: makeConfig().appOrigin,
+      "content-type": "application/json",
+      "x-request-id": "rid-9"
+    },
+    cookieHeader: "__Host-mystcrag_session=cipher",
+    body: "{\"name\":\"amethyst\"}"
+  });
+  const sdkRequest = buildSessionSdkRequest(request);
+  assert.equal(sdkRequest.url, "https://app.mystcrag.com/api/designs?draft=1");
+  assert.equal(sdkRequest.method, "POST");
+  assert.equal(sdkRequest.headers.get("origin"), makeConfig().appOrigin);
+  assert.equal(sdkRequest.headers.get("content-type"), "application/json");
+  assert.equal(sdkRequest.headers.get("x-request-id"), "rid-9");
+  assert.equal(sdkRequest.headers.get("cookie"), "__Host-mystcrag_session=cipher");
+  assert.equal(sdkRequest.cookies.get("__Host-mystcrag_session")?.value, "cipher");
+  // No business body may ever reach the SDK.
+  assert.equal(sdkRequest.body, null);
+  // The original request's body stream is untouched by building the SDK request.
+  assert.equal(request.bodyUsed, false);
+});
+
+test("AUTH-008: body-bearing POST completes session rolling through the SDK seam", async () => {
+  const touched: NextRequest[] = [];
+  const base = makeDeps({});
+  const deps: BffDeps = {
+    ...base.deps,
+    touchSession: async (request) => {
+      // Faithful to the SDK cross-chunk reconstruction seam: throws on a disturbed
+      // or locked body stream, exactly like production Next.js 16 Turbopack builds.
+      touched.push(sdkNormalize(request));
+      return [ROLLING_COOKIE];
+    }
+  };
+  const payload = JSON.stringify({ name: "紫水晶手链", beads: 12, unicode: "🔮" });
+  const request = makeRequest("https://app.mystcrag.com/api/designs", {
+    method: "POST",
+    headers: { origin: makeConfig().appOrigin, "content-type": "application/json" },
+    cookieHeader: "__Host-mystcrag_session=cipher",
+    body: payload
+  });
+
+  // Baseline: the SDK seam receives the consumed stream, reconstruction throws, and
+  // the BFF returns 500 "Session service unavailable." — this assertion fails there.
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 200);
+  // Rolling Set-Cookie still propagates on the successful mutation response.
+  assert.ok(response.headers.getSetCookie().includes(ROLLING_COOKIE));
+  assert.equal(touched.length, 1);
+});
+
+test("AUTH-008: touchSession and getAccessToken never receive a consumed/locked body", async () => {
+  const touched: NextRequest[] = [];
+  const tokenRequests: NextRequest[] = [];
+  const base = makeDeps({});
+  const deps: BffDeps = {
+    ...base.deps,
+    touchSession: async (request) => {
+      assert.equal(request.bodyUsed, false, "touchSession received a consumed body");
+      touched.push(sdkNormalize(request));
+      return [ROLLING_COOKIE];
+    },
+    getAccessToken: async (request, sink) => {
+      assert.equal(request.bodyUsed, false, "getAccessToken received a consumed body");
+      tokenRequests.push(sdkNormalize(request));
+      return base.deps.getAccessToken(request, sink);
+    }
+  };
+  const request = makeRequest("https://app.mystcrag.com/api/designs", {
+    method: "POST",
+    headers: { origin: makeConfig().appOrigin, "content-type": "application/json" },
+    cookieHeader: "__Host-mystcrag_session=cipher",
+    body: "{\"beads\":12}"
+  });
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 200);
+  assert.equal(touched.length, 1);
+  assert.equal(tokenRequests.length, 1);
+  // The SDK seam can reconstruct from the request it received without any stream error.
+  const touchedRequest = touched.at(0);
+  const tokenRequest = tokenRequests.at(0);
+  assert.ok(touchedRequest);
+  assert.ok(tokenRequest);
+  assert.equal(touchedRequest.method, "POST");
+  assert.equal(touchedRequest.body, null);
+  assert.equal(tokenRequest.body, null);
+});
+
+test("AUTH-008: mutation body reaches the Backend byte-for-byte after rolling", async () => {
+  const { deps, fetchCapture } = makeDeps({});
+  // Unicode, emoji, quotes, backslashes and a NUL: byte fidelity.
+  const payload = JSON.stringify({
+    name: "玄矶·紫水晶\"手链\"",
+    note: "a\\b\n🔮\u0000end",
+    beads: ["白水晶", "amethyst"]
+  });
+  const request = makeRequest("https://app.mystcrag.com/api/designs", {
+    method: "POST",
+    headers: { origin: makeConfig().appOrigin, "content-type": "application/json" },
+    cookieHeader: "__Host-mystcrag_session=cipher",
+    body: payload
+  });
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 200);
+  assert.equal(fetchCapture.body, payload);
+  assert.equal(fetchCapture.calls, 1);
+});
+
+test("AUTH-008: Origin rejection stays before rolling/token/body side effects for body-bearing mutations", async () => {
+  const base = makeDeps({});
+  const sideEffects: string[] = [];
+  const deps: BffDeps = {
+    ...base.deps,
+    touchSession: async (request) => {
+      sideEffects.push("rolling");
+      return base.deps.touchSession(request);
+    },
+    getAccessToken: async (request, sink) => {
+      sideEffects.push("token");
+      return base.deps.getAccessToken(request, sink);
+    },
+    fetch: async (url, init) => {
+      sideEffects.push("fetch");
+      return base.deps.fetch(url, init);
+    }
+  };
+  const request = makeRequest("https://app.mystcrag.com/api/designs", {
+    method: "POST",
+    headers: { origin: "https://evil.example.com", "content-type": "application/json" },
+    cookieHeader: "__Host-mystcrag_session=cipher",
+    body: "{\"beads\":12}"
+  });
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 403);
+  const body = await response.json();
+  assert.equal(body.error.code, "FORBIDDEN");
+  // No session/token/backend side effect may run before the Origin check.
+  assert.deepEqual(sideEffects, []);
+  // Origin rejection must not consume or disturb the business body stream.
+  assert.equal(request.bodyUsed, false);
+});
+
+test("AUTH-008: rolling failure on a body-bearing mutation still fails closed and preserves the session", async () => {
+  const { deps, fetchCapture } = makeDeps({
+    touch: async () => {
+      throw new Error("session store unavailable");
+    }
+  });
+  const request = makeRequest("https://app.mystcrag.com/api/designs", {
+    method: "POST",
+    headers: { origin: makeConfig().appOrigin, "content-type": "application/json" },
+    cookieHeader: "__Host-mystcrag_session=cipher",
+    body: "{\"beads\":12}"
+  });
+  const response = await handleBffRequest(request, ["designs"], deps);
+  assert.equal(response.status, 500);
+  const body = await response.json();
+  assert.deepEqual(body.error, {
+    code: "INTERNAL_ERROR",
+    message: "Session service unavailable.",
+    requestId: "req-test"
+  });
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  // A still-valid session is preserved: no clearing cookies, backend never contacted.
+  assert.ok(!response.headers.getSetCookie().some((c) => c.includes("Max-Age=0")));
+  assert.equal(fetchCapture.calls, 0);
+});
+
+test("AUTH-008: GET/HEAD keep their existing bodyless behavior", async () => {
+  for (const method of ["GET", "HEAD"]) {
+    const touched: NextRequest[] = [];
+    const base = makeDeps({});
+    const deps: BffDeps = {
+      ...base.deps,
+      touchSession: async (request) => {
+        assert.equal(request.bodyUsed, false);
+        touched.push(sdkNormalize(request));
+        return [ROLLING_COOKIE];
+      }
+    };
+    const request = makeRequest("https://app.mystcrag.com/api/designs", {
+      method,
+      cookieHeader: "__Host-mystcrag_session=cipher"
+    });
+    const response = await handleBffRequest(request, ["designs"], deps);
+    assert.equal(response.status, 200, method);
+    assert.ok(response.headers.getSetCookie().includes(ROLLING_COOKIE), method);
+    assert.equal(touched.length, 1, method);
+  }
 });
