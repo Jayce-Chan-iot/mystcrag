@@ -2,11 +2,11 @@
 
 **Feature:** FEAT-018 Production Identity & Session<br>
 **Prepared by:** SOL / TASK-AUDIT-001<br>
-**Package state:** AUTH-001 through AUTH-005 integrated; AUTH-006 candidate `3bbf8058d6a236064567ed9f0e9b3bd74597ac42` is `BLOCKED` after deterministic 30/32 production-build runs; AUTH-008 is registered `IN_PROGRESS` for Qwen to repair the BFF mutation/session-rolling defect; AUTH-007 remains dependency-blocked<br>
-**Blocking gates:** AUTH-008 owns only four exact frontend auth files; AUTH-006 retains its branch without a path lock while blocked, then rebases and repairs its QA/CI evidence after AUTH-008 lands; AUTH-007 remains last and starts only after two clean 32/32 AUTH-006 runs<br>
+**Package state:** AUTH-001 through AUTH-005 and AUTH-008 are integrated; AUTH-006 is reactivated `IN_PROGRESS` for GLM to rebase and repair candidate `3bbf8058d6a236064567ed9f0e9b3bd74597ac42`; AUTH-007 remains dependency-blocked<br>
+**Blocking gates:** AUTH-006 exclusively owns its exact QA/CI/evidence paths and must close every independent review finding plus produce two clean 32/32 runs; AUTH-007 remains last and starts only after AUTH-006 is accepted<br>
 **Contract marker:** `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`
 
-Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. SOL accepted AUTH-002 at `fbd7a540776c447289a05aeb20e50deefd8ea21a`, AUTH-003 at `ab54703fba59173ab9197aaae82215d93abf4f86`, AUTH-004 at `14cb9ef3d1c37113bf2d07df72044023c440137f`, and integrated AUTH-005 final candidate `071c1700328de3551976eaa42ea361e5028028a2`. AUTH-006 exposed a production-only body-stream/session-rolling failure and remains red; the narrow AUTH-008 frontend repair must land before AUTH-006 can rebase and produce final evidence.
+Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. SOL accepted AUTH-002 at `fbd7a540776c447289a05aeb20e50deefd8ea21a`, AUTH-003 at `ab54703fba59173ab9197aaae82215d93abf4f86`, AUTH-004 at `14cb9ef3d1c37113bf2d07df72044023c440137f`, integrated AUTH-005 final candidate `071c1700328de3551976eaa42ea361e5028028a2`, and integrated AUTH-008 final candidate `8b1edacb2df7041e39b39547bf4c37f3eaad936f`. AUTH-006 exposed the production-only body-stream/session-rolling failure that AUTH-008 repaired; GLM now rebases the retained AUTH-006 candidate and produces the final isolated evidence.
 
 ## Task DAG
 
@@ -268,4 +268,6 @@ TASK-AUTH-003 is `DONE`. SOL accepted final candidate `ab54703fba59173ab9197aaae
 
 TASK-AUTH-004 is `DONE`. SOL accepted final candidate `14cb9ef3d1c37113bf2d07df72044023c440137f` after independent wildcard/IP issuer probes, TTL-independent unknown-key cooldown probes, real PostgreSQL identity/owner isolation, production-start smoke, Backend 180/180 tests and full workspace validation.
 
-TASK-AUTH-005 is `DONE`. SOL accepted and fast-forward integrated final candidate `071c1700328de3551976eaa42ea361e5028028a2` after independent no-findings review, Frontend 397/397 tests, lint, typecheck, production build and full workspace validation. TASK-AUTH-006 is registered `IN_PROGRESS` for GLM with exact isolated QA/CI/evidence paths; TASK-AUTH-007 remains last. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.
+TASK-AUTH-005 is `DONE`. SOL accepted and fast-forward integrated final candidate `071c1700328de3551976eaa42ea361e5028028a2` after independent no-findings review, Frontend 397/397 tests, lint, typecheck, production build and full workspace validation.
+
+TASK-AUTH-008 is `DONE`. SOL accepted and fast-forward integrated final candidate `8b1edacb2df7041e39b39547bf4c37f3eaad936f` after byte-fidelity repair, independent no-findings review, Frontend 405/405 tests, lint, typecheck, production build and full workspace validation. TASK-AUTH-006 is reactivated `IN_PROGRESS` for GLM with exact isolated QA/CI/evidence paths; TASK-AUTH-007 remains last. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.
