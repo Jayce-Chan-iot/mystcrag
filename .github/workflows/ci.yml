@@ -74,13 +74,32 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
+      # Per-run secrets, generated on the runner and passed through the job env so the
+      # gate's teardown scan AND the evidence sanitizer can search for their literal
+      # values. They are never hardcoded in YAML and never printed to any log.
+      - name: Generate per-run AUTH-006 secrets
+        run: |
+          echo "AUTH006_CLIENT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "AUTH006_SESSION_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "AUTH006_ADMIN_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - name: AUTH-006 isolated security and full-loop E2E gate
-        run: pnpm exec playwright test --config tests/auth-e2e/playwright.config.ts
-      - name: Retain run evidence on failure
+        run: pnpm exec playwright test --config tests/auth-e2e/playwright.config.mts
+      - name: Sanitize run evidence on failure
+        if: failure()
+        run: >
+          node tests/auth-e2e/scripts/sanitize-evidence.mjs
+          output/playwright/auth-006
+          output/playwright/auth-006-sanitized
+          --secret "$AUTH006_CLIENT_SECRET"
+          --secret "$AUTH006_SESSION_SECRET"
+          --secret "$AUTH006_ADMIN_TOKEN"
+      - name: Retain sanitized run evidence on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: auth-006-run-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: output/playwright/auth-006/
+          # ONLY the sanitized, explicitly allowlisted directory is ever uploaded.
+          # The raw run directory (TLS keys, traces, logs) stays on the runner.
+          path: output/playwright/auth-006-sanitized/
           retention-days: 7
-          if-no-files-found: ignore
+          if-no-files-found: error

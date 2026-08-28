@@ -19,14 +19,19 @@ export type Auth006RunState = {
     providerTls: number;
     providerAdmin: number;
     browserRelay: number;
+    appTls: number;
+    apiTls: number;
     backend: number;
     frontend: number;
+    frontendProd: number;
     negativeBackend: number;
     negativeFrontend: number;
   };
   urls: {
     frontend: string;
+    frontendProd: string;
     backend: string;
+    backendTls: string;
     providerIssuer: string;
     providerAdmin: string;
   };
@@ -36,12 +41,16 @@ export type Auth006RunState = {
     port: number;
     user: string;
   };
+  workDirs: {
+    backend: string;
+    frontend: string;
+  };
 };
 
 export function runId(): string {
   const value = process.env.AUTH006_RUN_ID;
   if (!value || !/^[a-z0-9]{1,40}$/.test(value)) {
-    throw new Error("AUTH006_RUN_ID is not set in this worker; the suite must be started through tests/auth-e2e/playwright.config.ts");
+    throw new Error("AUTH006_RUN_ID is not set in this worker; the suite must be started through tests/auth-e2e/playwright.config.mts");
   }
   return value;
 }

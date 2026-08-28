@@ -9,8 +9,16 @@
  * the Auth0 SDK rejects domains containing ports, and both the frontend and backend
  * issuer validators only accept canonical HTTPS DNS hostnames. Port 443 traffic is
  * transparently remapped:
- *   - browser: --host-resolver-rules + --proxy-server=direct://
+ *   - browser: proxy → CONNECT relay (strict allowlist) for the provider
  *   - Node (BFF/backend): NODE_OPTIONS=--require node-connect-preload.cjs
+ *
+ * The PRODUCTION-topology origin (scenario I) is a real HTTPS DNS hostname too. It is
+ * reachable because the browser rewrites it with --host-resolver-rules (direct
+ * connection, bypassed from the proxy), and the production BFF reaches the backend's
+ * HTTPS origin through the preload's api-host rewrite:
+ *
+ *   https://app.mystcrag.auth006.internal:<appTls>/  (frontend via TLS reverse proxy)
+ *   https://api.mystcrag.auth006.internal:<apiTls>/  (backend via TLS reverse proxy)
  */
 
 import net from "node:net";
@@ -19,8 +27,11 @@ const BASE = {
   providerTls: 18443,
   providerAdmin: 18444,
   browserRelay: 18445,
+  appTls: 18446,
+  apiTls: 18447,
   backend: 18450,
   frontend: 18460,
+  frontendProd: 18461,
   negativeBackend: 18451,
   negativeFrontend: 18470
 } as const;
@@ -28,12 +39,18 @@ const BASE = {
 export const SYNTHETIC_PROVIDER_HOST = "synthetic.auth006.internal";
 export const SYNTHETIC_ISSUER = `https://${SYNTHETIC_PROVIDER_HOST}/`;
 
+export const PRODUCTION_APP_HOST = "app.mystcrag.auth006.internal";
+export const PRODUCTION_API_HOST = "api.mystcrag.auth006.internal";
+
 export type Auth006Ports = {
   providerTls: number;
   providerAdmin: number;
   browserRelay: number;
+  appTls: number;
+  apiTls: number;
   backend: number;
   frontend: number;
+  frontendProd: number;
   negativeBackend: number;
   negativeFrontend: number;
 };
@@ -54,8 +71,11 @@ export function resolvePorts(): Auth006Ports {
     providerTls: BASE.providerTls + shift,
     providerAdmin: BASE.providerAdmin + shift,
     browserRelay: BASE.browserRelay + shift,
+    appTls: BASE.appTls + shift,
+    apiTls: BASE.apiTls + shift,
     backend: BASE.backend + shift,
     frontend: BASE.frontend + shift,
+    frontendProd: BASE.frontendProd + shift,
     negativeBackend: BASE.negativeBackend + shift,
     negativeFrontend: BASE.negativeFrontend + shift
   };
@@ -99,4 +119,19 @@ export async function waitForPort(port: number, timeoutMs: number): Promise<void
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   throw new Error(`Port ${port} did not open within ${timeoutMs}ms`);
+}
+
+/** Waits until every given port has been RELEASED again (teardown verification). */
+export async function waitForPortsReleased(ports: Record<string, number>, timeoutMs: number): Promise<string[]> {
+  const deadline = Date.now() + timeoutMs;
+  let busy: string[] = [];
+  for (;;) {
+    busy = [];
+    for (const [name, port] of Object.entries(ports)) {
+      if (await isPortOpen(port)) busy.push(`${name}=${port}`);
+    }
+    if (busy.length === 0) return [];
+    if (Date.now() >= deadline) return busy;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }

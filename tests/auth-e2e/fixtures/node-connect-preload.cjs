@@ -6,20 +6,29 @@
  * bind 443, so this preload rewrites the TCP destination of any connect() call that
  * targets <synthetic host>:443 to the real loopback address. TLS verification still
  * runs against the synthetic hostname (SNI/servername is untouched), trusted through
- * NODE_EXTRA_CA_CERTS pointing at the generated provider certificate.
+ * NODE_EXTRA_CA_CERTS pointing at the generated multi-SAN certificate.
  *
- * Only the synthetic host on port 443 is rewritten; every other connection (including
- * the backend HTTP loopback origin) passes through unchanged.
+ * The production-topology BACKEND origin (https://api.mystcrag.auth006.internal:<port>/)
+ * is remapped the same way — host → 127.0.0.1, port PRESERVED — so the production BFF
+ * really speaks TLS to the backend's TLS reverse proxy while validating the synthetic
+ * DNS hostname in the certificate. This rewrite is opt-in per process via
+ * AUTH006_API_REMAP_HOST and is only set for the production-topology frontend.
+ *
+ * Only these two synthetic hosts are rewritten; every other connection (including
+ * the backend HTTP loopback origin of the main stack) passes through unchanged.
  *
  * Configuration (read from the process environment at load time):
  *   AUTH006_SYNTHETIC_HOST   — synthetic DNS hostname (default synthetic.auth006.internal)
- *   AUTH006_SYNTHETIC_PORT   — real TLS port of the provider on 127.0.0.1
+ *   AUTH006_SYNTHETIC_PORT   — real TLS port of the provider on 127.0.0.1 (required)
+ *   AUTH006_API_REMAP_HOST   — optional: backend TLS hostname to remap to 127.0.0.1
+ *                              (any port; used only by the production-topology BFF)
  */
 
 "use strict";
 
 const host = process.env.AUTH006_SYNTHETIC_HOST || "synthetic.auth006.internal";
 const port = Number(process.env.AUTH006_SYNTHETIC_PORT || 0);
+const apiRemapHost = (process.env.AUTH006_API_REMAP_HOST || "").toLowerCase();
 
 if (!Number.isInteger(port) || port <= 0) {
   // Fail loudly rather than silently bypassing the rewrite: without it the server
@@ -32,17 +41,35 @@ if (!Number.isInteger(port) || port <= 0) {
 const net = require("node:net");
 const originalConnect = net.Socket.prototype.connect;
 
+function shouldRewriteToProvider(options) {
+  return (
+    Number(options.port) === 443 &&
+    typeof options.host === "string" &&
+    options.host.toLowerCase() === host.toLowerCase()
+  );
+}
+
+function shouldRewriteApiHost(options) {
+  return (
+    apiRemapHost !== "" &&
+    typeof options.host === "string" &&
+    options.host.toLowerCase() === apiRemapHost &&
+    Number.isInteger(Number(options.port)) &&
+    Number(options.port) > 0
+  );
+}
+
 net.Socket.prototype.connect = function patchedConnect(options) {
   try {
-    if (
-      options !== null &&
-      typeof options === "object" &&
-      Number(options.port) === 443 &&
-      typeof options.host === "string" &&
-      options.host.toLowerCase() === host.toLowerCase()
-    ) {
-      const rewritten = Object.assign({}, options, { host: "127.0.0.1", port });
-      return originalConnect.call(this, rewritten, ...Array.prototype.slice.call(arguments, 1));
+    if (options !== null && typeof options === "object") {
+      if (shouldRewriteToProvider(options)) {
+        const rewritten = Object.assign({}, options, { host: "127.0.0.1", port });
+        return originalConnect.call(this, rewritten, ...Array.prototype.slice.call(arguments, 1));
+      }
+      if (shouldRewriteApiHost(options)) {
+        const rewritten = Object.assign({}, options, { host: "127.0.0.1" });
+        return originalConnect.call(this, rewritten, ...Array.prototype.slice.call(arguments, 1));
+      }
     }
   } catch {
     // Any patch failure falls through to the unpatched connect call.

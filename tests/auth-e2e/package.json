@@ -1,6 +1,0 @@
-{
-  "name": "@mystcrag/auth-e2e",
-  "private": true,
-  "type": "module",
-  "description": "AUTH-006 isolated authentication security & full-loop E2E gate. Not a workspace package: pnpm-workspace.yaml only globs apps/* and packages/*. This file only marks the AUTH-006 Playwright config/specs/helpers as ES modules so import.meta works when the suite is launched with `pnpm exec playwright test --config tests/auth-e2e/playwright.config.ts` from the repository root."
-}

@@ -33,6 +33,8 @@ const SDK_COOKIES_PATH = path.join(
 );
 
 export const SESSION_COOKIE_NAME = "mystcrag_session";
+/** NODE_ENV=production/staging classification — see getSessionCookieName in auth0-server.ts. */
+export const PRODUCTION_SESSION_COOKIE_NAME = "__Host-mystcrag_session";
 
 type SdkCookies = {
   encrypt(payload: unknown, secret: string, expiration: number): Promise<string>;

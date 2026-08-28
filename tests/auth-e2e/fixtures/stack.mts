@@ -5,15 +5,32 @@
  *
  *   1. unique run id + fixed port plan (asserted free before anything starts)
  *   2. isolated PostgreSQL database (create → migrate deploy → seed)
- *   3. synthetic OIDC provider (in-process HTTPS issuer + HTTP admin control plane)
- *   4. backend (esbuild production bundle, started with the Node connect rewrite)
- *   5. frontend (next build + next start, NODE_ENV=test so loopback HTTP app origins
- *      are legal while still exercising the production server runtime)
+ *   3. run-scoped build checkout: apps/backend and apps/frontend are COPIED into
+ *      output/playwright/auth-006/<runId>/work/ and built there, so the shared
+ *      apps/frontend/.next and apps/backend/dist of the developer workspace are never
+ *      read, written, or deleted. node_modules and packages/ are symlinked, so the
+ *      build still uses the exact frozen install. Every run builds from scratch —
+ *      no build output is ever reused between runs.
+ *   4. synthetic OIDC provider (in-process HTTPS issuer + HTTP admin control plane)
+ *      and the strict-allowlist browser CONNECT relay
+ *   5. backend (esbuild production bundle in the run-scoped checkout)
+ *   6. frontend (next build in the run-scoped checkout; the main instance runs with
+ *      NODE_ENV=test so loopback HTTP app origins are legal while still exercising
+ *      the production server runtime)
+ *   7. production topology (scenario I): TLS reverse proxies expose the SAME runtimes
+ *      on real HTTPS synthetic DNS origins — app.mystcrag.auth006.internal and
+ *      api.mystcrag.auth006.internal — plus a second frontend instance with
+ *      NODE_ENV=production, proving __Host- session cookies on a valid HTTPS origin.
  *
- * Everything generated (TLS key/cert, logs, run-state) lives only inside
- * output/playwright/auth-006/<runId>/ which is already gitignored. Secrets
- * (client secret, session secret, provider admin token) are passed through
- * process env only and are NEVER written to disk or logs.
+ * Teardown verifies ownership before signalling ANY pid (ps command-line match for
+ * recovered pids; live ChildProcess handles are kernel-verified), stops everything it
+ * started, verifies every owned port was released and the isolated database was
+ * dropped, and FAILS the run when any cleanup step fails.
+ *
+ * Everything generated (TLS key/cert, logs, run-state, build outputs) lives only
+ * inside output/playwright/auth-006/<runId>/ which is already gitignored. Secrets
+ * (client secret, session secret, provider admin token) are passed through process
+ * env only and are NEVER written to disk or logs.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -26,10 +43,21 @@ import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { resolvePorts, assertPortsFree, waitForPort, SYNTHETIC_ISSUER, SYNTHETIC_PROVIDER_HOST } from "./ports";
+import {
+  resolvePorts,
+  assertPortsFree,
+  waitForPort,
+  waitForPortsReleased,
+  SYNTHETIC_ISSUER,
+  SYNTHETIC_PROVIDER_HOST,
+  PRODUCTION_APP_HOST,
+  PRODUCTION_API_HOST
+} from "./ports";
 import { createSyntheticProvider } from "./synthetic-provider";
 import { ensureSyntheticTlsCertificate } from "./tls-cert";
 import { startBrowserRelay, type BrowserRelay } from "./browser-relay";
+import { startTlsReverseProxy, type TlsReverseProxy } from "./tls-reverse-proxy";
+import { verifyProcessOwnership, processCommandFor } from "./process-identity";
 
 export const AUTH006_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export const REPO_ROOT = path.resolve(AUTH006_DIR, "..", "..");
@@ -40,6 +68,10 @@ export const SYNTHETIC_AUDIENCE = "https://api.mystcrag.auth006.internal/";
 const PRELOAD_PATH = path.join(AUTH006_DIR, "fixtures", "node-connect-preload.cjs");
 const DATABASE_NAME_PATTERN = /^mystcrag_auth006_[a-z0-9]+_test$/;
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export type RunState = {
   runId: string;
   createdAt: string;
@@ -47,14 +79,19 @@ export type RunState = {
     providerTls: number;
     providerAdmin: number;
     browserRelay: number;
+    appTls: number;
+    apiTls: number;
     backend: number;
     frontend: number;
+    frontendProd: number;
     negativeBackend: number;
     negativeFrontend: number;
   };
   urls: {
     frontend: string;
+    frontendProd: string;
     backend: string;
+    backendTls: string;
     providerIssuer: string;
     providerAdmin: string;
   };
@@ -64,9 +101,14 @@ export type RunState = {
     port: number;
     user: string;
   };
+  workDirs: {
+    backend: string;
+    frontend: string;
+  };
   processes: {
     backendPid?: number;
     frontendPid?: number;
+    frontendProdPid?: number;
   };
   timings: {
     startedAt: string;
@@ -74,18 +116,22 @@ export type RunState = {
     providerReadyAt?: string;
     backendReadyAt?: string;
     frontendReadyAt?: string;
+    frontendProdReadyAt?: string;
     stoppedAt?: string;
   };
 };
 
 type StackHandle = {
   state: RunState;
-  provider: {
-    stop(): Promise<void>;
-  } | null;
+  provider: { stop(): Promise<void> } | null;
   relay: BrowserRelay | null;
+  tlsAppProxy: TlsReverseProxy | null;
+  tlsApiProxy: TlsReverseProxy | null;
   backendProcess: ChildProcess | null;
   frontendProcess: ChildProcess | null;
+  frontendProdProcess: ChildProcess | null;
+  /** Extra children spawned by specs (negative-config cases); stopped at teardown. */
+  extraChildren: Array<{ label: string; child: ChildProcess }>;
 };
 
 let handle: StackHandle | null = null;
@@ -180,12 +226,12 @@ function bundleResolutionNodePath(): string {
   return hoisted;
 }
 
-async function linkJsdomWorkerIntoBundle(): Promise<void> {
+async function linkJsdomWorkerIntoBundle(backendDir: string): Promise<void> {
   const hoistedJsdom = path.join(REPO_ROOT, "node_modules", ".pnpm", "node_modules", "jsdom");
   const jsdomDir = await fs.realpath(hoistedJsdom);
   const worker = path.join(jsdomDir, "lib", "jsdom", "living", "xhr", "xhr-sync-worker.js");
   await fs.access(worker);
-  const linkPath = path.join(REPO_ROOT, "apps", "backend", "dist", "xhr-sync-worker.js");
+  const linkPath = path.join(backendDir, "dist", "xhr-sync-worker.js");
   await fs.rm(linkPath, { force: true });
   await fs.symlink(worker, linkPath, "file");
 }
@@ -250,7 +296,8 @@ function nodeEnvForChildren(): Record<string, string> {
   return {
     PATH: process.env.PATH ?? "",
     HOME: process.env.HOME ?? "",
-    TMPDIR: process.env.TMPDIR ?? "/tmp"
+    TMPDIR: process.env.TMPDIR ?? "/tmp",
+    NEXT_TELEMETRY_DISABLED: "1"
   };
 }
 
@@ -265,6 +312,7 @@ function runtimeEnv(providerTlsPort: number, certPath: string): Record<string, s
     PATH: process.env.PATH ?? "",
     HOME: process.env.HOME ?? "",
     TMPDIR: process.env.TMPDIR ?? "/tmp",
+    NEXT_TELEMETRY_DISABLED: "1",
     NODE_OPTIONS: `--require ${JSON.stringify(PRELOAD_PATH)}`,
     AUTH006_SYNTHETIC_HOST: SYNTHETIC_PROVIDER_HOST,
     AUTH006_SYNTHETIC_PORT: String(providerTlsPort),
@@ -272,16 +320,63 @@ function runtimeEnv(providerTlsPort: number, certPath: string): Record<string, s
   };
 }
 
-function fetchJson(url: string, init: https.RequestOptions & { headers?: Record<string, string> }): Promise<{ status: number; body: string }> {
-  return new Promise((resolve, reject) => {
-    const request = https.request(url, init, (response) => {
-      const chunks: Buffer[] = [];
-      response.on("data", (chunk) => chunks.push(chunk));
-      response.on("end", () => resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
-    });
-    request.on("error", reject);
-    request.end();
+function resolveNextBin(): string {
+  const require = createRequire(path.join(REPO_ROOT, "apps", "frontend", "package.json"));
+  return require.resolve("next/dist/bin/next");
+}
+
+/**
+ * Copies one application tree into the run-scoped checkout, excluding its build
+ * outputs and dependencies (node_modules is symlinked to the frozen install so the
+ * copy builds against the exact same dependency graph without duplicating it).
+ */
+async function copyAppTree(source: string, destination: string, excludes: string[]): Promise<void> {
+  await fs.cp(source, destination, {
+    recursive: true,
+    filter: (entry: string) => {
+      const relative = path.relative(source, entry);
+      if (!relative) return true;
+      const topSegment = relative.split(path.sep)[0];
+      return !excludes.includes(topSegment);
+    }
   });
+}
+
+/**
+ * Run-scoped build checkout (repair #3). backend and frontend sources are copied to
+ * <runDir>/work/apps/*, their node_modules and the workspace packages/ tree are
+ * symlinked from the repository, and every build/start afterwards runs INSIDE the
+ * copy. The shared apps/frontend/.next and apps/backend/dist are never touched:
+ * not read (no stale build reuse between runs), not written, not deleted.
+ */
+async function prepareRunScopedCheckout(runDir: string): Promise<{ backendDir: string; frontendDir: string }> {
+  const workDir = path.join(runDir, "work");
+  const workAppsDir = path.join(workDir, "apps");
+  await fs.mkdir(workAppsDir, { recursive: true });
+
+  // build.mjs resolves workspace sources via ../../packages/** — symlink the tree.
+  await fs.symlink(path.join(REPO_ROOT, "packages"), path.join(workDir, "packages"), "dir");
+  // Both apps' tsconfig.json extend ../../tsconfig.base.json — complete the same
+  // directory shape the repository gives them (read-only link, never a copy).
+  await fs.symlink(path.join(REPO_ROOT, "tsconfig.base.json"), path.join(workDir, "tsconfig.base.json"), "file");
+
+  const backendDir = path.join(workAppsDir, "backend");
+  await copyAppTree(path.join(REPO_ROOT, "apps", "backend"), backendDir, ["node_modules", "dist"]);
+  await fs.symlink(
+    path.join(REPO_ROOT, "apps", "backend", "node_modules"),
+    path.join(backendDir, "node_modules"),
+    "dir"
+  );
+
+  const frontendDir = path.join(workAppsDir, "frontend");
+  await copyAppTree(path.join(REPO_ROOT, "apps", "frontend"), frontendDir, ["node_modules", ".next"]);
+  await fs.symlink(
+    path.join(REPO_ROOT, "apps", "frontend", "node_modules"),
+    path.join(frontendDir, "node_modules"),
+    "dir"
+  );
+
+  return { backendDir, frontendDir };
 }
 
 function httpGet(url: string): Promise<{ status: number; body: string }> {
@@ -365,6 +460,12 @@ export async function startIsolatedStack(): Promise<RunState> {
 
   await assertPortsFree(ports);
 
+  const nextBin = resolveNextBin();
+  // No trailing slash: the config validator compares MYSTCRAG_AUTH_CALLBACK_URL
+  // against the exact string `${MYSTCRAG_APP_ORIGIN}/auth/callback`.
+  const productionAppOrigin = `https://${PRODUCTION_APP_HOST}:${ports.appTls}`;
+  const productionApiOrigin = `https://${PRODUCTION_API_HOST}:${ports.apiTls}`;
+
   const adminUrl = new URL(resolveAdminDatabaseUrl());
   const state: RunState = {
     runId,
@@ -372,7 +473,9 @@ export async function startIsolatedStack(): Promise<RunState> {
     ports: { ...ports },
     urls: {
       frontend: `http://localhost:${ports.frontend}`,
+      frontendProd: productionAppOrigin,
       backend: `http://localhost:${ports.backend}`,
+      backendTls: productionApiOrigin,
       providerIssuer: SYNTHETIC_ISSUER,
       providerAdmin: `http://127.0.0.1:${ports.providerAdmin}`
     },
@@ -382,11 +485,22 @@ export async function startIsolatedStack(): Promise<RunState> {
       port: Number(adminUrl.port || 5432),
       user: decodeURIComponent(adminUrl.username || "postgres")
     },
+    workDirs: { backend: "", frontend: "" },
     processes: {},
     timings: { startedAt: new Date().toISOString() }
   };
 
-  const stack: StackHandle = { state, provider: null, relay: null, backendProcess: null, frontendProcess: null };
+  const stack: StackHandle = {
+    state,
+    provider: null,
+    relay: null,
+    tlsAppProxy: null,
+    tlsApiProxy: null,
+    backendProcess: null,
+    frontendProcess: null,
+    frontendProdProcess: null,
+    extraChildren: []
+  };
   handle = stack;
 
   try {
@@ -428,9 +542,18 @@ export async function startIsolatedStack(): Promise<RunState> {
       }
     );
 
-    // 2. Synthetic provider (in-process) + browser CONNECT relay.
+    // 2. Run-scoped build checkout (built in step 3/4 — never in apps/**).
+    const { backendDir, frontendDir } = await prepareRunScopedCheckout(runDir);
+    state.workDirs = { backend: backendDir, frontend: frontendDir };
+    await writeRunState(state);
+
+    // 3. Synthetic provider (in-process) + browser CONNECT relay (strict allowlist).
     const tlsDir = path.join(runDir, "tls");
     const { keyPath, certPath } = await ensureSyntheticTlsCertificate(tlsDir);
+    stack.relay = await startBrowserRelay({
+      port: ports.browserRelay,
+      allowlist: [{ host: SYNTHETIC_PROVIDER_HOST, port: 443, upstreamPort: ports.providerTls }]
+    });
     const provider = createSyntheticProvider({
       issuer: SYNTHETIC_ISSUER,
       audience: SYNTHETIC_AUDIENCE,
@@ -438,32 +561,29 @@ export async function startIsolatedStack(): Promise<RunState> {
       clientSecret: secrets.clientSecret,
       callbackUrl: `${state.urls.frontend}/auth/callback`,
       logoutUrl: `${state.urls.frontend}/`,
+      extraCallbackUrls: [`${productionAppOrigin}/auth/callback`],
+      extraLogoutUrls: [productionAppOrigin],
       tlsPort: ports.providerTls,
       adminPort: ports.providerAdmin,
       adminToken: secrets.adminToken,
       tlsKey: keyPath,
       tlsCert: certPath,
-      accessTokenLifetimeSeconds: Number(process.env.AUTH006_ACCESS_TOKEN_LIFETIME ?? 12)
+      accessTokenLifetimeSeconds: Number(process.env.AUTH006_ACCESS_TOKEN_LIFETIME ?? 12),
+      relayStats: () => stack.relay?.stats() ?? null
     });
     await provider.start();
     stack.provider = provider;
     await verifyProviderTls(ports.providerTls, certPath);
     state.timings.providerReadyAt = new Date().toISOString();
 
-    stack.relay = await startBrowserRelay({
-      port: ports.browserRelay,
-      upstreamHost: "127.0.0.1",
-      upstreamPort: ports.providerTls
-    });
-
-    // 3. Backend build + start.
+    // 4. Backend build + start (run-scoped checkout only).
     await runToCompletion("backend build", process.execPath, ["build.mjs"], {
-      cwd: path.join(REPO_ROOT, "apps", "backend"),
+      cwd: backendDir,
       env: nodeEnvForChildren(),
       logFile: path.join(logsDir, "backend-build.log"),
       timeoutMs: 300_000
     });
-    await linkJsdomWorkerIntoBundle();
+    await linkJsdomWorkerIntoBundle(backendDir);
 
     const backendEnv: Record<string, string> = {
       ...runtimeEnv(ports.providerTls, certPath),
@@ -479,7 +599,7 @@ export async function startIsolatedStack(): Promise<RunState> {
     stack.backendProcess = spawnLogged(
       process.execPath,
       ["dist/index.js"],
-      { cwd: path.join(REPO_ROOT, "apps", "backend"), env: backendEnv, logFile: path.join(logsDir, "backend.log") },
+      { cwd: backendDir, env: backendEnv, logFile: path.join(logsDir, "backend.log") },
       (code) => {
         if (code !== null && code !== 0 && handle === stack) {
           stack.backendProcess = null;
@@ -487,13 +607,15 @@ export async function startIsolatedStack(): Promise<RunState> {
       }
     );
     state.processes.backendPid = stack.backendProcess.pid;
+    await writeRunState(state);
     await waitForPort(ports.backend, 60_000);
     await waitForHttp("backend /health", `${state.urls.backend}/health`, (response) => response.status === 200, 60_000);
     state.timings.backendReadyAt = new Date().toISOString();
 
-    // 4. Frontend build + start.
-    await runToCompletion("frontend build", "pnpm", ["exec", "next", "build"], {
-      cwd: path.join(REPO_ROOT, "apps", "frontend"),
+    // 5. Frontend build + start (run-scoped checkout; shared build output lives only
+    //    in the run directory). NODE_ENV=test keeps loopback HTTP app origins legal.
+    await runToCompletion("frontend build", process.execPath, [nextBin, "build"], {
+      cwd: frontendDir,
       env: nodeEnvForChildren(),
       logFile: path.join(logsDir, "frontend-build.log"),
       timeoutMs: 600_000
@@ -515,11 +637,12 @@ export async function startIsolatedStack(): Promise<RunState> {
       MYSTCRAG_TAROT_ENABLED: "true"
     };
     stack.frontendProcess = spawnLogged(
-      "pnpm",
-      ["exec", "next", "start", "-p", String(ports.frontend)],
-      { cwd: path.join(REPO_ROOT, "apps", "frontend"), env: frontendEnv, logFile: path.join(logsDir, "frontend.log") }
+      process.execPath,
+      [nextBin, "start", "-p", String(ports.frontend)],
+      { cwd: frontendDir, env: frontendEnv, logFile: path.join(logsDir, "frontend.log") }
     );
     state.processes.frontendPid = stack.frontendProcess.pid;
+    await writeRunState(state);
     await waitForHttp(
       "frontend home page",
       `${state.urls.frontend}/`,
@@ -528,10 +651,83 @@ export async function startIsolatedStack(): Promise<RunState> {
     );
     state.timings.frontendReadyAt = new Date().toISOString();
 
+    // 6. Production topology (scenario I): the same backend and the same production
+    //    build, exposed on real HTTPS synthetic DNS origins through TLS reverse
+    //    proxies, plus a second frontend instance running NODE_ENV=production — the
+    //    environment classification the production config validator requires.
+    stack.tlsApiProxy = await startTlsReverseProxy({
+      port: ports.apiTls,
+      upstreamPort: ports.backend,
+      tlsKey: keyPath,
+      tlsCert: certPath
+    });
+    stack.tlsAppProxy = await startTlsReverseProxy({
+      port: ports.appTls,
+      upstreamPort: ports.frontendProd,
+      tlsKey: keyPath,
+      tlsCert: certPath
+    });
+
+    const productionFrontendEnv: Record<string, string> = {
+      ...runtimeEnv(ports.providerTls, certPath),
+      AUTH006_API_REMAP_HOST: PRODUCTION_API_HOST,
+      NODE_ENV: "production",
+      MYSTCRAG_APP_ORIGIN: productionAppOrigin,
+      MYSTCRAG_AUTH_PROVIDER: "auth0",
+      MYSTCRAG_AUTH_ISSUER: SYNTHETIC_ISSUER,
+      MYSTCRAG_AUTH_AUDIENCE: SYNTHETIC_AUDIENCE,
+      MYSTCRAG_AUTH_CLIENT_ID: SYNTHETIC_CLIENT_ID,
+      MYSTCRAG_AUTH_CLIENT_SECRET: secrets.clientSecret,
+      MYSTCRAG_AUTH_CALLBACK_URL: `${productionAppOrigin}/auth/callback`,
+      MYSTCRAG_AUTH_LOGOUT_URL: productionAppOrigin,
+      MYSTCRAG_AUTH_SESSION_SECRET: secrets.sessionSecret,
+      MYSTCRAG_BACKEND_ORIGIN: productionApiOrigin,
+      MYSTCRAG_TAROT_ENABLED: "true"
+    };
+    // Fixture-level regression guard for the production config contract: the
+    // frontend validator (auth-config.ts) rejects any MYSTCRAG_AUTH_CALLBACK_URL
+    // that is not exactly `${MYSTCRAG_APP_ORIGIN}/auth/callback`. A mismatch used
+    // to surface only as an opaque 180s readiness timeout behind endless
+    // auth.dependency_failed events; fail setup immediately with the exact
+    // violation instead.
+    const productionCallbackContract = `${productionFrontendEnv.MYSTCRAG_APP_ORIGIN}/auth/callback`;
+    if (productionFrontendEnv.MYSTCRAG_AUTH_CALLBACK_URL !== productionCallbackContract) {
+      throw new Error(
+        `production MYSTCRAG_AUTH_CALLBACK_URL contract violation: must exactly equal MYSTCRAG_APP_ORIGIN + '/auth/callback' ` +
+          `(got ${productionFrontendEnv.MYSTCRAG_AUTH_CALLBACK_URL}, expected ${productionCallbackContract})`
+      );
+    }
+    stack.frontendProdProcess = spawnLogged(
+      process.execPath,
+      [nextBin, "start", "-p", String(ports.frontendProd)],
+      { cwd: frontendDir, env: productionFrontendEnv, logFile: path.join(logsDir, "frontend-prod.log") }
+    );
+    state.processes.frontendProdPid = stack.frontendProdProcess.pid;
+    await writeRunState(state);
+    await waitForHttp(
+      "production-topology frontend home page",
+      `http://127.0.0.1:${ports.frontendProd}/`,
+      (response) => response.status === 200,
+      180_000
+    );
+    // Readiness must ALSO prove the production Auth configuration actually
+    // RESOLVED. A 200 on / alone does not prove that: the fail-closed proxy
+    // answers page navigations while the auth dependency is broken, and the
+    // run must never be judged ready on the strength of the home page alone.
+    // /auth/session answers 200 {"authenticated":false} only after the
+    // production config validator passed (config failure = stable 500).
+    await waitForHttp(
+      "production-topology frontend auth configuration",
+      `http://127.0.0.1:${ports.frontendProd}/auth/session`,
+      (response) => response.status === 200 && response.body.includes("\"authenticated\""),
+      60_000
+    );
+    state.timings.frontendProdReadyAt = new Date().toISOString();
+
     await writeRunState(state);
     return state;
   } catch (error) {
-    await stopIsolatedStack();
+    await stopIsolatedStack().catch(() => undefined);
     throw error;
   }
 }
@@ -552,20 +748,83 @@ export async function readRunState(): Promise<RunState> {
   return JSON.parse(raw) as RunState;
 }
 
-async function stopChild(process_: ChildProcess | null, label: string): Promise<void> {
-  if (!process_ || process_.exitCode !== null) return;
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      process_.kill("SIGKILL");
-      resolve();
-    }, 10_000);
-    process_.once("exit", () => {
+/** Registers a spec-spawned child so teardown stops it even when the spec crashes. */
+export function registerStackChild(label: string, child: ChildProcess): void {
+  if (handle) {
+    handle.extraChildren.push({ label, child });
+  }
+}
+
+function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    child.once("exit", () => {
       clearTimeout(timer);
-      resolve();
+      resolve(true);
     });
-    process_.kill("SIGTERM");
   });
-  void label;
+}
+
+/** Signals a live ChildProcess this run spawned. The handle itself proves ownership. */
+async function stopOwnedChild(child: ChildProcess, label: string): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill("SIGTERM");
+  if (await waitForExit(child, 10_000)) return;
+  child.kill("SIGKILL");
+  if (await waitForExit(child, 10_000)) return;
+  throw new Error(`${label} (pid ${child.pid}) did not exit after SIGTERM and SIGKILL`);
+}
+
+async function waitForPidGone(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await processCommandFor(pid)) === null) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
+/**
+ * Signals a pid recovered from run-state.json. The pid is verified against the
+ * run-scoped ownership signature FIRST: a recycled pid (foreign command line) is
+ * never signalled and fails teardown instead.
+ */
+async function stopRecoveredPid(spec: {
+  label: string;
+  pid?: number;
+  patterns: RegExp[];
+}): Promise<void> {
+  if (typeof spec.pid !== "number") return;
+  const check = await verifyProcessOwnership({ pid: spec.pid, patterns: spec.patterns });
+  if (check.kind === "gone") return;
+  if (check.kind === "foreign") {
+    throw new Error(
+      `refusing to signal ${spec.label} pid ${spec.pid}: command line does not match this run (${check.command})`
+    );
+  }
+  process.kill(spec.pid, "SIGTERM");
+  if (await waitForPidGone(spec.pid, 10_000)) return;
+  process.kill(spec.pid, "SIGKILL");
+  if (await waitForPidGone(spec.pid, 10_000)) return;
+  throw new Error(`${spec.label} (pid ${spec.pid}) did not exit after SIGTERM and SIGKILL`);
+}
+
+function recoveredProcessSpecs(state: RunState): Array<{ label: string; pid?: number; patterns: RegExp[] }> {
+  const backendPattern = new RegExp(`${escapeRegExp(state.workDirs.backend)}/dist/index\\.js$`);
+  return [
+    { label: "backend", pid: state.processes.backendPid, patterns: [backendPattern] },
+    {
+      label: "frontend",
+      pid: state.processes.frontendPid,
+      patterns: [new RegExp(`next start -p ${state.ports.frontend}$`)]
+    },
+    {
+      label: "production frontend",
+      pid: state.processes.frontendProdPid,
+      patterns: [new RegExp(`next start -p ${state.ports.frontendProd}$`)]
+    }
+  ];
 }
 
 export async function stopIsolatedStack(): Promise<void> {
@@ -579,23 +838,55 @@ export async function stopIsolatedStack(): Promise<void> {
     }
   }
 
+  const errors: string[] = [];
+
   if (handle) {
-    await stopChild(handle.backendProcess, "backend");
-    await stopChild(handle.frontendProcess, "frontend");
-    if (handle.provider) {
-      await handle.provider.stop().catch(() => undefined);
-    }
-    if (handle.relay) {
-      await handle.relay.stop().catch(() => undefined);
+    const liveChildren: Array<[string, ChildProcess | null]> = [
+      ["backend", handle.backendProcess],
+      ["frontend", handle.frontendProcess],
+      ["production frontend", handle.frontendProdProcess],
+      ...handle.extraChildren.map((entry) => [entry.label, entry.child] as [string, ChildProcess])
+    ];
+    for (const [label, child] of liveChildren) {
+      if (!child) continue;
+      try {
+        await stopOwnedChild(child, label);
+      } catch (error) {
+        errors.push(`${label}: ${error instanceof Error ? error.message : error}`);
+      }
     }
   } else if (state) {
-    for (const pid of [state.processes.backendPid, state.processes.frontendPid]) {
-      if (typeof pid !== "number") continue;
+    for (const spec of recoveredProcessSpecs(state)) {
       try {
-        process.kill(pid, "SIGTERM");
-      } catch {
-        // Already gone.
+        await stopRecoveredPid(spec);
+      } catch (error) {
+        errors.push(`${spec.label}: ${error instanceof Error ? error.message : error}`);
       }
+    }
+  }
+
+  if (handle) {
+    const inProcess: Array<[string, { stop(): Promise<void> } | null | undefined]> = [
+      ["app TLS reverse proxy", handle.tlsAppProxy],
+      ["api TLS reverse proxy", handle.tlsApiProxy],
+      ["synthetic provider", handle.provider],
+      ["browser relay", handle.relay]
+    ];
+    for (const [label, server] of inProcess) {
+      if (!server) continue;
+      try {
+        await server.stop();
+      } catch (error) {
+        errors.push(`${label}: ${error instanceof Error ? error.message : error}`);
+      }
+    }
+  }
+
+  // Every port of the run-scoped plan must be released again.
+  if (state) {
+    const busy = await waitForPortsReleased(state.ports, 15_000);
+    if (busy.length > 0) {
+      errors.push(`ports still bound after teardown: ${busy.join(", ")}`);
     }
   }
 
@@ -608,9 +899,18 @@ export async function stopIsolatedStack(): Promise<void> {
           [databaseName]
         );
         await queryAdmin(`DROP DATABASE IF EXISTS "${databaseName}"`);
+        const remaining = await queryAdmin(
+          "SELECT 1 FROM pg_database WHERE datname = $1",
+          [databaseName]
+        );
+        if (remaining.rows.length > 0) {
+          errors.push(`isolated database ${databaseName} still exists after DROP`);
+        }
       } catch (error) {
-        console.error(`[auth-006] failed to drop isolated database: ${error instanceof Error ? error.message : error}`);
+        errors.push(`database cleanup: ${error instanceof Error ? error.message : error}`);
       }
+    } else {
+      errors.push(`refusing database cleanup for unexpected name: ${databaseName}`);
     }
     state.timings.stoppedAt = new Date().toISOString();
     try {
@@ -621,6 +921,9 @@ export async function stopIsolatedStack(): Promise<void> {
   }
 
   handle = null;
+  if (errors.length > 0) {
+    throw new Error(`AUTH-006 teardown FAILED:\n  - ${errors.join("\n  - ")}`);
+  }
 }
 
 /**
@@ -634,6 +937,7 @@ export async function spawnBackendWithEnv(
   label: string
 ): Promise<{ waitForExit: (timeoutMs: number) => Promise<{ code: number | null; stderr: string }> }> {
   const ports = resolvePorts();
+  const state = await readRunState();
   const runDir = resolveRunDirectory();
   const logsDir = path.join(runDir, "logs");
   await fs.mkdir(logsDir, { recursive: true });
@@ -645,10 +949,11 @@ export async function spawnBackendWithEnv(
   };
   const stderrChunks: Buffer[] = [];
   const child = spawn(process.execPath, ["dist/index.js"], {
-    cwd: path.join(REPO_ROOT, "apps", "backend"),
+    cwd: state.workDirs.backend,
     env,
     stdio: ["ignore", "ignore", "pipe"]
   });
+  registerStackChild(`negative backend ${label}`, child);
   child.stderr?.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
   const logFile = path.join(logsDir, `negative-backend-${label}.log`);
   const stream = createWriteStream(logFile, { flags: "a" });
@@ -672,10 +977,10 @@ export async function spawnBackendWithEnv(
 
 /**
  * Spawns an extra frontend (`next start` on the reserved negative port) reusing the
- * production build made by the main stack. Frontend auth configuration is validated
- * per request, so a rejected config must surface as a stable 500 on /auth/session and
- * /auth/login with no Set-Cookie side effects — never a redirect to the provider and
- * never a fake anonymous session.
+ * run-scoped production build. Frontend auth configuration is validated per request,
+ * so a rejected config must surface as a stable 500 on /auth/session and /auth/login
+ * with no Set-Cookie side effects — never a redirect to the provider and never a
+ * fake anonymous session.
  */
 export async function spawnFrontendWithEnv(
   envOverrides: Record<string, string>,
@@ -687,6 +992,7 @@ export async function spawnFrontendWithEnv(
   const logsDir = path.join(runDir, "logs");
   await fs.mkdir(logsDir, { recursive: true });
 
+  const nextBin = resolveNextBin();
   const url = `http://localhost:${ports.negativeFrontend}`;
   const env: Record<string, string> = {
     ...nodeEnvForChildren(),
@@ -701,11 +1007,12 @@ export async function spawnFrontendWithEnv(
     MYSTCRAG_BACKEND_ORIGIN: state.urls.backend,
     ...envOverrides
   };
-  const child = spawn("pnpm", ["exec", "next", "start", "-p", String(ports.negativeFrontend)], {
-    cwd: path.join(REPO_ROOT, "apps", "frontend"),
+  const child = spawn(process.execPath, [nextBin, "start", "-p", String(ports.negativeFrontend)], {
+    cwd: state.workDirs.frontend,
     env,
     stdio: ["ignore", "pipe", "pipe"]
   });
+  registerStackChild(`negative frontend ${label}`, child);
   const logFile = path.join(logsDir, `negative-frontend-${label}.log`);
   const stream = createWriteStream(logFile, { flags: "a" });
   stream.write(`\n=== ${new Date().toISOString()} negative frontend ${label}\n`);

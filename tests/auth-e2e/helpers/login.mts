@@ -23,9 +23,9 @@ export type SessionCookie = {
   sameSite: string;
 };
 
-export async function readSessionCookie(page: Page): Promise<SessionCookie | null> {
+export async function readSessionCookie(page: Page, cookieName: string = SESSION_COOKIE_NAME): Promise<SessionCookie | null> {
   const cookies = await page.context().cookies();
-  const session = cookies.find((cookie) => cookie.name === SESSION_COOKIE_NAME);
+  const session = cookies.find((cookie) => cookie.name === cookieName);
   if (!session) return null;
   return {
     name: session.name,
@@ -38,8 +38,8 @@ export async function readSessionCookie(page: Page): Promise<SessionCookie | nul
   };
 }
 
-export async function requireSessionCookie(page: Page): Promise<SessionCookie> {
-  const cookie = await readSessionCookie(page);
+export async function requireSessionCookie(page: Page, cookieName: string = SESSION_COOKIE_NAME): Promise<SessionCookie> {
+  const cookie = await readSessionCookie(page, cookieName);
   expect(cookie, "the SDK must have set the session cookie after callback").not.toBeNull();
   return cookie!;
 }
@@ -87,13 +87,13 @@ export async function suppressRouterPrefetch(page: Page): Promise<void> {
 export async function loginAsUser(
   page: Page,
   user: SyntheticUser,
-  options: { startAt?: string } = {}
+  options: { startAt?: string; cookieName?: string } = {}
 ): Promise<SessionCookie> {
   await setNextUser(user);
   await page.goto(options.startAt ?? "/");
   await page.getByRole("button", { name: "登录" }).first().click();
   await expect(page.getByRole("button", { name: "退出登录" })).toBeVisible({ timeout: 30_000 });
-  return requireSessionCookie(page);
+  return requireSessionCookie(page, options.cookieName ?? SESSION_COOKIE_NAME);
 }
 
 /** Full real logout: click 退出 in the header, follow the top-level POST + 303 chain. */

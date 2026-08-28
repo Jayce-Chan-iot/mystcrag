@@ -53,6 +53,38 @@ test.describe("E. two-user isolation", () => {
 
       const tarotA = await createTarotSession(pageA);
 
+      // --- A owns a real Order placed from A's own design. ---
+      const generateJson = generate.json<{
+        design: { designId: string; revision: number; pricing: { pricingVersion: string; totalPriceMinor: number } };
+      }>();
+      const orderA = await apiA.createOrder({
+        requestId: `auth006-e-order-a-${crypto.randomUUID()}`,
+        design: generateJson.design,
+        expectedRevision: generateJson.design.revision,
+        expectedPricingVersion: generateJson.design.pricing.pricingVersion,
+        expectedTotalPriceMinor: generateJson.design.pricing.totalPriceMinor
+      });
+      expect(orderA.status, `A's order creation failed: ${orderA.body}`).toBe(200);
+      const orderAJson = orderA.json<{ orderId: string; orderStatus: string }>();
+      expect(orderAJson.orderId).toBeTruthy();
+
+      // A can read A's own Order back from A's order projection.
+      const ordersA = await apiA.listOrders();
+      expect(ordersA.status).toBe(200);
+      type OrderEntry = {
+        orderId: string;
+        status: string;
+        currency: string;
+        totalAmountMinor: number;
+        createdAt: string;
+        design: { designId: string };
+      };
+      const projectedA = ordersA.json<{ orders: OrderEntry[] }>().orders;
+      const orderAProjection = projectedA.find((entry) => entry.orderId === orderAJson.orderId);
+      expect(orderAProjection, "A's order must appear in A's own projection").toBeDefined();
+      expect(orderAProjection!.design.designId).toBe(designA.designId);
+      expect(orderAProjection!.totalAmountMinor).toBe(generateJson.design.pricing.totalPriceMinor);
+
       // --- User B logs in inside a completely separate context. ---
       await loginAsUser(pageB, userB);
       const apiB = bffClient(pageB);
@@ -61,6 +93,20 @@ test.describe("E. two-user isolation", () => {
       const listB = await apiB.listDesigns();
       expect(listB.status).toBe(200);
       expect(listB.json<{ designs: unknown[] }>().designs).toHaveLength(0);
+
+      // B's order projection does NOT contain A's order — not even partially.
+      const ordersB = await apiB.listOrders();
+      expect(ordersB.status).toBe(200);
+      const projectedB = ordersB.json<{ orders: Array<{ orderId: string; design: { designId: string } }> }>().orders;
+      expect(projectedB, "B owns no orders of their own yet").toHaveLength(0);
+      expect(
+        projectedB.map((entry) => entry.orderId),
+        "A's order id must not leak into B's projection"
+      ).not.toContain(orderAJson.orderId);
+      expect(
+        JSON.stringify(ordersB.body),
+        "A's design/order identifiers must not appear anywhere in B's order response"
+      ).not.toContain(designA.designId);
 
       // B cannot READ A's design — and the response is indistinguishable from missing.
       const readForeign = await apiB.getDesign(designA.designId);
@@ -132,6 +178,18 @@ test.describe("E. two-user isolation", () => {
       const surviving = stillThere.find((entry) => entry.design.designId === designA.designId);
       expect(surviving, "A's design must still exist").toBeDefined();
       expect(surviving!.design.revision, "A's design revision must be unchanged").toBe(designA.revision);
+
+      // A's Order survived B's attacks byte-for-byte (id, status, amount, design).
+      const ordersAAfter = await apiA.listOrders();
+      expect(ordersAAfter.status).toBe(200);
+      const projectedAAfter = ordersAAfter.json<{ orders: OrderEntry[] }>().orders;
+      const orderAAfter = projectedAAfter.find((entry) => entry.orderId === orderAJson.orderId);
+      expect(orderAAfter, "A's order must still exist after B's attacks").toBeDefined();
+      expect(orderAAfter!.status).toBe(orderAProjection!.status);
+      expect(orderAAfter!.currency).toBe(orderAProjection!.currency);
+      expect(orderAAfter!.totalAmountMinor).toBe(orderAProjection!.totalAmountMinor);
+      expect(orderAAfter!.createdAt).toBe(orderAProjection!.createdAt);
+      expect(orderAAfter!.design.designId).toBe(designA.designId);
 
       // --- No session/token material crosses from A's context into B's. ---
       const cookieA = await readSessionCookie(pageA);

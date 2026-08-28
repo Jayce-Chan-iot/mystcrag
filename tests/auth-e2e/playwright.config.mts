@@ -19,7 +19,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
 
-import { resolvePorts } from "./fixtures/ports";
+import { resolvePorts, PRODUCTION_APP_HOST, PRODUCTION_API_HOST } from "./fixtures/ports";
 
 const AUTH006_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(AUTH006_DIR, "..", "..");
@@ -42,8 +42,8 @@ const ports = resolvePorts();
 export default defineConfig({
   testDir: "./specs",
   outputDir: path.join(runDirectory, "test-results"),
-  globalSetup: path.join(AUTH006_DIR, "global-setup.ts"),
-  globalTeardown: path.join(AUTH006_DIR, "global-teardown.ts"),
+  globalSetup: path.join(AUTH006_DIR, "global-setup.mts"),
+  globalTeardown: path.join(AUTH006_DIR, "global-teardown.mts"),
   fullyParallel: false,
   workers: 1,
   retries: 0,
@@ -57,8 +57,14 @@ export default defineConfig({
     launchOptions: {
       proxy: {
         server: `http://127.0.0.1:${ports.browserRelay}`,
-        bypass: "localhost,127.0.0.1"
-      }
+        // The provider hostname goes through the CONNECT relay (strict allowlist);
+        // loopback and the production-topology synthetic DNS hosts connect directly
+        // (they are remapped to 127.0.0.1 by --host-resolver-rules below).
+        bypass: `localhost,127.0.0.1,${PRODUCTION_APP_HOST},${PRODUCTION_API_HOST}`
+      },
+      args: [
+        `--host-resolver-rules=MAP ${PRODUCTION_APP_HOST} 127.0.0.1,MAP ${PRODUCTION_API_HOST} 127.0.0.1`
+      ]
     },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",

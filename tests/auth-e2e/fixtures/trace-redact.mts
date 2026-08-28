@@ -26,7 +26,13 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import { inflateRawSync } from "node:zlib";
+
+import { parseZip } from "./zip-reader.mjs";
+
+export type ZipEntry = {
+  name: string;
+  data: Buffer;
+};
 
 const LOCAL_FILE_HEADER = 0x04034b50;
 const CENTRAL_DIR_HEADER = 0x02014b50;
@@ -46,55 +52,6 @@ function crc32(buffer: Buffer): number {
     crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
   }
   return (crc ^ 0xffffffff) >>> 0;
-}
-
-type ZipEntry = {
-  name: string;
-  data: Buffer;
-};
-
-export function parseZip(buffer: Buffer): ZipEntry[] {
-  let eocd = -1;
-  const scanFloor = Math.max(0, buffer.length - 22 - 65536);
-  for (let i = buffer.length - 22; i >= scanFloor; i -= 1) {
-    if (buffer.readUInt32LE(i) === END_OF_CENTRAL_DIR) {
-      eocd = i;
-      break;
-    }
-  }
-  if (eocd < 0) {
-    throw new Error("trace redaction: end-of-central-directory signature not found");
-  }
-
-  const entryCount = buffer.readUInt16LE(eocd + 10);
-  const entries: ZipEntry[] = [];
-  let cursor = buffer.readUInt32LE(eocd + 16);
-
-  for (let i = 0; i < entryCount; i += 1) {
-    if (buffer.readUInt32LE(cursor) !== CENTRAL_DIR_HEADER) {
-      throw new Error(`trace redaction: central directory entry ${i} is malformed`);
-    }
-    const method = buffer.readUInt16LE(cursor + 10);
-    const compressedSize = buffer.readUInt32LE(cursor + 20);
-    const nameLength = buffer.readUInt16LE(cursor + 28);
-    const extraLength = buffer.readUInt16LE(cursor + 30);
-    const commentLength = buffer.readUInt16LE(cursor + 32);
-    const localOffset = buffer.readUInt32LE(cursor + 42);
-    const name = buffer.subarray(cursor + 46, cursor + 46 + nameLength).toString("utf8");
-
-    if (buffer.readUInt32LE(localOffset) !== LOCAL_FILE_HEADER) {
-      throw new Error(`trace redaction: local header missing for entry ${name}`);
-    }
-    const localNameLength = buffer.readUInt16LE(localOffset + 26);
-    const localExtraLength = buffer.readUInt16LE(localOffset + 28);
-    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
-    const raw = buffer.subarray(dataStart, dataStart + compressedSize);
-    const data = method === 0 ? Buffer.from(raw) : inflateRawSync(raw);
-
-    entries.push({ name, data });
-    cursor += 46 + nameLength + extraLength + commentLength;
-  }
-  return entries;
 }
 
 export function buildZip(entries: readonly ZipEntry[]): Buffer {

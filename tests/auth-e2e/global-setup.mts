@@ -12,8 +12,11 @@ import { startIsolatedStack } from "./fixtures/stack";
 export default async function globalSetup(): Promise<void> {
   const state = await startIsolatedStack();
   console.log(`[auth-006] run ${state.runId} ready`);
-  console.log(`[auth-006]   frontend   ${state.urls.frontend}`);
-  console.log(`[auth-006]   backend    ${state.urls.backend}`);
-  console.log(`[auth-006]   provider   ${state.urls.providerIssuer}`);
-  console.log(`[auth-006]   database   ${state.database.name}`);
+  console.log(`[auth-006]   frontend        ${state.urls.frontend}`);
+  console.log(`[auth-006]   frontend (prod) ${state.urls.frontendProd} (__Host- session cookies)`);
+  console.log(`[auth-006]   backend         ${state.urls.backend}`);
+  console.log(`[auth-006]   backend (TLS)   ${state.urls.backendTls}`);
+  console.log(`[auth-006]   provider        ${state.urls.providerIssuer}`);
+  console.log(`[auth-006]   database        ${state.database.name}`);
+  console.log(`[auth-006]   work checkout   ${state.workDirs.frontend}`);
 }

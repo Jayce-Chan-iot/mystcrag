@@ -91,12 +91,26 @@ export type SyntheticProviderOptions = {
   clientSecret: string;
   callbackUrl: string;
   logoutUrl: string;
+  /**
+   * Additional registered redirect targets. The production-topology frontend (scenario
+   * I) registers its own https://app.mystcrag.auth006.internal:<port>/auth/callback —
+   * a genuinely different application origin that must be accepted exactly like the
+   * main loopback one. Same semantics for extraLogoutUrls.
+   */
+  extraCallbackUrls?: string[];
+  extraLogoutUrls?: string[];
   tlsPort: number;
   adminPort: number;
   adminToken: string;
   tlsKey: string;
   tlsCert: string;
   accessTokenLifetimeSeconds?: number;
+  /**
+   * Publishes the browser relay's counters through /admin/stats so specs can assert
+   * from workers that the provider really received the relayed requests and that
+   * off-allowlist CONNECT attempts were refused. Optional; absent for unit use.
+   */
+  relayStats?: () => unknown;
 };
 
 export function createSyntheticProvider(options: SyntheticProviderOptions) {
@@ -105,8 +119,8 @@ export function createSyntheticProvider(options: SyntheticProviderOptions) {
     audience: options.audience,
     clientId: options.clientId,
     clientSecret: options.clientSecret,
-    callbackUrl: options.callbackUrl,
-    logoutUrl: options.logoutUrl,
+    callbackUrls: [options.callbackUrl, ...(options.extraCallbackUrls ?? [])],
+    logoutUrls: [options.logoutUrl, ...(options.extraLogoutUrls ?? [])],
     tlsPort: options.tlsPort,
     adminPort: options.adminPort,
     adminToken: options.adminToken,
@@ -122,6 +136,7 @@ export function createSyntheticProvider(options: SyntheticProviderOptions) {
   const codes = new Map();
   const refreshTokens = new Map();
   const accessTokens = new Map();
+  const requestCounts = Object.create(null);
 
   function currentKey() {
     return keys[0];
@@ -192,6 +207,11 @@ export function createSyntheticProvider(options: SyntheticProviderOptions) {
     res.end(JSON.stringify({ error, error_description: description }));
   }
 
+  function countRequest(req, url) {
+    const key = `${req.method} ${url.pathname}`;
+    requestCounts[key] = (requestCounts[key] ?? 0) + 1;
+  }
+
   function handleAuthorize(req, res, url) {
     if (outage === "all" || outage === "authorize") {
       res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
@@ -209,7 +229,7 @@ export function createSyntheticProvider(options: SyntheticProviderOptions) {
     if (clientId !== config.clientId) {
       return oauthError(res, 400, "unauthorized_client", "Unknown client_id.");
     }
-    if (redirectUri !== config.callbackUrl) {
+    if (!config.callbackUrls.includes(redirectUri)) {
       return oauthError(res, 400, "invalid_request", "redirect_uri is not registered.");
     }
     if (responseType !== "code") {
@@ -360,7 +380,7 @@ export function createSyntheticProvider(options: SyntheticProviderOptions) {
     if (clientId !== config.clientId) {
       return oauthError(res, 400, "invalid_request", "Unknown client_id.");
     }
-    if (postLogoutRedirect !== config.logoutUrl) {
+    if (!config.logoutUrls.includes(postLogoutRedirect)) {
       return oauthError(res, 400, "invalid_request", "post_logout_redirect_uri is not registered.");
     }
     res.writeHead(302, { location: postLogoutRedirect, "cache-control": "no-store" });
@@ -378,6 +398,7 @@ export function createSyntheticProvider(options: SyntheticProviderOptions) {
     { key: fs.readFileSync(config.tlsKey), cert: fs.readFileSync(config.tlsCert) },
     (req, res) => {
       const url = new URL(req.url, config.issuer);
+      countRequest(req, url);
       Promise.resolve()
         .then(async () => {
           if (req.method === "GET" && url.pathname === "/.well-known/openid-configuration") {
@@ -471,7 +492,9 @@ export function createSyntheticProvider(options: SyntheticProviderOptions) {
           keys: keys.map((key) => key.kid),
           outstandingCodes: codes.size,
           outstandingRefreshTokens: refreshTokens.size,
-          nextUserSub: nextUser?.sub ?? null
+          nextUserSub: nextUser?.sub ?? null,
+          requestCounts,
+          relay: options.relayStats?.() ?? null
         })
       );
       return;
