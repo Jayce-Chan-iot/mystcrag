@@ -39,7 +39,13 @@ jobs:
   # AUTH-006 — isolated authentication security and full-loop E2E gate.
   # One command boots its own isolated resources (database, synthetic OIDC provider,
   # backend, frontend) via the Playwright global setup in tests/auth-e2e; nothing from
-  # a developer machine is reused. All secrets are generated in memory per run.
+  # a developer machine is reused. Per-run secrets are generated on the runner with
+  # openssl and exported through $GITHUB_ENV, which GitHub Actions materialises as a
+  # temporary env file ON THE RUNNER for the duration of the job — so they are never
+  # "in memory only": they exist in the runner process env and in that temp file.
+  # They are never hardcoded in YAML, never echoed to any log, and each value is
+  # registered with add-mask the moment it is created so an accidental echo is
+  # redacted in the log view.
   auth-006-security-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -74,16 +80,31 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
-      # Per-run secrets, generated on the runner and passed through the job env so the
-      # gate's teardown scan AND the evidence sanitizer can search for their literal
-      # values. They are never hardcoded in YAML and never printed to any log.
+      # Per-run secrets, generated on the runner and exported through $GITHUB_ENV so
+      # the gate's teardown scan AND the evidence sanitizer can search for their
+      # literal values. Each value is masked IMMEDIATELY after generation: if it ever
+      # reaches a log by accident, GitHub replaces it with ***. The generated values
+      # live in the runner process env and the $GITHUB_ENV temp file — nowhere else,
+      # never in YAML, never in argv (argv is visible in process listings and in the
+      # workflow's rendered command line, where a masked value would still be shown).
       - name: Generate per-run AUTH-006 secrets
         run: |
-          echo "AUTH006_CLIENT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-          echo "AUTH006_SESSION_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-          echo "AUTH006_ADMIN_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          client_secret="$(openssl rand -hex 32)"
+          session_secret="$(openssl rand -hex 32)"
+          admin_token="$(openssl rand -hex 32)"
+          echo "::add-mask::${client_secret}"
+          echo "::add-mask::${session_secret}"
+          echo "::add-mask::${admin_token}"
+          echo "AUTH006_CLIENT_SECRET=${client_secret}" >> "$GITHUB_ENV"
+          echo "AUTH006_SESSION_SECRET=${session_secret}" >> "$GITHUB_ENV"
+          echo "AUTH006_ADMIN_TOKEN=${admin_token}" >> "$GITHUB_ENV"
       - name: AUTH-006 isolated security and full-loop E2E gate
         run: pnpm exec playwright test --config tests/auth-e2e/playwright.config.mts
+      # The sanitizer reads the run secrets ONLY from the named environment
+      # variables (AUTH006_CLIENT_SECRET, AUTH006_SESSION_SECRET,
+      # AUTH006_ADMIN_TOKEN — already in the job env through $GITHUB_ENV), never
+      # from the command line: argv is visible in process listings and in the
+      # workflow's rendered command display.
       - name: Sanitize run evidence on failure
         id: sanitize_auth006
         if: failure()
@@ -91,9 +112,6 @@ jobs:
           node tests/auth-e2e/scripts/sanitize-evidence.mjs
           output/playwright/auth-006
           output/playwright/auth-006-sanitized
-          --secret "$AUTH006_CLIENT_SECRET"
-          --secret "$AUTH006_SESSION_SECRET"
-          --secret "$AUTH006_ADMIN_TOKEN"
       # The upload is DOUBLE-gated: the gate must have failed (failure()) AND the
       # sanitizer must have completed successfully (outcome == 'success'). When the
       # sanitizer itself fails — a detected violation or an internal error — its

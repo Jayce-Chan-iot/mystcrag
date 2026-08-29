@@ -6,12 +6,15 @@
  * order. B must not be able to read, modify, save, clone, delete or order A's
  * resources, nor read or select in A's Tarot session; for every owner-scoped
  * operation the response to a FOREIGN resource and to a NONEXISTENT resource is
- * compared directly (status AND stable error code) so no existence/ownership
- * oracle leaks; after all of B's attacks A's resources are re-read and asserted
+ * compared directly as the COMPLETE stable public error envelope — HTTP status and
+ * every public field (code, message, optional fieldErrors), excluding only the
+ * per-request requestId — so no existence/ownership oracle leaks; after all of
+ * B's attacks A's resources are re-read and asserted
  * byte-stable (design revision, order projection exact count and order contents,
- * Tarot session revision/status), B's order projection stays at exactly zero, and
- * no session/token material may cross from A's context into B's. Both users map
- * to distinct internal actors.
+ * Tarot session revision/status), B's own design and order projections stay at
+ * exactly zero, and no session/token/profile material may cross from A's context
+ * into B's (B's own profile IS rendered in B's page as the positive control).
+ * Both users map to distinct internal actors.
  *
  * The foreign-vs-missing comparison is honest about product semantics: the
  * backend repository filters every owner-scoped lookup by ownerId, so foreign
@@ -28,15 +31,25 @@ import { createTarotSession, type TarotSession } from "../helpers/tarot";
 import { externalIdentities } from "../helpers/db";
 import { decryptSessionCookie } from "../helpers/sdk-cookies";
 
-function errorOf(response: { body: string }): { code?: string } {
-  return (JSON.parse(response.body) as { error?: { code?: string } }).error ?? {};
+type PublicErrorEnvelope = {
+  code?: string;
+  message?: string;
+  fieldErrors?: unknown;
+  requestId?: string;
+};
+
+function errorEnvelopeOf(response: { body: string }): PublicErrorEnvelope {
+  return (JSON.parse(response.body) as { error?: PublicErrorEnvelope }).error ?? {};
 }
 
 /**
  * The no-oracle proof for one owner-scoped operation: the response B receives for
  * A's (foreign) resource must be indistinguishable from the response for a
- * resource that does not exist at all — same HTTP status AND same stable error
- * code. Any difference hands B an ownership oracle.
+ * resource that does not exist at all. The COMPLETE stable public error envelope
+ * is compared — HTTP status AND every public field (code, message and the
+ * optional fieldErrors) — with exactly ONE exclusion: requestId, which every
+ * response necessarily generates fresh. Any other difference hands B an
+ * ownership oracle.
  */
 function expectNoOracle(
   label: string,
@@ -44,10 +57,25 @@ function expectNoOracle(
   missing: ApiResponse
 ): void {
   expect(foreign.status, `${label}: foreign vs missing status must match`).toBe(missing.status);
+
+  const foreignEnvelope = errorEnvelopeOf(foreign);
+  const missingEnvelope = errorEnvelopeOf(missing);
+  // Both sides must be well-formed public error envelopes carrying a requestId —
+  // and those requestIds must genuinely differ, proving the excluded field is the
+  // ONLY thing that ever differs between the two responses.
+  expect(typeof foreignEnvelope.requestId, `${label}: foreign error must carry a requestId`).toBe("string");
+  expect(typeof missingEnvelope.requestId, `${label}: missing error must carry a requestId`).toBe("string");
   expect(
-    errorOf(foreign).code,
-    `${label}: foreign vs missing error code must match`
-  ).toBe(errorOf(missing).code);
+    foreignEnvelope.requestId !== missingEnvelope.requestId,
+    `${label}: requestIds must be generated per request`
+  ).toBe(true);
+
+  const { requestId: _foreignId, ...foreignPublic } = foreignEnvelope;
+  const { requestId: _missingId, ...missingPublic } = missingEnvelope;
+  expect(
+    foreignPublic,
+    `${label}: foreign vs missing public error envelope (code, message, fieldErrors) must be identical`
+  ).toEqual(missingPublic);
 }
 
 async function newIsolatedContext(page: Page): Promise<BrowserContext> {
@@ -152,7 +180,7 @@ test.describe("E. two-user isolation", () => {
       expect(readForeign.status).toBe(403);
       expect(readMissing.status).toBe(403);
       expectNoOracle("design read", readForeign, readMissing);
-      expect(errorOf(readForeign).code).toBe("FORBIDDEN");
+      expect(errorEnvelopeOf(readForeign).code).toBe("FORBIDDEN");
 
       // B cannot SAVE over A's design — save is owner-scoped, so a missing target
       // answers the same as a foreign one.
@@ -307,6 +335,15 @@ test.describe("E. two-user isolation", () => {
         "B's order projection must still be exactly empty after all attacks"
       ).toHaveLength(0);
 
+      // --- B's design projection is still exactly empty too: no attack saved,
+      // cloned or mutated anything into B's own space either. ---
+      const listBAfter = await apiB.listDesigns();
+      expect(listBAfter.status).toBe(200);
+      expect(
+        listBAfter.json<{ designs: unknown[] }>().designs,
+        "B's design projection must still be exactly empty after all attacks"
+      ).toHaveLength(0);
+
       // --- No session/token material crosses from A's context into B's. ---
       const cookieA = await readSessionCookie(pageA);
       const cookieB = await readSessionCookie(pageB);
@@ -340,6 +377,41 @@ test.describe("E. two-user isolation", () => {
         expect(htmlB, "A's token material must not appear in B's rendered page").not.toContain(secret);
         for (const entry of storageB) {
           expect(entry, "A's token material must not appear in B's web storage").not.toContain(secret);
+        }
+      }
+
+      // --- No PROFILE material crosses either — with a positive control that
+      // proves B's own profile really is served and rendered in B's context, so
+      // the absence of A's is a meaningful isolation result, not a rendering gap.
+      // (A's sub is an opaque identifier; name and email are the profile claims
+      // the session projection and the header actually expose.)
+      const profileFromA = [userA.sub, userA.name, userA.email];
+      const sessionB = await apiB.session();
+      expect(sessionB.status, `B's session projection failed: ${sessionB.body}`).toBe(200);
+      const sessionBUser = sessionB.json<{
+        authenticated: boolean;
+        user?: { displayName?: string; email?: string };
+      }>();
+      expect(sessionBUser.authenticated).toBe(true);
+      expect(
+        sessionBUser.user?.email === userB.email || sessionBUser.user?.displayName === userB.name,
+        "B's session projection must carry B's own profile (positive control)"
+      ).toBe(true);
+      expect(
+        htmlB.includes(userB.name) || htmlB.includes(userB.email),
+        "B's page must render B's own profile (positive control)"
+      ).toBe(true);
+      for (const profile of profileFromA) {
+        expect(sessionB.body, "A's profile material must not appear in B's session response").not.toContain(profile);
+        expect(htmlB, "A's profile material must not appear in B's rendered page").not.toContain(profile);
+        for (const entry of storageB) {
+          expect(entry, "A's profile material must not appear in B's web storage").not.toContain(profile);
+        }
+        for (const cookie of jarB) {
+          expect(
+            `${cookie.name}=${cookie.value}`,
+            "A's profile material must not appear in B's cookie jar"
+          ).not.toContain(profile);
         }
       }
 

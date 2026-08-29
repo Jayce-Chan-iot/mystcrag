@@ -84,7 +84,7 @@ Both must pass. There is no retry configuration anywhere in the gate.
 | `AUTH006_DATABASE_ADMIN_URL` | derived from `DATABASE_URL` | Admin connection used to create/drop the isolated database. |
 | `AUTH006_PORT_OFFSET` | `0` | Shifts the whole port plan (0–10000) to allow parallel isolated runs. |
 | `AUTH006_ACCESS_TOKEN_LIFETIME` | `12` | Synthetic provider access-token lifetime in seconds (specs B/C rely on the short default). |
-| `AUTH006_CLIENT_SECRET` / `AUTH006_SESSION_SECRET` / `AUTH006_ADMIN_TOKEN` | random per run | Secrets are generated in memory when absent; they are never written to disk or logs. |
+| `AUTH006_CLIENT_SECRET` / `AUTH006_SESSION_SECRET` / `AUTH006_ADMIN_TOKEN` | random per run | Generated inside the orchestrator process when absent and held only in process env; never logged, never passed on any command line. Local runs keep them in memory only. In CI they are exported through `$GITHUB_ENV`, which GitHub Actions materialises as a temporary env file on the runner for the job's duration — each value is registered with `add-mask` the moment it is created, and the evidence sanitizer reads them only from these named variables (never argv). |
 
 ## Port plan (offset applies to all)
 
@@ -177,7 +177,7 @@ Or set `AUTH006_PORT_OFFSET` and let the stale run coexist while it is investiga
 | `specs/f-responsive-accessibility.spec.mts` | F — desktop/mobile viewports, keyboard operability, touch targets, aria contracts |
 | `specs/g-configuration-negatives.spec.mts` | G — production config negatives, signed-test refusal, issuer/URL/secret validation, JWKS outage fail-closed |
 | `specs/h-narrow-regressions.spec.mts` | H — narrow harness regressions: single JSON encoding (echo + live backend contrast), relay allowlist/SNI, evidence sanitizer (clean publish + fail-closed), teardown PID ownership (command signature + run-scoped cwd, real recovery specs path), setup-failure cleanup aggregation, CI upload gate, SNI parser |
-| `specs/i-production-secure-cookie.spec.mts` | I — positive production proof: `__Host-` session cookie contract on a real HTTPS origin, JS unreadability, session restore, protected call through the production BFF → HTTPS → backend chain |
+| `specs/i-production-secure-cookie.spec.mts` | I — positive production proof: `__Host-` session cookie contract on a real HTTPS origin, JS unreadability, session restore, protected call through the production BFF → HTTPS → backend chain, and direct Origin/CSRF mutation enforcement (correct origin creates state; missing and attacker origins are rejected 403 with no side effects) |
 
 Evidence retention follows `docs/governance/QA_EVIDENCE_RETENTION.md`: traces and
 screenshots are `retain-on-failure`/`only-on-failure`; a passing run keeps only logs and

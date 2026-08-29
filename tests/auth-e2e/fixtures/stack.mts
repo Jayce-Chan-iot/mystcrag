@@ -136,6 +136,181 @@ type StackHandle = {
 
 let handle: StackHandle | null = null;
 
+/**
+ * Durable ownership record for a spec-spawned extra child (negative-config
+ * backend/frontend instances). Playwright workers are SEPARATE processes from
+ * global setup/teardown: the module-local `handle` is null in a worker and in
+ * the teardown process, so a worker-crash-recovered run MUST be able to find,
+ * re-verify and stop these children from the run directory alone.
+ *
+ * One JSON file per child under <runDir>/extra-children/ — registration and the
+ * on-exit update each write only their OWN file, so updates cross the
+ * worker/teardown process boundary without ever clobbering another child's
+ * state.
+ */
+export type ExtraChildRecord = {
+  id: string;
+  label: string;
+  pid: number;
+  /** Regex source the recovered pid's CURRENT command line must match. */
+  commandPattern: string;
+  /** Run-scoped working directory the recovered pid must currently be in. */
+  cwd: string;
+  startedAt: string;
+  exited: boolean;
+  exitCode: number | null;
+};
+
+const EXTRA_CHILDREN_DIR_NAME = "extra-children";
+
+function extraChildrenDirectory(): string {
+  return path.join(resolveRunDirectory(), EXTRA_CHILDREN_DIR_NAME);
+}
+
+function extraChildRecordPath(id: string): string {
+  return path.join(extraChildrenDirectory(), `${id}.json`);
+}
+
+/** Atomic per-record update: write a temp sibling, then rename over the target. */
+async function writeFileAtomic(target: string, contents: string): Promise<void> {
+  const temp = `${target}.tmp-${crypto.randomBytes(4).toString("hex")}`;
+  await fs.writeFile(temp, contents, "utf8");
+  await fs.rename(temp, target);
+}
+
+async function readExtraChildRecord(id: string): Promise<ExtraChildRecord | null> {
+  try {
+    return JSON.parse(await fs.readFile(extraChildRecordPath(id), "utf8")) as ExtraChildRecord;
+  } catch {
+    return null;
+  }
+}
+
+async function updateExtraChildExit(id: string, code: number | null): Promise<void> {
+  // Best effort: teardown re-verifies ownership before any signal anyway, and a
+  // stale "live" record for an exited pid resolves to kind "gone" (no signal).
+  const record = await readExtraChildRecord(id);
+  if (!record || record.exited) return;
+  record.exited = true;
+  record.exitCode = code;
+  try {
+    await writeFileAtomic(extraChildRecordPath(id), JSON.stringify(record, null, 2));
+  } catch {
+    // The record may already have been recovered and removed by teardown.
+  }
+}
+
+/**
+ * Registers a spec-spawned child so teardown stops it even when the spec or its
+ * whole worker process crashes. The registration persists pid, label, command
+ * signature and the run-scoped cwd to <runDir>/extra-children/<id>.json — the
+ * module-local handle alone can never survive the worker/teardown process
+ * boundary — and a normal exit rewrites the record as exited.
+ *
+ * The cwd MUST be inside this run's directory: teardown proves ownership with
+ * command + run-scoped cwd before ANY signal, and must never be handed a
+ * signature that could authorize signalling a process outside the run.
+ */
+export async function registerStackChild(
+  label: string,
+  child: ChildProcess,
+  ownership: { pattern: string; cwd: string }
+): Promise<void> {
+  const runDir = resolveRunDirectory();
+  const resolvedCwd = path.resolve(ownership.cwd);
+  if (resolvedCwd !== runDir && !resolvedCwd.startsWith(`${runDir}${path.sep}`)) {
+    throw new Error(
+      `refusing to register child "${label}": cwd ${resolvedCwd} is outside this run's directory — teardown would not be able to prove ownership`
+    );
+  }
+  if (typeof child.pid !== "number") {
+    throw new Error(`refusing to register child "${label}": the child has no pid`);
+  }
+  const id = `${label.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase()}-${child.pid}-${crypto
+    .randomBytes(4)
+    .toString("hex")}`;
+  const record: ExtraChildRecord = {
+    id,
+    label,
+    pid: child.pid,
+    commandPattern: ownership.pattern,
+    cwd: resolvedCwd,
+    startedAt: new Date().toISOString(),
+    exited: false,
+    exitCode: null
+  };
+  await fs.mkdir(extraChildrenDirectory(), { recursive: true });
+  await writeFileAtomic(extraChildRecordPath(id), JSON.stringify(record, null, 2));
+  if (handle) {
+    handle.extraChildren.push({ label, child });
+  }
+  child.once("exit", (code) => {
+    void updateExtraChildExit(id, code);
+  });
+}
+
+/**
+ * Recovers and stops every still-live extra child recorded under this run's
+ * extra-children directory — the fresh-recovery path a crashed worker needs.
+ * Before ANY signal, each pid is re-verified against its CURRENT command line
+ * AND its run-scoped working directory (the checkout path embeds the unique
+ * run id). A record whose ownership proof is incomplete, unreadable, or points
+ * outside this run's directory is NEVER signalled and FAILS loudly instead.
+ * Exported for the H9 regression, which drives this exact path.
+ */
+export async function recoverExtraChildren(): Promise<void> {
+  const runDir = resolveRunDirectory();
+  const directory = extraChildrenDirectory();
+  let names: string[];
+  try {
+    names = await fs.readdir(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const errors: string[] = [];
+  for (const name of names.filter((entry) => entry.endsWith(".json"))) {
+    const id = name.slice(0, -".json".length);
+    const record = await readExtraChildRecord(id);
+    if (
+      !record ||
+      typeof record.pid !== "number" ||
+      typeof record.commandPattern !== "string" ||
+      record.commandPattern.length === 0 ||
+      typeof record.cwd !== "string"
+    ) {
+      errors.push(`extra child record ${id}: ownership proof incomplete — refusing to signal anything for it`);
+      continue;
+    }
+    if (record.cwd !== runDir && !record.cwd.startsWith(`${runDir}${path.sep}`)) {
+      errors.push(
+        `extra child record ${id}: recorded cwd is outside this run's directory — refusing to signal pid ${record.pid}`
+      );
+      continue;
+    }
+    if (record.exited) {
+      await fs.rm(extraChildRecordPath(id), { force: true });
+      continue;
+    }
+    try {
+      await stopRecoveredPid({
+        label: `extra child ${record.label}`,
+        pid: record.pid,
+        patterns: [new RegExp(record.commandPattern)],
+        cwd: record.cwd
+      });
+      await fs.rm(extraChildRecordPath(id), { force: true });
+    } catch (error) {
+      errors.push(
+        `extra child ${record.label} (pid ${record.pid}): ${error instanceof Error ? error.message : error}`
+      );
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(`AUTH-006 extra-child recovery FAILED:\n  - ${errors.join("\n  - ")}`);
+  }
+}
+
 function generateRunId(): string {
   const random = crypto.randomBytes(5).toString("hex");
   return `r${Date.now().toString(36)}${random}`;
@@ -780,13 +955,6 @@ export async function readRunState(): Promise<RunState> {
   return JSON.parse(raw) as RunState;
 }
 
-/** Registers a spec-spawned child so teardown stops it even when the spec crashes. */
-export function registerStackChild(label: string, child: ChildProcess): void {
-  if (handle) {
-    handle.extraChildren.push({ label, child });
-  }
-}
-
 function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
   return new Promise((resolve) => {
@@ -913,6 +1081,16 @@ export async function stopIsolatedStack(): Promise<void> {
     }
   }
 
+  // Spec-spawned extra children (negative-config backend/frontend) run in WORKER
+  // processes — the module-local handle above never contains them. Their durable
+  // ownership records under <runDir>/extra-children/ are the only recovery source,
+  // so this MUST run in both branches (with and without the in-process handle).
+  try {
+    await recoverExtraChildren();
+  } catch (error) {
+    errors.push(`${error instanceof Error ? error.message : error}`);
+  }
+
   if (handle) {
     const inProcess: Array<[string, { stop(): Promise<void> } | null | undefined]> = [
       ["app TLS reverse proxy", handle.tlsAppProxy],
@@ -996,12 +1174,18 @@ export async function spawnBackendWithEnv(
     ...envOverrides
   };
   const stderrChunks: Buffer[] = [];
-  const child = spawn(process.execPath, ["dist/index.js"], {
+  // Absolute script path on purpose: the persisted ownership pattern matches the
+  // ps command line `<workDirs.backend>/dist/index.js$`, and recovery in another
+  // process must be able to verify that signature against the live pid.
+  const child = spawn(process.execPath, [path.join(state.workDirs.backend, "dist", "index.js")], {
     cwd: state.workDirs.backend,
     env,
     stdio: ["ignore", "ignore", "pipe"]
   });
-  registerStackChild(`negative backend ${label}`, child);
+  await registerStackChild(`negative backend ${label}`, child, {
+    pattern: `${escapeRegExp(state.workDirs.backend)}/dist/index\\.js$`,
+    cwd: state.workDirs.backend
+  });
   child.stderr?.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
   const logFile = path.join(logsDir, `negative-backend-${label}.log`);
   const stream = createWriteStream(logFile, { flags: "a" });
@@ -1060,7 +1244,10 @@ export async function spawnFrontendWithEnv(
     env,
     stdio: ["ignore", "pipe", "pipe"]
   });
-  registerStackChild(`negative frontend ${label}`, child);
+  await registerStackChild(`negative frontend ${label}`, child, {
+    pattern: `next start -p ${ports.negativeFrontend}$`,
+    cwd: state.workDirs.frontend
+  });
   const logFile = path.join(logsDir, `negative-frontend-${label}.log`);
   const stream = createWriteStream(logFile, { flags: "a" });
   stream.write(`\n=== ${new Date().toISOString()} negative frontend ${label}\n`);

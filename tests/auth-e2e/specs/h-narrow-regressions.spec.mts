@@ -23,6 +23,19 @@
  *       NAME is a violation, a pre-existing symlink in the destination chain is
  *       never written through — and on ANY violation nothing at all is
  *       published (no sanitized directory, no staging residue)
+ *   H4c the REAL sanitizer CLI (spawned through child_process, never the
+ *       imported function alone): no arguments → non-zero exit + safe usage; a
+ *       clean source publishes a sanitized destination; a dirty source exits
+ *       non-zero and publishes nothing; stdout/stderr NEVER carry the secret,
+ *       the hit path or any credential content — only sanitized categories
+ *       and counts
+ *   H4d a file swapped for a symlink MID-RUN can never smuggle denied material
+ *       past the scan: either the swap is caught (fail closed, nothing
+ *       published) or the published bytes are the ORIGINAL pre-swap bytes —
+ *       never the symlink target's content
+ *   H4e an unreadable source FILE and an unreadable source DIRECTORY are both
+ *       fatal (fail closed, nothing published) — a traversal failure is never
+ *       mistaken for an empty directory
  *   H5  teardown PID ownership: a pid is signalled only when its CURRENT command
  *       line matches this run's signature; a recycled/foreign pid fails loudly
  *       instead of being killed
@@ -32,14 +45,26 @@
  *       exited pid and a command mismatch are each refused — and the refusal
  *       provably sends no signal
  *   H6  the SNI parser accepts a real ClientHello and rejects non-hello bytes
+ *   H6b the SNI parser enforces EVERY declared length boundary: zero/overflowing
+ *       handshake, record, extension, server-name-list and name lengths, a
+ *       non-host_name entry type, and a forged SNI placed beyond the
+ *       record/handshake boundary are ALL rejected (null) — and through the
+ *       live relay none of them ever reaches the upstream
  *   H7  a failed setup propagates a simultaneous cleanup failure as an
  *       AggregateError carrying BOTH errors — a cleanup error can never hide
  *       behind the original setup error
  *   H8  the CI artifact upload is gated on the sanitizer's OWN success
  *       (`failure() && steps.sanitize_auth006.outcome == 'success'`), so a
  *       failing sanitizer can never publish a partial sanitized directory
+ *   H9  spec-spawned extra children own DURABLE records under
+ *       <runDir>/extra-children/: a child registered in a worker (where the
+ *       module-local stack handle is null — the exact worker-crash condition
+ *       teardown faces) is stopped by the FRESH recovery path from the
+ *       persisted record alone; a record whose cwd points outside this run's
+ *       directory is refused WITHOUT any signal, and registration itself
+ *       refuses a cwd outside the run
  *
- * H3/H4/H4b/H5/H5b/H6/H7/H8 are stack-independent: they start their own
+ * H3, H4, H4b, H4c, H4d, H4e, H5, H5b, H6, H6b, H7, H8 and H9 are stack-independent: they start their own
  * throwaway listeners and stand-in child processes so a harness regression is
  * diagnosed without a full-stack run.
  */
@@ -63,9 +88,13 @@ import { generateClientHelloFor } from "../fixtures/client-hello-for-test.mts";
 import { buildZip } from "../fixtures/trace-redact";
 import {
   buildSetupFailure,
+  recoverExtraChildren,
   recoveredProcessSpecs,
+  registerStackChild,
+  resolveRunDirectory,
   stopRecoveredPid,
   REPO_ROOT,
+  type ExtraChildRecord,
   type RunState
 } from "../fixtures/stack";
 
@@ -75,6 +104,45 @@ type Echoed = {
   contentType: string | undefined;
   rawBody: string;
 };
+
+/** The REAL sanitizer CLI, driven as a child process — never as an import. */
+const SANITIZER_CLI = path.join(REPO_ROOT, "tests", "auth-e2e", "scripts", "sanitize-evidence.mjs");
+
+function runSanitizerCli(
+  args: string[],
+  extraEnv: Record<string, string> = {}
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [SANITIZER_CLI, ...args], {
+      env: { PATH: process.env.PATH ?? "", ...extraEnv }
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    const finish = (code: number | null) => resolve({ code, stdout, stderr });
+    child.on("exit", (code) => finish(code));
+    child.on("error", () => finish(null));
+  });
+}
+
+async function filesUnder(root: string): Promise<string[]> {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const target = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await filesUnder(target)));
+    } else {
+      files.push(target);
+    }
+  }
+  return files;
+}
 
 async function startEchoServer(): Promise<{ port: number; requests: Echoed[]; stop(): Promise<void> }> {
   const requests: Echoed[] = [];
@@ -436,6 +504,197 @@ test.describe("H. narrow harness regressions", () => {
     }
   });
 
+  test("H4c the real sanitizer CLI: usage exit, clean publish, dirty fail-closed, secret-free output", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "auth006-h4c-"));
+    const secretValue = `secret-${crypto.randomBytes(24).toString("hex")}`;
+    try {
+      // (a) No arguments: non-zero exit and a safe usage line on stderr.
+      const usage = await runSanitizerCli([]);
+      expect(usage.code).not.toBe(null);
+      expect(usage.code).not.toBe(0);
+      expect(usage.stderr).toContain("usage:");
+      expect(usage.stderr).toContain("AUTH006_CLIENT_SECRET");
+      expect(usage.stderr.includes(secretValue)).toBe(false);
+
+      // (b) Extra arguments are refused the same way — the CLI contract is
+      // exactly two positional arguments.
+      const extra = await runSanitizerCli(["one", "two", "three"]);
+      expect(extra.code).not.toBe(0);
+      expect(extra.stderr).toContain("usage:");
+
+      // (c) A clean source: exit 0 and the sanitized destination really exists.
+      // Secrets reach the CLI ONLY through the named environment, never argv.
+      const cleanSource = path.join(tmp, "clean-run");
+      const cleanDestination = path.join(tmp, "clean-sanitized");
+      await fs.mkdir(path.join(cleanSource, "logs"), { recursive: true });
+      await fs.writeFile(path.join(cleanSource, "run-state.json"), JSON.stringify({ runId: "h4c" }), "utf8");
+      await fs.writeFile(path.join(cleanSource, "logs", "backend.log"), "clean log line\n", "utf8");
+      const clean = await runSanitizerCli([cleanSource, cleanDestination], {
+        AUTH006_CLIENT_SECRET: secretValue,
+        AUTH006_SESSION_SECRET: secretValue,
+        AUTH006_ADMIN_TOKEN: secretValue
+      });
+      expect(clean.code, `clean CLI run failed: ${clean.stderr}`).toBe(0);
+      expect(clean.stdout).toContain("sanitized evidence ready");
+      expect(clean.stdout).toContain("run secrets from env: 3");
+      const published = await fs.readdir(cleanDestination);
+      expect(published).toContain("run-state.json");
+      expect(published).toContain("sanitize-summary.json");
+      expect(await fs.readdir(path.join(cleanDestination, "logs"))).toContain("backend.log");
+      const publishedSummary = JSON.parse(
+        await fs.readFile(path.join(cleanDestination, "sanitize-summary.json"), "utf8")
+      ) as { ok: boolean; copiedFiles: number; violations: unknown[] };
+      expect(publishedSummary.ok).toBe(true);
+      expect(publishedSummary.copiedFiles).toBe(2);
+      expect(publishedSummary.violations).toHaveLength(0);
+      expect(clean.stdout.includes(secretValue)).toBe(false);
+      expect(clean.stderr.includes(secretValue)).toBe(false);
+
+      // (d) A dirty source (secret in a file BODY and in a file NAME): non-zero
+      // exit, nothing published — and the CLI output NEVER carries the secret,
+      // the hit path or the credential-bearing file name: only sanitized
+      // categories and counts.
+      const dirtySource = path.join(tmp, "dirty-run");
+      const dirtyDestination = path.join(tmp, "dirty-sanitized");
+      await fs.mkdir(path.join(dirtySource, "logs"), { recursive: true });
+      await fs.writeFile(path.join(dirtySource, "logs", "leaky.log"), `token=${secretValue}\n`, "utf8");
+      await fs.writeFile(path.join(dirtySource, "logs", `token-${secretValue}.log`), "clean body\n", "utf8");
+      const dirty = await runSanitizerCli([dirtySource, dirtyDestination], {
+        AUTH006_CLIENT_SECRET: secretValue
+      });
+      expect(dirty.code).not.toBe(null);
+      expect(dirty.code).not.toBe(0);
+      expect(dirty.stderr).toContain("credential material detected");
+      expect(dirty.stderr).toContain("credential-in-content");
+      expect(dirty.stderr).toContain("credential-in-name");
+      expect(dirty.stderr.includes(secretValue)).toBe(false);
+      expect(dirty.stderr.includes("leaky.log")).toBe(false);
+      expect(dirty.stdout.includes(secretValue)).toBe(false);
+      expect(dirty.stdout.includes("leaky.log")).toBe(false);
+      // Fail closed: no destination, no staging residue.
+      await expect(fs.stat(dirtyDestination)).rejects.toThrow();
+      expect((await fs.readdir(tmp)).filter((name) => name.startsWith("dirty-sanitized.staging-"))).toHaveLength(0);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("H4d a mid-run symlink swap can never smuggle denied material past the scan", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "auth006-h4d-"));
+    const secretValue = `secret-${crypto.randomBytes(24).toString("hex")}`;
+    try {
+      const source = path.join(tmp, "swap-run");
+      const destination = path.join(tmp, "swap-sanitized");
+      const deniedDir = path.join(source, "tls");
+      const logsDir = path.join(source, "logs");
+      await fs.mkdir(deniedDir, { recursive: true });
+      await fs.mkdir(logsDir, { recursive: true });
+
+      // The denied material the swapped symlink will point at.
+      const keyPath = path.join(deniedDir, "synthetic-provider.key.pem");
+      await fs.writeFile(keyPath, `-----BEGIN PRIVATE KEY-----\n${secretValue}\n-----END PRIVATE KEY-----\n`, "utf8");
+
+      // The victim: a large allowlisted file that holds the sanitizer mid-run,
+      // giving the swap every chance to land between the directory listing and
+      // the open — the exact TOCTOU window the single-descriptor design closes.
+      const victimPath = path.join(logsDir, "victim.log");
+      await fs.writeFile(victimPath, `clean-prefix\n${"x".repeat(24 * 1024 * 1024)}\n`, "utf8");
+      const originalVictim = await fs.readFile(victimPath);
+
+      const child = spawn(process.execPath, [SANITIZER_CLI, source, destination], {
+        env: { PATH: process.env.PATH ?? "", AUTH006_CLIENT_SECRET: secretValue }
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString("utf8");
+      });
+      // Swap the victim for a symlink AT the denied material while the run is
+      // live — at whatever point the sanitizer has reached it.
+      await fs.rm(victimPath);
+      await fs.symlink(keyPath, victimPath);
+      const code = await new Promise<number | null>((resolve) => {
+        child.on("exit", (exitCode) => resolve(exitCode));
+        child.on("error", () => resolve(null));
+      });
+
+      // The CLI's own output never carries the secret, whatever happened.
+      expect(stdout.includes(secretValue)).toBe(false);
+      expect(stderr.includes(secretValue)).toBe(false);
+
+      if (code === 0) {
+        // The victim was fully read BEFORE the swap landed: the published bytes
+        // are the ORIGINAL pre-swap bytes — the symlink target's content never
+        // made it into the sanitized output.
+        const publishedVictim = await fs.readFile(path.join(destination, "logs", "victim.log"));
+        expect(publishedVictim.equals(originalVictim)).toBe(true);
+        for (const file of await filesUnder(destination)) {
+          expect((await fs.readFile(file)).includes(secretValue)).toBe(false);
+        }
+      } else {
+        // The swap was caught — at collection (dirent type), at open (ELOOP
+        // under O_NOFOLLOW) or as a vanished file — and the run fails closed:
+        // NOTHING is published.
+        expect(code).toBe(1);
+        await expect(fs.stat(destination)).rejects.toThrow();
+      }
+      // No staging residue either way.
+      expect((await fs.readdir(tmp)).filter((name) => name.startsWith("swap-sanitized.staging-"))).toHaveLength(0);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("H4e an unreadable source file and an unreadable directory are both fatal", async () => {
+    test.skip(
+      typeof process.getuid === "function" && process.getuid() === 0,
+      "permission-denied fail-closed cases cannot be exercised as root"
+    );
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "auth006-h4e-"));
+    try {
+      // (a) An unreadable source FILE: a recorded source-read-failure violation,
+      // non-zero exit, nothing published — never a silent skip.
+      const fileSource = path.join(tmp, "file-run");
+      const fileDestination = path.join(tmp, "file-sanitized");
+      const lockedLogs = path.join(fileSource, "logs");
+      await fs.mkdir(lockedLogs, { recursive: true });
+      await fs.writeFile(path.join(lockedLogs, "backend.log"), "clean log line\n", "utf8");
+      const unreadable = path.join(lockedLogs, "unreadable.log");
+      await fs.writeFile(unreadable, "clean but unreadable\n", "utf8");
+      await fs.chmod(unreadable, 0o000);
+      const fileRun = await runSanitizerCli([fileSource, fileDestination]);
+      expect(fileRun.code).not.toBe(null);
+      expect(fileRun.code).not.toBe(0);
+      expect(fileRun.stderr).toContain("source-read-failure");
+      await expect(fs.stat(fileDestination)).rejects.toThrow();
+
+      // (b) An unreadable source DIRECTORY: a fatal traversal failure — never
+      // mistaken for an empty directory that sanitizes "clean".
+      const dirSource = path.join(tmp, "dir-run");
+      const dirDestination = path.join(tmp, "dir-sanitized");
+      const reachableLogs = path.join(dirSource, "logs");
+      const lockedSubdir = path.join(reachableLogs, "locked");
+      await fs.mkdir(lockedSubdir, { recursive: true });
+      await fs.writeFile(path.join(reachableLogs, "backend.log"), "clean log line\n", "utf8");
+      await fs.writeFile(path.join(lockedSubdir, "hidden.log"), "clean but unreachable\n", "utf8");
+      await fs.chmod(lockedSubdir, 0o000);
+      const dirRun = await runSanitizerCli([dirSource, dirDestination]);
+      expect(dirRun.code).not.toBe(null);
+      expect(dirRun.code).not.toBe(0);
+      expect(dirRun.stderr).toContain("traversal or read failed");
+      await expect(fs.stat(dirDestination)).rejects.toThrow();
+      expect((await fs.readdir(tmp)).filter((name) => name.startsWith("dir-sanitized.staging-"))).toHaveLength(0);
+    } finally {
+      // Restore accessibility so the recursive cleanup can remove the trees.
+      await fs.chmod(path.join(tmp, "file-run", "logs", "unreadable.log"), 0o644).catch(() => undefined);
+      await fs.chmod(path.join(tmp, "dir-run", "logs", "locked"), 0o755).catch(() => undefined);
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   test("H5 teardown signals a pid only when its CURRENT command line matches this run", async () => {
     // This test process itself: owned when the pattern matches, foreign when not.
     const owned = await verifyProcessOwnership({
@@ -598,6 +857,182 @@ test.describe("H. narrow harness regressions", () => {
     ).toBeNull();
   });
 
+  test("H6b the SNI parser enforces every declared length boundary — no forgery reaches the upstream", async () => {
+    const HOST = "allowed.auth006.internal";
+
+    // A ClientHello builder with EXPLICITLY forgable length fields — byte-for-byte
+    // the shape of generateClientHelloFor when no override is given.
+    const u16 = (value: number) => Buffer.from([(value >> 8) & 0xff, value & 0xff]);
+    const u24 = (value: number) => Buffer.from([(value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff]);
+    const forge = (overrides: {
+      handshakeLength?: number;
+      recordLength?: number;
+      extensionsLength?: number;
+      sniExtensionLength?: number;
+      listLength?: number;
+      nameLength?: number;
+      nameType?: number;
+      sniAfterHandshake?: boolean;
+      sniAfterRecord?: boolean;
+    }): Buffer => {
+      const name = Buffer.from(HOST, "ascii");
+      const sniExtension = Buffer.concat([
+        Buffer.from([0x00, 0x00]),
+        u16(overrides.sniExtensionLength ?? name.length + 5),
+        u16(overrides.listLength ?? name.length + 3),
+        Buffer.from([overrides.nameType ?? 0x00]),
+        u16(overrides.nameLength ?? name.length),
+        name
+      ]);
+      const includeSniInBody = !overrides.sniAfterHandshake && !overrides.sniAfterRecord;
+      const extensions = Buffer.concat([
+        ...(includeSniInBody ? [sniExtension] : []),
+        Buffer.from([0x00, 0x0d, 0x00, 0x00])
+      ]);
+      const body = Buffer.concat([
+        Buffer.from([0x03, 0x03]),
+        crypto.randomBytes(32),
+        Buffer.from([0x00]),
+        Buffer.from([0x00, 0x02, 0xc0, 0x2f]),
+        Buffer.from([0x01, 0x00]),
+        u16(overrides.extensionsLength ?? extensions.length),
+        extensions
+      ]);
+      const handshake = Buffer.concat([
+        Buffer.from([0x01]),
+        u24(overrides.handshakeLength ?? body.length),
+        body
+      ]);
+      const payload = overrides.sniAfterHandshake ? Buffer.concat([handshake, sniExtension]) : handshake;
+      const record = Buffer.concat([
+        Buffer.from([0x16, 0x03, 0x01]),
+        u16(overrides.recordLength ?? payload.length),
+        payload
+      ]);
+      return overrides.sniAfterRecord ? Buffer.concat([record, sniExtension]) : record;
+    };
+
+    // The builder itself is sane: unmodified, it parses to the exact host.
+    expect(parseSniFromClientHello(forge({}))).toBe(HOST);
+
+    // Every declared length is enforced against its PARENT boundary: zero,
+    // overflowing, truncated or trailing-forged declarations are rejected
+    // outright — never silently clamped, never scanned past the boundary.
+    const forgeries: Array<[string, Buffer]> = [
+      ["zero handshake length", forge({ handshakeLength: 0 })],
+      ["handshake length beyond the record", forge({ handshakeLength: 0xffffff })],
+      ["extensions length beyond the handshake", forge({ extensionsLength: 0xffff })],
+      ["zero server_name extension length", forge({ sniExtensionLength: 0 })],
+      ["server_name extension length beyond the extensions block", forge({ sniExtensionLength: 0xffff })],
+      ["server-name-list beyond its extension", forge({ listLength: HOST.length + 64 })],
+      ["name length beyond the server-name list", forge({ nameLength: HOST.length + 64 })],
+      ["non-host_name entry type", forge({ nameType: 0x01 })],
+      // The SNI entry is physically present INSIDE the record but beyond the
+      // declared handshake boundary — a parser slackened to recordEnd would
+      // recover the allowlisted host here; strict bounds return null.
+      ["forged SNI beyond the handshake boundary", forge({ sniAfterHandshake: true })],
+      // The SNI entry sits entirely AFTER the declared record end.
+      ["forged SNI beyond the record boundary", forge({ sniAfterRecord: true })]
+    ];
+    for (const [label, hello] of forgeries) {
+      expect(parseSniFromClientHello(hello), `${label} must parse as null`).toBeNull();
+    }
+
+    // Through the LIVE relay: none of the forgeries may ever reach the upstream.
+    // The upstream counts every tunneled byte — the gate must refuse every
+    // forgery BEFORE a single byte is piped.
+    let upstreamDataBytes = 0;
+    const upstream = net.createServer((socket) => {
+      socket.on("data", (chunk: Buffer) => {
+        upstreamDataBytes += chunk.length;
+        socket.write("UPSTREAM-REACHED marker=1\r\n");
+      });
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+    const upstreamPort = (upstream.address() as net.AddressInfo).port;
+
+    const relay = await startBrowserRelay({
+      port: 0,
+      allowlist: [{ host: HOST, port: 443, upstreamPort }]
+    });
+
+    try {
+      const connectWithHello = async (hello: Buffer): Promise<void> => {
+        const refusalsBefore = relay.stats().sniRefused;
+        const socket = net.connect(relay.port, "127.0.0.1");
+        await new Promise<void>((resolve) => {
+          socket.on("connect", () => {
+            socket.write(`CONNECT ${HOST}:443 HTTP/1.1\r\nhost: ${HOST}:443\r\n\r\n`);
+            socket.write(hello);
+            resolve();
+          });
+          socket.on("error", resolve);
+        });
+        try {
+          // The relay's sniRefused COUNTER is the deterministic proof that this
+          // forged hello was actually read, parsed and refused. (The relay's
+          // destroy() only half-closes the TCP connection, so waiting for the
+          // client-side close event would hang on a timeout instead — the
+          // counter cannot be satisfied by silence.)
+          const deadline = Date.now() + 5_000;
+          while (relay.stats().sniRefused <= refusalsBefore && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+          expect(relay.stats().sniRefused, "the relay must have refused the forged hello").toBeGreaterThan(
+            refusalsBefore
+          );
+        } finally {
+          socket.destroy();
+        }
+      };
+
+      for (const [, hello] of forgeries) {
+        await connectWithHello(hello);
+      }
+
+      // Not one tunneled byte reached the upstream, and nothing counted allowed.
+      expect(upstreamDataBytes).toBe(0);
+      const stats = relay.stats();
+      expect(stats.allowed).toBe(0);
+      expect(stats.sniRefused).toBe(forgeries.length);
+
+      // The control: the same tunnel with the WELL-FORMED hello for this host
+      // IS established and reaches the upstream — the refusals above were
+      // refusals of the forgeries, not of a broken relay.
+      const good = await new Promise<boolean>((resolve) => {
+        const socket = net.connect(relay.port, "127.0.0.1");
+        let data = "";
+        const timer = setTimeout(() => {
+          socket.destroy();
+          resolve(false);
+        }, 8_000);
+        socket.on("connect", () => {
+          socket.write(`CONNECT ${HOST}:443 HTTP/1.1\r\nhost: ${HOST}:443\r\n\r\n`);
+          socket.write(generateClientHelloFor(HOST));
+        });
+        socket.on("data", (chunk: Buffer) => {
+          data += chunk.toString("latin1");
+          if (data.includes("UPSTREAM-REACHED")) {
+            clearTimeout(timer);
+            socket.destroy();
+            resolve(true);
+          }
+        });
+        socket.on("error", () => {
+          clearTimeout(timer);
+          socket.destroy();
+          resolve(false);
+        });
+      });
+      expect(good).toBe(true);
+      expect(relay.stats().allowed).toBe(1);
+      expect(upstreamDataBytes).toBeGreaterThan(0);
+    } finally {
+      await relay.stop();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
   test("H7 a failed setup propagates a simultaneous cleanup failure instead of swallowing it", async () => {
     const setupError = new Error("setup failed: provider did not become ready");
     const cleanupError = new Error("cleanup failed: port 43210 still bound");
@@ -642,5 +1077,113 @@ test.describe("H. narrow harness regressions", () => {
     const uploadIf = uploadStep.match(/^\s+if:\s*(.+)$/m);
     expect(uploadIf).not.toBeNull();
     expect(uploadIf![1].trim()).toBe("failure() && steps.sanitize_auth006.outcome == 'success'");
+  });
+
+  test("H9 spec-spawned extra children are stopped from durable records after the worker handle is lost", async () => {
+    const runDir = resolveRunDirectory();
+    const extraDir = path.join(runDir, "extra-children");
+    const marker = `auth006-h9-${crypto.randomBytes(8).toString("hex")}`;
+
+    const spawnMarkerChild = (cwd: string) =>
+      spawn(process.execPath, ["-e", `setInterval(() => {}, 1000); // ${marker}`], {
+        cwd,
+        stdio: "ignore"
+      });
+
+    const waitForCommandLine = async (child: ChildProcess): Promise<string> => {
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const command = await processCommandFor(child.pid ?? 0);
+        if (command) return command;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      throw new Error("h9 child never became visible in ps");
+    };
+
+    const records = async (): Promise<ExtraChildRecord[]> => {
+      const names = (await fs.readdir(extraDir)).filter((name) => name.endsWith(".json"));
+      const list: ExtraChildRecord[] = [];
+      for (const name of names) {
+        list.push(JSON.parse(await fs.readFile(path.join(extraDir, name), "utf8")) as ExtraChildRecord);
+      }
+      return list;
+    };
+
+    // (a) Registration itself refuses a cwd outside this run's directory — a
+    // record that could authorize signalling a foreign process is never written.
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "auth006-h9-out-"));
+    let outsideChild: ChildProcess | null = null;
+    let foreignRecordPath: string | null = null;
+    try {
+      outsideChild = spawnMarkerChild(outside);
+      await waitForCommandLine(outsideChild);
+      await expect(
+        registerStackChild("h9 outside-cwd", outsideChild, { pattern: marker, cwd: outside })
+      ).rejects.toThrow(/outside this run's directory/);
+
+      // (b) A live child registered from a SPEC worker. The module-local stack
+      // handle is null in this worker process — the exact worker-crash
+      // condition teardown faces — so ownership lives ONLY in the durable record.
+      const liveChild = spawnMarkerChild(runDir);
+      await waitForCommandLine(liveChild);
+      await registerStackChild("h9 live child", liveChild, { pattern: marker, cwd: runDir });
+
+      // (c) A sibling that exits NORMALLY after registration: its own record
+      // flips to exited — without ever clobbering the live sibling's record.
+      const exitingChild = spawn(process.execPath, ["-e", `process.exit(0); // ${marker}`], {
+        cwd: runDir,
+        stdio: "ignore"
+      });
+      await registerStackChild("h9 exiting child", exitingChild, { pattern: marker, cwd: runDir });
+      await new Promise<void>((resolve) => exitingChild.once("exit", () => resolve()));
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        if ((await records()).find((record) => record.pid === exitingChild.pid)?.exited) break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+
+      const liveRecord = (await records()).find((record) => record.pid === liveChild.pid);
+      expect(liveRecord, "the live child's durable record must exist").toBeDefined();
+      expect(liveRecord!.exited).toBe(false);
+      expect(liveRecord!.cwd).toBe(runDir);
+      expect(liveRecord!.commandPattern).toBe(marker);
+
+      const exitingRecord = (await records()).find((record) => record.pid === exitingChild.pid);
+      expect(exitingRecord, "the exited child's record must exist").toBeDefined();
+      expect(exitingRecord!.exited).toBe(true);
+      expect(exitingRecord!.exitCode).toBe(0);
+
+      // (d) The FRESH recovery path — exactly what a crashed worker forces
+      // teardown into — stops the live child from the record alone: command
+      // signature AND run-scoped cwd are re-verified against the CURRENT pid
+      // before any signal, then the consumed records are removed.
+      await recoverExtraChildren();
+      expect(await processCommandFor(liveChild.pid ?? 0)).toBeNull();
+      const after = await records();
+      expect(after.find((record) => record.pid === liveChild.pid)).toBeUndefined();
+      expect(after.find((record) => record.pid === exitingChild.pid)).toBeUndefined();
+
+      // (e) A durable record whose cwd points OUTSIDE this run: recovery
+      // refuses it loudly and NEVER signals the pid it describes — the foreign
+      // process is still alive afterwards.
+      const foreignRecord: ExtraChildRecord = {
+        id: `h9-foreign-${crypto.randomBytes(4).toString("hex")}`,
+        label: "h9 foreign record",
+        pid: outsideChild.pid ?? 0,
+        commandPattern: marker,
+        cwd: outside,
+        startedAt: new Date().toISOString(),
+        exited: false,
+        exitCode: null
+      };
+      foreignRecordPath = path.join(extraDir, `${foreignRecord.id}.json`);
+      await fs.writeFile(foreignRecordPath, JSON.stringify(foreignRecord, null, 2), "utf8");
+      await expect(recoverExtraChildren()).rejects.toThrow(/outside this run's directory/);
+      expect(await processCommandFor(foreignRecord.pid)).not.toBeNull();
+    } finally {
+      // The crafted refusal record MUST be removed here: leaving it would make
+      // the REAL teardown fail closed on a record no real child ever wrote.
+      if (foreignRecordPath) await fs.rm(foreignRecordPath, { force: true }).catch(() => undefined);
+      if (outsideChild && outsideChild.exitCode === null) outsideChild.kill("SIGKILL");
+      await fs.rm(outside, { recursive: true, force: true }).catch(() => undefined);
+    }
   });
 });

@@ -53,44 +53,80 @@ export type BrowserRelay = {
 /**
  * Parses the SNI hostname out of a TLS ClientHello record buffer, or returns null
  * when the bytes are not a parseable ClientHello.
+ *
+ * Every declared length is strictly bounded by its PARENT container — the
+ * handshake by the record, the ClientHello body fields by the handshake, the
+ * extensions block by the handshake, each extension by the extensions block,
+ * the server-name list by its extension, and the name by the list. A declared
+ * length that overflows, truncates or points past its parent boundary makes
+ * the whole ClientHello malformed (null) — it is never silently clamped with
+ * Math.min, and bytes outside the record (pipelined or forged trailing data)
+ * are never parsed. A server_name entry whose type is not host_name (0x00) is
+ * rejected too. Regression-tested by H6b, including a forged SNI placed beyond
+ * the record/handshake boundary, which the old unbounded parser would have
+ * accepted.
  */
 export function parseSniFromClientHello(buffer: Buffer): string | null {
   // TLS record header: type(1) version(2) length(2); must be a handshake record.
   if (buffer.length < 5 || buffer[0] !== 0x16) return null;
   const recordLength = buffer.readUInt16BE(3);
-  if (buffer.length < 5 + recordLength) return null;
+  const recordEnd = 5 + recordLength;
+  // The record must be fully present; anything beyond recordEnd belongs to
+  // later records and is never parsed.
+  if (buffer.length < recordEnd) return null;
   let cursor = 5;
-  // Handshake header: type(1) length(3); must be ClientHello (1).
+  // Handshake header: type(1) length(3); must be ClientHello (1). The declared
+  // handshake length must fit INSIDE this record.
+  if (recordEnd - cursor < 4) return null;
   if (buffer[cursor] !== 0x01) return null;
+  const handshakeLength = (buffer[cursor + 1] << 16) | (buffer[cursor + 2] << 8) | buffer[cursor + 3];
+  const handshakeEnd = cursor + 4 + handshakeLength;
+  if (handshakeEnd > recordEnd) return null;
   cursor += 4;
   // ClientHello body: version(2) random(32) session_id(1..32) cipher_suites(2..)
+  // compression(1..) extensions(2..) — every field bounded by handshakeEnd.
+  if (handshakeEnd - cursor < 2 + 32 + 1) return null;
   cursor += 2 + 32;
-  if (cursor >= buffer.length) return null;
   const sessionIdLength = buffer[cursor];
   cursor += 1 + sessionIdLength;
-  if (cursor + 2 > buffer.length) return null;
+  if (handshakeEnd - cursor < 2) return null;
   const cipherSuitesLength = buffer.readUInt16BE(cursor);
   cursor += 2 + cipherSuitesLength;
-  if (cursor >= buffer.length) return null;
+  if (handshakeEnd - cursor < 1) return null;
   const compressionLength = buffer[cursor];
   cursor += 1 + compressionLength;
-  if (cursor + 2 > buffer.length) return null;
+  if (handshakeEnd - cursor < 2) return null;
   const extensionsLength = buffer.readUInt16BE(cursor);
   cursor += 2;
-  const extensionsEnd = Math.min(cursor + extensionsLength, buffer.length);
+  const extensionsEnd = cursor + extensionsLength;
+  // Strict: the declared extensions block must fit inside the handshake.
+  if (extensionsEnd > handshakeEnd) return null;
   while (cursor + 4 <= extensionsEnd) {
     const extensionType = buffer.readUInt16BE(cursor);
     const extensionLength = buffer.readUInt16BE(cursor + 2);
     const extensionStart = cursor + 4;
+    const extensionEnd = extensionStart + extensionLength;
+    // Strict: each extension must fit inside the extensions block.
+    if (extensionEnd > extensionsEnd) return null;
     if (extensionType === 0x0000) {
       // server_name extension: list_length(2) name_type(1) name_length(2) name
-      if (extensionStart + 5 > buffer.length) return null;
-      const nameLength = buffer.readUInt16BE(extensionStart + 3);
-      const nameStart = extensionStart + 5;
-      if (nameStart + nameLength > buffer.length) return null;
-      return buffer.toString("ascii", nameStart, nameStart + nameLength);
+      if (extensionEnd - extensionStart < 2) return null;
+      const listLength = buffer.readUInt16BE(extensionStart);
+      const listEnd = extensionStart + 2 + listLength;
+      // Strict: the server-name list must fit inside its extension.
+      if (listEnd > extensionEnd) return null;
+      const entryStart = extensionStart + 2;
+      if (listEnd - entryStart < 3) return null;
+      const nameType = buffer[entryStart];
+      if (nameType !== 0x00) return null;
+      const nameLength = buffer.readUInt16BE(entryStart + 1);
+      const nameStart = entryStart + 3;
+      const nameEnd = nameStart + nameLength;
+      // Strict: the name must fit inside the server-name list.
+      if (nameEnd > listEnd) return null;
+      return buffer.toString("ascii", nameStart, nameEnd);
     }
-    cursor = extensionStart + extensionLength;
+    cursor = extensionEnd;
   }
   return null;
 }

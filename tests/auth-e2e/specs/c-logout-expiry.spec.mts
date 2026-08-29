@@ -102,7 +102,9 @@ test.describe("C. logout / expiry / revocation", () => {
   });
 
   test("C4 repeated logout stays idempotent", async ({ page }) => {
+    await suppressRouterPrefetch(page);
     await loginAsUser(page, syntheticUser("auth006-c4", "蔡四"));
+    await page.waitForLoadState("networkidle");
     const api = bffClient(page);
 
     const first = await api.logoutPost();
