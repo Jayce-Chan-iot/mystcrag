@@ -29,7 +29,7 @@ Community sharing requires user permission.
 
 ## Production identity and browser session
 
-[AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md) is authoritative and is currently `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`.
+[AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md) is authoritative and is currently `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`.
 
 - Auth0 uses OIDC Authorization Code + PKCE (`S256`) through the Next.js Server/BFF. Development, staging, and production have isolated clients and exact callback/logout/web-origin allowlists; wildcard callbacks are forbidden.
 - The sole FEAT-018 session mode is the Auth0 Next.js SDK authenticated-encrypted, host-only HttpOnly Cookie Session: production `__Host-mystcrag_session`, `Secure`, `SameSite=Lax`, `Path=/`, no `Domain`. It may contain encrypted session/token material but never plaintext Token or Claim. Idle expiry is 8 hours and absolute expiry is 7 days; rolling activity may reissue the encrypted cookie but never extends absolute expiry. No Redis, persistent `SessionStore`, session database, or `AuthSession` Prisma model is authorized.
@@ -38,3 +38,4 @@ Community sharing requires user permission.
 - Fastify validates signature, exact issuer, audience, expiry, and no more than 60 seconds clock skew before `(issuer, subject)` mapping. Verification failure is generic `401`; owner mismatch remains generic `403`; provider/JWKS/session dependency outage uses HTTP `500` with the existing `INTERNAL_ERROR` envelope and never treats a session as anonymous. Active logout immediately clears the current browser cookie; provider/admin grant revocation is effective by the next renewal or within the 15-minute Access Token bound.
 - Logs use redacted structured categories and request ids. Cookies, JWTs, codes, verifier/state/nonce values, client secrets, and raw provider profiles are never logged.
 - The Knowledge Admin key/cookie path is independent operator authentication and cannot be reused for customer sessions.
+- `SignedTestTokenAuthProvider` and the frontend `signed-test` mode require explicit development/test opt-in and are rejected in production/staging. The legacy empty `NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN` template name has no production source consumer and cannot authenticate browser requests.

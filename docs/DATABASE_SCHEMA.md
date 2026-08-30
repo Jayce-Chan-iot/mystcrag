@@ -35,6 +35,8 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 
 The controlling semantics remain frozen in [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md). Migration `20260825100000_add_external_identities` is additive: it creates the `external_identities` table with a unique `(issuer, subject)` index, a `user_id` index, and a foreign key to `users.id` that is explicitly `ON DELETE RESTRICT ON UPDATE RESTRICT` (the Prisma relation declares both `onDelete: Restrict` and `onUpdate: Restrict`; the default `onUpdate` cascade is deliberately overridden). No existing table or business datum changes.
 
+Final FEAT-018 reconciliation confirms that this is the only authentication-related persistence. The encrypted Auth0 SDK Cookie Session remains stateless at the application boundary: there is no Redis session store, session database, `AuthSession` Prisma model, token column, authorization-code column or PKCE-verifier column.
+
 Model and constraints:
 
 - `ExternalIdentity.id` is an internal opaque cuid primary key; it is never a provider subject.

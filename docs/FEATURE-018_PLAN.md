@@ -2,7 +2,7 @@
 
 **Priority:** P0 for commercial release<br>
 **Recommended next Feature:** yes, and the only major Feature selected<br>
-**Dispatch state:** AUTH-001 through AUTH-005 integrated; AUTH-006 isolated security/full-loop E2E is ready; AUTH-007 remains the final acceptance gate<br>
+**Dispatch state:** AUTH-001 through AUTH-006 and AUTH-008 integrated; AUTH-007 final acceptance is blocked on two missing authorities/evidence inputs<br>
 **Contract marker:** `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`
 
 ## Objective
@@ -20,18 +20,14 @@ As a customer, I can sign in, return to the app, access only my saved work and o
 - `SignedTestTokenAuthProvider` remains development/test-only and cannot start in production.
 - Frontend uses the Auth0 SDK authenticated-encrypted, host-only HttpOnly Cookie Session and same-origin BFF; browser JavaScript receives no production Token.
 - Login, callback, session restoration/rolling, exact-Origin POST logout, expiry/renewal handling and accessible desktop/mobile session affordances are implemented.
-- AUTH-006 must now prove the integrated stack twice from a clean checkout, including responsive browser flows, expiry/revocation/provider outage, production-start negatives and two-user isolation. Only AUTH-007 may issue final Feature acceptance.
+- AUTH-006 proved the integrated stack in two clean 54/54 candidate runs and a 54/54 post-main run; AUTH-007 independently replayed 54/54 again as `rmtf8try9fmdt97x3ho`, including responsive flows, expiry/revocation/provider outage, production-start negatives, two-user isolation, cleanup, and artifact scanning.
 
-## Gap
+## Remaining final-acceptance gaps
 
-Product Owner decisions and all cross-module semantics are now frozen by [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md): Auth0; isolated environment clients and exact allowlists; Next.js Server/BFF token custody; provider-neutral identity; collision-safe mapping; cookie/session/API/error/environment contracts. Remaining gaps are implementation and validation only:
+Product Owner decisions and all cross-module semantics remain frozen by [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md). Implementation, workspace validation, fresh PostgreSQL verification, security/full-loop E2E, production-start negatives, cleanup, and evidence scanning pass. AUTH-007 cannot truthfully close the following frozen acceptance items without new authority/evidence:
 
-1. AUTH-002 pins supported dependencies and writes the environment template; actual staging/production domains remain deployment inputs.
-2. AUTH-003 implements the additive `ExternalIdentity` mapping and 20-way idempotent provisioning.
-3. AUTH-004 implements Auth0/JWKS verification and internal actor composition.
-4. AUTH-005 implements the BFF session endpoints and removes production fixed-token use.
-5. AUTH-006 proves security, expiry/revocation, responsive flows, and two-user isolation.
-6. AUTH-007 performs the only final acceptance review.
+1. The performance criterion references a session-lookup p95 "contract budget", but no controlling AUTH contract or test defines its numeric threshold or measurement method. AUTH-007 may not invent or weaken a frozen product gate.
+2. The contract requires byte-exact staging and production Auth0 origin/callback/logout/web-origin allowlists plus login/logout smoke. Those deployment inputs and real-environment results have not been supplied. This blocks those deployments and final Feature acceptance, while the implementation remains ready for that evidence.
 
 ## Architecture impact
 
@@ -100,4 +96,4 @@ The Feature may report `FEATURE ACCEPTANCE: PASS` only when all are true:
 - **E2E:** clean authenticated full-loop and two-user isolation tests pass in CI-compatible isolated runtime output.
 - **Operations:** production startup validates required configuration; key rotation/revocation and rollback procedure are documented and exercised in test.
 
-TASK-AUTH-001 records `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`; it is not implementation or Feature acceptance. AUTH-002 through AUTH-007 must proceed serially/parallel only as registered, and only AUTH-007 may record final acceptance.
+TASK-AUTH-001 originally recorded `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`; the current contract marker is `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`. AUTH-002 through AUTH-006 and AUTH-008 are integrated. AUTH-007 is the sole final gate and currently records `FEATURE ACCEPTANCE: FAIL` because the two remaining criteria above are not evidenced; this is not permission to modify frozen decisions or begin another Feature.

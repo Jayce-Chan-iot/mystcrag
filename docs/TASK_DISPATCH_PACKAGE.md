@@ -2,11 +2,11 @@
 
 **Feature:** FEAT-018 Production Identity & Session<br>
 **Prepared by:** SOL / TASK-AUDIT-001<br>
-**Package state:** AUTH-001 through AUTH-006 and AUTH-008 are integrated; AUTH-006 final candidate `1412d657236ade40872d71d4468df3d66391040c` is `DONE`; AUTH-007 is `IN_PROGRESS` under SOL<br>
-**Blocking gates:** AUTH-007 remains the only final Feature acceptance gate; it may reconcile only its registered controlling documents and must not start a new Feature, redesign authentication, perform P1/P2 work or weaken AUTH-006<br>
+**Package state:** AUTH-001 through AUTH-006 and AUTH-008 are integrated; AUTH-006 final candidate `1412d657236ade40872d71d4468df3d66391040c` is `DONE`; AUTH-007 is `BLOCKED` under SOL after its technical replay passed<br>
+**Blocking gates:** final acceptance still needs an authorized numeric session-lookup p95 budget/measurement rule and byte-exact staging/production Auth0 allowlists plus real login/logout smoke evidence; AUTH-007 must not start a new Feature, redesign authentication, perform P1/P2 work or weaken AUTH-006<br>
 **Contract marker:** `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`
 
-Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. SOL accepted AUTH-002 at `fbd7a540776c447289a05aeb20e50deefd8ea21a`, AUTH-003 at `ab54703fba59173ab9197aaae82215d93abf4f86`, AUTH-004 at `14cb9ef3d1c37113bf2d07df72044023c440137f`, integrated AUTH-005 final candidate `071c1700328de3551976eaa42ea361e5028028a2`, integrated AUTH-008 final candidate `8b1edacb2df7041e39b39547bf4c37f3eaad936f`, and integrated AUTH-006 final candidate `1412d657236ade40872d71d4468df3d66391040c`. The final post-integration AUTH-006 run `rmtf8gu2csc2y1frhp4` passed 54/54 with complete resource cleanup and artifact secret scan; AUTH-007 now performs final reconciliation and acceptance.
+Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. SOL accepted AUTH-002 at `fbd7a540776c447289a05aeb20e50deefd8ea21a`, AUTH-003 at `ab54703fba59173ab9197aaae82215d93abf4f86`, AUTH-004 at `14cb9ef3d1c37113bf2d07df72044023c440137f`, integrated AUTH-005 final candidate `071c1700328de3551976eaa42ea361e5028028a2`, integrated AUTH-008 final candidate `8b1edacb2df7041e39b39547bf4c37f3eaad936f`, and integrated AUTH-006 final candidate `1412d657236ade40872d71d4468df3d66391040c`. The final post-integration AUTH-006 run `rmtf8gu2csc2y1frhp4` passed 54/54 with complete resource cleanup and artifact secret scan; AUTH-007 independently replayed 54/54 as `rmtf8try9fmdt97x3ho` and passed fresh PostgreSQL 87/87, but cannot waive the two unresolved final gates.
 
 ## Task DAG
 
@@ -229,7 +229,7 @@ Contract freeze and dependency setup are serial. TASK-AUTH-003 and TASK-AUTH-005
 - **OBJECTIVE:** review each task against frozen contracts, integrate in DAG order and issue the only Feature acceptance decision.
 - **BACKGROUND:** cross-module auth work is complete only when contract, persistence, backend, frontend, operations and E2E evidence agree.
 - **DEPENDENCIES:** TASK-AUTH-001 through TASK-AUTH-006 `DONE` with green evidence.
-- **ALLOWED FILES:** integration conflict resolutions within previously approved paths, `docs/SECURITY_AND_PRIVACY.md`, `docs/DEPLOYMENT_GUIDE.md`, `docs/ENGINEERING_GUIDE.md`, Feature/task/canonical/health registries and final acceptance report.
+- **ALLOWED FILES:** integration conflict resolutions within previously approved paths; exact controlling documents `docs/AUTH_SESSION_CONTRACT.md`, `docs/SECURITY_AND_PRIVACY.md`, `docs/API_SPECIFICATION.md`, `docs/DATABASE_SCHEMA.md`, `docs/DEPLOYMENT_GUIDE.md`, `docs/ENGINEERING_GUIDE.md`, `docs/FEATURE-018_PLAN.md`, `docs/TASK_DISPATCH_PACKAGE.md`; Feature/task/canonical/health registries; and the final acceptance report.
 - **FORBIDDEN FILES:** new feature scope, broad refactors, unreviewed dependency/schema changes, payment/community/3D, destructive branch/worktree operations.
 - **CANONICAL REFERENCES:** approved Auth Session Contract, FEAT-018 plan, all task diffs/evidence, governance registries.
 - **ARCHITECTURE CONSTRAINTS:** no weakened contract during merge; conflict resolution preserves the reviewed single authorities; integration order follows DAG; main remains integration-only.
@@ -274,4 +274,4 @@ TASK-AUTH-008 is `DONE`. SOL accepted and fast-forward integrated final candidat
 
 TASK-AUTH-006 is `DONE`. SOL accepted and fast-forward integrated final candidate `1412d657236ade40872d71d4468df3d66391040c`; candidate evidence contains two clean 54/54 isolated runs, and the post-integration main run `rmtf8gu2csc2y1frhp4` again passed 54/54 with `stoppedAt`, all owned processes exited, ports released, isolated database dropped and verified gone, artifact secret scan PASS, and `pnpm validate` 15/15 packages PASS.
 
-TASK-AUTH-007 is `IN_PROGRESS` under SOL on `task/auth-007-final-integration`. It remains the only final acceptance task and is limited to registered integration consistency, controlling-document reconciliation, final main validation and the Feature acceptance decision. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.
+TASK-AUTH-007 is `BLOCKED` under SOL on `task/auth-007-final-integration`. Fresh PostgreSQL passed 87/87 and isolated security/full-loop E2E run `rmtf8try9fmdt97x3ho` passed 54/54 with complete cleanup and artifact scanning. The runtime and frozen topology have no integration failure. Final acceptance remains `FAIL` because no controlling document defines the numeric session-lookup p95 budget referenced by the acceptance plan, and byte-exact staging/production Auth0 allowlists plus real login/logout smoke evidence have not been supplied. Those deployment values are inputs, not a pending provider/topology choice, and AUTH-007 may not invent or waive either gate.

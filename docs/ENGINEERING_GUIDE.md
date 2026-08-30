@@ -28,6 +28,13 @@ lint, typecheck, test, and build while keeping those gates sequential.
 
 Database commands run from `packages/database`: `pnpm db:format`, `pnpm db:generate`, and `pnpm db:migrate`.
 
+## FEAT-018 identity verification
+
+- `pnpm exec playwright test --config tests/auth-e2e/playwright.config.mts` runs the 54-test isolated identity/session security and full-loop gate. It creates a run-scoped database, provider, ports, processes and build checkout; teardown must record `stoppedAt`, exit every owned process, release every owned port, drop and verify the database gone, and pass the artifact secret scan.
+- A fresh persistence replay uses a uniquely named empty `mystcrag_*test*` database with `TEST_DATABASE_URL=... pnpm db:test`. Drop only that run-owned database after verification and confirm it no longer exists.
+- Production builds must reject `signed-test`, missing Auth0 configuration, loopback/wildcard production values and weak session secrets. Browser clients use only same-origin `/api/**`; reusable Tokens must not appear in browser storage, HTML/RSC payloads, URLs or client bundles.
+- The CI workflow runs the same isolated browser gate and may upload only sanitizer-approved failure evidence. Do not upload a raw run directory.
+
 ## Agent handoff
 
 1. Read every file in `docs` and the root `AGENTS.md`.
