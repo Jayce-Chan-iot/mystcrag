@@ -8,8 +8,18 @@
  *   - TLS material (private keys, the whole tls/ directory) is NEVER copied.
  *   - The run-scoped build checkout (work/) is never copied — build output is not
  *     evidence and would bloat the artifact.
- *   - Only allowlisted file types are considered at all: .log .json .txt .md .png
- *     .zip (Playwright traces/error contexts/screenshots/logs/run-state).
+ *   - Only allowlisted file types are considered at all: .log .json .txt .md .zip
+ *     (Playwright traces/error contexts/logs/run-state). Binary image types
+ *     (e.g. .png) are NOT allowlisted: their content cannot be reliably proven
+ *     free of credential material, so they are excluded rather than uploaded
+ *     unscanned. Screenshots inside zip trace archives ARE covered, because
+ *     every zip entry is scanned (below).
+ *   - Credential material in a NAME is checked FIRST, for EVERY collected path —
+ *     file paths and symbolic-link paths alike — BEFORE any directory, basename
+ *     or extension decision: a path such as `token-<secret>.bin` is a violation
+ *     even though its extension/directory would have excluded the file anyway,
+ *     so a secret-bearing path can never ride into a summary as a mere
+ *     "excluded" entry.
  *   - Symbolic links in the source tree FAIL CLOSED: the link target is never
  *     read and never copied, and every link is recorded as a violation. A link
  *     such as safe.log -> tls/private-key.pem must not smuggle denied material
@@ -22,6 +32,16 @@
  *     both scanned AND written to staging — there is no second path-based read
  *     (readFile/copyFile by path) that a TOCTOU swap could redirect. Zip archives
  *     are parsed from those same already-read bytes, never re-opened by path.
+ *   - O_NOFOLLOW protects only the FINAL path component. An ANCESTOR directory
+ *     (e.g. logs/) swapped for a symlink after collection would still redirect
+ *     the open outside the source root. Every descriptor is therefore proven,
+ *     AFTER the open and BEFORE any byte is read, to live inside the canonical
+ *     source root: on Linux the kernel-resolved path of /proc/self/fd/<fd> must
+ *     be inside the root; on every platform each ancestor is lstat-verified as a
+ *     real directory (never a symlink) and the descriptor's own fstat identity
+ *     (dev+ino) must equal the lstat identity of that verified path. A platform
+ *     where the proof cannot be completed fails closed. See
+ *     verifyDescriptorInsideSourceRoot.
  *   - Traversal failures are fatal: a failed readdir (unreadable directory,
  *     vanished root) throws — it is never mistaken for an empty directory. An
  *     unreadable/unopenable/vanished FILE is a recorded violation (fail closed),
@@ -30,16 +50,22 @@
  *     path/NAME, and in every zip entry NAME as well as its decompressed
  *     content: known token/cookie patterns (SENSITIVE_PATTERNS — shared with the
  *     in-process teardown scan) plus literal run secrets read from explicitly
- *     named ENVIRONMENT variables. Any hit excludes the file AND records a
- *     violation.
+ *     named ENVIRONMENT variables. Zip entries are scanned on their RAW bytes
+ *     (literal secrets are searched byte-wise, patterns on both the UTF-8 and
+ *     the Latin-1 decodings) — a NUL byte or binary content never skips the
+ *     scan. Any hit excludes the file AND records a violation.
  *   - Secrets never travel on the command line (argv is visible in process
  *     listings): the CLI reads AUTH006_CLIENT_SECRET, AUTH006_SESSION_SECRET and
  *     AUTH006_ADMIN_TOKEN from the environment only.
  *   - The CLI's stdout/stderr never print a hit's original path, zip entry name,
  *     secret value or credential content — only sanitized categories, counts and
- *     opaque references. (The full violation detail — including paths — stays in
- *     the in-process return value and, on clean runs, in the published summary,
- *     where there are no violations at all; a dirty run's staging summary is
+ *     opaque references. The PUBLISHED sanitize-summary.json is likewise
+ *     path-free: copied and excluded entries are recorded as opaque references
+ *     (ref-<sha256-prefix>) plus a safe reason category, never as source paths —
+ *     and the source/destination roots are opaque references as well — so a
+ *     secret-bearing path cannot reach the upload directory through the summary
+ *     either. (Full violation detail with paths stays only in the in-process
+ *     return value, which is never printed; a dirty run's staging summary is
  *     deleted before anything is published.)
  *   - Destination writes cannot escape: each destination path is resolved under
  *     the sanitized root, and every ancestor segment is verified not to be a
@@ -109,7 +135,7 @@ export const SENSITIVE_PATTERNS = [
 /** Run secrets enter ONLY through these named environment variables, never argv. */
 export const SECRET_ENV_NAMES = ["AUTH006_CLIENT_SECRET", "AUTH006_SESSION_SECRET", "AUTH006_ADMIN_TOKEN"];
 
-const ALLOWED_EXTENSIONS = new Set([".log", ".json", ".txt", ".md", ".png", ".zip"]);
+const ALLOWED_EXTENSIONS = new Set([".log", ".json", ".txt", ".md", ".zip"]);
 /** Directories that are never evidence: TLS material and the run-scoped build tree. */
 const DENIED_DIRECTORIES = new Set(["tls", "work"]);
 /** Basenames that are never copied regardless of extension. */
@@ -122,6 +148,8 @@ const DENIED_BASENAMES = new Set(["synthetic-provider.key.pem"]);
  */
 const CATEGORY = {
   SYMBOLIC_LINK: "symbolic-link-in-source",
+  ANCESTOR_SYMBOLIC_LINK: "ancestor-directory-symbolic-link",
+  DESCRIPTOR_ESCAPE: "descriptor-outside-source-root",
   NOT_REGULAR_FILE: "not-a-regular-file",
   SOURCE_READ_FAILURE: "source-read-failure",
   CREDENTIAL_IN_NAME: "credential-in-name",
@@ -158,10 +186,39 @@ function scanName(value, secrets) {
 }
 
 /**
+ * Scans arbitrary BYTES — file contents and zip entry bodies — for credential
+ * material without ever skipping on binary content:
+ *
+ *   - literal run secrets are searched in the RAW bytes (Buffer.includes does a
+ *     byte-wise search), so NUL bytes or non-UTF-8 content cannot hide them;
+ *   - ASCII/UTF-8 credential PATTERNS are tested on both the UTF-8 and the
+ *     Latin-1 decodings of the same bytes, so a pattern split across or buried
+ *     in binary data is still caught. A false positive on binary garbage fails
+ *     CLOSED, which is the safe direction for evidence publication.
+ */
+function scanBytes(bytes, secrets) {
+  const hits = new Set();
+  for (const secret of secrets) {
+    if (secret.length >= 16 && bytes.includes(secret)) {
+      hits.add("literal secret value");
+      break;
+    }
+  }
+  for (const decoding of [bytes.toString("utf8"), bytes.toString("latin1")]) {
+    for (const hit of scanText(decoding, secrets)) {
+      hits.add(hit);
+    }
+  }
+  return [...hits];
+}
+
+/**
  * Scans every entry of a zip archive that was ALREADY read into memory (the
  * single-descriptor bytes — the archive is never re-opened by path) and returns
- * all hits found. Hits reference entries by INDEX only: a secret-bearing entry
- * NAME must never be embedded in any message this module produces.
+ * all hits found. Every entry is scanned on its RAW bytes: a NUL byte or binary
+ * content never skips the scan. Hits reference entries by INDEX only: a
+ * secret-bearing entry NAME must never be embedded in any message this module
+ * produces.
  */
 function scanZipEntries(entries, secrets) {
   const hits = [];
@@ -170,9 +227,7 @@ function scanZipEntries(entries, secrets) {
     for (const hit of scanName(entry.name, secrets)) {
       hits.push(`zip entry #${index} name: ${hit}`);
     }
-    const text = entry.data.toString("utf8");
-    if (!text || text.includes("\u0000")) continue;
-    for (const hit of scanText(text, secrets)) {
+    for (const hit of scanBytes(entry.data, secrets)) {
       hits.push(`zip entry #${index} content: ${hit}`);
     }
   }
@@ -254,14 +309,82 @@ const OPEN_FLAGS =
     ? fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | (fs.constants.O_NONBLOCK ?? 0)
     : fs.constants.O_RDONLY;
 
+/** Memoized: does this platform expose /proc/self/fd (Linux) or not (macOS)? */
+let procFdAvailable = null;
+async function isProcFdAvailable() {
+  if (procFdAvailable === null) {
+    procFdAvailable = await fs.stat("/proc/self/fd").then(
+      () => true,
+      () => false
+    );
+  }
+  return procFdAvailable;
+}
+
+/**
+ * Proves — AFTER the open, BEFORE any byte is read — that the descriptor's file
+ * lives inside the canonical source root, so an ancestor directory swapped for
+ * a symlink mid-run (O_NOFOLLOW only guards the FINAL component) can never
+ * redirect the read outside the root:
+ *
+ *   1. Linux kernel truth: /proc/self/fd/<fd> resolves to the kernel-resolved
+ *      path of exactly this descriptor; it must be inside the root. An
+ *      unresolvable link (file deleted mid-run, /proc oddity) fails closed.
+ *   2. Every platform: each ANCESTOR segment of the relative path is lstat-ed
+ *      from the canonical root and must be a REAL directory, never a symlink,
+ *      and the FINAL component must lstat as the same file identity (dev+ino)
+ *      as the descriptor's own fstat. A descriptor whose bytes were sourced
+ *      through a symlinked ancestor resolves to a different inode than the
+ *      real file at the verified path, so the mismatch fails closed.
+ *
+ * Returns null when proven; otherwise a violation category.
+ */
+async function verifyDescriptorInsideSourceRoot(fd, fdStat, canonicalSourceRoot, relativePath) {
+  if (await isProcFdAvailable()) {
+    let resolved;
+    try {
+      resolved = await fs.realpath(`/proc/self/fd/${fd}`);
+    } catch {
+      return CATEGORY.DESCRIPTOR_ESCAPE;
+    }
+    if (resolved !== canonicalSourceRoot && !resolved.startsWith(`${canonicalSourceRoot}${path.sep}`)) {
+      return CATEGORY.DESCRIPTOR_ESCAPE;
+    }
+  }
+
+  const segments = relativePath.split(path.sep);
+  let current = canonicalSourceRoot;
+  for (let index = 0; index < segments.length; index += 1) {
+    current = path.join(current, segments[index]);
+    let stat;
+    try {
+      stat = await fs.lstat(current);
+    } catch {
+      return CATEGORY.SOURCE_READ_FAILURE;
+    }
+    if (stat.isSymbolicLink()) {
+      return index < segments.length - 1 ? CATEGORY.ANCESTOR_SYMBOLIC_LINK : CATEGORY.SYMBOLIC_LINK;
+    }
+    if (index < segments.length - 1 && !stat.isDirectory()) {
+      return CATEGORY.SOURCE_READ_FAILURE;
+    }
+    if (index === segments.length - 1 && (stat.dev !== fdStat.dev || stat.ino !== fdStat.ino)) {
+      return CATEGORY.DESCRIPTOR_ESCAPE;
+    }
+  }
+  return null;
+}
+
 /**
  * Reads one file through a SINGLE descriptor opened with O_NOFOLLOW: the fstat
- * proves it is a regular file, and the bytes returned are the bytes scanned and
- * published. A file swapped for a symlink after the directory listing fails the
- * open with ELOOP (violation); a vanished or unreadable file fails closed as a
- * violation too — never a silent skip, never an empty read treated as success.
+ * proves it is a regular file, the descriptor-identity proof (above) proves the
+ * file is inside the canonical source root, and only then are the bytes read —
+ * the bytes returned are the bytes scanned and published. A file swapped for a
+ * symlink after the directory listing fails the open with ELOOP (violation); a
+ * vanished, unreadable or unverifiable file fails closed as a violation too —
+ * never a silent skip, never an empty read treated as success.
  */
-async function openAndReadRegularFile(sourcePath) {
+async function openAndReadRegularFile(sourcePath, canonicalSourceRoot, relativePath) {
   let handle;
   try {
     handle = await fs.open(sourcePath, OPEN_FLAGS);
@@ -271,6 +394,10 @@ async function openAndReadRegularFile(sourcePath) {
     const stat = await handle.stat();
     if (!stat.isFile()) {
       return { ok: false, reason: CATEGORY.NOT_REGULAR_FILE };
+    }
+    const escape = await verifyDescriptorInsideSourceRoot(handle.fd, stat, canonicalSourceRoot, relativePath);
+    if (escape !== null) {
+      return { ok: false, reason: escape };
     }
     const bytes = await handle.readFile();
     return { ok: true, bytes };
@@ -286,6 +413,15 @@ async function openAndReadRegularFile(sourcePath) {
   }
 }
 
+/**
+ * Opaque reference for a source path: the PUBLISHED summary records copied and
+ * excluded entries by this reference plus a safe reason, never by path — a
+ * secret-bearing path cannot reach the upload directory through the summary.
+ */
+function pathReference(relativePath) {
+  return `ref-${crypto.createHash("sha256").update(relativePath).digest("hex").slice(0, 16)}`;
+}
+
 export async function sanitizeEvidence(sourceRoot, destinationRoot, options = {}) {
   const secrets = (options.secrets ?? []).filter((value) => typeof value === "string");
   const copied = [];
@@ -294,6 +430,10 @@ export async function sanitizeEvidence(sourceRoot, destinationRoot, options = {}
 
   const absoluteSource = path.resolve(sourceRoot);
   const absoluteDestination = path.resolve(destinationRoot);
+  // The canonical (fully resolved) source root — every descriptor-identity and
+  // ancestor proof below starts from here, so a symlinked path prefix on the
+  // invocation cannot weaken them.
+  const canonicalSource = await fs.realpath(absoluteSource);
   // Stage the sanitized tree NEXT TO the destination (same filesystem, so the
   // final publish is one atomic rename) and only publish on a fully clean scan.
   const stagingRoot = `${absoluteDestination}.staging-${crypto.randomBytes(6).toString("hex")}`;
@@ -305,12 +445,15 @@ export async function sanitizeEvidence(sourceRoot, destinationRoot, options = {}
     await fs.mkdir(stagingRoot, { recursive: true });
 
     // Source symlinks: fail closed — the target is never read, never copied.
+    // The symlink's own PATH is name-scanned first, exactly like every file
+    // path, so a credential-bearing symlink path is a violation of its own.
     for (const relativePath of symlinks) {
-      violations.push({
-        path: relativePath,
-        hits: ["symbolic link in run directory (target never read)"],
-        categories: [CATEGORY.SYMBOLIC_LINK]
-      });
+      const nameHits = scanName(relativePath, secrets);
+      const hits = nameHits.map((hit) => `file name: ${hit}`);
+      hits.push("symbolic link in run directory (target never read)");
+      const categories = [CATEGORY.SYMBOLIC_LINK];
+      if (nameHits.length > 0) categories.push(CATEGORY.CREDENTIAL_IN_NAME);
+      violations.push({ path: relativePath, hits, categories });
       excluded.push({ path: relativePath, reason: "symbolic link (fail closed)" });
     }
 
@@ -322,6 +465,22 @@ export async function sanitizeEvidence(sourceRoot, destinationRoot, options = {}
       const deny = (reason) => {
         excluded.push({ path: relativePath, reason });
       };
+
+      // Credential material in the path/NAME is checked FIRST — BEFORE the
+      // directory, basename and extension decisions below. A secret-bearing
+      // path must be a VIOLATION (fail closed, nothing published) even when
+      // its extension or directory would have excluded the file anyway: the
+      // excluded entry of a published summary must never carry a secret path.
+      const nameHits = scanName(relativePath, secrets);
+      if (nameHits.length > 0) {
+        violations.push({
+          path: relativePath,
+          hits: nameHits.map((hit) => `file name: ${hit}`),
+          categories: [CATEGORY.CREDENTIAL_IN_NAME]
+        });
+        deny(`credential material in file name (fail closed)`);
+        continue;
+      }
 
       // Denied directories apply at ANY depth: the CI invocation passes the parent
       // of all run directories as the source root, so the check cannot rely on the
@@ -337,19 +496,7 @@ export async function sanitizeEvidence(sourceRoot, destinationRoot, options = {}
         continue;
       }
       if (!ALLOWED_EXTENSIONS.has(extension)) {
-        deny("extension not allowlisted");
-        continue;
-      }
-
-      // Credential material in the path/name itself (not only the contents).
-      const nameHits = scanName(relativePath, secrets);
-      if (nameHits.length > 0) {
-        violations.push({
-          path: relativePath,
-          hits: nameHits.map((hit) => `file name: ${hit}`),
-          categories: [CATEGORY.CREDENTIAL_IN_NAME]
-        });
-        deny(`credential material in file name: ${nameHits.join("; ")}`);
+        deny("extension not allowlisted (binary image types are never uploaded unscanned)");
         continue;
       }
 
@@ -365,16 +512,21 @@ export async function sanitizeEvidence(sourceRoot, destinationRoot, options = {}
         continue;
       }
 
-      // ONE descriptor, ONE read: the bytes scanned below are the bytes written
-      // to staging. No path-based readFile/copyFile exists anywhere in this loop.
-      const read = await openAndReadRegularFile(sourcePath);
+      // ONE descriptor, ONE read: the descriptor-identity proof and the scan
+      // below run on the SAME bytes that are written to staging. No path-based
+      // readFile/copyFile exists anywhere in this loop.
+      const read = await openAndReadRegularFile(sourcePath, canonicalSource, relativePath);
       if (!read.ok) {
         const reason =
           read.reason === CATEGORY.SYMBOLIC_LINK
             ? "symbolic link in run directory (target never read)"
-            : read.reason === CATEGORY.NOT_REGULAR_FILE
-              ? "not a regular file"
-              : "source read failure (fail closed)";
+            : read.reason === CATEGORY.ANCESTOR_SYMBOLIC_LINK
+              ? "ancestor directory swapped to a symbolic link (fail closed)"
+              : read.reason === CATEGORY.DESCRIPTOR_ESCAPE
+                ? "descriptor resolves outside the source root (fail closed)"
+                : read.reason === CATEGORY.NOT_REGULAR_FILE
+                  ? "not a regular file"
+                  : "source read failure (fail closed)";
         violations.push({ path: relativePath, hits: [reason], categories: [read.reason] });
         deny(reason);
         continue;
@@ -404,9 +556,8 @@ export async function sanitizeEvidence(sourceRoot, destinationRoot, options = {}
           deny(`credential material inside archive: ${hits.join("; ")}`);
           continue;
         }
-      } else if (extension !== ".png") {
-        const content = bytes.toString("utf8");
-        const hits = scanText(content, secrets);
+      } else {
+        const hits = scanBytes(bytes, secrets);
         if (hits.length > 0) {
           violations.push({
             path: relativePath,
@@ -427,13 +578,21 @@ export async function sanitizeEvidence(sourceRoot, destinationRoot, options = {}
       copied.push(relativePath);
     }
 
+    // The PUBLISHED summary is path-free: copied/excluded entries are opaque
+    // references with safe reason categories, violations are references with
+    // categories only, and even the source/destination ROOTS are opaque
+    // references. No raw path — secret-bearing or not — is written to disk by
+    // this module.
     const summary = {
-      sourceRoot: absoluteSource,
-      destinationRoot: absoluteDestination,
+      sourceRoot: pathReference(absoluteSource),
+      destinationRoot: pathReference(absoluteDestination),
       copiedFiles: copied.length,
-      copied,
-      excluded,
-      violations,
+      copied: copied.map(pathReference),
+      excluded: excluded.map((entry) => ({ ref: pathReference(entry.path), reason: entry.reason })),
+      violations: violations.map((violation) => ({
+        ref: pathReference(violation.path),
+        categories: violation.categories
+      })),
       ok: violations.length === 0,
       generatedAt: new Date().toISOString()
     };
@@ -522,7 +681,8 @@ async function main() {
     );
     process.exit(1);
   }
-  console.log(`[auth-006-sanitize] sanitized evidence ready at ${path.resolve(destinationRoot)}`);
+  // No raw path is printed: stdout carries counts and categories only.
+  console.log(`[auth-006-sanitize] sanitized evidence published (summary: sanitize-summary.json)`);
 }
 
 // CLI entry: import.meta.url is a file:// URL — it MUST be converted with

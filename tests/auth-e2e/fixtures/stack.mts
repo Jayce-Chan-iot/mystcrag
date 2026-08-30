@@ -201,6 +201,50 @@ async function updateExtraChildExit(id: string, code: number | null): Promise<vo
 }
 
 /**
+ * Reclaims a child whose registration FAILED: the process is already running
+ * but has NO durable record, so teardown could never find it or stop it. It is
+ * signalled NOW — SIGTERM, escalating to SIGKILL — and its exit is awaited
+ * BEFORE the registration error is rethrown, so a failed registration never
+ * leaks a live, unowned process (or a bound port) on the machine.
+ *
+ * A child that never started (spawn failure — no pid) or already exited needs
+ * no reclamation. A child that still refuses to exit after SIGKILL is reported
+ * as a cleanup failure so the caller can surface BOTH errors (AggregateError).
+ */
+async function reclaimUnregisteredChild(label: string, child: ChildProcess): Promise<void> {
+  if (typeof child.pid !== "number") return;
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exitedWithin = (timeoutMs: number): Promise<boolean> =>
+    new Promise((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve(true);
+        return;
+      }
+      const timer = setTimeout(() => resolve(child.exitCode !== null || child.signalCode !== null), timeoutMs);
+      child.once("exit", () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    // Already gone or signal denied — the exit check below decides.
+  }
+  if (await exitedWithin(3_000)) return;
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    // Already gone or signal denied — the exit check below decides.
+  }
+  if (!(await exitedWithin(3_000))) {
+    throw new Error(
+      `could not reclaim unregistered child "${label}" (pid ${child.pid}): it did not exit after SIGTERM and SIGKILL — manual cleanup required`
+    );
+  }
+}
+
+/**
  * Registers a spec-spawned child so teardown stops it even when the spec or its
  * whole worker process crashes. The registration persists pid, label, command
  * signature and the run-scoped cwd to <runDir>/extra-children/<id>.json — the
@@ -210,43 +254,63 @@ async function updateExtraChildExit(id: string, code: number | null): Promise<vo
  * The cwd MUST be inside this run's directory: teardown proves ownership with
  * command + run-scoped cwd before ANY signal, and must never be handed a
  * signature that could authorize signalling a process outside the run.
+ *
+ * If the registration fails — refused cwd, missing pid, or a failed
+ * mkdir/write/rename of the durable record — the child is ALREADY running with
+ * no record, so it is reclaimed FIRST (SIGTERM → SIGKILL, exit awaited) and
+ * only then is the registration error rethrown. If the reclamation itself
+ * fails, BOTH failures are reported as one AggregateError — a leaked process
+ * must never hide behind the registration error. Both spawnBackendWithEnv and
+ * spawnFrontendWithEnv register through this safe path.
  */
 export async function registerStackChild(
   label: string,
   child: ChildProcess,
   ownership: { pattern: string; cwd: string }
 ): Promise<void> {
-  const runDir = resolveRunDirectory();
-  const resolvedCwd = path.resolve(ownership.cwd);
-  if (resolvedCwd !== runDir && !resolvedCwd.startsWith(`${runDir}${path.sep}`)) {
-    throw new Error(
-      `refusing to register child "${label}": cwd ${resolvedCwd} is outside this run's directory — teardown would not be able to prove ownership`
-    );
+  try {
+    const runDir = resolveRunDirectory();
+    const resolvedCwd = path.resolve(ownership.cwd);
+    if (resolvedCwd !== runDir && !resolvedCwd.startsWith(`${runDir}${path.sep}`)) {
+      throw new Error(
+        `refusing to register child "${label}": cwd ${resolvedCwd} is outside this run's directory — teardown would not be able to prove ownership`
+      );
+    }
+    if (typeof child.pid !== "number") {
+      throw new Error(`refusing to register child "${label}": the child has no pid`);
+    }
+    const id = `${label.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase()}-${child.pid}-${crypto
+      .randomBytes(4)
+      .toString("hex")}`;
+    const record: ExtraChildRecord = {
+      id,
+      label,
+      pid: child.pid,
+      commandPattern: ownership.pattern,
+      cwd: resolvedCwd,
+      startedAt: new Date().toISOString(),
+      exited: false,
+      exitCode: null
+    };
+    await fs.mkdir(extraChildrenDirectory(), { recursive: true });
+    await writeFileAtomic(extraChildRecordPath(id), JSON.stringify(record, null, 2));
+    if (handle) {
+      handle.extraChildren.push({ label, child });
+    }
+    child.once("exit", (code) => {
+      void updateExtraChildExit(id, code);
+    });
+  } catch (registrationError) {
+    try {
+      await reclaimUnregisteredChild(label, child);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [registrationError, cleanupError],
+        `registering extra child "${label}" failed AND reclaiming its process failed — a process may still be running`
+      );
+    }
+    throw registrationError;
   }
-  if (typeof child.pid !== "number") {
-    throw new Error(`refusing to register child "${label}": the child has no pid`);
-  }
-  const id = `${label.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase()}-${child.pid}-${crypto
-    .randomBytes(4)
-    .toString("hex")}`;
-  const record: ExtraChildRecord = {
-    id,
-    label,
-    pid: child.pid,
-    commandPattern: ownership.pattern,
-    cwd: resolvedCwd,
-    startedAt: new Date().toISOString(),
-    exited: false,
-    exitCode: null
-  };
-  await fs.mkdir(extraChildrenDirectory(), { recursive: true });
-  await writeFileAtomic(extraChildRecordPath(id), JSON.stringify(record, null, 2));
-  if (handle) {
-    handle.extraChildren.push({ label, child });
-  }
-  child.once("exit", (code) => {
-    void updateExtraChildExit(id, code);
-  });
 }
 
 /**

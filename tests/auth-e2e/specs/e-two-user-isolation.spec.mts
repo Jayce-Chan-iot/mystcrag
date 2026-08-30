@@ -6,8 +6,8 @@
  * order. B must not be able to read, modify, save, clone, delete or order A's
  * resources, nor read or select in A's Tarot session; for every owner-scoped
  * operation the response to a FOREIGN resource and to a NONEXISTENT resource is
- * compared directly as the COMPLETE stable public error envelope — HTTP status and
- * every public field (code, message, optional fieldErrors), excluding only the
+ * compared directly as the COMPLETE JSON response body — HTTP status and every
+ * public field at every level, top-level topology included, excluding only the
  * per-request requestId — so no existence/ownership oracle leaks; after all of
  * B's attacks A's resources are re-read and asserted
  * byte-stable (design revision, order projection exact count and order contents,
@@ -38,18 +38,55 @@ type PublicErrorEnvelope = {
   requestId?: string;
 };
 
+/** The expected stable public error topology: exactly one top-level `error`. */
+const PUBLIC_ERROR_KEYS = ["error"];
+
+/** The only public fields a stable error envelope may ever carry. */
+const PUBLIC_ERROR_ENVELOPE_KEYS = ["code", "fieldErrors", "message", "requestId"];
+
 function errorEnvelopeOf(response: { body: string }): PublicErrorEnvelope {
   return (JSON.parse(response.body) as { error?: PublicErrorEnvelope }).error ?? {};
 }
 
 /**
+ * Parses the COMPLETE public response body and asserts its topology is exactly
+ * the expected stable error envelope: the ONLY tolerated top-level member is
+ * `error`, and the only tolerated members of `error` are code, message,
+ * fieldErrors and requestId. Any other field — a `resourceExists` flag, an
+ * owner hint, or any future addition — is an existence/ownership oracle and
+ * fails the comparison outright, whatever its value.
+ */
+function publicErrorBodyOf(response: ApiResponse, label: string): PublicErrorEnvelope {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(response.body) as Record<string, unknown>;
+  } catch {
+    throw new Error(`${label}: response body is not valid JSON (envelope topology cannot be proven)`);
+  }
+  expect(
+    Object.keys(parsed).sort(),
+    `${label}: top-level topology must be exactly the stable error envelope`
+  ).toEqual(PUBLIC_ERROR_KEYS);
+  const envelope = (parsed.error ?? {}) as Record<string, unknown>;
+  const envelopeKeys = Object.keys(envelope).sort();
+  for (const key of envelopeKeys) {
+    expect(
+      PUBLIC_ERROR_ENVELOPE_KEYS,
+      `${label}: unexpected public error field (owner/existence oracle risk)`
+    ).toContain(key);
+  }
+  return envelope as PublicErrorEnvelope;
+}
+
+/**
  * The no-oracle proof for one owner-scoped operation: the response B receives for
  * A's (foreign) resource must be indistinguishable from the response for a
- * resource that does not exist at all. The COMPLETE stable public error envelope
- * is compared — HTTP status AND every public field (code, message and the
- * optional fieldErrors) — with exactly ONE exclusion: requestId, which every
- * response necessarily generates fresh. Any other difference hands B an
- * ownership oracle.
+ * resource that does not exist at all. The COMPLETE JSON response body is
+ * compared — HTTP status AND every public field at every level (the top-level
+ * topology is itself asserted to be exactly the stable `error` envelope by
+ * publicErrorBodyOf) — with exactly ONE exclusion: requestId, which every
+ * response necessarily generates fresh. Any other difference, in any field,
+ * hands B an ownership oracle.
  */
 function expectNoOracle(
   label: string,
@@ -58,8 +95,8 @@ function expectNoOracle(
 ): void {
   expect(foreign.status, `${label}: foreign vs missing status must match`).toBe(missing.status);
 
-  const foreignEnvelope = errorEnvelopeOf(foreign);
-  const missingEnvelope = errorEnvelopeOf(missing);
+  const foreignEnvelope = publicErrorBodyOf(foreign, `${label} (foreign)`);
+  const missingEnvelope = publicErrorBodyOf(missing, `${label} (missing)`);
   // Both sides must be well-formed public error envelopes carrying a requestId —
   // and those requestIds must genuinely differ, proving the excluded field is the
   // ONLY thing that ever differs between the two responses.
@@ -74,7 +111,7 @@ function expectNoOracle(
   const { requestId: _missingId, ...missingPublic } = missingEnvelope;
   expect(
     foreignPublic,
-    `${label}: foreign vs missing public error envelope (code, message, fieldErrors) must be identical`
+    `${label}: foreign vs missing COMPLETE public response body (every top-level field) must be identical`
   ).toEqual(missingPublic);
 }
 

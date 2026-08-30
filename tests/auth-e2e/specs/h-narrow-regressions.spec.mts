@@ -36,6 +36,22 @@
  *   H4e an unreadable source FILE and an unreadable source DIRECTORY are both
  *       fatal (fail closed, nothing published) — a traversal failure is never
  *       mistaken for an empty directory
+ *   H4f a secret-bearing path is a violation EVEN when its extension or
+ *       directory would have excluded the file anyway — through the REAL CLI:
+ *       token-<secret>.bin (denied extension) and tls/token-<secret>.log
+ *       (denied directory) both fail closed, nothing is published, and neither
+ *       stdout/stderr nor any surviving summary/destination content carries
+ *       the secret; a clean run's published summary is PATH-FREE (opaque
+ *       references only)
+ *   H4g binary evidence is never uploaded unscanned: a .png (removed from the
+ *       CI allowlist) is never copied or published however harmless its bytes
+ *       look, and a zip entry whose RAW bytes contain a secret next to NUL
+ *       bytes is caught — binary content never skips the scan
+ *   H4h an ANCESTOR directory swapped for a symlink mid-run can never redirect
+ *       the read outside the source root: whatever the interleaving, a file
+ *       from outside the root never enters the destination — either the run
+ *       fails closed (non-zero exit, nothing published) or only the ORIGINAL
+ *       pre-swap bytes are published — and no staging residue survives
  *   H5  teardown PID ownership: a pid is signalled only when its CURRENT command
  *       line matches this run's signature; a recycled/foreign pid fails loudly
  *       instead of being killed
@@ -50,6 +66,13 @@
  *       non-host_name entry type, and a forged SNI placed beyond the
  *       record/handshake boundary are ALL rejected (null) — and through the
  *       live relay none of them ever reaches the upstream
+ *   H6c the SNI parser rejects UNDER-consumption exactly like overflow: a
+ *       shortened extensions vector (extensionsEnd below the handshake end),
+ *       trailing bytes in the server-name list, trailing bytes inside the SNI
+ *       extension, a duplicate host_name, a zero-length hostname, a hostname
+ *       with control/non-ASCII bytes and a malformed second entry are ALL
+ *       rejected — and through the live relay none of them ever reaches the
+ *       upstream
  *   H7  a failed setup propagates a simultaneous cleanup failure as an
  *       AggregateError carrying BOTH errors — a cleanup error can never hide
  *       behind the original setup error
@@ -62,11 +85,17 @@
  *       teardown faces) is stopped by the FRESH recovery path from the
  *       persisted record alone; a record whose cwd points outside this run's
  *       directory is refused WITHOUT any signal, and registration itself
- *       refuses a cwd outside the run
+ *       refuses a cwd outside the run — reclaiming the just-spawned child
+ *       before the refusal propagates
+ *   H9b a FAILED registration never leaks its child: when the durable record
+ *       cannot be written, registration fails, the child is already dead, no
+ *       record exists and no port stays occupied; and when the reclamation
+ *       itself fails too, BOTH failures surface as one AggregateError
  *
- * H3, H4, H4b, H4c, H4d, H4e, H5, H5b, H6, H6b, H7, H8 and H9 are stack-independent: they start their own
- * throwaway listeners and stand-in child processes so a harness regression is
- * diagnosed without a full-stack run.
+ * H3, H4, H4b, H4c, H4d, H4e, H4f, H4g, H4h, H5, H5b, H6, H6b, H6c, H7, H8, H9
+ * and H9b are stack-independent: they start their own throwaway listeners and
+ * stand-in child processes so a harness regression is diagnosed without a
+ * full-stack run.
  */
 
 import { expect, test } from "@playwright/test";
@@ -76,6 +105,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { EventEmitter } from "node:events";
 import { spawn, type ChildProcess } from "node:child_process";
 
 import { bffClient, clientFor, generateDesignRequest } from "../helpers/api";
@@ -535,7 +565,7 @@ test.describe("H. narrow harness regressions", () => {
         AUTH006_ADMIN_TOKEN: secretValue
       });
       expect(clean.code, `clean CLI run failed: ${clean.stderr}`).toBe(0);
-      expect(clean.stdout).toContain("sanitized evidence ready");
+      expect(clean.stdout).toContain("sanitized evidence published");
       expect(clean.stdout).toContain("run secrets from env: 3");
       const published = await fs.readdir(cleanDestination);
       expect(published).toContain("run-state.json");
@@ -691,6 +721,232 @@ test.describe("H. narrow harness regressions", () => {
       // Restore accessibility so the recursive cleanup can remove the trees.
       await fs.chmod(path.join(tmp, "file-run", "logs", "unreadable.log"), 0o644).catch(() => undefined);
       await fs.chmod(path.join(tmp, "dir-run", "logs", "locked"), 0o755).catch(() => undefined);
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("H4f secret-bearing denied-extension and denied-directory names fail closed through the real CLI", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "auth006-h4f-"));
+    const secretValue = `secret-${crypto.randomBytes(24).toString("hex")}`;
+    try {
+      // (a) A secret-bearing name whose EXTENSION would have excluded it anyway
+      // (token-<secret>.bin) and one whose DIRECTORY would have excluded it
+      // (tls/token-<secret>.log). The name is scanned BEFORE any directory or
+      // extension decision, so BOTH are violations — not mere "excluded"
+      // entries — and nothing at all is published.
+      const dirtySource = path.join(tmp, "dirty-run");
+      const dirtyDestination = path.join(tmp, "dirty-sanitized");
+      await fs.mkdir(path.join(dirtySource, "logs"), { recursive: true });
+      await fs.mkdir(path.join(dirtySource, "tls"), { recursive: true });
+      await fs.writeFile(path.join(dirtySource, "logs", "clean.log"), "clean log line\n", "utf8");
+      await fs.writeFile(path.join(dirtySource, `token-${secretValue}.bin`), "clean body\n", "utf8");
+      await fs.writeFile(path.join(dirtySource, "tls", `token-${secretValue}.log`), "clean body\n", "utf8");
+      const dirty = await runSanitizerCli([dirtySource, dirtyDestination], {
+        AUTH006_CLIENT_SECRET: secretValue
+      });
+      expect(dirty.code).not.toBe(null);
+      expect(dirty.code).not.toBe(0);
+      expect(dirty.stderr).toContain("credential-in-name");
+      expect(dirty.stderr).not.toContain(secretValue);
+      expect(dirty.stdout).not.toContain(secretValue);
+      // Fail closed: no destination (so no summary could carry the path) and no
+      // staging residue.
+      await expect(fs.stat(dirtyDestination)).rejects.toThrow();
+      expect((await fs.readdir(tmp)).filter((name: string) => name.startsWith("dirty-sanitized.staging-"))).toHaveLength(0);
+
+      // (b) The published summary of a CLEAN run is PATH-FREE: copied/excluded
+      // entries and even the roots are opaque references only — a raw source or
+      // destination path (secret-bearing or not) is never written to disk.
+      const cleanSource = path.join(tmp, "clean-run");
+      const cleanDestination = path.join(tmp, "clean-sanitized");
+      await fs.mkdir(path.join(cleanSource, "logs"), { recursive: true });
+      await fs.writeFile(path.join(cleanSource, "logs", "backend.log"), "clean log line\n", "utf8");
+      const clean = await runSanitizerCli([cleanSource, cleanDestination], {
+        AUTH006_ADMIN_TOKEN: secretValue
+      });
+      expect(clean.code, `clean CLI run failed: ${clean.stderr}`).toBe(0);
+      const summaryText = await fs.readFile(path.join(cleanDestination, "sanitize-summary.json"), "utf8");
+      const summary = JSON.parse(summaryText) as {
+        copied: string[];
+        excluded: Array<{ ref: string; reason: string }>;
+        sourceRoot: string;
+        destinationRoot: string;
+      };
+      const opaqueRefs = [
+        ...summary.copied,
+        ...summary.excluded.map((entry) => entry.ref),
+        summary.sourceRoot,
+        summary.destinationRoot
+      ];
+      expect(opaqueRefs.length).toBeGreaterThan(0);
+      for (const ref of opaqueRefs) {
+        expect(ref, "every summary entry must be an opaque ref, never a path").toMatch(/^ref-[0-9a-f]{16}$/);
+      }
+      expect(summaryText).not.toContain(cleanSource);
+      expect(summaryText).not.toContain(cleanDestination);
+      expect(summaryText).not.toContain("logs/backend.log");
+      expect(summaryText).not.toContain(secretValue);
+      for (const file of await filesUnder(cleanDestination)) {
+        expect((await fs.readFile(file)).includes(secretValue)).toBe(false);
+      }
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("H4g binary evidence is never uploaded unscanned — PNG exclusion and NUL-bearing zip entries", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "auth006-h4g-"));
+    const secretValue = `secret-${crypto.randomBytes(24).toString("hex")}`;
+    try {
+      // (a) A .png whose bytes embed the secret. Image types are NOT
+      // allowlisted (their content cannot be reliably proven free of
+      // credential material), so the file is NEVER uploaded: it must not
+      // appear in the destination, and no published byte may carry the secret.
+      const pngSource = path.join(tmp, "png-run");
+      const pngDestination = path.join(tmp, "png-sanitized");
+      await fs.mkdir(pngSource, { recursive: true });
+      const pngBytes = Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        Buffer.from(`\0shot-${secretValue}\0`, "latin1")
+      ]);
+      await fs.writeFile(path.join(pngSource, "screenshot.png"), pngBytes);
+      const pngRun = await runSanitizerCli([pngSource, pngDestination], {
+        AUTH006_CLIENT_SECRET: secretValue
+      });
+      expect(pngRun.code, `png run failed: ${pngRun.stderr}`).toBe(0);
+      const publishedPng = await fs.readdir(pngDestination);
+      expect(publishedPng).not.toContain("screenshot.png");
+      expect(publishedPng).toContain("sanitize-summary.json");
+      for (const file of await filesUnder(pngDestination)) {
+        expect((await fs.readFile(file)).includes(secretValue)).toBe(false);
+      }
+
+      // (b) A zip entry whose RAW bytes contain the secret NEXT TO NUL bytes:
+      // the old scanner skipped any text containing NUL — binary content must
+      // never skip the scan. The archive is caught, nothing is published.
+      const zipSource = path.join(tmp, "zip-run");
+      const zipDestination = path.join(tmp, "zip-sanitized");
+      await fs.mkdir(path.join(zipSource, "test-results"), { recursive: true });
+      const binaryEntryBytes = Buffer.concat([
+        Buffer.from("prefix\0", "latin1"),
+        Buffer.from(secretValue, "latin1"),
+        Buffer.from("\0suffix", "latin1")
+      ]);
+      await fs.writeFile(
+        path.join(zipSource, "test-results", "trace.zip"),
+        buildZip([{ name: "0.trace", data: binaryEntryBytes }])
+      );
+      const zipRun = await runSanitizerCli([zipSource, zipDestination], {
+        AUTH006_SESSION_SECRET: secretValue
+      });
+      expect(zipRun.code).not.toBe(null);
+      expect(zipRun.code).not.toBe(0);
+      expect(zipRun.stderr).toContain("credential-in-archive");
+      expect(zipRun.stderr).not.toContain(secretValue);
+      expect(zipRun.stdout).not.toContain(secretValue);
+      await expect(fs.stat(zipDestination)).rejects.toThrow();
+      expect((await fs.readdir(tmp)).filter((name: string) => name.startsWith("zip-sanitized.staging-"))).toHaveLength(0);
+
+      // (c) The control: a NUL-bearing but CLEAN binary entry does not fail the
+      // run — the scan is content-based, not "binary means dirty".
+      const controlSource = path.join(tmp, "control-run");
+      const controlDestination = path.join(tmp, "control-sanitized");
+      await fs.mkdir(path.join(controlSource, "test-results"), { recursive: true });
+      await fs.writeFile(
+        path.join(controlSource, "test-results", "trace.zip"),
+        buildZip([{ name: "0.trace", data: Buffer.concat([Buffer.from("binary\0", "latin1"), crypto.randomBytes(48)]) }])
+      );
+      const controlRun = await runSanitizerCli([controlSource, controlDestination], {
+        AUTH006_ADMIN_TOKEN: secretValue
+      });
+      expect(controlRun.code, `control run failed: ${controlRun.stderr}`).toBe(0);
+      expect(await fs.readdir(path.join(controlDestination, "test-results"))).toContain("trace.zip");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("H4h an ancestor-directory mid-run symlink swap never publishes outside-root bytes", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "auth006-h4h-"));
+    const secretValue = `secret-${crypto.randomBytes(24).toString("hex")}`;
+    try {
+      const source = path.join(tmp, "swap-run");
+      const destination = path.join(tmp, "swap-sanitized");
+      const logsDir = path.join(source, "logs");
+      const realLogsDir = `${logsDir}.h4h-real`;
+      await fs.mkdir(logsDir, { recursive: true });
+
+      // The OUTSIDE-root tree the swapped ancestor will point at: same relative
+      // layout as the victim (so the open would resolve to it) plus a second
+      // file that must never be collected or published at all.
+      const outsideLogs = path.join(tmp, "outside", "logs");
+      await fs.mkdir(outsideLogs, { recursive: true });
+      await fs.writeFile(path.join(outsideLogs, "victim.log"), `outside ${secretValue}\n`, "utf8");
+      await fs.writeFile(path.join(outsideLogs, "smuggled.log"), `smuggled ${secretValue}\n`, "utf8");
+
+      // The victim INSIDE the root: a large allowlisted file that holds the
+      // sanitizer mid-run inside the collect → open → read window.
+      const victimPath = path.join(logsDir, "victim.log");
+      await fs.writeFile(victimPath, `clean-prefix\n${"x".repeat(24 * 1024 * 1024)}\n`, "utf8");
+      const originalVictim = await fs.readFile(victimPath);
+
+      const child = spawn(process.execPath, [SANITIZER_CLI, source, destination], {
+        env: { PATH: process.env.PATH ?? "", AUTH006_CLIENT_SECRET: secretValue }
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString("utf8");
+      });
+
+      // Wait until the sanitizer is PAST collection (its staging directory
+      // exists) and processing files, then swap the ANCESTOR directory logs/
+      // for a symlink to the outside tree. O_NOFOLLOW protects only the FINAL
+      // component (victim.log); this targets exactly the gap the
+      // descriptor-identity proof must close.
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        const staging = (await fs.readdir(tmp)).find((name: string) => name.startsWith("swap-sanitized.staging-"));
+        if (staging) break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await fs.rename(logsDir, realLogsDir);
+      await fs.symlink(outsideLogs, logsDir);
+      const code = await new Promise<number | null>((resolve) => {
+        child.on("exit", (exitCode) => resolve(exitCode));
+        child.on("error", () => resolve(null));
+      });
+
+      // Restore the real directory before any assertion can fail and strand it.
+      await fs.rm(logsDir, { force: true });
+      await fs.rename(realLogsDir, logsDir);
+
+      expect(stdout.includes(secretValue)).toBe(false);
+      expect(stderr.includes(secretValue)).toBe(false);
+
+      if (code === 0) {
+        // The victim's descriptor was opened and proven BEFORE the swap landed:
+        // the published bytes are the ORIGINAL pre-swap bytes, and no outside
+        // file (smuggled.log) was ever collected or published.
+        const publishedVictim = await fs.readFile(path.join(destination, "logs", "victim.log"));
+        expect(publishedVictim.equals(originalVictim)).toBe(true);
+        expect(await fs.readdir(path.join(destination, "logs"))).not.toContain("smuggled.log");
+        for (const file of await filesUnder(destination)) {
+          expect((await fs.readFile(file)).includes(secretValue)).toBe(false);
+        }
+      } else {
+        // The swap was caught — at collection (dirent type), at the open, or by
+        // the ancestor/descriptor identity proof — and the run fails closed:
+        // NOTHING is published.
+        expect(code).toBe(1);
+        await expect(fs.stat(destination)).rejects.toThrow();
+      }
+      // No staging residue either way.
+      expect((await fs.readdir(tmp)).filter((name: string) => name.startsWith("swap-sanitized.staging-"))).toHaveLength(0);
+    } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
   });
@@ -1033,6 +1289,188 @@ test.describe("H. narrow harness regressions", () => {
     }
   });
 
+  test("H6c the SNI parser rejects under-consumption — no trailing or duplicated entry ever reaches the upstream", async () => {
+    const HOST = "allowed.auth006.internal";
+
+    const u16 = (value: number) => Buffer.from([(value >> 8) & 0xff, value & 0xff]);
+    const u24 = (value: number) => Buffer.from([(value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff]);
+    const entry = (name: string, nameLengthOverride?: number) =>
+      Buffer.concat([
+        Buffer.from([0x00]),
+        u16(nameLengthOverride ?? name.length),
+        Buffer.from(name, "ascii")
+      ]);
+
+    // Builds a ClientHello whose server_name LIST content and whose DECLARED
+    // lengths are independently controllable, so every under-consumption shape
+    // can be forged byte-exactly.
+    const buildHello = (options: {
+      list?: Buffer;
+      declaredListLength?: number;
+      trailingInExtension?: Buffer;
+      underConsumeExtensions?: boolean;
+    }): Buffer => {
+      const list = options.list ?? entry(HOST);
+      const declaredList = options.declaredListLength ?? list.length;
+      const extensionBody = Buffer.concat([
+        u16(declaredList),
+        list,
+        options.trailingInExtension ?? Buffer.alloc(0)
+      ]);
+      const sniExtension = Buffer.concat([
+        Buffer.from([0x00, 0x00]),
+        u16(extensionBody.length),
+        extensionBody
+      ]);
+      const otherExtension = Buffer.from([0x00, 0x0d, 0x00, 0x00]);
+      const extensions = Buffer.concat([sniExtension, otherExtension]);
+      const body = Buffer.concat([
+        Buffer.from([0x03, 0x03]),
+        crypto.randomBytes(32),
+        Buffer.from([0x00]),
+        Buffer.from([0x00, 0x02, 0xc0, 0x2f]),
+        Buffer.from([0x01, 0x00]),
+        // A SHORTER declared extensions block leaves the trailing otherExtension
+        // bytes unparsed inside the handshake — under-consumption.
+        u16(options.underConsumeExtensions ? extensions.length - otherExtension.length : extensions.length),
+        extensions
+      ]);
+      const handshake = Buffer.concat([Buffer.from([0x01]), u24(body.length), body]);
+      return Buffer.concat([Buffer.from([0x16, 0x03, 0x01]), u16(handshake.length), handshake]);
+    };
+
+    // The builder is sane: the well-formed shape parses to the exact host.
+    expect(parseSniFromClientHello(buildHello({}))).toBe(HOST);
+    // The parser consumes the WHOLE list before deciding: two host_name entries
+    // with DIFFERENT names are still a duplicate list (only one host_name is
+    // ever legal) — the parser may not return after the first entry.
+    expect(
+      parseSniFromClientHello(buildHello({ list: Buffer.concat([entry(HOST), entry("second.auth006.internal")]) }))
+    ).toBeNull();
+
+    // Every UNDER-consumption shape is rejected exactly like an overflow:
+    const forgeries: Array<[string, Buffer]> = [
+      ["shortened extensions vector (declared block below the handshake end)", buildHello({ underConsumeExtensions: true })],
+      [
+        "trailing bytes in the server-name list (declared list below the physical entries)",
+        buildHello({
+          list: Buffer.concat([entry(HOST), entry("second.auth006.internal")]),
+          declaredListLength: entry(HOST).length
+        })
+      ],
+      [
+        "trailing bytes inside the SNI extension (list shorter than its extension)",
+        buildHello({ trailingInExtension: Buffer.from([0xde, 0xad, 0xbe, 0xef]) })
+      ],
+      ["duplicate host_name entries", buildHello({ list: Buffer.concat([entry(HOST), entry(HOST)]) })],
+      [
+        "malformed second entry (name length beyond the list end)",
+        buildHello({
+          list: Buffer.concat([entry(HOST), Buffer.from([0x00]), u16(64), Buffer.from("short", "ascii")])
+        })
+      ],
+      ["zero-length hostname", buildHello({ list: Buffer.concat([Buffer.from([0x00]), u16(0)]) })],
+      ["hostname with a control byte", buildHello({ list: entry(`bad\x01${HOST}`) })],
+      ["hostname with a space", buildHello({ list: entry(`bad ${HOST}`) })],
+      ["hostname with a DEL byte", buildHello({ list: entry(`bad\x7f${HOST}`) })],
+      ["hostname with non-ASCII bytes", buildHello({ list: entry(`bad€${HOST}`) })]
+    ];
+    for (const [label, hello] of forgeries) {
+      expect(parseSniFromClientHello(hello), `${label} must parse as null`).toBeNull();
+    }
+
+    // Through the LIVE relay: none of the under-consumption forgeries may ever
+    // reach the upstream. The upstream counts every tunneled byte.
+    let upstreamDataBytes = 0;
+    const upstream = net.createServer((socket) => {
+      socket.on("data", (chunk: Buffer) => {
+        upstreamDataBytes += chunk.length;
+        socket.write("UPSTREAM-REACHED marker=1\r\n");
+      });
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+    const upstreamPort = (upstream.address() as net.AddressInfo).port;
+
+    const relay = await startBrowserRelay({
+      port: 0,
+      allowlist: [{ host: HOST, port: 443, upstreamPort }]
+    });
+
+    try {
+      const connectWithHello = async (hello: Buffer): Promise<void> => {
+        const refusalsBefore = relay.stats().sniRefused;
+        const socket = net.connect(relay.port, "127.0.0.1");
+        await new Promise<void>((resolve) => {
+          socket.on("connect", () => {
+            socket.write(`CONNECT ${HOST}:443 HTTP/1.1\r\nhost: ${HOST}:443\r\n\r\n`);
+            socket.write(hello);
+            resolve();
+          });
+          socket.on("error", resolve);
+        });
+        try {
+          // The sniRefused COUNTER is the deterministic proof that this hello
+          // was actually read, parsed and refused (see H6b for why the client
+          // close event cannot be used here).
+          const deadline = Date.now() + 5_000;
+          while (relay.stats().sniRefused <= refusalsBefore && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+          expect(relay.stats().sniRefused, "the relay must have refused the under-consuming hello").toBeGreaterThan(
+            refusalsBefore
+          );
+        } finally {
+          socket.destroy();
+        }
+      };
+
+      for (const [, hello] of forgeries) {
+        await connectWithHello(hello);
+      }
+
+      // Not one tunneled byte reached the upstream, and nothing counted allowed.
+      expect(upstreamDataBytes).toBe(0);
+      const stats = relay.stats();
+      expect(stats.allowed).toBe(0);
+      expect(stats.sniRefused).toBe(forgeries.length);
+
+      // The control: the WELL-FORMED hello IS established and reaches the
+      // upstream — the refusals above were refusals of the forgeries, not of a
+      // broken relay.
+      const good = await new Promise<boolean>((resolve) => {
+        const socket = net.connect(relay.port, "127.0.0.1");
+        let data = "";
+        const timer = setTimeout(() => {
+          socket.destroy();
+          resolve(false);
+        }, 8_000);
+        socket.on("connect", () => {
+          socket.write(`CONNECT ${HOST}:443 HTTP/1.1\r\nhost: ${HOST}:443\r\n\r\n`);
+          socket.write(buildHello({}));
+        });
+        socket.on("data", (chunk: Buffer) => {
+          data += chunk.toString("latin1");
+          if (data.includes("UPSTREAM-REACHED")) {
+            clearTimeout(timer);
+            socket.destroy();
+            resolve(true);
+          }
+        });
+        socket.on("error", () => {
+          clearTimeout(timer);
+          socket.destroy();
+          resolve(false);
+        });
+      });
+      expect(good).toBe(true);
+      expect(relay.stats().allowed).toBe(1);
+      expect(upstreamDataBytes).toBeGreaterThan(0);
+    } finally {
+      await relay.stop();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
   test("H7 a failed setup propagates a simultaneous cleanup failure instead of swallowing it", async () => {
     const setupError = new Error("setup failed: provider did not become ready");
     const cleanupError = new Error("cleanup failed: port 43210 still bound");
@@ -1109,16 +1547,26 @@ test.describe("H. narrow harness regressions", () => {
     };
 
     // (a) Registration itself refuses a cwd outside this run's directory — a
-    // record that could authorize signalling a foreign process is never written.
+    // record that could authorize signalling a foreign process is never
+    // written. The refused registration RECLAIMS the just-spawned child before
+    // the refusal propagates, so no live orphan is left behind.
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), "auth006-h9-out-"));
     let outsideChild: ChildProcess | null = null;
+    let foreignChild: ChildProcess | null = null;
     let foreignRecordPath: string | null = null;
+    const waitForChildExit = (child: ChildProcess): Promise<void> =>
+      new Promise((resolve) => {
+        if (child.exitCode !== null || child.signalCode !== null) resolve();
+        else child.once("exit", () => resolve());
+      });
     try {
       outsideChild = spawnMarkerChild(outside);
       await waitForCommandLine(outsideChild);
       await expect(
         registerStackChild("h9 outside-cwd", outsideChild, { pattern: marker, cwd: outside })
       ).rejects.toThrow(/outside this run's directory/);
+      await waitForChildExit(outsideChild);
+      expect(outsideChild.exitCode !== null || outsideChild.signalCode !== null).toBe(true);
 
       // (b) A live child registered from a SPEC worker. The module-local stack
       // handle is null in this worker process — the exact worker-crash
@@ -1163,11 +1611,14 @@ test.describe("H. narrow harness regressions", () => {
 
       // (e) A durable record whose cwd points OUTSIDE this run: recovery
       // refuses it loudly and NEVER signals the pid it describes — the foreign
-      // process is still alive afterwards.
+      // process is still alive afterwards. (A FRESH process: the (a) child was
+      // already reclaimed by its own refused registration.)
+      foreignChild = spawnMarkerChild(outside);
+      await waitForCommandLine(foreignChild);
       const foreignRecord: ExtraChildRecord = {
         id: `h9-foreign-${crypto.randomBytes(4).toString("hex")}`,
         label: "h9 foreign record",
-        pid: outsideChild.pid ?? 0,
+        pid: foreignChild.pid ?? 0,
         commandPattern: marker,
         cwd: outside,
         startedAt: new Date().toISOString(),
@@ -1182,8 +1633,157 @@ test.describe("H. narrow harness regressions", () => {
       // The crafted refusal record MUST be removed here: leaving it would make
       // the REAL teardown fail closed on a record no real child ever wrote.
       if (foreignRecordPath) await fs.rm(foreignRecordPath, { force: true }).catch(() => undefined);
-      if (outsideChild && outsideChild.exitCode === null) outsideChild.kill("SIGKILL");
+      if (foreignChild && foreignChild.exitCode === null && foreignChild.signalCode === null) {
+        foreignChild.kill("SIGKILL");
+        await waitForChildExit(foreignChild);
+      }
+      if (outsideChild && outsideChild.exitCode === null && outsideChild.signalCode === null) {
+        outsideChild.kill("SIGKILL");
+        await waitForChildExit(outsideChild);
+      }
       await fs.rm(outside, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  test("H9b a failed registration reclaims its child — no record, no leaked port, AggregateError when reclamation fails", async () => {
+    const runDir = resolveRunDirectory();
+    const extraDir = path.join(runDir, "extra-children");
+    const marker = `auth006-h9b-${crypto.randomBytes(8).toString("hex")}`;
+    const backupDir = `${extraDir}.h9b-backup`;
+    const portFile = path.join(runDir, `h9b-port-${marker}.txt`);
+
+    // Sabotage: <runDir>/extra-children becomes a REGULAR FILE, so the mkdir /
+    // atomic write of any child record fails — the exact "child already spawned,
+    // durable record cannot be written" failure the safe path must survive.
+    // The real directory is moved aside and restored in the finally, because the
+    // REAL teardown later needs extra-children/ to be its normal directory.
+    const sabotage = async (): Promise<void> => {
+      await fs.rm(backupDir, { recursive: true, force: true });
+      await fs
+        .rename(extraDir, backupDir)
+        .catch((error) => {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        });
+      await fs.writeFile(extraDir, "not a directory", "utf8");
+    };
+    const restore = async (): Promise<void> => {
+      await fs.rm(extraDir, { force: true });
+      await fs.rename(backupDir, extraDir).catch(() => undefined);
+      await fs.rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
+    };
+
+    try {
+      // (i) The REAL path: a spawned child that binds a port, whose record
+      // write fails. Registration must fail, the child must already be dead,
+      // no durable record may exist, and the port must be free again.
+      const childScript = [
+        "const net = require('node:net');",
+        "const fs = require('node:fs');",
+        `const portFile = ${JSON.stringify(portFile)};`,
+        "const server = net.createServer();",
+        "server.listen(0, '127.0.0.1', () => {",
+        "  fs.writeFileSync(portFile, String(server.address().port));",
+        "});",
+        "setInterval(() => {}, 1000);"
+      ].join("\n");
+      const child = spawn(process.execPath, ["-e", childScript], {
+        cwd: runDir,
+        stdio: "ignore"
+      });
+      expect(child.pid).toBeDefined();
+
+      // Wait until the child really holds its port.
+      let port = 0;
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        const text = await fs.readFile(portFile, "utf8").then(
+          (value) => value,
+          () => null
+        );
+        if (text) {
+          port = Number.parseInt(text, 10);
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(Number.isInteger(port) && port > 0, "the h9b child never bound its port").toBe(true);
+
+      await sabotage();
+      let registrationError: unknown;
+      try {
+        await registerStackChild("h9b write-failure child", child, { pattern: marker, cwd: runDir });
+      } catch (error) {
+        registrationError = error;
+      }
+      expect(registrationError, "the record-write failure must fail registration").toBeDefined();
+      expect(registrationError).not.toBeInstanceOf(AggregateError);
+
+      // The child was reclaimed BEFORE the failure surfaced: it is exited...
+      const childExited = await new Promise<boolean>((resolve) => {
+        if (child.exitCode !== null || child.signalCode !== null) resolve(true);
+        else child.once("exit", () => resolve(true));
+        setTimeout(() => resolve(child.exitCode !== null || child.signalCode !== null), 5_000);
+      });
+      expect(childExited, "the failed registration must have reclaimed the child").toBe(true);
+      expect(await processCommandFor(child.pid ?? 0)).toBeNull();
+
+      // ...no durable record exists (nothing references the pid, no temp
+      // residue)...
+      await restore();
+      const names = await fs.readdir(extraDir).catch(() => [] as string[]);
+      const recordTexts = await Promise.all(
+        names
+          .filter((name) => name.endsWith(".json"))
+          .map(async (name) => fs.readFile(path.join(extraDir, name), "utf8"))
+      );
+      expect(recordTexts.some((text) => text.includes(String(child.pid)))).toBe(false);
+      expect(names.some((name) => name.includes(".tmp-"))).toBe(false);
+
+      // ...and the port the child held is free again: a fresh listener can bind
+      // it (retried briefly — the kernel releases the socket at process exit).
+      let bindError: Error | null = null;
+      const boundAt = Date.now();
+      while (Date.now() - boundAt < 5_000) {
+        const probe = net.createServer();
+        bindError = await new Promise<Error | null>((resolve) => {
+          probe.once("error", (error: Error) => resolve(error));
+          probe.listen(port, "127.0.0.1", () => resolve(null));
+        });
+        await new Promise<void>((resolve) => probe.close(() => resolve()));
+        if (!bindError) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(bindError, "the reclaimed child's port must be bindable again").toBeNull();
+
+      // (ii) The reclamation itself fails too (a stand-in child whose kill is
+      // denied and which never exits): BOTH failures surface as ONE
+      // AggregateError — the registration error is not swallowed and the
+      // failed reclamation is not hidden behind it.
+      await sabotage();
+      class UnreclaimableStandIn extends EventEmitter {
+        readonly pid = 4_194_000;
+        exitCode: number | null = null;
+        signalCode: string | null = null;
+        kill(): boolean {
+          throw new Error("kill denied (h9b stand-in)");
+        }
+      }
+      const standIn = new UnreclaimableStandIn() as unknown as ChildProcess;
+      let aggregate: unknown;
+      try {
+        await registerStackChild("h9b unreclaimable stand-in", standIn, { pattern: marker, cwd: runDir });
+      } catch (error) {
+        aggregate = error;
+      }
+      expect(aggregate, "registration + failed reclamation must fail").toBeInstanceOf(AggregateError);
+      const aggregateError = aggregate as AggregateError;
+      expect(aggregateError.errors).toHaveLength(2);
+      expect(aggregateError.message).toMatch(/failed AND reclaiming its process failed/);
+      expect((aggregateError.errors[0] as Error).message).not.toMatch(/reclaim/);
+      expect((aggregateError.errors[1] as Error).message).toMatch(/could not reclaim unregistered child/);
+    } finally {
+      await restore().catch(() => undefined);
+      await fs.rm(portFile, { force: true }).catch(() => undefined);
     }
   });
 });

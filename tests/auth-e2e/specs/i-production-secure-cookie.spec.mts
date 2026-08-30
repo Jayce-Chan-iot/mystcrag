@@ -18,11 +18,11 @@
  *
  *   I1  the session cookie on a valid production HTTPS origin is EXACTLY
  *       __Host-mystcrag_session · Secure · HttpOnly · SameSite=Lax · Path=/ ·
- *       host-only (no Domain attribute — a __Host- prefix forbids one)
- *   I2  browser JavaScript cannot read the session credential (document.cookie,
- *       localStorage, sessionStorage), and no chunked session cookie exists
- *   I3  the authenticated session survives a fresh navigation (session restore)
- *       and a protected call completes through the production BFF → HTTPS →
+ *       host-only (no Domain attribute — a __Host- prefix forbids one);
+ *       browser JavaScript cannot read the session credential (document.cookie,
+ *       localStorage, sessionStorage) and no chunked session cookie exists; and
+ *       the authenticated session survives a fresh navigation (session restore)
+ *       while a protected call completes through the production BFF → HTTPS →
  *       backend chain (access-token verification included)
  *   I2  mutations on the production topology enforce Origin/CSRF directly, from
  *       the real browser over the real TLS topology: a same-origin mutation

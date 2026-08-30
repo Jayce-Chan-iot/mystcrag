@@ -21,7 +21,13 @@
  *     the synthetic provider.
  *   - The first tunneled bytes must be a TLS ClientHello whose SNI equals the
  *     CONNECT host. A plaintext request or a ClientHello naming a different host
- *     destroys the tunnel — no application byte ever flows on a mismatch.
+ *     destroys the tunnel — no application byte ever flows on a mismatch. The
+ *     parser demands EXACT consumption of every sub-vector: the extensions
+ *     block must end exactly at the ClientHello handshake end, the server-name
+ *     list must consume its extension entirely, and every list entry must be
+ *     well-formed — a duplicate host_name, a zero-length hostname or a hostname
+ *     with non-printable/non-ASCII bytes is malformed and never reaches the
+ *     upstream.
  *   - Every decision is counted (allowed / refused / sni-refused, per host) and the
  *     counters are published through the provider admin plane, so specs can assert
  *     the provider really received the relayed requests and that refusals happened.
@@ -61,10 +67,27 @@ export type BrowserRelay = {
  * length that overflows, truncates or points past its parent boundary makes
  * the whole ClientHello malformed (null) — it is never silently clamped with
  * Math.min, and bytes outside the record (pipelined or forged trailing data)
- * are never parsed. A server_name entry whose type is not host_name (0x00) is
- * rejected too. Regression-tested by H6b, including a forged SNI placed beyond
- * the record/handshake boundary, which the old unbounded parser would have
- * accepted.
+ * are never parsed.
+ *
+ * UNDER-consumption is rejected exactly like overflow: every sub-vector must
+ * be consumed EXACTLY by its declared successor —
+ *   - the extensions block must end exactly at the ClientHello handshake end
+ *     (an extensionsLength shorter than the actual extension content leaves
+ *     unparsed trailing handshake bytes and is malformed);
+ *   - the server-name list must consume its server_name extension ENTIRELY
+ *     (trailing bytes after the declared list, inside the extension, are
+ *     malformed);
+ *   - every entry in the list is parsed and validated — the parser never
+ *     returns after the first host_name and ignores the tail. A second
+ *     host_name entry (duplicate), a zero-length hostname, a hostname
+ *     containing anything outside printable ASCII (control characters, space,
+ *     DEL, non-ASCII bytes), a non-host_name entry type, or a truncated second
+ *     entry all make the ClientHello malformed.
+ *
+ * Regression-tested by H6b (boundary overflows and out-of-bound forgeries) and
+ * H6c (under-consumption, trailing list bytes, duplicate host_name, malformed
+ * second entry), both at parser level and through the live relay, where none
+ * of the malformed inputs may ever reach the upstream.
  */
 export function parseSniFromClientHello(buffer: Buffer): string | null {
   // TLS record header: type(1) version(2) length(2); must be a handshake record.
@@ -99,9 +122,17 @@ export function parseSniFromClientHello(buffer: Buffer): string | null {
   const extensionsLength = buffer.readUInt16BE(cursor);
   cursor += 2;
   const extensionsEnd = cursor + extensionsLength;
-  // Strict: the declared extensions block must fit inside the handshake.
-  if (extensionsEnd > handshakeEnd) return null;
-  while (cursor + 4 <= extensionsEnd) {
+  // Strict and EXACT: the extensions block must consume the ClientHello
+  // handshake to its very end — an extensionsLength SHORTER than the actual
+  // extension content (under-consumption) is malformed exactly like an
+  // overflowing one, never silently tolerated.
+  if (extensionsEnd !== handshakeEnd) return null;
+
+  let serverName: string | null = null;
+  let sawServerNameExtension = false;
+  while (cursor < extensionsEnd) {
+    // A partial extension header at the end of the block is trailing garbage.
+    if (extensionsEnd - cursor < 4) return null;
     const extensionType = buffer.readUInt16BE(cursor);
     const extensionLength = buffer.readUInt16BE(cursor + 2);
     const extensionStart = cursor + 4;
@@ -109,26 +140,65 @@ export function parseSniFromClientHello(buffer: Buffer): string | null {
     // Strict: each extension must fit inside the extensions block.
     if (extensionEnd > extensionsEnd) return null;
     if (extensionType === 0x0000) {
-      // server_name extension: list_length(2) name_type(1) name_length(2) name
-      if (extensionEnd - extensionStart < 2) return null;
-      const listLength = buffer.readUInt16BE(extensionStart);
-      const listEnd = extensionStart + 2 + listLength;
-      // Strict: the server-name list must fit inside its extension.
-      if (listEnd > extensionEnd) return null;
-      const entryStart = extensionStart + 2;
-      if (listEnd - entryStart < 3) return null;
-      const nameType = buffer[entryStart];
-      if (nameType !== 0x00) return null;
-      const nameLength = buffer.readUInt16BE(entryStart + 1);
-      const nameStart = entryStart + 3;
-      const nameEnd = nameStart + nameLength;
-      // Strict: the name must fit inside the server-name list.
-      if (nameEnd > listEnd) return null;
-      return buffer.toString("ascii", nameStart, nameEnd);
+      // A second server_name extension is malformed (duplicate extension type).
+      if (sawServerNameExtension) return null;
+      sawServerNameExtension = true;
+      const parsed = parseServerNameList(buffer, extensionStart, extensionEnd);
+      if (parsed === null) return null;
+      serverName = parsed;
     }
     cursor = extensionEnd;
   }
-  return null;
+  return serverName;
+}
+
+/**
+ * Parses the server_name list of ONE server_name extension. The list must
+ * consume the extension EXACTLY (trailing bytes after the declared list are
+ * malformed), every entry must be a well-formed host_name (a non-host_name
+ * type is rejected), a duplicate host_name is rejected, a zero-length
+ * hostname is rejected, and every hostname byte must be printable ASCII —
+ * control characters, space, DEL and non-ASCII bytes are all rejected. The
+ * entry list is parsed to its end: a truncated or malformed SECOND entry
+ * makes the whole ClientHello malformed even though the first parsed fine.
+ */
+function parseServerNameList(
+  buffer: Buffer,
+  extensionStart: number,
+  extensionEnd: number
+): string | null {
+  if (extensionEnd - extensionStart < 2) return null;
+  const listLength = buffer.readUInt16BE(extensionStart);
+  const listEnd = extensionStart + 2 + listLength;
+  // Strict and EXACT: the server-name list must consume its extension to the
+  // very end — trailing bytes inside the extension are malformed, never ignored.
+  if (listEnd !== extensionEnd) return null;
+  let cursor = extensionStart + 2;
+  let hostName: string | null = null;
+  while (cursor < listEnd) {
+    // A partial entry header at the end of the list is trailing garbage.
+    if (listEnd - cursor < 3) return null;
+    const nameType = buffer[cursor];
+    if (nameType !== 0x00) return null;
+    const nameLength = buffer.readUInt16BE(cursor + 1);
+    const nameStart = cursor + 3;
+    const nameEnd = nameStart + nameLength;
+    // Strict: the name must fit inside the server-name list.
+    if (nameEnd > listEnd) return null;
+    // A zero-length hostname is malformed.
+    if (nameLength === 0) return null;
+    for (let index = nameStart; index < nameEnd; index += 1) {
+      // Printable ASCII only: control characters, space, DEL and every
+      // non-ASCII byte are rejected — toString("ascii") would silently mask
+      // them, so the bytes are validated before decoding.
+      if (buffer[index] < 0x21 || buffer[index] > 0x7e) return null;
+    }
+    // At most ONE host_name: a duplicate is malformed, never "first wins".
+    if (hostName !== null) return null;
+    hostName = buffer.toString("ascii", nameStart, nameEnd);
+    cursor = nameEnd;
+  }
+  return hostName;
 }
 
 export async function startBrowserRelay(options: {
