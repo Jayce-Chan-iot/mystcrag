@@ -2,11 +2,11 @@
 
 **Feature:** FEAT-018 Production Identity & Session<br>
 **Prepared by:** SOL / TASK-AUDIT-001<br>
-**Package state:** AUTH-001 through AUTH-005 and AUTH-008 are integrated; AUTH-006 is reactivated `IN_PROGRESS` for GLM to rebase and repair candidate `3bbf8058d6a236064567ed9f0e9b3bd74597ac42`; AUTH-007 remains dependency-blocked<br>
-**Blocking gates:** AUTH-006 exclusively owns its exact QA/CI/evidence paths and must close every independent review finding plus produce two clean 32/32 runs; AUTH-007 remains last and starts only after AUTH-006 is accepted<br>
+**Package state:** AUTH-001 through AUTH-006 and AUTH-008 are integrated; AUTH-006 final candidate `1412d657236ade40872d71d4468df3d66391040c` is `DONE`; AUTH-007 is `IN_PROGRESS` under SOL<br>
+**Blocking gates:** AUTH-007 remains the only final Feature acceptance gate; it may reconcile only its registered controlling documents and must not start a new Feature, redesign authentication, perform P1/P2 work or weaken AUTH-006<br>
 **Contract marker:** `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`
 
-Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. SOL accepted AUTH-002 at `fbd7a540776c447289a05aeb20e50deefd8ea21a`, AUTH-003 at `ab54703fba59173ab9197aaae82215d93abf4f86`, AUTH-004 at `14cb9ef3d1c37113bf2d07df72044023c440137f`, integrated AUTH-005 final candidate `071c1700328de3551976eaa42ea361e5028028a2`, and integrated AUTH-008 final candidate `8b1edacb2df7041e39b39547bf4c37f3eaad936f`. AUTH-006 exposed the production-only body-stream/session-rolling failure that AUTH-008 repaired; GLM now rebases the retained AUTH-006 candidate and produces the final isolated evidence.
+Product Owner approved Auth0, environment-isolated exact allowlists, and the Next.js BFF secure-cookie topology on 2026-08-25. SOL accepted AUTH-002 at `fbd7a540776c447289a05aeb20e50deefd8ea21a`, AUTH-003 at `ab54703fba59173ab9197aaae82215d93abf4f86`, AUTH-004 at `14cb9ef3d1c37113bf2d07df72044023c440137f`, integrated AUTH-005 final candidate `071c1700328de3551976eaa42ea361e5028028a2`, integrated AUTH-008 final candidate `8b1edacb2df7041e39b39547bf4c37f3eaad936f`, and integrated AUTH-006 final candidate `1412d657236ade40872d71d4468df3d66391040c`. The final post-integration AUTH-006 run `rmtf8gu2csc2y1frhp4` passed 54/54 with complete resource cleanup and artifact secret scan; AUTH-007 now performs final reconciliation and acceptance.
 
 ## Task DAG
 
@@ -42,7 +42,7 @@ Baseline P0 DONE + Product Owner inputs
                     |
                     v
          TASK-AUTH-006 rebase/rerun
-          two clean 32/32 gates
+          accepted 54-test gate
                     |
                     v
               TASK-AUTH-007
@@ -228,7 +228,7 @@ Contract freeze and dependency setup are serial. TASK-AUTH-003 and TASK-AUTH-005
 - **BRANCH:** `task/auth-007-final-integration`
 - **OBJECTIVE:** review each task against frozen contracts, integrate in DAG order and issue the only Feature acceptance decision.
 - **BACKGROUND:** cross-module auth work is complete only when contract, persistence, backend, frontend, operations and E2E evidence agree.
-- **DEPENDENCIES:** TASK-AUTH-001 through TASK-AUTH-006 in `REVIEW` with green evidence.
+- **DEPENDENCIES:** TASK-AUTH-001 through TASK-AUTH-006 `DONE` with green evidence.
 - **ALLOWED FILES:** integration conflict resolutions within previously approved paths, `docs/SECURITY_AND_PRIVACY.md`, `docs/DEPLOYMENT_GUIDE.md`, `docs/ENGINEERING_GUIDE.md`, Feature/task/canonical/health registries and final acceptance report.
 - **FORBIDDEN FILES:** new feature scope, broad refactors, unreviewed dependency/schema changes, payment/community/3D, destructive branch/worktree operations.
 - **CANONICAL REFERENCES:** approved Auth Session Contract, FEAT-018 plan, all task diffs/evidence, governance registries.
@@ -270,4 +270,8 @@ TASK-AUTH-004 is `DONE`. SOL accepted final candidate `14cb9ef3d1c37113bf2d07df7
 
 TASK-AUTH-005 is `DONE`. SOL accepted and fast-forward integrated final candidate `071c1700328de3551976eaa42ea361e5028028a2` after independent no-findings review, Frontend 397/397 tests, lint, typecheck, production build and full workspace validation.
 
-TASK-AUTH-008 is `DONE`. SOL accepted and fast-forward integrated final candidate `8b1edacb2df7041e39b39547bf4c37f3eaad936f` after byte-fidelity repair, independent no-findings review, Frontend 405/405 tests, lint, typecheck, production build and full workspace validation. TASK-AUTH-006 is reactivated `IN_PROGRESS` for GLM with exact isolated QA/CI/evidence paths; TASK-AUTH-007 remains last. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.
+TASK-AUTH-008 is `DONE`. SOL accepted and fast-forward integrated final candidate `8b1edacb2df7041e39b39547bf4c37f3eaad936f` after byte-fidelity repair, independent no-findings review, Frontend 405/405 tests, lint, typecheck, production build and full workspace validation.
+
+TASK-AUTH-006 is `DONE`. SOL accepted and fast-forward integrated final candidate `1412d657236ade40872d71d4468df3d66391040c`; candidate evidence contains two clean 54/54 isolated runs, and the post-integration main run `rmtf8gu2csc2y1frhp4` again passed 54/54 with `stoppedAt`, all owned processes exited, ports released, isolated database dropped and verified gone, artifact secret scan PASS, and `pnpm validate` 15/15 packages PASS.
+
+TASK-AUTH-007 is `IN_PROGRESS` under SOL on `task/auth-007-final-integration`. It remains the only final acceptance task and is limited to registered integration consistency, controlling-document reconciliation, final main validation and the Feature acceptance decision. Actual staging/production domain values remain deployment inputs, not a pending provider or topology decision.
