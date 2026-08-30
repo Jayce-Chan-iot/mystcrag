@@ -1,7 +1,7 @@
 # Next Phase Backlog
 
 **Planning horizon:** current Phase plus the immediately following Phase only<br>
-**Selection rule:** one major Feature starts after baseline P0 closes
+**Selection rule:** the baseline is ready and non-auth development may continue only through separately registered tasks after the M0 Product + Competitor + Cross-platform Audit
 
 ## Current Phase entry gates
 
@@ -12,7 +12,7 @@ These are repository gates, not competing product Features:
 3. Resolve AI candidate concept collision: TASK-AI-001 -> TASK-BE-003.
 4. Freeze and replay-validate one candidate commit, including isolated authenticated browser smoke.
 
-All next-Phase Feature tasks remain `BACKLOG` or `BLOCKED` until these gates are `DONE`.
+These baseline gates are `DONE`. FEAT-018 implementation and isolated security verification are also complete; its production deployment acceptance is deferred and does not block unrelated registered Features.
 
 ## Priority ranking
 
@@ -38,11 +38,11 @@ Weights: User Value 25, Business Value 20, Core Experience 20, Technical Necessi
 - **Technical Value:** replaces a public fixed token with a standard server-verified session and stable actor provisioning.
 - **Technical Risk:** high; security, provider operations, cookie/token boundaries, migration and recovery must be decided contract-first.
 - **Estimated Scope:** large, 5 implementation/review tasks after one SOL contract task.
-- **Dependencies:** frozen baseline; provider/security decision; deployment secrets and callback domains.
+- **Dependencies:** implementation dependencies are complete. Production release still requires the approved same-region staging benchmark, real Origins, byte-exact Auth0 allowlists and real login/logout smoke when deployment resumes.
 - **Affected Modules:** backend auth and app composition, frontend auth/session UI and API runtime, database user provisioning, API/security/deployment docs, QA.
 - **Parallelizable:** backend and frontend implementation can run in parallel only after the contract/dependency task freezes interfaces and file locks.
 - **Recommended Agent Type:** SOL contract/integration, GLM backend/database/tests, Qwen frontend/responsive interaction.
-- **Reason:** every persistent customer flow already assumes an actor; this is the highest-value shared prerequisite and commercial blocker.
+- **Reason:** the shared identity prerequisite is technically integrated. The remaining gap is a deferred production release gate, not authorization for ordinary Features to modify the frozen Auth boundary.
 
 ### FEAT-022 — Checkout and Fulfillment Foundation
 
@@ -126,8 +126,8 @@ Weights: User Value 25, Business Value 20, Core Experience 20, Technical Necessi
 ## Recommended selection
 
 ```text
-RECOMMENDED NEXT FEATURE:
-FEAT-018 — Production Identity & Session
+RECOMMENDED NEXT TASK:
+M0 — Product + Competitor + Cross-platform Audit
 ```
 
-It is the only Feature recommended for the next Phase. FEAT-022 and the other candidates remain planned; they are not authorized to start in parallel.
+The audit must re-evaluate Web competitive experience, DIY interaction quality, shared Core boundaries, cross-platform architecture, WeChat Mini Program readiness, AI/3D product work and White Label groundwork against the current code. It is analysis/governance work, not permission to start business implementation. Every resulting Feature still requires its own Task ID, owner, branch, writable/forbidden paths, dependencies and acceptance criteria. Existing Web Auth must not be rewritten for Mini Program preparation; a future WeChat identity integration requires an independent Auth Adapter task over the canonical internal `User` + `ExternalIdentity` model.

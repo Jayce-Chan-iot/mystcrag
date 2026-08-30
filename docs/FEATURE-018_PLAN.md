@@ -1,8 +1,8 @@
 # FEAT-018 Plan — Production Identity & Session
 
 **Priority:** P0 for commercial release<br>
-**Recommended next Feature:** yes, and the only major Feature selected<br>
-**Dispatch state:** AUTH-001 through AUTH-006 and AUTH-008 integrated; AUTH-007 final acceptance is blocked on two missing authorities/evidence inputs<br>
+**Recommended next Feature:** implementation complete; production deployment acceptance deferred<br>
+**Dispatch state:** AUTH-001 through AUTH-006 and AUTH-008 integrated; AUTH-007 is `BLOCKED — DEPLOYMENT_ACCEPTANCE_DEFERRED_BY_PRODUCT_OWNER`<br>
 **Contract marker:** `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`
 
 ## Objective
@@ -24,10 +24,12 @@ As a customer, I can sign in, return to the app, access only my saved work and o
 
 ## Remaining final-acceptance gaps
 
-Product Owner decisions and all cross-module semantics remain frozen by [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md). Implementation, workspace validation, fresh PostgreSQL verification, security/full-loop E2E, production-start negatives, cleanup, and evidence scanning pass. AUTH-007 cannot truthfully close the following frozen acceptance items without new authority/evidence:
+Product Owner decisions and all cross-module semantics remain frozen by [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md). Implementation, workspace validation, fresh PostgreSQL verification, security/full-loop E2E, production-start negatives, cleanup, and evidence scanning pass. Product Owner approved the measurable performance contract but intentionally deferred staging/production deployment. AUTH-007 cannot truthfully close the following release acceptance items until deployment resumes:
 
-1. The performance criterion references a session-lookup p95 "contract budget", but no controlling AUTH contract or test defines its numeric threshold or measurement method. AUTH-007 may not invent or weaken a frozen product gate.
-2. The contract requires byte-exact staging and production Auth0 origin/callback/logout/web-origin allowlists plus login/logout smoke. Those deployment inputs and real-environment results have not been supplied. This blocks those deployments and final Feature acceptance, while the implementation remains ready for that evidence.
+1. Measure steady-state session lookup added latency at p95 <= 100 ms after 30 warm-up requests using at least 300 valid samples in a same-region staging environment. Token renewal and JWKS cold paths are measured separately. The approved threshold remains frozen and is not waived by the deferral.
+2. Verify byte-exact staging and production Auth0 origin/callback/logout/web-origin allowlists plus real login/logout smoke. Real Origins have not been provided and must not be fabricated or replaced with localhost.
+
+`DEVELOPMENT GATE = OPEN`: this deployment-only blocker does not prevent separately registered non-authentication product Features from entering `READY` or `IN_PROGRESS` when their own dependencies and acceptance criteria are satisfied. `PRODUCTION AUTH RELEASE GATE = BLOCKED`: AUTH-007 itself may not expand scope, redesign authentication, weaken security gates or implement unrelated Feature work.
 
 ## Architecture impact
 
@@ -89,11 +91,11 @@ The Feature may report `FEATURE ACCEPTANCE: PASS` only when all are true:
 - **Functional:** login, callback/session restoration, logout, expiry and revocation behave according to the frozen contract.
 - **Desktop/mobile:** at 1440×900 and 375×812 there is no horizontal scroll; sign-in/out and session-error actions remain visible and keyboard-operable.
 - **Regression:** anonymous home/library behavior and authenticated design/recommendation/DIY/order/Tarot flows retain existing behavior.
-- **Performance:** session lookup does not add more than the contract budget to p95 protected navigation; verifier key retrieval is bounded and cached per provider guidance.
+- **Performance:** steady-state session lookup adds no more than 100 ms at p95 after 30 warm-up requests over at least 300 valid same-region staging samples; Token renewal and JWKS cold paths are measured separately; verifier key retrieval remains bounded and cached per provider guidance.
 - **Error handling:** provider unavailable, invalid state/nonce, expired/revoked token and missing user mapping fail closed with no secret/claim leakage.
 - **Data persistence:** concurrent first login creates one identity mapping and one user; cross-user repository access is rejected.
 - **Build:** install, lint, typecheck, unit/integration tests, production build and PostgreSQL verification pass.
 - **E2E:** clean authenticated full-loop and two-user isolation tests pass in CI-compatible isolated runtime output.
 - **Operations:** production startup validates required configuration; key rotation/revocation and rollback procedure are documented and exercised in test.
 
-TASK-AUTH-001 originally recorded `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`; the current contract marker is `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`. AUTH-002 through AUTH-006 and AUTH-008 are integrated. AUTH-007 is the sole final gate and currently records `FEATURE ACCEPTANCE: FAIL` because the two remaining criteria above are not evidenced; this is not permission to modify frozen decisions or begin another Feature.
+TASK-AUTH-001 originally recorded `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`; the current contract marker is `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`. AUTH-002 through AUTH-006 and AUTH-008 are integrated. AUTH-007 remains the sole production acceptance authority and records `FEATURE ACCEPTANCE: FAIL` until the deferred deployment evidence exists. That restriction applies to AUTH-007 and the frozen Auth boundary; it does not globally prohibit a separately registered non-auth Feature.

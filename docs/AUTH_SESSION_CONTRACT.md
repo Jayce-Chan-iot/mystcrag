@@ -219,6 +219,8 @@ Startup is fail closed in staging/production: all variables must exist, origins/
 
 Actual staging and production domains are deployment inputs, not fabricated contract values:
 
+The Product Owner-approved performance contract remains frozen for the future deployment phase: steady-state session lookup added latency is p95 <= 100 ms after 30 warm-up requests over at least 300 valid samples in a same-region staging environment. Token renewal and JWKS cold paths are measured separately. Deployment deferral does not delete, weaken or substitute local evidence for this gate.
+
 | Input | Owner | Verification | PASS | FAIL |
 | --- | --- | --- | --- | --- |
 | staging origin/callback/logout/web origin | Product Owner + SOL/Operations before staging deployment | Compare secret-managed values and Auth0 staging Application settings byte-for-byte; execute login/logout smoke | Exact HTTPS entries, no wildcard/localhost, flow passes | Missing/mismatch/wildcard/localhost or redirect failure; deployment blocked |
@@ -287,4 +289,4 @@ Accessed 2026-08-25:
 
 `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`
 
-AUTH-002 through AUTH-006 and the narrowly registered AUTH-008 repair are integrated on `main`. AUTH-007 replayed the complete workspace, PostgreSQL, browser security, cleanup, and artifact gates successfully, but final Feature acceptance remains pending because the frozen plan's session-lookup p95 budget has no numeric authority to measure against and the real staging/production Auth0 allowlists and login/logout smoke evidence require deployment inputs that have not been supplied. Only AUTH-007 may record the final acceptance result after those gates are evidenced; implementation success alone is not Feature acceptance.
+AUTH-002 through AUTH-006 and the narrowly registered AUTH-008 repair are integrated on `main`. AUTH-007 replayed the complete workspace, PostgreSQL, browser security, cleanup, and artifact gates successfully. Product Owner approved the numeric performance contract above and intentionally deferred staging/production deployment; real Origins, byte-exact Auth0 allowlists, the staging benchmark and real login/logout smoke therefore remain pending release evidence. Only AUTH-007 may record final production acceptance after those gates are evidenced. The Auth implementation is frozen except for an explicitly registered P0 security defect. This deployment-only blocker does not prevent separately registered non-auth Features from proceeding under normal governance.

@@ -5,7 +5,7 @@
 **Baseline:** `READY`<br>
 **Baseline reference:** annotated tag `baseline/v0.1.0-20260825`
 
-The repository has a validated P0 baseline and the FEAT-018 production identity runtime is integrated. AUTH-007 independently passed workspace validation, fresh PostgreSQL, build, 54/54 isolated authenticated browser checks, cleanup, and artifact scanning. Final Feature acceptance remains blocked on an undefined numeric session p95 budget and missing real staging/production Auth0 allowlist/smoke evidence; maintenance work remains separately registered.
+The repository has a validated P0 baseline and the FEAT-018 production identity runtime is integrated. AUTH-007 independently passed workspace validation, fresh PostgreSQL, build, 54/54 isolated authenticated browser checks, cleanup, and artifact scanning. Authentication implementation health is green; production Auth acceptance is deferred by Product Owner until a future deployment phase supplies real Origins, Auth0 allowlist/smoke evidence and the approved same-region staging benchmark. This deployment-only gate does not lower the frozen technical score or block separately registered non-auth development.
 
 ## Scorecard
 
@@ -25,7 +25,8 @@ The repository has a validated P0 baseline and the FEAT-018 production identity 
 ## Priority summary
 
 - Baseline P0: none.
-- FEAT-018 final gate: authorize and measure the numeric session-lookup p95 budget; supply byte-exact staging/production Auth0 allowlists and login/logout smoke evidence.
+- FEAT-018 production release gate: measure the approved steady-state session lookup budget (p95 added latency <= 100 ms after 30 warm-ups over >= 300 same-region staging samples; renewal/JWKS cold paths separate) and supply byte-exact staging/production Auth0 allowlists plus login/logout smoke when Product Owner resumes deployment.
+- Development gate: `OPEN` for separately registered non-auth Features whose own dependencies, ownership, path locks and acceptance criteria are satisfied; the frozen Auth boundary remains read-only except for an explicitly registered P0 security defect.
 - P1: current-document reconciliation outside FEAT-018, dormant/experimental lifecycle decisions and asset/export parity.
 - P2: compatibility review, concentration-hotspot splits and branch/worktree metadata cleanup.
 
