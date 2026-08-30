@@ -275,3 +275,15 @@ TASK-AUTH-008 is `DONE`. SOL accepted and fast-forward integrated final candidat
 TASK-AUTH-006 is `DONE`. SOL accepted and fast-forward integrated final candidate `1412d657236ade40872d71d4468df3d66391040c`; candidate evidence contains two clean 54/54 isolated runs, and the post-integration main run `rmtf8gu2csc2y1frhp4` again passed 54/54 with `stoppedAt`, all owned processes exited, ports released, isolated database dropped and verified gone, artifact secret scan PASS, and `pnpm validate` 15/15 packages PASS.
 
 TASK-AUTH-007 is `BLOCKED — DEPLOYMENT_ACCEPTANCE_DEFERRED_BY_PRODUCT_OWNER` under SOL on `task/auth-007-final-integration`. Fresh PostgreSQL passed 87/87 and isolated security/full-loop E2E run `rmtf8try9fmdt97x3ho` passed 54/54 with complete cleanup and artifact scanning. Product Owner approved a steady-state session lookup added-latency budget of p95 <= 100 ms after 30 warm-up requests over >= 300 valid same-region staging samples, with Token renewal/JWKS cold paths measured separately, then intentionally postponed deployment. Real staging/production Origins, byte-exact Auth0 allowlists, the staging benchmark and real login/logout smoke remain production release gates. AUTH-007 may not waive them or expand its scope, but this deployment-only blocker does not prevent separately registered non-auth Features from proceeding.
+
+## M0 audit first-Worker recommendation
+
+TASK-AUDIT-002 recommends exactly one next Worker and does not start it:
+
+| Task | Worker | Branch | State | Dependency |
+| --- | --- | --- | --- | --- |
+| TASK-CORE-001 Cross-platform DIY Editing Session Core | **GLM** | `task/core-001-diy-editing-session-core` | `PROPOSED — AWAIT HUMAN PRODUCT OWNER DISPATCH` | TASK-AUDIT-002 accepted |
+
+The complete dispatch package—including objective, writable/forbidden paths, architecture constraints, acceptance criteria, required tests and regression scope—is frozen in [M0 Product, Competitor and Cross-platform Audit](M0_PRODUCT_COMPETITOR_CROSS_PLATFORM_AUDIT.md#first-worker-dispatch-package).
+
+TASK-CORE-001 is Core/architecture work only. It may create `packages/diy-session-core/**`, including that new package's own manifest and task-local tests, but may not modify any application, existing package, root or existing-package manifest, lockfile, database, Prisma, Three Engine, runtime configuration or Auth path. It must return a Core-only candidate in `REVIEW`; it must not integrate the Web consumer, create a Mini Program shell or start AI/commerce work.

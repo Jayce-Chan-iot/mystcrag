@@ -1,19 +1,19 @@
 # Current Product Status
 
-**Observed:** 2026-08-30 at local `main` `c1af69f`<br>
+**Observed:** 2026-08-31 at audit baseline `main` `2abfdfe76df3302f2c9ae88cfa749832b71e2578`<br>
 **Product posture:** demonstrable 2.5D MVP core; not commercially production-ready<br>
 **Repository baseline:** `READY` — `baseline/v0.1.0-20260825`
 
-Completion is based on mounted production paths, source and contract reachability, automated checks and current browser evidence. A compiled or tested dormant component is not counted as a completed product Feature.
+Completion is based on mounted production paths, source and contract reachability, and automated checks. TASK-AUDIT-002 could not capture a current-run local browser screenshot because both permitted desktop-browser paths blocked the local origin; its visual conclusions are therefore code/test grounded and are not a screenshot-level visual certification. A compiled or tested dormant component is not counted as a completed product Feature.
 
 ## Completion matrix
 
 | Feature | Status | Completion | Quality | Production Ready | Main problem |
 | --- | --- | ---: | --- | --- | --- |
 | Atelier home and navigation | ACTIVE | 95% | High | Yes, within MVP | No product analytics; current browser smoke only covers entry/navigation. |
-| AI questionnaire and three recommendations | ACTIVE | 85% | Medium-high | Conditional | Production path is deterministic and functional; generate/recommend API roles are conflated in registry/docs and orchestration is large. |
+| AI questionnaire and three recommendations | ACTIVE | 85% | Medium-high | Conditional | Production path is deterministic/rule-based and grounded in real catalog constraints; there is no conversational refinement loop. |
 | Design result and compact preview | ACTIVE | 90% | High | Conditional | Protected ownership uses the integrated Auth boundary; commercial deployment evidence remains deferred. |
-| 2D DIY editor | ACTIVE | 85% | Medium-high | Conditional | Full-server edit round trips, manual save/session recovery, 1,275-line component and export/visible asset divergence. |
+| 2D DIY editor | ACTIVE | 85% | Medium-high | Conditional | Every structural gesture waits on a server mutation; undo/redo is tab-memory-only; state is concentrated in a 1,275-line component. |
 | Save, revisions, clone and delete | ACTIVE | 90% | High | Conditional | Persistence, production-verifiable identity composition and owner isolation are tested; formal deployment acceptance is deferred. |
 | Pricing and inventory validation | ACTIVE | 85% | High | Conditional | Core checks pass; catalog seed documentation is contradictory. |
 | Immutable order creation/history | ACTIVE | 65% | High for implemented scope | No for commerce | Produces an internal snapshot only; no address, shipping, tax, payment or fulfillment workflow. |
@@ -46,14 +46,15 @@ production deployment acceptance -> durable account/profile completion -> addres
 
 ## Five current bottlenecks
 
-1. **Production deployment acceptance:** Auth implementation and isolated security verification are complete, but Product Owner deferred real Origins, Auth0 allowlist/smoke evidence and the approved staging performance benchmark.
-2. **Commercial checkout:** order creation stops at a `PENDING`/restock-aware immutable snapshot without payment, address, shipping, tax or fulfillment.
-3. **DIY resilience and concentration:** the editor is a large component with synchronous server mutations, manual persistence and weak interrupted-session recovery.
-4. **Real-environment release evidence deferred:** the 54-test authenticated browser gate is integrated and CI-compatible, but real deployment-tenant smoke and the first recorded hosted run remain outstanding.
-5. **Community promise exceeds implementation:** personal design management and a backend publish method exist, while discovery/feed/share/moderation do not.
+1. **Shared editing behavior is absent:** Web state, browser persistence and transport concerns surround a large editor; Mini Program reuse would otherwise duplicate product rules.
+2. **DIY resilience and concentration:** structural edits block on server round trips and history disappears with the tab.
+3. **Commercial checkout:** order creation stops at a `PENDING`/restock-aware immutable snapshot without payment, address, shipping, tax or fulfillment.
+4. **Durable customer continuity:** addresses, favorites, preferences and privacy state are browser-local despite durable identity.
+5. **Production deployment acceptance:** implementation is frozen and technically validated, while Product Owner deferred real Origins, Auth0 allowlist/smoke and staging benchmark evidence.
 
 ## Current and next phase boundary
 
 - Current Phase: validated baseline plus technically integrated FEAT-018; production Auth acceptance is intentionally deferred.
-- Development Gate: `OPEN` for separately registered non-auth product work; the next step is an M0 Product + Competitor + Cross-platform Audit before selecting implementation tasks.
+- Development Gate: `OPEN` for separately registered non-auth product work. TASK-AUDIT-002 recommends exactly one first worker candidate, `TASK-CORE-001`, subject to Human Product Owner dispatch.
 - Auth boundary: frozen until deployment acceptance resumes, except for an explicitly registered P0 security defect. WeChat identity requires a future independent adapter task and must not rewrite Web Auth.
+- Cross-platform boundary: Web shell and Auth0 remain Web adapters; Design Contract and Bracelet Engine are shared authorities; a pure editing-session Core must land before Web resilience or Mini Program shell work.

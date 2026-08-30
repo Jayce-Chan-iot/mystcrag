@@ -1,11 +1,13 @@
 # Repository Health
 
 **Frozen score:** 89 / 100<br>
-**Assessment date:** 2026-08-25<br>
+**Assessment date:** 2026-08-31<br>
 **Baseline:** `READY`<br>
 **Baseline reference:** annotated tag `baseline/v0.1.0-20260825`
 
 The repository has a validated P0 baseline and the FEAT-018 production identity runtime is integrated. AUTH-007 independently passed workspace validation, fresh PostgreSQL, build, 54/54 isolated authenticated browser checks, cleanup, and artifact scanning. Authentication implementation health is green; production Auth acceptance is deferred by Product Owner until a future deployment phase supplies real Origins, Auth0 allowlist/smoke evidence and the approved same-region staging benchmark. This deployment-only gate does not lower the frozen technical score or block separately registered non-auth development.
+
+TASK-AUDIT-002 reconfirmed that Design Contract and Bracelet Engine are portable authorities, but found no platform-neutral owner for DIY commands, history and revision reconciliation. Browser-only persistence/navigation/rendering and a request-bound 1,275-line editor are the next shared-Core pressure point. White Label, commerce and Mini Program shells remain unimplemented and must not be inferred from package portability.
 
 ## Scorecard
 
@@ -27,8 +29,10 @@ The repository has a validated P0 baseline and the FEAT-018 production identity 
 - Baseline P0: none.
 - FEAT-018 production release gate: measure the approved steady-state session lookup budget (p95 added latency <= 100 ms after 30 warm-ups over >= 300 same-region staging samples; renewal/JWKS cold paths separate) and supply byte-exact staging/production Auth0 allowlists plus login/logout smoke when Product Owner resumes deployment.
 - Development gate: `OPEN` for separately registered non-auth Features whose own dependencies, ownership, path locks and acceptance criteria are satisfied; the frozen Auth boundary remains read-only except for an explicitly registered P0 security defect.
-- P1: current-document reconciliation outside FEAT-018, dormant/experimental lifecycle decisions and asset/export parity.
-- P2: compatibility review, concentration-hotspot splits and branch/worktree metadata cleanup.
+- P0 product/Core: propose exactly one first Worker, TASK-CORE-001 under GLM, for a pure DIY editing-session Core. It awaits Human Product Owner dispatch.
+- P0 commercial: checkout/fulfillment contract is blocked on provider and policy decisions; no runtime/schema task is authorized.
+- P1: resilient Web workbench after TASK-CORE-001, versioned sharing, grounded conversational refinement and durable profile boundaries.
+- P2: evidence-based 3D lifecycle, White Label tenancy spike, compatibility review and repository metadata cleanup.
 
 ## Strengths to preserve
 
