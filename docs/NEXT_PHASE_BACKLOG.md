@@ -37,9 +37,12 @@ Every item is specified with evidence, impact, ownership, paths, acceptance crit
 ```text
 RECOMMENDED WORKER: Qwen
 TASK: TASK-FE-002 Competitive DIY Interaction and Mobile Feedback
+OWNER: FRONTEND / Qwen
 BRANCH: task/fe-002-competitive-diy-experience
 STATUS: PROPOSED — AWAIT HUMAN PRODUCT OWNER DISPATCH
 ```
+
+Qwen is the sole execution Owner. SOL performs Review and Integration only and does not share TASK-FE-002 ownership. Stage A is an evidence-only baseline capture under ignored `output/playwright/task-fe-002/before/`; production changes remain forbidden until explicit Human Product Owner approval. Stage B then writes paired evidence under ignored `output/playwright/task-fe-002/after/`. A blocked browser capture blocks implementation and cannot be replaced by a code-only L3 claim.
 
 The revised six-competitor matrix shows that the largest actionable L3 gap is direct-manipulation feedback and mobile editing continuity. Existing Design Contract edit operations and Bracelet Engine layout/fit/slot behavior are sufficient. TASK-CORE-001 is therefore withdrawn as the first prerequisite; no new Core package, workspace importer or `pnpm-lock.yaml` change is authorized.
 

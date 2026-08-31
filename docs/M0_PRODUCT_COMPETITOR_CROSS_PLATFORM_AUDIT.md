@@ -234,9 +234,9 @@ This reverses the earlier premature sequence. Mystcrag should first prove an exc
 - **User impact:** removes the most frequent manipulation delay and makes edits, failures and recovery understandable on mobile.
 - **Architecture impact:** adds a frontend-only optimistic projection/reconciliation boundary; server authority and shared contracts remain unchanged.
 - **Dependencies:** TASK-AUDIT-002 accepted; current desktop/mobile states captured before changes.
-- **Owner / Worker:** FRONTEND / Qwen.
+- **Execution owner:** FRONTEND / Qwen. Qwen is the sole execution owner; SOL performs Review and Integration and does not share task ownership.
 - **Suggested Task ID / branch:** `TASK-FE-002` / `task/fe-002-competitive-diy-experience`.
-- **Writable paths:** the exact files in the dispatch package below plus exact TASK-FE-002/FEAT-004 governance rows.
+- **Writable paths:** the exact frontend files in the dispatch package below, the exact TASK-FE-002 row in `docs/tasks/TASK_REGISTRY.md`, and the exact FEAT-004 row in `docs/governance/FEATURE_REGISTRY.md`.
 - **Forbidden paths:** backend, packages, root tests, assets, Prisma, dependencies/lockfile, CI/runtime, Auth and other features.
 - **Acceptance criteria:** direct manipulation and recovery satisfy the dispatch's viewport, 20-gesture, failure/revision, accessibility and authority criteria.
 - **Required tests:** frontend-local interaction/reconciliation/accessibility tests, existing design tests, architecture tests, `pnpm validate` and browser evidence.
@@ -360,9 +360,13 @@ These gates do not block TASK-FE-002 and do not permit any Auth change.
 TASK: TASK-FE-002
 TITLE: Competitive DIY Interaction and Mobile Feedback
 RECOMMENDED WORKER: Qwen
-OWNER: FRONTEND
+OWNER: FRONTEND / Qwen
 BRANCH: task/fe-002-competitive-diy-experience
 STATUS: PROPOSED — HUMAN PRODUCT OWNER MUST DISPATCH
+
+OWNERSHIP BOUNDARY
+- Qwen is the sole execution Owner.
+- SOL performs Review and Integration only and does not share task ownership.
 
 OBJECTIVE
 Raise the existing Web DIY direct-manipulation, mobile feedback and editing
@@ -386,16 +390,51 @@ WRITABLE PATHS
 - apps/frontend/src/features/design/model/optimistic-design.test.tsx (new)
 - apps/frontend/src/features/design/frontend-ai-flow.test.tsx
 - apps/frontend/src/features/design/atelier-ui-contract.test.tsx
-- exact TASK-FE-002 and FEAT-004 governance rows
+- exact TASK-FE-002 row in docs/tasks/TASK_REGISTRY.md
+- exact FEAT-004 row in docs/governance/FEATURE_REGISTRY.md
+
+IGNORED QA EVIDENCE OUTPUT — NOT A TRACKED SOURCE WRITABLE PATH
+- output/playwright/task-fe-002/before/
+- output/playwright/task-fe-002/after/
+- output/playwright/task-fe-002/ is already covered by .gitignore and must
+  contain only this task's raw screenshots and browser artifacts
 
 FORBIDDEN PATHS
 - apps/backend/** and every non-design frontend feature
 - apps/frontend/public/** (no unreviewed asset replacement)
+- docs/ui-references/**
 - packages/** including Design Contract, Bracelet Engine and Three Engine
 - tests/** outside the listed frontend feature tests
 - Prisma/migrations, package manifests, pnpm-lock.yaml and CI/runtime config
 - Auth implementation/contracts/tests
 - .env, Secrets and generated output
+- .gitignore
+- repository-root screenshots or browser artifacts
+- tracked screenshots or any other task's Playwright evidence
+
+STAGE A — BASELINE CAPTURE
+1. Before modifying any production file, start the current application.
+2. Capture at least 390x844, 375x812, 430x932 and desktop.
+3. Cover the DIY initial state, a selected bead, drag/insertion state, the
+   mobile material panel, and the wrist/length/count/price information state.
+4. Save all raw screenshots and browser artifacts under
+   output/playwright/task-fe-002/before/.
+5. Return a screenshot index, current-experience findings and git status.
+6. Stop and wait for explicit Human Product Owner baseline acceptance.
+
+Before explicit Human Product Owner approval, do not modify any production
+file, implement optimistic updates, or adjust UI, animation or layout.
+
+If browser capture remains blocked, do not skip the screenshot gate. Return
+BLOCKED with startup logs, attempted URL, failure reason and the minimum
+unblocking condition. Code inspection alone cannot support an L3 claim.
+
+STAGE B — IMPLEMENTATION
+Only after explicit Human Product Owner baseline approval may Qwen continue on
+the same TASK-FE-002 branch and modify the tracked writable paths. Save the
+corresponding final evidence under output/playwright/task-fe-002/after/ and
+provide a one-to-one before/after comparison index. Do not commit screenshots
+or raw browser artifacts.
 
 ARCHITECTURE CONSTRAINTS
 - reuse existing UpdateDesignOperation DTOs and Bracelet Engine slot/fit results
@@ -462,3 +501,15 @@ Because TASK-CORE-001 is no longer selected or proposed, `pnpm-lock.yaml` remain
 - TASK-FE-002 is the only first Worker and remains `PROPOSED`; it is not `IN_PROGRESS`.
 - No Worker branch/worktree has been created.
 - No Feature implementation, Mini Program, AI, 3D, Commerce, White Label, deployment or Auth work is authorized by this audit.
+
+## Validation Evidence
+
+- Current candidate: `43c475c010d0f666848489b1a1d570fd7ab9f34f`
+- `node --test tests/architecture.test.mjs`: PASS, 15/15
+- `pnpm validate`: PASS, 15/15 workspace packages
+- root validation architecture/lifecycle gate: PASS, 16/16
+- `git diff --check main...HEAD`: PASS
+- worktree status: clean
+- final scope: 10 authorized governance/audit documents
+- runtime/package/test/Prisma/lockfile/Auth changes: NONE
+- TASK-FE-002 branch/worktree: NOT CREATED
