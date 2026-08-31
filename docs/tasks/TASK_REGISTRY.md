@@ -13,6 +13,12 @@ One task equals one accountable owner, one branch, one writable path set, and on
 
 No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROGRESS` only after its owner creates the registered branch/worktree and records exact writable paths.
 
+## Active product development
+
+| Task | Owner | Branch | Status | Writable paths | Forbidden paths |
+| --- | --- | --- | --- | --- | --- |
+| TASK-FE-002 | FRONTEND / Qwen | `task/fe-002-competitive-diy-experience` | IN_PROGRESS — STAGE A ONLY: Human Product Owner approved dispatch on 2026-08-31; capture the unchanged desktop/mobile baseline under ignored `output/playwright/task-fe-002/before/`, return the screenshot index and findings, then stop for explicit baseline acceptance; production-file changes remain forbidden during Stage A | `apps/frontend/src/features/design/components/diy-editor.tsx`, `apps/frontend/src/features/design/components/flat-bracelet-editor.tsx`, `apps/frontend/src/features/design/components/crystal-bead-image.tsx`, `apps/frontend/src/features/design/model/bracelet-fit.ts`, `apps/frontend/src/features/design/model/visual-assets.ts`, `apps/frontend/src/features/design/model/optimistic-design.ts` (new), `apps/frontend/src/features/design/model/optimistic-design.test.tsx` (new), `apps/frontend/src/features/design/frontend-ai-flow.test.tsx`, `apps/frontend/src/features/design/atelier-ui-contract.test.tsx`, exact TASK-FE-002 row in `docs/tasks/TASK_REGISTRY.md`, exact FEAT-004 row in `docs/governance/FEATURE_REGISTRY.md`; ignored task-owned evidence under `output/playwright/task-fe-002/{before,after}/` | `apps/backend/**`, every non-design frontend feature, `apps/frontend/public/**`, `docs/ui-references/**`, `packages/**`, unlisted `tests/**`, Prisma/migrations, package manifests, `pnpm-lock.yaml`, CI/runtime configuration, Auth implementation/contracts/tests, `.env`/Secrets, generated output, `.gitignore`, repository-root or tracked screenshots, other tasks' Playwright evidence; during Stage A, all tracked production files are additionally forbidden |
+
 ## Completed cleanup task
 
 | Task | Owner | Branch | Status | Writable paths | Forbidden paths |
