@@ -504,7 +504,7 @@ Because TASK-CORE-001 is no longer selected or proposed, `pnpm-lock.yaml` remain
 
 ## Validation Evidence
 
-- Current candidate: `43c475c010d0f666848489b1a1d570fd7ab9f34f`
+- Validation target: task/audit-002-product-competitor-cross-platform branch HEAD at validation execution time. SOL records the immutable accepted candidate hash when TASK-AUDIT-002 transitions from REVIEW to DONE.
 - `node --test tests/architecture.test.mjs`: PASS, 15/15
 - `pnpm validate`: PASS, 15/15 workspace packages
 - root validation architecture/lifecycle gate: PASS, 16/16
