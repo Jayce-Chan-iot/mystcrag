@@ -6,7 +6,9 @@ One task has one accountable owner. Reviewers may advise, but they do not share 
 
 | Owner ID | Accountable scope | Paths | Required controlling documents |
 | --- | --- | --- | --- |
-| `SOL` | Repository governance, integration order, cross-module release | root config, `docs/governance`, `docs/tasks`, integration-only tasks | `AGENTS.md`, current/target maps |
+| `SOL` | Planning, task registration, review, acceptance recording and archival; no runtime implementation | `docs/governance`, `docs/tasks`, specifications, plans and review/archive records explicitly named by its task | `AGENTS.md`, current/target maps |
+| `GLM` | Assigned implementation executor for image processing, visual asset, frontend and resolver tasks | only the exact runtime/test/docs paths granted by its `IN_PROGRESS` task | task specification, UI/asset manifests and affected module contracts |
+| `QWEN` | Assigned implementation executor for contract, database, backend and integration/QA tasks | only the exact runtime/test/docs paths granted by its `IN_PROGRESS` task | task specification and affected module contracts |
 | `FRONTEND` | Next.js composition, product UI, frontend API client | `apps/frontend` | UI system, interaction plan, API spec |
 | `UI` | Reusable presentation primitives | `packages/ui` | UI design system |
 | `BACKEND` | Fastify transport, application orchestration, auth and server policy | `apps/backend` | API spec, security, DesignV1 |
@@ -33,12 +35,14 @@ One task has one accountable owner. Reviewers may advise, but they do not share 
 | 3D scene contract | `THREE` | Bracelet and Frontend |
 | Knowledge rule/review contract | `KNOWLEDGE` | Backend, Database, AI/Design as affected |
 | Tarot public contract | `CONTRACT` | Tarot, Backend, Frontend, Database |
-| Root scripts/CI/workspace config | `SOL` | QA and affected module owners |
+| Root scripts/CI/workspace config | the registered `GLM` or `QWEN` execution task | SOL and QA |
 | Production runtime asset change | `ASSET` | Frontend |
 
 ## Ownership enforcement
 
 - The active task registry is authoritative; role ownership does not grant permission to edit a path already locked by another `IN_PROGRESS` task.
-- A cross-module task is owned by `SOL` only when the user explicitly approves a single integration task. Otherwise split contract producer and consumer work into dependent tasks.
+- `SOL` must not own or perform runtime implementation. It may plan, register, review, record acceptance and archive completed work. Runtime tasks must name `GLM` or `QWEN` as their single accountable owner.
+- `GLM` and `QWEN` are execution owners only when the task registry assigns them an exact branch and writable path set; neither identifier grants standing cross-repository write access.
+- Cross-module runtime work must be split into dependency-ordered `GLM`/`QWEN` tasks; `SOL` may own only the corresponding plan, review and archive tasks.
 - Generated clients, `.next`, `dist`, screenshots, local databases, and environment files are never valid task-owned source paths.
 - When a suspected duplicate crosses owners, the owner of the canonical component owns the decision task; consumer cleanup tasks depend on that decision.

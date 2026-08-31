@@ -17,11 +17,27 @@ No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROG
 | --- | --- | --- | --- | --- | --- |
 | TASK-REPO-001 | QA | `task/repo-001-evidence-retention` | DONE | tracked QA/output evidence under `artifacts/**`, `output/playwright/**`, `outputs/**`, `qa-captures-*/**`, `apps/frontend/qa-captures/**`, frontend root QA PNGs, `scripts/ui-qa/artifacts/**`, `scripts/ui-qa/qa-captures-final/**`; `.gitignore`; `docs/QA_PHASE_3_REPORT.md`; governance/task/plan docs | runtime source, `apps/frontend/public/**`, `docs/ui-references/**`, knowledge coverage JSON, current spreadsheet deliverables, user files and other worktrees |
 
-## Active feature design task
+## Bead asset import planning tasks
 
 | Task | Owner | Branch | Status | Dependencies | Writable paths | Forbidden paths |
 | --- | --- | --- | --- | --- | --- | --- |
-| TASK-ASSET-IMPORT-001 | SOL | `task/asset-import-001-design` | REVIEW | TASK-GOV-001; Product Owner approved the local-first, cloud-ready design direction on 2026-08-31 | `docs/tasks/TASK_REGISTRY.md`, `docs/INDEX.md`, `docs/governance/FEATURE_REGISTRY.md`, `docs/superpowers/specs/2026-08-31-bead-asset-import-assistant-design.md` | `apps/**`, `packages/**`, Prisma schema/migrations, root configuration, tests, runtime assets, source bead photographs, generated outputs, pre-existing unrelated user changes |
+| TASK-ASSET-IMPORT-001 | SOL | `task/asset-import-001-design` | DONE | TASK-GOV-001; Product Owner approved the local-first, cloud-ready design direction and written specification on 2026-08-31 | `docs/tasks/TASK_REGISTRY.md`, `docs/INDEX.md`, `docs/governance/FEATURE_REGISTRY.md`, `docs/superpowers/specs/2026-08-31-bead-asset-import-assistant-design.md` | `apps/**`, `packages/**`, Prisma schema/migrations, root configuration, tests, runtime assets, source bead photographs, generated outputs, pre-existing unrelated user changes |
+| TASK-ASSET-IMPORT-PLAN-001 | SOL | `task/asset-import-plan-001-implementation-plan` | REVIEW | TASK-ASSET-IMPORT-001 | `docs/tasks/TASK_REGISTRY.md`, `docs/governance/MODULE_OWNERS.md`, `docs/superpowers/plans/2026-08-31-bead-asset-import-assistant-implementation-plan.md` | `apps/**`, `packages/**`, Prisma schema/migrations, root configuration, tests, runtime assets, source bead photographs, generated outputs, pre-existing unrelated user changes |
+
+## Bead asset import implementation chain
+
+Only the named executor may claim an implementation task. SOL plans, reviews, records acceptance and archives; SOL does not implement runtime code.
+
+| Task | Owner | Branch | Status | Dependencies | Writable paths | Forbidden paths |
+| --- | --- | --- | --- | --- | --- | --- |
+| TASK-ASSET-CONTRACT-001 | QWEN | `task/asset-contract-001-admin-dtos` | BACKLOG | TASK-ASSET-IMPORT-PLAN-001 | `packages/design-contract/src/schemas/bead-asset-import-api.schema.ts`, `packages/design-contract/src/index.ts`, `packages/design-contract/tests/bead-asset-import-api.test.ts`, `docs/API_SPECIFICATION.md` | all other paths; source bead photographs; generated output |
+| TASK-ASSET-DB-001 | QWEN | `task/asset-db-001-draft-persistence` | BACKLOG | TASK-ASSET-CONTRACT-001 | `packages/database/prisma/schema.prisma`, `packages/database/prisma/migrations/20260831_add_bead_asset_import/migration.sql`, `packages/database/src/repositories/asset-import.repository.ts`, `packages/database/src/repositories/asset-import.repository.unit.test.ts`, `packages/database/src/repositories/asset-import.repository.integration.test.ts`, `packages/database/src/index.ts`, `docs/DATABASE_SCHEMA.md` | all other paths; destructive migration; generated Prisma client; source bead photographs |
+| TASK-ASSET-WORKER-001 | GLM | `task/asset-worker-001-local-pipeline` | BACKLOG | TASK-ASSET-CONTRACT-001, TASK-ASSET-DB-001 | `packages/asset-pipeline/**`, `apps/asset-worker/**`, `package.json`, `pnpm-lock.yaml`, `turbo.json`, `.env.example`, `docs/ASSET_PIPELINE.md` | all other paths; source bead photographs; generated output; network/generative image services |
+| TASK-ASSET-BE-001 | QWEN | `task/asset-be-001-import-api` | BACKLOG | TASK-ASSET-CONTRACT-001, TASK-ASSET-DB-001, TASK-ASSET-WORKER-001 | `apps/backend/src/modules/bead-asset-import/**`, `apps/backend/src/modules/product-assets/**`, `apps/backend/src/app.ts`, `apps/backend/src/index.ts`, `apps/backend/package.json`, `docs/SECURITY_AND_PRIVACY.md` | all other paths; source bead photographs; reusable admin credentials in responses/logs/client bundles |
+| TASK-ASSET-FE-001 | GLM | `task/asset-fe-001-admin-flow` | BACKLOG | TASK-ASSET-BE-001 | `apps/frontend/app/admin/page.tsx`, `apps/frontend/app/admin/bead-import/**`, `apps/frontend/app/api/admin/bead-import/**`, `apps/frontend/src/features/admin-bead-import/**` | all other paths; knowledge-admin routes; source bead photographs; public runtime visual resolver |
+| TASK-ASSET-RESOLVER-001 | GLM | `task/asset-resolver-001-runtime-visuals` | BACKLOG | TASK-ASSET-BE-001, TASK-ASSET-FE-001 | `apps/frontend/src/features/design/model/visual-assets.ts`, `apps/frontend/src/features/design/model/visual-assets.test.tsx`, `apps/frontend/src/features/design/components/crystal-bead-image.tsx`, exact frontend consumers of `CrystalBeadImage` or `getBeadVisual` named in the task claim, `apps/frontend/app/api/assets/**` | all other paths; deletion of static fallback assets; source bead photographs |
+| TASK-ASSET-QA-001 | QWEN | `task/asset-qa-001-integration-gate` | BACKLOG | TASK-ASSET-DB-001, TASK-ASSET-WORKER-001, TASK-ASSET-BE-001, TASK-ASSET-FE-001, TASK-ASSET-RESOLVER-001 | `tests/bead-asset-import-architecture.test.mjs`, `scripts/ui-qa/bead_import_flow.py`, `docs/qa/BEAD_ASSET_IMPORT_ACCEPTANCE.md` | runtime implementation; checked-in raw bead photographs; checked-in QA screenshots/output; unrelated tests |
+| TASK-ASSET-REVIEW-001 | SOL | `task/asset-review-001-acceptance-archive` | BACKLOG | TASK-ASSET-QA-001 | `docs/tasks/TASK_REGISTRY.md`, `docs/governance/FEATURE_REGISTRY.md`, `docs/progress/PROJECT_STATUS.md`, `docs/qa/BEAD_ASSET_IMPORT_ACCEPTANCE.md` | runtime implementation; tests; root configuration; source bead photographs; generated output |
 
 ## Cleanup backlog
 
@@ -145,6 +161,14 @@ No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROG
 - Define conservative background removal and image enhancement that does not generate texture or silently alter product color.
 - Define module boundaries, data lifecycle, failure recovery, security controls, rollout decomposition and measurable acceptance tests.
 - Pass architecture tests, internal document-link validation and final scope/diff review before moving the task to REVIEW.
+
+### TASK-ASSET-IMPORT-PLAN-001 — implementation dispatch plan
+
+- Register a dependency-ordered implementation chain with one owner, branch and precise writable path set per task.
+- Assign all runtime implementation to GLM or QWEN; limit SOL to planning, review, acceptance recording and archival.
+- Provide test-first steps, concrete interfaces, narrow and repository-wide verification commands, commit messages and SOL review gates.
+- Cover contract, database, archive/pipeline worker, backend security/API, standalone admin UI, runtime resolver, integration QA and final acceptance without modifying runtime code.
+- Pass architecture tests, internal document-path validation, `pnpm validate` and final diff review before moving the plan to REVIEW.
 
 ### TASK-DOC-001 — current documentation
 
