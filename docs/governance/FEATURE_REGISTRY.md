@@ -5,9 +5,9 @@ Status vocabulary: `ACTIVE` is mounted and backed by a runtime path; `PARTIAL` i
 | ID | Feature | Product/API entry | Canonical implementation | Owner | Status | Gaps / next task |
 | --- | --- | --- | --- | --- | --- | --- |
 | FEAT-001 | Original atelier home/navigation | `/` and shared layout | `apps/frontend/app/page.tsx` | FRONTEND | ACTIVE | Keep original UI as product baseline |
-| FEAT-002 | AI questionnaire and three designs | `/ai-design`, design recommendation APIs | frontend questionnaire + backend recommendation service + deterministic RuleBasedProvider/Design/Knowledge packages | FRONTEND | ACTIVE | Grounded deterministic generation is production; conversational refinement is proposed only after TASK-CORE-001 |
+| FEAT-002 | AI questionnaire and three designs | `/ai-design`, design recommendation APIs | frontend questionnaire + backend recommendation service + deterministic RuleBasedProvider/Design/Knowledge packages | FRONTEND | ACTIVE | Grounded deterministic generation is production; continuous AI modification follows an accepted L3 editor, not a new prerequisite Core package |
 | FEAT-003 | Design result and compact bracelet view | `/design/[id]` | `BraceletPreview`, Design Contract public projection | FRONTEND | ACTIVE | Distinguish from editing renderers |
-| FEAT-004 | 2D DIY bracelet editing | `/diy`, `/diy/[id]` | `FlatBraceletEditor` + Bracelet Engine | FRONTEND | ACTIVE | Request-bound gestures, tab-memory history and 1,275-line state concentration; TASK-CORE-001 is proposed before TASK-FE-002 |
+| FEAT-004 | 2D DIY bracelet editing | `/diy`, `/diy/[id]` | `FlatBraceletEditor` + Bracelet Engine | FRONTEND | ACTIVE | Request-bound gestures, tab-memory history and exactly 25 `React.useState` hooks in the 1,275-line `DiyEditor`; Qwen/TASK-FE-002 is the only proposed first Worker |
 | FEAT-005 | 3D bracelet preview/editor | package renderer and frontend wrapper | Three Engine + `ThreeBraceletPreview` | THREE | EXPERIMENTAL | Intentionally absent from production DIY; TASK-3D-001 |
 | FEAT-006 | Sequence-only editor | test-mounted component | `BraceletSequenceEditor` | FRONTEND | DORMANT | Assign product role or retire; TASK-FE-001 |
 | FEAT-007 | Crystal library | `/crystal-library` | frontend library feature + catalog APIs/data | FRONTEND | ACTIVE | Component is large; no duplicate authority identified |

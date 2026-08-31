@@ -282,8 +282,10 @@ TASK-AUDIT-002 recommends exactly one next Worker and does not start it:
 
 | Task | Worker | Branch | State | Dependency |
 | --- | --- | --- | --- | --- |
-| TASK-CORE-001 Cross-platform DIY Editing Session Core | **GLM** | `task/core-001-diy-editing-session-core` | `PROPOSED — AWAIT HUMAN PRODUCT OWNER DISPATCH` | TASK-AUDIT-002 accepted |
+| TASK-FE-002 Competitive DIY Interaction and Mobile Feedback | **Qwen** | `task/fe-002-competitive-diy-experience` | `PROPOSED — AWAIT HUMAN PRODUCT OWNER DISPATCH` | TASK-AUDIT-002 accepted; current screenshot baseline captured before UI changes |
 
 The complete dispatch package—including objective, writable/forbidden paths, architecture constraints, acceptance criteria, required tests and regression scope—is frozen in [M0 Product, Competitor and Cross-platform Audit](M0_PRODUCT_COMPETITOR_CROSS_PLATFORM_AUDIT.md#first-worker-dispatch-package).
 
-TASK-CORE-001 is Core/architecture work only. It may create `packages/diy-session-core/**`, including that new package's own manifest and task-local tests, but may not modify any application, existing package, root or existing-package manifest, lockfile, database, Prisma, Three Engine, runtime configuration or Auth path. It must return a Core-only candidate in `REVIEW`; it must not integrate the Web consumer, create a Mini Program shell or start AI/commerce work.
+The Product Owner authority is the ChatGPT conversation `玄矶 DIY 系统需求分析`, ID `6a8ac667-ebb4-83ea-99f9-bb5b267dd97a`. Its formal six-product matrix is Qi Yi Crystal, 养个石头, 盘个串串, 良旺手作, Lucid Beads and BeadDIY. General configurators and Beadaro are not formal direct competitors; Beadaro is not BeadDIY.
+
+TASK-FE-002 reuses existing Design Contract operations and Bracelet Engine layout/fit/slot behavior. Its exact writable paths are the named frontend design components/models/tests and exact governance rows in the audit dispatch. It may not change `apps/frontend/public/**`, backend, any package, root tests, Prisma, package manifests, `pnpm-lock.yaml`, CI/runtime configuration or Auth. TASK-CORE-001 is withdrawn as the first prerequisite; no Core package or workspace importer is authorized. TASK-FE-002 must return one Qwen candidate in `REVIEW` and must not start Mini Program, AI, 3D, Commerce, White Label or another Worker.

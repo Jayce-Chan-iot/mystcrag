@@ -109,18 +109,18 @@ Web shell (Next/React/Auth0 BFF/DOM/Canvas/WebGL/browser storage)
 platform API + storage + navigation + rendering adapters
              |
              v
-Shared Domain/Core (Design Contract + Bracelet Engine + future DIY Session Core)
+Shared Domain/Core (Design Contract + Bracelet Engine)
              |
              v
 backend authority (identity mapping, ownership, price, inventory, revisions, orders)
 ```
 
-Design Contract and Bracelet Engine are portable authorities. The current Web editor, Three renderer, API transport, navigation and browser storage are platform adapters. A future Mini Program must provide its own request/storage/navigation/rendering and identity adapters; it must not import the Auth0 Web session or create a second business identity model.
+Design Contract and Bracelet Engine are portable authorities and are sufficient for the first competitive Web UX task. The current Web editor, Three renderer, API transport, navigation and browser storage are platform adapters. A future Mini Program must provide its own request/storage/navigation/rendering and identity adapters; it must not import the Auth0 Web session or create a second business identity model. Cross-platform session extraction follows accepted Web interaction evidence rather than preceding it.
 
 ## Known current-state pressure points
 
 - Three large orchestration files concentrate change risk: design API (1,284 lines), recommendation service (1,127), Tarot service (941); DIY editor is 1,275 lines.
 - The production DIY page deliberately renders `FlatBraceletEditor`; the tested 3D preview wrapper is not mounted.
-- The active DIY session has no platform-neutral command/history/reconciliation owner; TASK-AUDIT-002 proposes TASK-CORE-001.
+- `DiyEditor` contains exactly 25 `React.useState` hooks, while every structural update waits for the server before settling the visible design. TASK-AUDIT-002 proposes Qwen/TASK-FE-002 as the direct L3 UX intervention; no Core package is authorized.
 - Compatibility, mock, placeholder, and QA evidence paths are not consistently labeled or isolated.
 - User profile/address/favorites remain browser-local, while White Label has no tenant/brand/theme boundary.

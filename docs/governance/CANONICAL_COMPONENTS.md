@@ -32,7 +32,6 @@ Consult this registry before introducing another schema, renderer, service, stor
 | Shared UI primitive | `packages/ui/src/Surface` | frontend | Add components only when reused across features |
 | Frontend server state | Typed API clients under `apps/frontend/src/lib/api` | frontend features | `mock-design-api` is explicit demo/test behavior, not production authority |
 | Active DIY working state | local state in `DiyEditor` projected from `DesignV1` | production DIY route | No second global design store is authorized; future extraction must preserve one active authority |
-| Cross-platform DIY session behavior | **No canonical component yet**; proposed TASK-CORE-001 `packages/diy-session-core` | future Web and Mini Program platform adapters | Must remain pure TypeScript and own commands/history/reconciliation only; it may not own rendering, transport, storage, Auth, price or inventory authority |
 
 ## Renderer responsibilities
 
@@ -53,7 +52,7 @@ Only the last two currently require a lifecycle decision. Collapsing all rendere
 
 A canonical replacement needs an approved task that names the old and new authority, migrates every production consumer, updates contract/architecture tests, and records the lifecycle change here. Adding a second implementation does not make it canonical.
 
-TASK-CORE-001 is only proposed by TASK-AUDIT-002. Until a Human Product Owner dispatches and SOL accepts it, local `DiyEditor` state remains the current active authority and no new package is canonical.
+TASK-AUDIT-002 found that Design Contract edit operations and Bracelet Engine layout/fit/slot behavior are sufficient for the first competitive Web UX task. No new DIY session Core or workspace package is authorized. A future cross-platform extraction decision must follow accepted Web interaction evidence and must not pre-emptively create a second active authority.
 
 ## Frozen P0 schema decisions
 

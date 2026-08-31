@@ -14,7 +14,6 @@ One task has one accountable owner. Reviewers may advise, but they do not share 
 | `CONTRACT` | Shared public/internal Zod schemas, DTOs and projections | `packages/design-contract` | DesignV1, API spec |
 | `AI` | Recommendation agents, provider adapters and AI candidate conversion | `packages/ai-agent` | AI spec, DesignV1 |
 | `DESIGN` | Deterministic allocation, rules, scoring and validation | `packages/design-engine` | AI spec, DesignV1 |
-| `DESIGN CORE` | Platform-neutral DIY command, history and reconciliation semantics when an approved task creates that boundary | proposed `packages/diy-session-core` only | DesignV1, Bracelet geometry, API spec, cross-platform audit |
 | `CONTEXT` | Questionnaire/Tarot context normalization | `packages/context-resolver` | AI spec, Tarot spec |
 | `KNOWLEDGE` | Knowledge retrieval, review, compiler, ingestion and worker | `packages/knowledge-core`, `packages/knowledge-ingestion`, `apps/knowledge-worker` | knowledge system spec |
 | `TAROT` | Tarot-private mechanics and backend lifecycle implementation | `packages/tarot-engine`, Tarot-owned backend/frontend paths when assigned | Tarot spec, API spec, security |
@@ -31,7 +30,6 @@ One task has one accountable owner. Reviewers may advise, but they do not share 
 | DesignV1 or API DTO change | `CONTRACT` | Backend, Frontend, Database; Three/AI as affected |
 | Prisma schema/migration | `DATABASE` | Backend and Contract |
 | Bracelet geometry contract | `BRACELET` | Frontend and Three |
-| DIY editing-session command/history contract | `DESIGN CORE` | Bracelet, Contract, Backend and every platform-shell owner |
 | 3D scene contract | `THREE` | Bracelet and Frontend |
 | Knowledge rule/review contract | `KNOWLEDGE` | Backend, Database, AI/Design as affected |
 | Tarot public contract | `CONTRACT` | Tarot, Backend, Frontend, Database |
@@ -44,4 +42,4 @@ One task has one accountable owner. Reviewers may advise, but they do not share 
 - A cross-module task is owned by `SOL` only when the user explicitly approves a single integration task. Otherwise split contract producer and consumer work into dependent tasks.
 - Generated clients, `.next`, `dist`, screenshots, local databases, and environment files are never valid task-owned source paths.
 - When a suspected duplicate crosses owners, the owner of the canonical component owns the decision task; consumer cleanup tasks depend on that decision.
-- Platform shells own their storage, navigation, rendering, identity and transport adapters. `DESIGN CORE` may not absorb Web Auth0, DOM/Canvas/WebGL or future WeChat identity/runtime APIs.
+- Platform shells own their storage, navigation, rendering, identity and transport adapters. Any future cross-platform extraction requires a separately approved owner/task after Web interaction evidence; it may not absorb Web Auth0, DOM/Canvas/WebGL or future WeChat identity/runtime APIs.

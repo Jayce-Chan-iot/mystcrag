@@ -13,7 +13,7 @@ Completion is based on mounted production paths, source and contract reachabilit
 | Atelier home and navigation | ACTIVE | 95% | High | Yes, within MVP | No product analytics; current browser smoke only covers entry/navigation. |
 | AI questionnaire and three recommendations | ACTIVE | 85% | Medium-high | Conditional | Production path is deterministic/rule-based and grounded in real catalog constraints; there is no conversational refinement loop. |
 | Design result and compact preview | ACTIVE | 90% | High | Conditional | Protected ownership uses the integrated Auth boundary; commercial deployment evidence remains deferred. |
-| 2D DIY editor | ACTIVE | 85% | Medium-high | Conditional | Every structural gesture waits on a server mutation; undo/redo is tab-memory-only; state is concentrated in a 1,275-line component. |
+| 2D DIY editor | ACTIVE | 85% | Medium-high | Conditional | Every structural gesture waits on a server mutation; undo/redo is tab-memory-only; exactly 25 `React.useState` hooks are concentrated in the 1,275-line `DiyEditor`. |
 | Save, revisions, clone and delete | ACTIVE | 90% | High | Conditional | Persistence, production-verifiable identity composition and owner isolation are tested; formal deployment acceptance is deferred. |
 | Pricing and inventory validation | ACTIVE | 85% | High | Conditional | Core checks pass; catalog seed documentation is contradictory. |
 | Immutable order creation/history | ACTIVE | 65% | High for implemented scope | No for commerce | Produces an internal snapshot only; no address, shipping, tax, payment or fulfillment workflow. |
@@ -46,8 +46,8 @@ production deployment acceptance -> durable account/profile completion -> addres
 
 ## Five current bottlenecks
 
-1. **Shared editing behavior is absent:** Web state, browser persistence and transport concerns surround a large editor; Mini Program reuse would otherwise duplicate product rules.
-2. **DIY resilience and concentration:** structural edits block on server round trips and history disappears with the tab.
+1. **Competitive DIY experience:** direct manipulation works, but structural edits settle only after server round trips; insertion/reflow/snap feedback, mobile continuity and refresh recovery remain below L3.
+2. **Visual evidence and realism:** photographic assets exist, but the current browser-capture blocker prevents screenshot-level bead-realism and luxury-parity certification.
 3. **Commercial checkout:** order creation stops at a `PENDING`/restock-aware immutable snapshot without payment, address, shipping, tax or fulfillment.
 4. **Durable customer continuity:** addresses, favorites, preferences and privacy state are browser-local despite durable identity.
 5. **Production deployment acceptance:** implementation is frozen and technically validated, while Product Owner deferred real Origins, Auth0 allowlist/smoke and staging benchmark evidence.
@@ -55,6 +55,6 @@ production deployment acceptance -> durable account/profile completion -> addres
 ## Current and next phase boundary
 
 - Current Phase: validated baseline plus technically integrated FEAT-018; production Auth acceptance is intentionally deferred.
-- Development Gate: `OPEN` for separately registered non-auth product work. TASK-AUDIT-002 recommends exactly one first worker candidate, `TASK-CORE-001`, subject to Human Product Owner dispatch.
+- Development Gate: `OPEN` for separately registered non-auth product work. TASK-AUDIT-002 recommends exactly one first worker candidate, Qwen/TASK-FE-002 Competitive DIY Interaction and Mobile Feedback, subject to Human Product Owner dispatch.
 - Auth boundary: frozen until deployment acceptance resumes, except for an explicitly registered P0 security defect. WeChat identity requires a future independent adapter task and must not rewrite Web Auth.
-- Cross-platform boundary: Web shell and Auth0 remain Web adapters; Design Contract and Bracelet Engine are shared authorities; a pure editing-session Core must land before Web resilience or Mini Program shell work.
+- Cross-platform boundary: Web shell and Auth0 remain Web adapters; Design Contract and Bracelet Engine already provide sufficient shared authorities for the first Web UX task. Stable cross-platform editing behavior is extracted only after the L3 Web interaction is proven; no Core package is currently authorized.
