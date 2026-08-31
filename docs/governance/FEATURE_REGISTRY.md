@@ -29,6 +29,7 @@ Status vocabulary: `ACTIVE` is mounted and backed by a runtime path; `PARTIAL` i
 | FEAT-023 | Product analytics dashboard | none | none | SOL | PLANNED | Do not confuse with KnowledgeUsageEvent |
 | FEAT-024 | Legacy grouped-design import | package compatibility exports/migration | Design Contract migration + AI/Three legacy adapters | CONTRACT | LEGACY | Usage proof and sunset decision; TASK-COMPAT-001 |
 | FEAT-025 | Community publication and discovery | backend design publish boundary only | Publication Service + Publication Repository | BACKEND | PARTIAL | Publish is backend-only; no frontend publish action, public listing/feed, share flow, or unpublish UI |
+| FEAT-026 | Bead asset import assistant | planned `/admin/bead-import` and admin APIs | approved design in `docs/superpowers/specs/2026-08-31-bead-asset-import-assistant-design.md`; no runtime implementation | SOL | PLANNED | Split Contract, Database, Asset Worker, Backend, Frontend, resolver and QA tasks before implementation |
 
 ## Registration rule
 

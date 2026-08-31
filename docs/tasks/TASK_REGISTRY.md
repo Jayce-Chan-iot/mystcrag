@@ -17,6 +17,12 @@ No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROG
 | --- | --- | --- | --- | --- | --- |
 | TASK-REPO-001 | QA | `task/repo-001-evidence-retention` | DONE | tracked QA/output evidence under `artifacts/**`, `output/playwright/**`, `outputs/**`, `qa-captures-*/**`, `apps/frontend/qa-captures/**`, frontend root QA PNGs, `scripts/ui-qa/artifacts/**`, `scripts/ui-qa/qa-captures-final/**`; `.gitignore`; `docs/QA_PHASE_3_REPORT.md`; governance/task/plan docs | runtime source, `apps/frontend/public/**`, `docs/ui-references/**`, knowledge coverage JSON, current spreadsheet deliverables, user files and other worktrees |
 
+## Active feature design task
+
+| Task | Owner | Branch | Status | Dependencies | Writable paths | Forbidden paths |
+| --- | --- | --- | --- | --- | --- | --- |
+| TASK-ASSET-IMPORT-001 | SOL | `task/asset-import-001-design` | REVIEW | TASK-GOV-001; Product Owner approved the local-first, cloud-ready design direction on 2026-08-31 | `docs/tasks/TASK_REGISTRY.md`, `docs/INDEX.md`, `docs/governance/FEATURE_REGISTRY.md`, `docs/superpowers/specs/2026-08-31-bead-asset-import-assistant-design.md` | `apps/**`, `packages/**`, Prisma schema/migrations, root configuration, tests, runtime assets, source bead photographs, generated outputs, pre-existing unrelated user changes |
+
 ## Cleanup backlog
 
 | Task | Owner | Priority | Dependency | Proposed branch | Scope/status |
@@ -130,6 +136,15 @@ No cleanup task currently holds a path lock. A `READY` task may move to `IN_PROG
 - Confirm no live worktree, open PR, tag, release, or recovery policy needs each deletion candidate.
 - Obtain explicit user approval for remote or destructive actions.
 - Record removed/retained branches and recovery references in `BRANCH_REGISTRY.md`.
+
+### TASK-ASSET-IMPORT-001 — bead asset import assistant design
+
+- Specify a standalone `/admin/bead-import` entry and a local-first, cloud-ready architecture without changing runtime code.
+- Preserve original ARW/JPG files outside Git; define hash-verified archival, resumable processing, draft-only database writes and transactional publication.
+- Require similarity grouping plus human naming; prohibit mineral, quality or treatment inference from photographs.
+- Define conservative background removal and image enhancement that does not generate texture or silently alter product color.
+- Define module boundaries, data lifecycle, failure recovery, security controls, rollout decomposition and measurable acceptance tests.
+- Pass architecture tests, internal document-link validation and final scope/diff review before moving the task to REVIEW.
 
 ### TASK-DOC-001 — current documentation
 

@@ -20,6 +20,7 @@ Repository governance entry points:
 | Product / MVP | `PRODUCT_REQUIREMENT.md`, `MVP_DEVELOPMENT_PLAN.md`, `UI_DESIGN_SYSTEM.md` |
 | Frontend / interaction | `UI_DESIGN_SYSTEM.md`, `INTERACTION_TEST_PLAN.md`, `API_SPECIFICATION.md` |
 | UI reference implementation | `UI_REFERENCE_AND_ASSET_MANIFEST.md`, `AGENT_FULL_UI_REBUILD_AND_QA_PROMPT.md`, `UI_DESIGN_SYSTEM.md`, `INTERACTION_TEST_PLAN.md` |
+| Bead asset import assistant | `superpowers/specs/2026-08-31-bead-asset-import-assistant-design.md`, `UI_REFERENCE_AND_ASSET_MANIFEST.md`, `DATABASE_SCHEMA.md`, `API_SPECIFICATION.md`, `SECURITY_AND_PRIVACY.md` |
 | Bracelet Engine | `BRACELET_GEOMETRY.md`, `DESIGN_CONTRACT_V1.md`, `THREE_ENGINE_SPEC.md` |
 | Backend / API | `API_SPECIFICATION.md`, `DESIGN_CONTRACT_V1.md`, `SECURITY_AND_PRIVACY.md` |
 | Database | `DATABASE_SCHEMA.md`, `PERSISTENCE_MODEL_V1.md`, `SECURITY_AND_PRIVACY.md` |
