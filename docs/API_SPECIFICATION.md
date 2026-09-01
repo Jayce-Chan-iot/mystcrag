@@ -154,6 +154,112 @@ Authentication is a dedicated admin key: the `X-Admin-Key` header compared again
 
 Error mapping follows the shared envelope: unknown ids → `404 NOT_FOUND`, illegal status transitions and duplicate versions → `409 CONFLICT`, request-shape violations → `400 VALIDATION_ERROR`, missing/wrong key → `403 FORBIDDEN`. Route coverage — fail-closed key handling, filter validation, verdict mapping, and error codes — is in `apps/backend/src/modules/knowledge-admin/knowledge-admin.routes.test.ts`.
 
+## Bead Asset Import Admin API
+
+Contract-first surface for the bead asset import assistant (`/admin/bead-import`, spec `superpowers/specs/2026-08-31-bead-asset-import-assistant-design.md`). All DTOs are strict Zod objects in [bead-asset-import-api.schema](../packages/design-contract/src/schemas/bead-asset-import-api.schema.ts): every request rejects unknown keys, and clients never submit absolute filesystem paths, archive paths, processed-result paths, or server storage keys — manifest paths are normalized relative paths, and every stored `archiveKey` is server-generated. This section defines the contract; routes are implemented by TASK-ASSET-BE-001 with a dedicated `ASSET_ADMIN_API_KEY` (timing-safe comparison, independent of the knowledge admin key). Images are never used to infer mineral identity, quality, treatment, or efficacy — the only identity input is the human-confirmed bead name.
+
+Session lifecycle uses exactly these states (`AssetImportSessionStateSchema`): `CREATED → UPLOADING → ARCHIVING → PROCESSING → NEEDS_REVIEW → READY_TO_PUBLISH → PUBLISHING → PUBLISHED`, with `PARTIALLY_FAILED` reachable from `ARCHIVING`, `PROCESSING`, and `PUBLISHING` (recoverable back into `PROCESSING`/`NEEDS_REVIEW` or down to `FAILED`). `PUBLISHED` and `FAILED` are terminal. Legal moves are enumerated in `ASSET_IMPORT_SESSION_TRANSITIONS`; any other move is `409`.
+
+| Route | Request DTO | Response DTO | Behavior |
+| --- | --- | --- | --- |
+| `POST /api/admin/bead-import/sessions` | `CreateAssetImportSessionRequestSchema` (`idempotencyKey`) | `CreateAssetImportSessionResponseSchema` | Creates a session in `CREATED`. No filesystem root or local directory is accepted. |
+| `POST /api/admin/bead-import/sessions/:sessionId/manifest` | `RegisterAssetManifestRequestSchema` | `RegisterAssetManifestResponseSchema` | Registers the file inventory before any bytes move. Each entry carries `clientFileId`, normalized `relativePath`, `byteSize`, `lastModifiedMs`, and declared `kind` (`ARW`/`JPEG`/`PNG`/`WEBP`). Enforces ≤500 files, ≤256 MiB per file, ≤8 GiB per session (`ASSET_MANIFEST_LIMITS`), unique `clientFileId`/`relativePath`, and extension↔kind agreement. |
+| `PUT /api/admin/bead-import/sessions/:sessionId/files/:fileId/content` | `UploadAssetFileParamsSchema` (binary body) | `UploadAssetFileResponseSchema` | Streams one registered file, verifies declared length, content magic bytes, and final SHA-256, then reports the server-assigned `archiveKey`. The client supplies no path; the response never echoes local paths. |
+| `GET /api/admin/bead-import/sessions/:sessionId` | no body | `AssetImportSessionResponseSchema` | Polls progress: counts, bytes, per-file state (`PENDING`/`UPLOADING`/`ARCHIVED`/`FAILED`/`SKIPPED_DUPLICATE`), and group review state. Short-polling only in V1. |
+| `PATCH /api/admin/bead-import/groups/:groupId` | `UpdateBeadImageGroupRequestSchema` | `UpdateBeadImageGroupResponseSchema` | Review actions: `SET_NAME`, `MERGE_GROUPS`, `SPLIT_GROUP`, `MOVE_FILES`, `SET_PRIMARY`, `IGNORE_FILES`. Every action requires `expectedGroupRevision`; responses return the incremented `revision`. |
+| `POST /api/admin/bead-import/groups/:groupId/reprocess` | `ReprocessBeadImageGroupRequestSchema` | `ReprocessBeadImageGroupResponseSchema` | Queues a new processing version. Only bounded settings are accepted (`maskThreshold` 0–1, `edgeFeatherPx` 0–8); no model choice, no output path. |
+| `POST /api/admin/bead-import/groups/:groupId/publish` | `PublishBeadImageGroupRequestSchema` | `PublishBeadImageGroupResponseSchema` | Transactional publication of one reviewed group into the formal catalog. |
+
+Draft save is the group PATCH `SET_NAME` action: a group needs only a human bead name (`crystalName`) to persist as a named draft. Drafts never appear in public catalog queries, AI recommendation, or inventory; publication is the only path to the live catalog, and it requires the complete publish request.
+
+Publish example (all fields strict; unknown keys rejected):
+
+```json
+{
+  "idempotencyKey": "publish-group-1",
+  "expectedGroupRevision": 3,
+  "crystalName": "紫水晶",
+  "crystalNameConfirmedByOperator": true,
+  "displayName": "紫水晶 8mm 圆珠",
+  "sku": "BEAD-AMETHYST-8",
+  "materialKey": "amethyst-round-8",
+  "shape": "ROUND",
+  "diameterMm": 8,
+  "currency": "CNY",
+  "unitPriceMinor": 12800,
+  "costMinor": 4000,
+  "availableQuantity": 12,
+  "allowPublicDisplay": true,
+  "allowAiRecommendation": false,
+  "rightsHolder": "玄矶工作室",
+  "usagePermission": "GRANTED",
+  "isAuthenticPhotograph": true,
+  "approvedAssetIds": ["asset-512-main"]
+}
+```
+
+`crystalNameConfirmedByOperator` must be `true` (human confirmation of the name), `approvedAssetIds` must reference at least one approved processed asset, and `usagePermission` must not be `PROHIBITED`. The request does not accept an `UNKNOWN` permission at all, so a group whose rights are unresolved stays review-only until an operator records `OWNED` or `GRANTED`. Public visibility additionally requires explicit `allowPublicDisplay: true`. Example response:
+
+```json
+{
+  "groupId": "group-1",
+  "state": "PUBLISHED",
+  "materialProductId": "product-1",
+  "crystalId": "crystal-1",
+  "inventorySnapshotId": "inventory-1",
+  "publishedAt": "2026-09-01T09:30:00+08:00",
+  "publishedAssetKeys": ["asset-512-main"]
+}
+```
+
+Manifest registration example:
+
+```json
+{
+  "idempotencyKey": "manifest-batch-1",
+  "files": [
+    { "clientFileId": "file-001", "relativePath": "01/DSC0001.JPG", "byteSize": 1048576, "lastModifiedMs": 1756600000000, "kind": "JPEG" },
+    { "clientFileId": "file-002", "relativePath": "01/DSC0001.ARW", "byteSize": 25165824, "lastModifiedMs": 1756600000000, "kind": "ARW" }
+  ]
+}
+```
+
+Binary upload response example (`ARCHIVED` requires verified `sha256`, server `archiveKey`, and `archivedAt`):
+
+```json
+{
+  "fileId": "file-1",
+  "uploadStatus": "ARCHIVED",
+  "byteSize": 1048576,
+  "sha256": "a3f5…(64 hex)",
+  "archiveKey": "imports/session-1/raw/a3f5.webp",
+  "archivedAt": "2026-09-01T09:00:00+08:00"
+}
+```
+
+### Error codes
+
+| Status | Code | When |
+| --- | --- | --- |
+| `400` | `VALIDATION_ERROR` | Strict-shape violations, unknown keys, hostile paths (absolute, `..`, backslash, drive letter), extension↔kind mismatch, non-positive sizes or revisions, `usagePermission` outside `OWNED`/`GRANTED`/`PROHIBITED`. |
+| `401` | `UNAUTHORIZED` | Missing or invalid `ASSET_ADMIN_API_KEY`. The key is never echoed or logged. |
+| `404` | `NOT_FOUND` | Unknown `sessionId`, `fileId`, `groupId`, or job. Draft assets requested through the public asset route also resolve to `404`. |
+| `409` | `CONFLICT` | Illegal session/file transition, stale `expectedGroupRevision`, duplicate idempotency key with a different payload, SHA-256 conflict against an archived file, conflicting duplicate publish. |
+| `413` | `PAYLOAD_TOO_LARGE` | Declared or streamed bytes exceed the per-file or session limit. |
+| `415` | `UNSUPPORTED_MEDIA_TYPE` | Declared kind or detected magic bytes outside ARW/JPEG/PNG/WEBP. |
+| `422` | `UNPROCESSABLE_ENTITY` | Well-formed but business-invalid requests: publish without operator-confirmed name, publish with QC-failed or unapproved assets, publish with `PROHIBITED` usage permission, processing requested before archive verification. |
+| `500` | `INTERNAL` | Unexpected failure. Safe to retry with the same idempotency key; no second session, archive copy, processing version, or SKU is created by the retry. |
+
+### Idempotency and repeated operations
+
+- **Session creation:** one `idempotencyKey` maps to one session; an exact retry returns the existing session instead of creating another.
+- **Manifest registration:** same key and identical file list returns the existing stable `fileId`s; the same key with different files is `409`. Re-registering never duplicates file records — `(sessionId, clientFileId)` is unique.
+- **File upload (incl. failure retry):** re-PUTting a `PENDING`/`FAILED` `fileId` resumes that file; retry is the failure-recovery path and never archives a second original. Re-uploading an `ARCHIVED` file with a matching SHA-256 succeeds without side effects; different content for the same `fileId` is `409`.
+- **Session status:** `GET` is read-only and safe to poll.
+- **Group edits:** optimistic concurrency via `expectedGroupRevision`; an accepted action increments the revision, so a stale retry is `409` and the client re-reads the group. Accepted edits never lose member files or the human primary-image choice.
+- **Reprocess:** one `idempotencyKey` yields one job and one new processing version; an exact retry returns the existing `jobId`/`processingVersion`. Retries never silently create extra versions.
+- **Publish:** one `idempotencyKey` publishes once. An exact retry returns the existing publication result (same `materialProductId`, inventory snapshot, and asset bindings); the same key with a different payload is `409`. Publication creates/approves the crystal, activates the product, appends the inventory snapshot, and binds approved assets in one transaction — any failure rolls everything back and the group remains a draft.
+
 ## Design Save API
 
 POST /api/design/save
