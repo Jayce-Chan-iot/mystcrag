@@ -14,10 +14,12 @@ import { CurrencySchema, IsoDateTimeSchema } from "./metadata.schema";
 
 /**
  * Bead Asset Import admin contract (TASK-ASSET-CONTRACT-001). Defines the
- * session state machine, manifest/upload DTOs, group review actions and the
- * publication request. Storage layout, image processing, persistence and
- * routing are owned by the worker/backend/database tasks; the client never
- * submits filesystem paths, server storage keys or processing results.
+ * session state machine, recovery checkpoints, manifest/upload DTOs, group
+ * review actions, draft save/completeness, the publication request/response,
+ * the approved public asset key and resolver contract, and the stable error
+ * contract. Storage layout, image processing, persistence and routing are
+ * owned by the worker/backend/database tasks; the client never submits
+ * filesystem paths, private archive keys or processing results.
  */
 
 export const ASSET_IMPORT_SESSION_STATES = [
@@ -30,23 +32,31 @@ export const ASSET_IMPORT_SESSION_STATES = [
   "PUBLISHING",
   "PUBLISHED",
   "PARTIALLY_FAILED",
-  "FAILED"
+  "FAILED",
+  "CANCELLED"
 ] as const;
 
 export const AssetImportSessionStateSchema = z.enum(ASSET_IMPORT_SESSION_STATES);
 export type AssetImportSessionState = z.infer<typeof AssetImportSessionStateSchema>;
 
+export const ASSET_IMPORT_SESSION_TERMINAL_STATES: readonly AssetImportSessionState[] = [
+  "PUBLISHED",
+  "FAILED",
+  "CANCELLED"
+];
+
 export const ASSET_IMPORT_SESSION_TRANSITIONS: Record<AssetImportSessionState, readonly AssetImportSessionState[]> = {
-  CREATED: ["UPLOADING", "FAILED"],
-  UPLOADING: ["ARCHIVING", "FAILED"],
-  ARCHIVING: ["PROCESSING", "PARTIALLY_FAILED", "FAILED"],
-  PROCESSING: ["NEEDS_REVIEW", "PARTIALLY_FAILED", "FAILED"],
-  NEEDS_REVIEW: ["READY_TO_PUBLISH", "PROCESSING", "FAILED"],
-  READY_TO_PUBLISH: ["PUBLISHING", "NEEDS_REVIEW"],
-  PUBLISHING: ["PUBLISHED", "PARTIALLY_FAILED"],
+  CREATED: ["UPLOADING", "FAILED", "CANCELLED"],
+  UPLOADING: ["ARCHIVING", "FAILED", "CANCELLED"],
+  ARCHIVING: ["PROCESSING", "PARTIALLY_FAILED", "FAILED", "CANCELLED"],
+  PROCESSING: ["NEEDS_REVIEW", "PARTIALLY_FAILED", "FAILED", "CANCELLED"],
+  NEEDS_REVIEW: ["READY_TO_PUBLISH", "PROCESSING", "FAILED", "CANCELLED"],
+  READY_TO_PUBLISH: ["PUBLISHING", "NEEDS_REVIEW", "CANCELLED"],
+  PUBLISHING: ["PUBLISHED", "PARTIALLY_FAILED", "CANCELLED"],
   PUBLISHED: [],
-  PARTIALLY_FAILED: ["PROCESSING", "NEEDS_REVIEW", "FAILED"],
-  FAILED: []
+  PARTIALLY_FAILED: ["PROCESSING", "NEEDS_REVIEW", "FAILED", "CANCELLED"],
+  FAILED: [],
+  CANCELLED: []
 };
 
 export function canTransitionAssetImportSession(
@@ -54,6 +64,27 @@ export function canTransitionAssetImportSession(
   to: AssetImportSessionState
 ): boolean {
   return ASSET_IMPORT_SESSION_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+/**
+ * Verified recovery checkpoints (spec §11). These are interruption-recovery
+ * markers recorded on the session, not session states: a crashed or cancelled
+ * run resumes from the last verified checkpoint.
+ */
+export const ASSET_IMPORT_CHECKPOINTS = [
+  "ARCHIVED",
+  "GROUPED",
+  "LABELED",
+  "PROCESSED",
+  "REVIEWED",
+  "PUBLISHED"
+] as const;
+
+export const AssetImportCheckpointSchema = z.enum(ASSET_IMPORT_CHECKPOINTS);
+export type AssetImportCheckpoint = z.infer<typeof AssetImportCheckpointSchema>;
+
+export function assetImportCheckpointRank(checkpoint: AssetImportCheckpoint): number {
+  return ASSET_IMPORT_CHECKPOINTS.indexOf(checkpoint);
 }
 
 export const AssetSourceFileKindSchema = z.enum(["ARW", "JPEG", "PNG", "WEBP"]);
@@ -177,8 +208,11 @@ const AssetRelativePathSchema = z
     message: "Path must be a normalized relative path without traversal"
   });
 
-const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/, "Expected a lowercase SHA-256 hex digest");
+export const Sha256Schema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/, "Expected a lowercase SHA-256 hex digest");
 
+/** Private server-generated archive keys; never exposed in public responses. */
 const AssetArchiveKeySchema = z
   .string()
   .trim()
@@ -187,6 +221,17 @@ const AssetArchiveKeySchema = z
   .refine(isNormalizedAssetRelativePath, {
     message: "Archive key must be a server-generated relative storage key"
   });
+
+/**
+ * Stable public keys for approved, published assets. Content-addressed and
+ * deliberately unlike archive paths so private archive keys, client paths and
+ * draft-relative paths can never parse as a public approved key.
+ */
+const APPROVED_ASSET_KEY_PATTERN = /^approved:[0-9a-f]{64}$/;
+export const ApprovedAssetKeySchema = z
+  .string()
+  .regex(APPROVED_ASSET_KEY_PATTERN, "Expected a stable approved asset key of the form approved:<sha256>");
+export type ApprovedAssetKey = z.infer<typeof ApprovedAssetKeySchema>;
 
 const IdempotencyKeySchema = IdentifierSchema;
 const ExpectedRevisionSchema = PositiveSafeIntegerSchema;
@@ -210,17 +255,21 @@ export const AssetImportManifestFileEntrySchema = z
 export type AssetImportManifestFileEntry = z.infer<typeof AssetImportManifestFileEntrySchema>;
 
 export const CreateAssetImportSessionRequestSchema = z.strictObject({
-  idempotencyKey: IdempotencyKeySchema,
-  sessionId: IdentifierSchema.optional()
+  idempotencyKey: IdempotencyKeySchema
 });
 export type CreateAssetImportSessionRequest = z.infer<typeof CreateAssetImportSessionRequestSchema>;
 
 export const CreateAssetImportSessionResponseSchema = z.strictObject({
   sessionId: IdentifierSchema,
-  state: AssetImportSessionStateSchema,
+  state: z.literal("CREATED"),
   createdAt: IsoDateTimeSchema
 });
 export type CreateAssetImportSessionResponse = z.infer<typeof CreateAssetImportSessionResponseSchema>;
+
+export const RegisterAssetManifestParamsSchema = z.strictObject({
+  sessionId: IdentifierSchema
+});
+export type RegisterAssetManifestParams = z.infer<typeof RegisterAssetManifestParamsSchema>;
 
 export const RegisterAssetManifestRequestSchema = z
   .strictObject({
@@ -268,17 +317,27 @@ export const RegisteredAssetFileSchema = z.strictObject({
 });
 export type RegisteredAssetFile = z.infer<typeof RegisteredAssetFileSchema>;
 
-export const RegisterAssetManifestResponseSchema = z.strictObject({
-  sessionId: IdentifierSchema,
-  registeredFileCount: NonNegativeSafeIntegerSchema,
-  files: z.array(RegisteredAssetFileSchema)
-});
+export const RegisterAssetManifestResponseSchema = z
+  .strictObject({
+    sessionId: IdentifierSchema,
+    registeredFileCount: NonNegativeSafeIntegerSchema,
+    files: z.array(RegisteredAssetFileSchema)
+  })
+  .superRefine((response, context) => {
+    if (response.registeredFileCount !== response.files.length) {
+      context.addIssue({
+        code: "custom",
+        message: "registeredFileCount must equal the files array length",
+        path: ["registeredFileCount"]
+      });
+    }
+  });
 export type RegisterAssetManifestResponse = z.infer<typeof RegisterAssetManifestResponseSchema>;
 
 export const UploadAssetFileParamsSchema = z.strictObject({
   sessionId: IdentifierSchema,
   fileId: IdentifierSchema,
-  contentLengthBytes: NonNegativeSafeIntegerSchema,
+  contentLengthBytes: SafeIntegerSchema.positive().max(ASSET_MANIFEST_LIMITS.maxFileBytes),
   declaredSha256: Sha256Schema.optional()
 });
 export type UploadAssetFileParams = z.infer<typeof UploadAssetFileParamsSchema>;
@@ -334,6 +393,7 @@ export const AssetImportSessionResponseSchema = z.strictObject({
   state: AssetImportSessionStateSchema,
   createdAt: IsoDateTimeSchema,
   updatedAt: IsoDateTimeSchema,
+  lastVerifiedCheckpoint: AssetImportCheckpointSchema.nullable(),
   declaredFileCount: NonNegativeSafeIntegerSchema,
   uploadedFileCount: NonNegativeSafeIntegerSchema,
   archivedFileCount: NonNegativeSafeIntegerSchema,
@@ -344,6 +404,85 @@ export const AssetImportSessionResponseSchema = z.strictObject({
   groups: z.array(AssetImportSessionGroupViewSchema)
 });
 export type AssetImportSessionResponse = z.infer<typeof AssetImportSessionResponseSchema>;
+
+export const ListAssetImportSessionsQuerySchema = z.strictObject({
+  state: AssetImportSessionStateSchema.optional(),
+  limit: PositiveSafeIntegerSchema.min(1).max(100).optional(),
+  cursor: IdentifierSchema.optional()
+});
+export type ListAssetImportSessionsQuery = z.infer<typeof ListAssetImportSessionsQuerySchema>;
+
+export const AssetImportSessionSummarySchema = z.strictObject({
+  sessionId: IdentifierSchema,
+  state: AssetImportSessionStateSchema,
+  lastVerifiedCheckpoint: AssetImportCheckpointSchema.nullable(),
+  declaredFileCount: NonNegativeSafeIntegerSchema,
+  archivedFileCount: NonNegativeSafeIntegerSchema,
+  failedFileCount: NonNegativeSafeIntegerSchema,
+  groupCount: NonNegativeSafeIntegerSchema,
+  createdAt: IsoDateTimeSchema,
+  updatedAt: IsoDateTimeSchema
+});
+export type AssetImportSessionSummary = z.infer<typeof AssetImportSessionSummarySchema>;
+
+export const ListAssetImportSessionsResponseSchema = z.strictObject({
+  sessions: z.array(AssetImportSessionSummarySchema),
+  nextCursor: IdentifierSchema.nullable()
+});
+export type ListAssetImportSessionsResponse = z.infer<typeof ListAssetImportSessionsResponseSchema>;
+
+export const CancelAssetImportSessionParamsSchema = z.strictObject({
+  sessionId: IdentifierSchema
+});
+export type CancelAssetImportSessionParams = z.infer<typeof CancelAssetImportSessionParamsSchema>;
+
+export const CancelAssetImportSessionRequestSchema = z.strictObject({
+  idempotencyKey: IdempotencyKeySchema
+});
+export type CancelAssetImportSessionRequest = z.infer<typeof CancelAssetImportSessionRequestSchema>;
+
+export const CancelAssetImportSessionResponseSchema = z.strictObject({
+  sessionId: IdentifierSchema,
+  state: z.literal("CANCELLED"),
+  cancelledAt: IsoDateTimeSchema
+});
+export type CancelAssetImportSessionResponse = z.infer<typeof CancelAssetImportSessionResponseSchema>;
+
+export const StartAssetImportGroupingParamsSchema = z.strictObject({
+  sessionId: IdentifierSchema
+});
+export type StartAssetImportGroupingParams = z.infer<typeof StartAssetImportGroupingParamsSchema>;
+
+export const StartAssetImportGroupingRequestSchema = z.strictObject({
+  idempotencyKey: IdempotencyKeySchema
+});
+export type StartAssetImportGroupingRequest = z.infer<typeof StartAssetImportGroupingRequestSchema>;
+
+export const StartAssetImportGroupingResponseSchema = z.strictObject({
+  sessionId: IdentifierSchema,
+  state: z.literal("PROCESSING"),
+  queuedJobCount: NonNegativeSafeIntegerSchema,
+  startedAt: IsoDateTimeSchema
+});
+export type StartAssetImportGroupingResponse = z.infer<typeof StartAssetImportGroupingResponseSchema>;
+
+export const StartAssetImportProcessingParamsSchema = z.strictObject({
+  sessionId: IdentifierSchema
+});
+export type StartAssetImportProcessingParams = z.infer<typeof StartAssetImportProcessingParamsSchema>;
+
+export const StartAssetImportProcessingRequestSchema = z.strictObject({
+  idempotencyKey: IdempotencyKeySchema
+});
+export type StartAssetImportProcessingRequest = z.infer<typeof StartAssetImportProcessingRequestSchema>;
+
+export const StartAssetImportProcessingResponseSchema = z.strictObject({
+  sessionId: IdentifierSchema,
+  state: z.literal("PROCESSING"),
+  queuedJobCount: NonNegativeSafeIntegerSchema,
+  startedAt: IsoDateTimeSchema
+});
+export type StartAssetImportProcessingResponse = z.infer<typeof StartAssetImportProcessingResponseSchema>;
 
 const SetGroupNameActionSchema = z.strictObject({
   action: z.literal("SET_NAME"),
@@ -389,17 +528,15 @@ const MoveFilesActionSchema = z
     path: ["fileIds"]
   });
 
-const SetPrimaryFileActionSchema = z
-  .strictObject({
-    action: z.literal("SET_PRIMARY"),
-    expectedGroupRevision: ExpectedRevisionSchema,
-    primaryFileId: IdentifierSchema,
-    memberFileIds: z.array(IdentifierSchema).min(1)
-  })
-  .refine((action) => action.memberFileIds.includes(action.primaryFileId), {
-    message: "primaryFileId must be a current group member",
-    path: ["primaryFileId"]
-  });
+/**
+ * Membership is authoritative on the backend: it is checked against the
+ * groupId and expectedGroupRevision, never against a client-supplied list.
+ */
+const SetPrimaryFileActionSchema = z.strictObject({
+  action: z.literal("SET_PRIMARY"),
+  expectedGroupRevision: ExpectedRevisionSchema,
+  primaryFileId: IdentifierSchema
+});
 
 const IgnoreFilesActionSchema = z.strictObject({
   action: z.literal("IGNORE_FILES"),
@@ -407,6 +544,11 @@ const IgnoreFilesActionSchema = z.strictObject({
   fileIds: z.array(IdentifierSchema).min(1),
   reason: NonEmptyTextSchema
 });
+
+export const UpdateBeadImageGroupParamsSchema = z.strictObject({
+  groupId: IdentifierSchema
+});
+export type UpdateBeadImageGroupParams = z.infer<typeof UpdateBeadImageGroupParamsSchema>;
 
 export const UpdateBeadImageGroupRequestSchema = z.discriminatedUnion("action", [
   SetGroupNameActionSchema,
@@ -434,6 +576,11 @@ export const ReprocessSettingsSchema = z.strictObject({
 });
 export type ReprocessSettings = z.infer<typeof ReprocessSettingsSchema>;
 
+export const ReprocessBeadImageGroupParamsSchema = z.strictObject({
+  groupId: IdentifierSchema
+});
+export type ReprocessBeadImageGroupParams = z.infer<typeof ReprocessBeadImageGroupParamsSchema>;
+
 export const ReprocessBeadImageGroupRequestSchema = z.strictObject({
   idempotencyKey: IdempotencyKeySchema,
   expectedGroupRevision: ExpectedRevisionSchema,
@@ -449,13 +596,190 @@ export const ReprocessBeadImageGroupResponseSchema = z.strictObject({
 });
 export type ReprocessBeadImageGroupResponse = z.infer<typeof ReprocessBeadImageGroupResponseSchema>;
 
-export const AssetUsagePermissionSchema = z.enum(["OWNED", "GRANTED", "PROHIBITED"]);
+export const SelectProcessedVersionParamsSchema = z.strictObject({
+  groupId: IdentifierSchema
+});
+export type SelectProcessedVersionParams = z.infer<typeof SelectProcessedVersionParamsSchema>;
+
+export const SelectProcessedVersionRequestSchema = z.strictObject({
+  expectedGroupRevision: ExpectedRevisionSchema,
+  processingVersion: PositiveSafeIntegerSchema
+});
+export type SelectProcessedVersionRequest = z.infer<typeof SelectProcessedVersionRequestSchema>;
+
+export const SelectProcessedVersionResponseSchema = z.strictObject({
+  groupId: IdentifierSchema,
+  state: BeadImageGroupStateSchema,
+  selectedProcessingVersion: PositiveSafeIntegerSchema,
+  updatedAt: IsoDateTimeSchema
+});
+export type SelectProcessedVersionResponse = z.infer<typeof SelectProcessedVersionResponseSchema>;
+
+/**
+ * General draft permission vocabulary. UNKNOWN and PROHIBITED records may be
+ * saved locally for review but can never be published; publication uses the
+ * narrower PublishAssetUsagePermissionSchema below.
+ */
+export const AssetUsagePermissionSchema = z.enum(["UNKNOWN", "OWNED", "GRANTED", "PROHIBITED"]);
 export type AssetUsagePermission = z.infer<typeof AssetUsagePermissionSchema>;
 
+export const PublishAssetUsagePermissionSchema = z.enum(["OWNED", "GRANTED"]);
+export type PublishAssetUsagePermission = z.infer<typeof PublishAssetUsagePermissionSchema>;
+
+const BEAD_PRODUCT_DRAFT_FIELDS = [
+  "crystalName",
+  "crystalId",
+  "crystalDraftId",
+  "displayName",
+  "sku",
+  "materialKey",
+  "shape",
+  "diameterMm",
+  "lengthAlongStringMm",
+  "currency",
+  "unitPriceMinor",
+  "costMinor",
+  "availableQuantity",
+  "qualityStatement",
+  "qualitySource",
+  "textureAssetKey",
+  "modelAssetKey",
+  "rightsHolder",
+  "usagePermission",
+  "isAuthenticPhotograph",
+  "allowAiTraining",
+  "allowCommercialUse",
+  "allowPublicDisplay",
+  "allowAiRecommendation"
+] as const;
+
+export const SaveBeadProductDraftParamsSchema = z.strictObject({
+  groupId: IdentifierSchema
+});
+export type SaveBeadProductDraftParams = z.infer<typeof SaveBeadProductDraftParamsSchema>;
+
+export const SaveBeadProductDraftRequestSchema = z
+  .strictObject({
+    expectedGroupRevision: ExpectedRevisionSchema,
+    crystalName: z.string().trim().min(1).max(120).optional(),
+    crystalId: IdentifierSchema.optional(),
+    crystalDraftId: IdentifierSchema.optional(),
+    displayName: z.string().trim().min(1).max(200).optional(),
+    sku: IdentifierSchema.optional(),
+    materialKey: IdentifierSchema.optional(),
+    shape: BeadShapeSchema.optional(),
+    diameterMm: MillimeterSchema.positive().optional(),
+    lengthAlongStringMm: MillimeterSchema.positive().optional(),
+    currency: CurrencySchema.optional(),
+    unitPriceMinor: MinorAmountSchema.optional(),
+    costMinor: MinorAmountSchema.optional(),
+    availableQuantity: NonNegativeSafeIntegerSchema.optional(),
+    qualityStatement: NonEmptyTextSchema.optional(),
+    qualitySource: NonEmptyTextSchema.optional(),
+    textureAssetKey: ApprovedAssetKeySchema.optional(),
+    modelAssetKey: ApprovedAssetKeySchema.optional(),
+    rightsHolder: NonEmptyTextSchema.optional(),
+    usagePermission: AssetUsagePermissionSchema.optional(),
+    isAuthenticPhotograph: z.boolean().optional(),
+    allowAiTraining: z.boolean().optional(),
+    allowCommercialUse: z.boolean().optional(),
+    allowPublicDisplay: z.boolean().optional(),
+    allowAiRecommendation: z.boolean().optional()
+  })
+  .refine(
+    (request) => BEAD_PRODUCT_DRAFT_FIELDS.some((field) => request[field] !== undefined),
+    { message: "Draft save must carry at least one product field", path: ["expectedGroupRevision"] }
+  )
+  .refine(
+    (request) => !(request.crystalId !== undefined && request.crystalDraftId !== undefined),
+    { message: "A draft may reference an existing crystal or a crystal draft, not both", path: ["crystalDraftId"] }
+  );
+export type SaveBeadProductDraftRequest = z.infer<typeof SaveBeadProductDraftRequestSchema>;
+
+export const SaveBeadProductDraftResponseSchema = z.strictObject({
+  groupId: IdentifierSchema,
+  state: BeadImageGroupStateSchema,
+  revision: PositiveSafeIntegerSchema,
+  draftSavedAt: IsoDateTimeSchema
+});
+export type SaveBeadProductDraftResponse = z.infer<typeof SaveBeadProductDraftResponseSchema>;
+
+export const DRAFT_COMPLETENESS_FIELDS = [
+  "CRYSTAL_NAME",
+  "CRYSTAL_REFERENCE",
+  "PRODUCT_NAME",
+  "SHAPE",
+  "DIMENSIONS",
+  "QUALITY_STATEMENT",
+  "QUALITY_SOURCE",
+  "MATERIAL_KEY",
+  "TEXTURE_ASSET_KEY",
+  "CURRENCY",
+  "UNIT_PRICE",
+  "COST",
+  "AVAILABLE_QUANTITY",
+  "RIGHTS_HOLDER",
+  "USAGE_PERMISSION",
+  "AUTHENTIC_PHOTO_DECLARATION",
+  "AI_TRAINING_DECISION",
+  "COMMERCIAL_USE_DECISION",
+  "PUBLIC_DISPLAY_DECISION",
+  "AI_RECOMMENDATION_DECISION"
+] as const;
+
+export const DraftCompletenessFieldSchema = z.enum(DRAFT_COMPLETENESS_FIELDS);
+export type DraftCompletenessField = z.infer<typeof DraftCompletenessFieldSchema>;
+
+export const CheckBeadProductDraftCompletenessParamsSchema = z.strictObject({
+  groupId: IdentifierSchema
+});
+export type CheckBeadProductDraftCompletenessParams = z.infer<
+  typeof CheckBeadProductDraftCompletenessParamsSchema
+>;
+
+export const CheckBeadProductDraftCompletenessResponseSchema = z
+  .strictObject({
+    groupId: IdentifierSchema,
+    state: BeadImageGroupStateSchema,
+    complete: z.boolean(),
+    missingFields: z.array(DraftCompletenessFieldSchema),
+    checkedAt: IsoDateTimeSchema
+  })
+  .refine(
+    (response) => response.complete === (response.missingFields.length === 0),
+    { message: "complete must be true exactly when missingFields is empty", path: ["complete"] }
+  );
+export type CheckBeadProductDraftCompletenessResponse = z.infer<
+  typeof CheckBeadProductDraftCompletenessResponseSchema
+>;
+
+function hasExactlyOneCrystalReference(value: {
+  crystalId?: string | undefined;
+  crystalDraftId?: string | undefined;
+}): boolean {
+  const hasCrystal = value.crystalId !== undefined;
+  const hasDraft = value.crystalDraftId !== undefined;
+  return hasCrystal !== hasDraft;
+}
+
+export const PublishBeadImageGroupParamsSchema = z.strictObject({
+  groupId: IdentifierSchema
+});
+export type PublishBeadImageGroupParams = z.infer<typeof PublishBeadImageGroupParamsSchema>;
+
+/**
+ * Publication requires the full spec §6.6 field set. allowAiRecommendation is
+ * the AI-recommendation availability decision and is deliberately separate
+ * from allowAiTraining consent. Crystal identity resolves through either an
+ * existing crystalId or an explicitly confirmed CrystalDraft promotion.
+ */
 export const PublishBeadImageGroupRequestSchema = z
   .strictObject({
     idempotencyKey: IdempotencyKeySchema,
     expectedGroupRevision: ExpectedRevisionSchema,
+    crystalId: IdentifierSchema.optional(),
+    crystalDraftId: IdentifierSchema.optional(),
+    crystalDraftPromotionConfirmed: z.literal(true).optional(),
     crystalName: z.string().trim().min(1).max(120),
     crystalNameConfirmedByOperator: z.literal(true),
     displayName: z.string().trim().min(1).max(200),
@@ -464,23 +788,43 @@ export const PublishBeadImageGroupRequestSchema = z
     shape: BeadShapeSchema,
     diameterMm: MillimeterSchema.positive(),
     lengthAlongStringMm: MillimeterSchema.positive().optional(),
+    qualityStatement: NonEmptyTextSchema,
+    qualitySource: NonEmptyTextSchema,
+    textureAssetKey: ApprovedAssetKeySchema,
+    modelAssetKey: ApprovedAssetKeySchema.optional(),
     currency: CurrencySchema,
     unitPriceMinor: MinorAmountSchema,
     costMinor: MinorAmountSchema,
     availableQuantity: NonNegativeSafeIntegerSchema,
     allowPublicDisplay: z.boolean(),
     allowAiRecommendation: z.boolean(),
+    allowAiTraining: z.boolean(),
+    allowCommercialUse: z.boolean(),
     rightsHolder: NonEmptyTextSchema,
-    usagePermission: AssetUsagePermissionSchema,
-    isAuthenticPhotograph: z.boolean(),
-    approvedAssetIds: z.array(IdentifierSchema).min(1)
+    usagePermission: PublishAssetUsagePermissionSchema,
+    isAuthenticPhotograph: z.boolean()
   })
   .superRefine((request, context) => {
-    if (request.usagePermission === "PROHIBITED") {
+    if (!hasExactlyOneCrystalReference(request)) {
       context.addIssue({
         code: "custom",
-        message: "Assets with PROHIBITED usage permission can never be published",
-        path: ["usagePermission"]
+        message:
+          "Publish must resolve exactly one crystal reference: an existing crystalId or a crystalDraftId promotion",
+        path: ["crystalId"]
+      });
+    }
+    if (request.crystalDraftId !== undefined && request.crystalDraftPromotionConfirmed !== true) {
+      context.addIssue({
+        code: "custom",
+        message: "Crystal draft publication requires explicit operator promotion confirmation",
+        path: ["crystalDraftPromotionConfirmed"]
+      });
+    }
+    if (request.crystalDraftId === undefined && request.crystalDraftPromotionConfirmed !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "crystalDraftPromotionConfirmed is only valid together with a crystalDraftId",
+        path: ["crystalDraftPromotionConfirmed"]
       });
     }
   });
@@ -488,11 +832,140 @@ export type PublishBeadImageGroupRequest = z.infer<typeof PublishBeadImageGroupR
 
 export const PublishBeadImageGroupResponseSchema = z.strictObject({
   groupId: IdentifierSchema,
-  state: BeadImageGroupStateSchema,
+  state: z.literal("PUBLISHED"),
   materialProductId: IdentifierSchema,
   crystalId: IdentifierSchema,
   inventorySnapshotId: IdentifierSchema,
   publishedAt: IsoDateTimeSchema,
-  publishedAssetKeys: z.array(AssetArchiveKeySchema)
+  publishedAssetKeys: z.array(ApprovedAssetKeySchema).min(1)
 });
 export type PublishBeadImageGroupResponse = z.infer<typeof PublishBeadImageGroupResponseSchema>;
+
+export const GetBeadImageGroupPublishResultParamsSchema = z.strictObject({
+  groupId: IdentifierSchema
+});
+export type GetBeadImageGroupPublishResultParams = z.infer<typeof GetBeadImageGroupPublishResultParamsSchema>;
+
+export const GetBeadImageGroupPublishResultResponseSchema = PublishBeadImageGroupResponseSchema;
+export type GetBeadImageGroupPublishResultResponse = PublishBeadImageGroupResponse;
+
+export const ResolveApprovedAssetParamsSchema = z.strictObject({
+  assetKey: ApprovedAssetKeySchema
+});
+export type ResolveApprovedAssetParams = z.infer<typeof ResolveApprovedAssetParamsSchema>;
+
+export const ResolveApprovedAssetResponseSchema = z.strictObject({
+  assetKey: ApprovedAssetKeySchema,
+  contentType: z.enum(["image/webp", "image/png", "image/jpeg"]),
+  byteSize: PositiveSafeIntegerSchema,
+  sha256: Sha256Schema,
+  etag: NonEmptyTextSchema,
+  cacheControl: NonEmptyTextSchema
+});
+export type ResolveApprovedAssetResponse = z.infer<typeof ResolveApprovedAssetResponseSchema>;
+
+/**
+ * Stable typed errors for the spec §11 failure categories. Every error gives
+ * a stable code, a human-readable message, retryability and a safe recovery
+ * action; the envelope keeps the repository's shared `{ error: { code,
+ * message, requestId } }` outer shape with the added detail fields.
+ */
+export const ASSET_IMPORT_ERROR_CODES = [
+  "UNSUPPORTED_FILE_KIND",
+  "CORRUPT_FILE_CONTENT",
+  "STORAGE_FULL",
+  "ARCHIVE_VERIFICATION_FAILED",
+  "ARCHIVE_CONFLICT",
+  "JOB_LEASE_CONFLICT",
+  "SEGMENTATION_FAILED",
+  "QUALITY_INSUFFICIENT",
+  "ADMIN_PERMISSION_EXPIRED",
+  "DRAFT_INCOMPLETE",
+  "MISSING_REFERENCE",
+  "SKU_CONFLICT",
+  "INVENTORY_VERSION_CONFLICT",
+  "PUBLISH_TRANSACTION_FAILED"
+] as const;
+
+export const AssetImportErrorCodeSchema = z.enum(ASSET_IMPORT_ERROR_CODES);
+export type AssetImportErrorCode = z.infer<typeof AssetImportErrorCodeSchema>;
+
+export const ASSET_IMPORT_ERROR_RECOVERY_ACTIONS = [
+  "RETRY_REQUEST",
+  "RESUME_FROM_CHECKPOINT",
+  "REUPLOAD_FILE",
+  "REPROCESS_GROUP",
+  "COMPLETE_DRAFT_FIELDS",
+  "RENEW_ADMIN_PERMISSION",
+  "RESOLVE_SKU_CONFLICT",
+  "RETRY_WITH_FRESH_INVENTORY",
+  "CANCEL_SESSION",
+  "NO_RECOVERY"
+] as const;
+
+export const AssetImportErrorRecoveryActionSchema = z.enum(ASSET_IMPORT_ERROR_RECOVERY_ACTIONS);
+export type AssetImportErrorRecoveryAction = z.infer<typeof AssetImportErrorRecoveryActionSchema>;
+
+export const ASSET_IMPORT_ERROR_CATALOG: Record<
+  AssetImportErrorCode,
+  Readonly<{ retryable: boolean; recoveryAction: AssetImportErrorRecoveryAction }>
+> = {
+  UNSUPPORTED_FILE_KIND: { retryable: false, recoveryAction: "REUPLOAD_FILE" },
+  CORRUPT_FILE_CONTENT: { retryable: false, recoveryAction: "REUPLOAD_FILE" },
+  STORAGE_FULL: { retryable: true, recoveryAction: "RESUME_FROM_CHECKPOINT" },
+  ARCHIVE_VERIFICATION_FAILED: { retryable: true, recoveryAction: "REUPLOAD_FILE" },
+  ARCHIVE_CONFLICT: { retryable: true, recoveryAction: "RESUME_FROM_CHECKPOINT" },
+  JOB_LEASE_CONFLICT: { retryable: true, recoveryAction: "RESUME_FROM_CHECKPOINT" },
+  SEGMENTATION_FAILED: { retryable: true, recoveryAction: "REPROCESS_GROUP" },
+  QUALITY_INSUFFICIENT: { retryable: false, recoveryAction: "REPROCESS_GROUP" },
+  ADMIN_PERMISSION_EXPIRED: { retryable: true, recoveryAction: "RENEW_ADMIN_PERMISSION" },
+  DRAFT_INCOMPLETE: { retryable: false, recoveryAction: "COMPLETE_DRAFT_FIELDS" },
+  MISSING_REFERENCE: { retryable: false, recoveryAction: "COMPLETE_DRAFT_FIELDS" },
+  SKU_CONFLICT: { retryable: false, recoveryAction: "RESOLVE_SKU_CONFLICT" },
+  INVENTORY_VERSION_CONFLICT: { retryable: true, recoveryAction: "RETRY_WITH_FRESH_INVENTORY" },
+  PUBLISH_TRANSACTION_FAILED: { retryable: true, recoveryAction: "RETRY_REQUEST" }
+};
+
+export const AssetImportFieldErrorSchema = z.strictObject({
+  fieldPath: z.string().min(1),
+  message: z.string().min(1)
+});
+export type AssetImportFieldError = z.infer<typeof AssetImportFieldErrorSchema>;
+
+function errorDetailMatchesCatalog(detail: {
+  code: AssetImportErrorCode;
+  retryable: boolean;
+  recoveryAction: AssetImportErrorRecoveryAction;
+}): boolean {
+  const guidance = ASSET_IMPORT_ERROR_CATALOG[detail.code];
+  return guidance.retryable === detail.retryable && guidance.recoveryAction === detail.recoveryAction;
+}
+
+export const AssetImportErrorDetailSchema = z
+  .strictObject({
+    code: AssetImportErrorCodeSchema,
+    message: NonEmptyTextSchema,
+    retryable: z.boolean(),
+    recoveryAction: AssetImportErrorRecoveryActionSchema,
+    fieldErrors: z.array(AssetImportFieldErrorSchema).optional()
+  })
+  .refine(errorDetailMatchesCatalog, {
+    message: "retryable and recoveryAction must match the stable asset-import error catalog"
+  });
+export type AssetImportErrorDetail = z.infer<typeof AssetImportErrorDetailSchema>;
+
+export const AssetImportErrorEnvelopeSchema = z.strictObject({
+  error: z
+    .strictObject({
+      code: AssetImportErrorCodeSchema,
+      message: NonEmptyTextSchema,
+      retryable: z.boolean(),
+      recoveryAction: AssetImportErrorRecoveryActionSchema,
+      fieldErrors: z.array(AssetImportFieldErrorSchema).optional(),
+      requestId: NonEmptyTextSchema
+    })
+    .refine(errorDetailMatchesCatalog, {
+      message: "retryable and recoveryAction must match the stable asset-import error catalog"
+    })
+});
+export type AssetImportErrorEnvelope = z.infer<typeof AssetImportErrorEnvelopeSchema>;
