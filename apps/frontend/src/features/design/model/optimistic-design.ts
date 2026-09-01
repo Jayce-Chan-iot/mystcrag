@@ -69,7 +69,12 @@ function mainRing(design: PublicDesignV1): MainRingComponent[] {
   ].sort((left, right) => left.positionIndex - right.positionIndex);
 }
 
-function rebuildDesign(design: PublicDesignV1, ring: MainRingComponent[], anchored: AnchoredAccessory[]): PublicDesignV1 {
+function rebuildDesign(
+  design: PublicDesignV1,
+  ring: MainRingComponent[],
+  anchored: AnchoredAccessory[],
+  bracelet: PublicDesignV1["bracelet"] = design.bracelet
+): PublicDesignV1 {
   const renumbered = ring.map((component, positionIndex) => ({ ...component, positionIndex }));
   const beads = renumbered.filter((component): component is BeadV1 => "beadProductId" in component);
   const inlineAccessories = renumbered.filter(
@@ -77,12 +82,14 @@ function rebuildDesign(design: PublicDesignV1, ring: MainRingComponent[], anchor
   );
   return {
     ...design,
-    bracelet: { ...design.bracelet, totalBeadCount: beads.length },
+    // Mirrors Backend applyOperations: totalBeadCount is always normalized from
+    // the live ring and production.wristCircumferenceMm follows the bracelet.
+    bracelet: { ...bracelet, totalBeadCount: beads.length },
     beads,
     accessories: [...inlineAccessories, ...anchored],
     production: {
       ...design.production,
-      wristCircumferenceMm: design.bracelet.wristCircumferenceMm,
+      wristCircumferenceMm: bracelet.wristCircumferenceMm,
       componentSequence: renumbered.map((component) => component.componentId),
       anchoredComponents: anchored.map((accessory) => ({
         componentId: accessory.componentId,
@@ -94,14 +101,14 @@ function rebuildDesign(design: PublicDesignV1, ring: MainRingComponent[], anchor
 }
 
 function applyOperation(design: PublicDesignV1, operation: UpdateDesignOperation): PublicDesignV1 {
-  if (operation.operation === "UPDATE_BRACELET") {
-    return { ...design, bracelet: operation.bracelet };
-  }
-
   const ring = mainRing(design);
   let anchored = design.accessories.filter(
     (accessory): accessory is AnchoredAccessory => accessory.placementMode === "ANCHORED"
   );
+
+  if (operation.operation === "UPDATE_BRACELET") {
+    return rebuildDesign(design, ring, anchored, operation.bracelet);
+  }
 
   if (operation.operation === "MOVE_COMPONENT") {
     const index = ring.findIndex((component) => component.componentId === operation.componentId);
@@ -224,7 +231,7 @@ export function settleEdit(
       ...state,
       confirmed: outcome.design,
       pending,
-      status: pending.length > 0 ? "syncing" : "saved",
+      status: pending.length > 0 ? "syncing" : state.discardedEdits.length > 0 ? "recovered" : "saved",
       failureCode: null
     };
   }
@@ -264,7 +271,7 @@ export function resolveConflict(state: OptimisticDesignState, freshServerDesign:
     return {
       ...state,
       confirmed: freshServerDesign,
-      status: state.pending.length > 0 ? "syncing" : "saved",
+      status: state.pending.length > 0 ? "syncing" : state.discardedEdits.length > 0 ? "recovered" : "saved",
       failureCode: null
     };
   }

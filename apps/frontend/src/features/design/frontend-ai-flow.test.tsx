@@ -12,12 +12,12 @@ import { MOCK_MATERIALS, mockGetDesignOptions, mockReplaceBead } from "../../lib
 import { BraceletPreview } from "./components/bracelet-preview";
 import { BraceletSequenceEditor } from "./components/bracelet-sequence-editor";
 import { DisplayTray } from "./components/display-tray";
-import { DIY_LAYOUT_CLASS, SyncStatusBanner } from "./components/diy-editor";
-import { connectedRingRadiusPercent, FlatBraceletEditor } from "./components/flat-bracelet-editor";
+import { DiyEditor, DIY_LAYOUT_CLASS, SyncStatusBanner } from "./components/diy-editor";
+import { calculateSizeAwareRingLayout, connectedRingRadiusPercent, dragMetrics, FlatBraceletEditor, targetPositionForAngle } from "./components/flat-bracelet-editor";
 import { mockDesignOptions } from "./fixtures/mock-design-options";
 import { calculateBraceletCircumferenceMm, evaluateBraceletFit } from "./model/bracelet-fit";
 import { resolveSelectedDesign } from "./model/design-selection";
-import { createOptimisticState, enqueueEdit, resolveConflict, settleEdit } from "./model/optimistic-design";
+import { createOptimisticState, dismissRecoveryNotice, enqueueEdit, resolveConflict, settleEdit } from "./model/optimistic-design";
 import { WristMeasurementGuide } from "../questionnaire/components/wrist-measurement-guide";
 import {
   getNextStepIndex,
@@ -233,6 +233,43 @@ test("flat bracelet editor exposes the touch-first 2D ring", () => {
   assert.match(source, /loading="eager"/);
 });
 
+test("drag hit resolution maps each pointer position to the slot rendered under it", () => {
+  const base = mockDesignOptions[0]!;
+  const slotNames = ["a", "b", "c", "d"];
+  const ring = base.beads.slice(0, 4).map((bead, index) => ({
+    ...bead,
+    componentId: `bead-slot-${slotNames[index]}`,
+    diameterMm: 10,
+    kind: "BEAD" as const,
+    lengthAlongStringMm: 10,
+    positionIndex: index
+  }));
+  const layout = calculateSizeAwareRingLayout(ring, false);
+  const radiusPercent = layout[0]!.radiusPercent;
+  const rect = { bottom: 400, height: 400, left: 0, right: 400, top: 0, width: 400, x: 0, y: 0 } as DOMRect;
+  const radiusPx = 400 * (radiusPercent / 100);
+  const boundaryOffset = 0.05;
+  const pointerCases = [
+    { expectedPosition: 0, label: "top pointer over slot A", x: 200, y: 200 - radiusPx },
+    { expectedPosition: 1, label: "right pointer over slot B", x: 200 + radiusPx, y: 200 },
+    { expectedPosition: 2, label: "bottom pointer over slot C", x: 200, y: 200 + radiusPx },
+    { expectedPosition: 3, label: "left pointer over slot D", x: 200 - radiusPx, y: 200 },
+    { expectedPosition: 1, label: "pointer just above the 0-radian axis", x: 200 + Math.cos(boundaryOffset) * radiusPx, y: 200 - Math.sin(boundaryOffset) * radiusPx },
+    { expectedPosition: 1, label: "pointer just below the 0-radian axis", x: 200 + Math.cos(boundaryOffset) * radiusPx, y: 200 + Math.sin(boundaryOffset) * radiusPx }
+  ];
+  for (const pointerCase of pointerCases) {
+    const metrics = dragMetrics(rect, pointerCase.x, pointerCase.y, radiusPercent);
+    assert.equal(metrics.nearRing, true, `${pointerCase.label} should sit inside the ring band`);
+    assert.equal(metrics.outsideTray, false, `${pointerCase.label} should stay inside the tray`);
+    const resolved = layout[targetPositionForAngle(layout, metrics.angle, -1)]?.component.componentId;
+    assert.equal(
+      resolved,
+      `bead-slot-${slotNames[pointerCase.expectedPosition]}`,
+      `${pointerCase.label} must resolve to the slot rendered under the pointer`
+    );
+  }
+});
+
 test("display tray renders the approved switchable presentation materials", () => {
   const markup = renderToStaticMarkup(<DisplayTray material="BONE_CHINA" />);
   assert.match(markup, /data-display-tray="BONE_CHINA"/);
@@ -354,6 +391,21 @@ test("the sync state machine renders every status with explicit accessible recov
   assert.match(recoveredMarkup, /data-sync-status="recovered"/);
   assert.match(recoveredMarkup, /data-sync-dismiss="true"/);
   assert.match(recoveredMarkup, /知道了/);
+  assert.match(recoveredMarkup, /1 项未同步编辑已丢弃，不会写入服务器/);
+  const dismissedMarkup = renderBanner(dismissRecoveryNotice(recoveredState));
+  assert.match(dismissedMarkup, /data-sync-status="saved"/);
+  assert.doesNotMatch(dismissedMarkup, /已丢弃/);
+
+  // Failed edit superseded by a new one: a later success must still surface the
+  // discard instead of collapsing into the plain saved banner.
+  const failedState2 = settleEdit(syncingState, "banner-edit", { ok: false, code: "INVENTORY_CHANGED" });
+  const superseded = enqueueEdit(failedState2, { requestId: "banner-edit-2", operations, undoOperations });
+  const settledSuperseded = settleEdit(superseded, "banner-edit-2", { ok: true, design });
+  assert.equal(settledSuperseded.status, "recovered");
+  const supersededMarkup = renderBanner(settledSuperseded);
+  assert.match(supersededMarkup, /data-sync-status="recovered"/);
+  assert.match(supersededMarkup, /1 项未同步编辑已丢弃，不会写入服务器/);
+  assert.doesNotMatch(supersededMarkup, /编辑已同步，服务器为最新版本/);
 });
 
 test("pointer cancellation restores the ring and the lifted bead keeps its real photo", () => {
@@ -402,7 +454,7 @@ test("editor motion stays within the 150–350ms band and honors reduced motion"
   }
 });
 
-test("the mobile workbench keeps one persistent server-authoritative info strip and an unoccluded catalog sheet", () => {
+test("the mobile workbench keeps one persistent server-authoritative info strip and clears the fixed bottom nav", () => {
   const source = readFileSync(new URL("./components/diy-editor.tsx", import.meta.url), "utf8");
   assert.match(source, /data-mobile-design-info-strip="true"/);
   assert.match(source, /<dt>手围<\/dt>/);
@@ -410,12 +462,26 @@ test("the mobile workbench keeps one persistent server-authoritative info strip 
   assert.match(source, /<dt>珠数<\/dt>/);
   assert.match(source, /<dt>合计<\/dt>/);
   assert.match(source, /data-server-authoritative-price="true">\{formatMinorAmount\(\{ amountMinor: design\.pricing\.totalPriceMinor/);
-  assert.match(source, /sticky bottom-0/);
-  assert.doesNotMatch(source, /bottom-\[3\.4rem\]/);
   assert.match(source, /aria-label="导出设计图" className="grid h-11 w-11/);
   assert.equal((source.match(/<SyncStatusBanner/g) ?? []).length, 2);
   assert.match(source, /optimistic\.pending\.length > 0 \? <p className="mt-4 text-center text-sm text-\[var\(--muted\)\]" role="status">正在同步手串、库存与价格…/);
   assert.match(source, /disabled=\{isConflict \|\| optimistic\.undoStack\.length === 0\}/);
   assert.match(source, /disabled=\{isSaving \|\| !editsSettled\}/);
   assert.match(source, /disabled=\{isOrdering \|\| Boolean\(order\) \|\| !editsSettled\}/);
+
+  const markup = renderToStaticMarkup(<DiyEditor designId="mobile-bottom-clearance-contract" />);
+  assert.match(markup, /data-diy-editor-page="true"/);
+  // Effective bottom-space contract: the mobile column reserves exactly the fixed
+  // nav footprint (1px border + min-h-[3.4rem] + env(safe-area-inset-bottom)) so
+  // the catalog, action bar and scrollable content never rest behind the nav.
+  const navSource = readFileSync(new URL("../../../components/mobile-bottom-nav.tsx", import.meta.url), "utf8");
+  assert.match(navSource, /min-h-\[3\.4rem\]/);
+  assert.match(navSource, /env\(safe-area-inset-bottom\)/);
+  assert.match(source, /pb-\[calc\(3\.4rem_\+_env\(safe-area-inset-bottom\)_\+_1px\)\] lg:hidden/);
+  // The catalog sheet must never pin itself to the viewport bottom underneath the nav.
+  assert.doesNotMatch(source, /sticky bottom-0/);
+  assert.match(source, /data-catalog-sheet-state=\{catalogSheetState\}/);
+  // The half/full material grid is a bounded flex-scroll box so its last item can
+  // scroll fully above the nav instead of being clipped by the sheet.
+  assert.match(source, /mt-3 grid min-h-0 flex-1 grid-cols-3 overflow-y-auto/);
 });

@@ -428,3 +428,139 @@ test("new edits after a failed sync supersede the unrecovered tail explicitly", 
   assert.deepEqual(fresh.recoverableEdits, []);
   assert.deepEqual(fresh.discardedEdits.map((edit) => edit.requestId), ["req-move-1"]);
 });
+
+test("a successful edit after a discarded failure keeps the discard explicit until the user confirms", () => {
+  const design = baseDesign();
+  const s0 = createOptimisticState(design);
+  const failed = settleEdit(enqueueEdit(s0, moveEdit(s0, "req-move-1", "bead-01", 3)), "req-move-1", { ok: false, code: "INVENTORY_CHANGED" });
+  const superseded = enqueueEdit(failed, moveEdit(failed, "req-move-2", "bead-02", 0));
+  assert.deepEqual(superseded.discardedEdits.map((edit) => edit.requestId), ["req-move-1"]);
+
+  // The superseding edit succeeding must not hide the discarded one behind a
+  // plain saved status.
+  const settled = settleEdit(superseded, "req-move-2", { ok: true, design: serverDesign(projectDesign(superseded)) });
+  assert.equal(settled.status, "recovered");
+  assert.equal(settled.pending.length, 0);
+  assert.equal(settled.failureCode, null);
+  assert.deepEqual(settled.discardedEdits.map((edit) => edit.requestId), ["req-move-1"]);
+
+  // New edits and syncing keep working while the discard notice is up.
+  const next = enqueueEdit(settled, moveEdit(settled, "req-move-3", "bead-03", 0));
+  assert.equal(next.status, "syncing");
+  assert.equal(nextEditToSync(next)?.requestId, "req-move-3");
+  const nextSettled = settleEdit(next, "req-move-3", { ok: true, design: serverDesign(projectDesign(next)) });
+  assert.equal(nextSettled.status, "recovered");
+  assert.deepEqual(nextSettled.discardedEdits.map((edit) => edit.requestId), ["req-move-1"]);
+
+  // Only the explicit user confirmation clears the discards and lands on saved.
+  const dismissed = dismissRecoveryNotice(nextSettled);
+  assert.equal(dismissed.status, "saved");
+  assert.deepEqual(dismissed.discardedEdits, []);
+});
+
+test("conflict resolution at an unchanged revision keeps the discard notice when edits were already discarded", () => {
+  const design = baseDesign();
+  const s0 = createOptimisticState(design);
+  const failed = settleEdit(enqueueEdit(s0, moveEdit(s0, "req-move-1", "bead-01", 3)), "req-move-1", { ok: false, code: "NETWORK_ERROR" });
+  const superseded = enqueueEdit(failed, moveEdit(failed, "req-move-2", "bead-02", 0));
+  const conflict = settleEdit(superseded, "req-move-2", { ok: false, code: "CONFLICT" });
+  assert.deepEqual(conflict.discardedEdits.map((edit) => edit.requestId), ["req-move-1"]);
+
+  const resolved = resolveConflict(conflict, structuredClone(design));
+  assert.equal(resolved.status, "syncing");
+  const settled = settleEdit(resolved, "req-move-2", { ok: true, design: serverDesign(projectDesign(resolved)) });
+  assert.equal(settled.status, "recovered");
+  assert.deepEqual(settled.discardedEdits.map((edit) => edit.requestId), ["req-move-1"]);
+});
+
+function updateBraceletEdit(state: OptimisticDesignState, requestId: string, wristCircumferenceMm: number): PendingEdit {
+  const current = projectDesign(state).bracelet;
+  const bracelet = { ...current, wristCircumferenceMm };
+  return {
+    requestId,
+    operations: [{ operation: "UPDATE_BRACELET", bracelet }],
+    undoOperations: [{ operation: "UPDATE_BRACELET", bracelet: current }]
+  };
+}
+
+test("standalone UPDATE_BRACELET mirrors Backend derivation: normalized totalBeadCount, production wrist and untouched ring identity", () => {
+  const design = baseDesign();
+  const s0 = createOptimisticState(design);
+  const state = enqueueEdit(s0, updateBraceletEdit(s0, "req-wrist-1", 165));
+  const projection = projectDesign(state);
+
+  // The bracelet block must carry the new wrist and the true bead count, not a
+  // stale copy of the pre-edit bracelet.
+  assert.equal(projection.bracelet.wristCircumferenceMm, 165);
+  assert.equal(projection.bracelet.totalBeadCount, projection.beads.length);
+  assert.equal(projection.bracelet.totalBeadCount, design.beads.length);
+  // Backend also copies the wrist into production so manufacture and preview agree.
+  assert.equal(projection.production.wristCircumferenceMm, 165);
+  // The ring itself is untouched: identity, order and anchor wiring stay intact.
+  assert.deepEqual(projection.production.componentSequence, design.production.componentSequence);
+  assert.deepEqual(projection.production.anchoredComponents, design.production.anchoredComponents);
+  assert.deepEqual(projection.beads.map((bead) => bead.componentId), design.beads.map((bead) => bead.componentId));
+  assert.deepEqual(projection.beads.map((bead) => bead.positionIndex), design.beads.map((bead) => bead.positionIndex));
+  // Server authority is preserved through the wrist edit.
+  assert.equal(projection.pricing, design.pricing);
+  assert.equal(projection.revision, design.revision);
+});
+
+test("UPDATE_BRACELET normalizes an out-of-sync totalBeadCount against the live ring", () => {
+  const design = baseDesign();
+  const s0 = createOptimisticState(design);
+  const drifted = { ...s0, confirmed: { ...design, bracelet: { ...design.bracelet, totalBeadCount: design.beads.length + 3 } } };
+  const state = enqueueEdit(drifted, updateBraceletEdit(drifted, "req-wrist-2", 170));
+  const projection = projectDesign(state);
+
+  assert.equal(projection.bracelet.wristCircumferenceMm, 170);
+  assert.equal(projection.bracelet.totalBeadCount, projection.beads.length);
+  assert.notEqual(projection.bracelet.totalBeadCount, design.beads.length + 3);
+  assert.equal(projection.production.wristCircumferenceMm, 170);
+});
+
+test("a mixed MOVE + UPDATE_BRACELET batch keeps sequence, bracelet and production coherent", () => {
+  const design = baseDesign();
+  const s0 = createOptimisticState(design);
+  const moved = enqueueEdit(s0, moveEdit(s0, "req-move-1", "bead-01", 4));
+  const state = enqueueEdit(moved, updateBraceletEdit(moved, "req-wrist-1", 165));
+  const projection = projectDesign(state);
+
+  const expectedSequence = [...design.production.componentSequence];
+  const [first] = expectedSequence.splice(expectedSequence.indexOf("bead-01"), 1);
+  expectedSequence.splice(4, 0, first!);
+  assert.deepEqual(projection.production.componentSequence, expectedSequence);
+  assert.equal(projection.bracelet.wristCircumferenceMm, 165);
+  assert.equal(projection.production.wristCircumferenceMm, 165);
+  assert.equal(projection.bracelet.totalBeadCount, projection.beads.length);
+  assert.deepEqual(projection.production.anchoredComponents, design.production.anchoredComponents);
+  assert.deepEqual(projection.beads.map((bead) => bead.positionIndex), projection.beads.map((_, index) => index));
+});
+
+test("a mixed REPLACE + UPDATE_BRACELET batch keeps replacement identity and wrist derivation coherent", () => {
+  const design = baseDesign();
+  const s0 = createOptimisticState(design);
+  const projection0 = projectDesign(s0);
+  const replaceRequest = createReplaceRequest(projection0, "bead-02", {
+    ...design.beads[1]!,
+    beadProductId: AMETHYST_MATERIAL.beadProductId,
+    materialKey: AMETHYST_MATERIAL.materialKey,
+    diameterMm: AMETHYST_MATERIAL.diameterMm,
+    unitPriceMinor: AMETHYST_MATERIAL.unitPriceMinor
+  });
+  const replaced = enqueueEdit(s0, {
+    requestId: "req-replace-1",
+    operations: replaceRequest.operations,
+    undoOperations: invertOperations(projection0, replaceRequest.operations)
+  });
+  const state = enqueueEdit(replaced, updateBraceletEdit(replaced, "req-wrist-1", 172));
+  const projection = projectDesign(state);
+
+  const replacedBead = projection.beads.find((bead) => bead.componentId === "bead-02")!;
+  assert.equal(replacedBead.beadProductId, AMETHYST_MATERIAL.beadProductId);
+  assert.equal(replacedBead.positionIndex, design.beads[1]!.positionIndex);
+  assert.deepEqual(projection.production.componentSequence, design.production.componentSequence);
+  assert.equal(projection.bracelet.wristCircumferenceMm, 172);
+  assert.equal(projection.production.wristCircumferenceMm, 172);
+  assert.equal(projection.bracelet.totalBeadCount, projection.beads.length);
+});

@@ -1,6 +1,6 @@
 "use client";
 
-import { createBraceletLayout, resolveSlotAtAngle, type BraceletLayoutResult } from "@mystcrag/bracelet-engine";
+import { createBraceletLayout, normalizeAngle, resolveSlotAtAngle, type BraceletLayoutResult } from "@mystcrag/bracelet-engine";
 import type { PublicDesignV1 } from "@mystcrag/design-contract";
 import Image from "next/image";
 import * as React from "react";
@@ -75,7 +75,7 @@ export function calculateSizeAwareRingLayout(components: RingComponent[], connec
   });
 }
 
-function targetPositionForAngle(layout: ReturnType<typeof calculateSizeAwareRingLayout>, angle: number, fallback: number) {
+export function targetPositionForAngle(layout: ReturnType<typeof calculateSizeAwareRingLayout>, angle: number, fallback: number) {
   const engineLayout: BraceletLayoutResult = {
     center: { x: 0, y: 0 },
     circumference: 0,
@@ -113,14 +113,16 @@ export function previewMovedRing(
   return next;
 }
 
-function dragMetrics(rect: DOMRect, clientX: number, clientY: number, ringRadiusPercent: number) {
+export function dragMetrics(rect: DOMRect, clientX: number, clientY: number, ringRadiusPercent: number) {
   const x = clientX - rect.left;
   const y = clientY - rect.top;
   const centerX = rect.width / 2;
   const centerY = rect.height / 2;
   const ringRadius = rect.width * (ringRadiusPercent / 100);
   const distance = Math.hypot(x - centerX, y - centerY);
-  const angle = (Math.atan2(y - centerY, x - centerX) + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2);
+  // Slots are positioned with cos/sin in this same stage frame, so the pointer
+  // angle is the plain atan2; any extra rotation offsets every drop target.
+  const angle = normalizeAngle(Math.atan2(y - centerY, x - centerX));
   return {
     angle,
     nearRing: Math.abs(distance - ringRadius) <= rect.width * 0.16,

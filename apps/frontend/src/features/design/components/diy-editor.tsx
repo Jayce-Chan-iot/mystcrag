@@ -117,7 +117,9 @@ export function SyncStatusBanner({
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-white/90 px-4 py-2 text-xs text-[var(--foreground)]" data-sync-status="recovered" role="status">
       <span>
-        已按服务器最新版本恢复{optimistic.discardedEdits.length > 0 ? `，${optimistic.discardedEdits.length} 项不兼容编辑已丢弃` : ""}。
+        {optimistic.discardedEdits.length > 0
+          ? `已按服务器最新版本恢复，${optimistic.discardedEdits.length} 项未同步编辑已丢弃，不会写入服务器。`
+          : "已按服务器最新版本恢复。"}
       </span>
       <button className="min-h-11 shrink-0 rounded-full border border-[var(--border)] bg-white px-4 text-xs" data-sync-dismiss="true" onClick={onDismiss} type="button">
         知道了
@@ -1163,7 +1165,7 @@ export function DiyEditor({ designId }: { designId: string }) {
         </div>
       </div>
 
-      <div className="lg:hidden sm:px-6 sm:py-6">
+      <div className="pb-[calc(3.4rem_+_env(safe-area-inset-bottom)_+_1px)] lg:hidden sm:px-6 sm:pt-6">
         <div className={`${DIY_LAYOUT_CLASS} max-w-[30rem]`}>
         <section className="overflow-hidden bg-[var(--surface)] sm:rounded-[1.7rem] sm:border sm:border-[var(--border)] sm:shadow-[0_20px_65px_rgb(57_45_67/0.08)]" aria-labelledby="bracelet-preview-title">
           <header className="grid min-h-16 grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-[var(--border)]/65 px-4 sm:px-6">
@@ -1237,7 +1239,7 @@ export function DiyEditor({ designId }: { designId: string }) {
           </div>
           {braceletFit.message ? <p className="border-b border-[var(--border)]/70 bg-white/55 px-4 pb-3 text-right text-xs text-[var(--muted)]" id="mobile-bracelet-fit-help">建议范围 13.0–20.0cm，不影响完成设计</p> : null}
 
-          <section className={`sticky bottom-0 z-40 overflow-hidden border-t border-[var(--border)] bg-[var(--surface)] px-3 pb-4 pt-3 shadow-[0_-18px_50px_rgb(57_45_67/0.12)] transition-[max-height] duration-300 motion-reduce:transition-none sm:px-6 ${catalogSheetState === "collapsed" ? "max-h-[12rem]" : catalogSheetState === "half" ? "max-h-[48dvh]" : "max-h-[82dvh]"}`} aria-labelledby="material-library-title" data-catalog-sheet-state={catalogSheetState}>
+          <section className={`z-40 flex flex-col overflow-hidden border-t border-[var(--border)] bg-[var(--surface)] px-3 pb-4 pt-3 shadow-[0_-18px_50px_rgb(57_45_67/0.12)] transition-[max-height] duration-300 motion-reduce:transition-none sm:px-6 ${catalogSheetState === "collapsed" ? "max-h-[12rem]" : catalogSheetState === "half" ? "max-h-[48dvh]" : "max-h-[82dvh]"}`} aria-labelledby="material-library-title" data-catalog-sheet-state={catalogSheetState}>
             <div className="flex items-end justify-between gap-3">
               <div>
                 <h2 className="font-serif text-xl sm:text-2xl" id="material-library-title">商品库</h2>
@@ -1319,7 +1321,7 @@ export function DiyEditor({ designId }: { designId: string }) {
               </select>
             </div>
 
-            <div className={`${catalogSheetState === "collapsed" ? "mt-3 flex overflow-x-auto" : "mt-3 grid grid-cols-3 overflow-y-auto"} max-h-[60dvh] gap-2 pr-0.5 sm:gap-3`} aria-label="可加入的珠子">
+            <div className={`${catalogSheetState === "collapsed" ? "mt-3 flex max-h-[60dvh] overflow-x-auto" : "mt-3 grid min-h-0 flex-1 grid-cols-3 overflow-y-auto"} gap-2 pr-0.5 sm:gap-3`} aria-label="可加入的珠子">
               {materialOptions.map((material, index) => (
                 <button
                   aria-label={`加入 ${material.crystalNameCn}`}
