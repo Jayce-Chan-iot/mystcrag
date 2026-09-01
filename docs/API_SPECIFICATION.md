@@ -176,10 +176,10 @@ Recovery checkpoints are a separate ordered enum (`AssetImportCheckpointSchema`)
 | `POST /api/admin/bead-import/groups/:groupId/reprocess` | `ReprocessBeadImageGroupRequestSchema` | `ReprocessBeadImageGroupResponseSchema` | Queues a new processing version. Only bounded settings are accepted (`maskThreshold` 0–1, `edgeFeatherPx` 0–8); no model choice, no output path. |
 | `POST /api/admin/bead-import/groups/:groupId/processed-version` | `SelectProcessedVersionRequestSchema` | `SelectProcessedVersionResponseSchema` | Explicitly selects the current processed version for review/publication. New versions never delete old ones; the selection is an explicit reference guarded by `expectedGroupRevision`. |
 | `POST /api/admin/bead-import/groups/:groupId/draft` | `SaveBeadProductDraftRequestSchema` | `SaveBeadProductDraftResponseSchema` | Explicit partial product-draft save: at least one product field plus `expectedGroupRevision`. Accepts the full permission vocabulary including `UNKNOWN` and `PROHIBITED` — such drafts persist locally as review-only records. A draft may reference an existing `crystalId` or a `crystalDraftId`, never both. |
-| `GET /api/admin/bead-import/groups/:groupId/draft-completeness` | no body | `CheckBeadProductDraftCompletenessResponseSchema` | Reports `complete` and `missingFields` against the publish-required field list (`DRAFT_COMPLETENESS_FIELDS`); `complete` is true exactly when `missingFields` is empty. |
+| `GET /api/admin/bead-import/groups/:groupId/draft-completeness` | no body | `CheckBeadProductDraftCompletenessResponseSchema` | Reports `complete` and `missingFields` against the publish-required field list (`DRAFT_COMPLETENESS_FIELDS`, including `SKU`); `PUBLISH_REQUIRED_FIELDS_TO_COMPLETENESS` maps every publish-required business field one-to-one onto those fields. `complete` is true exactly when `missingFields` is empty. |
 | `POST /api/admin/bead-import/groups/:groupId/publish` | `PublishBeadImageGroupRequestSchema` | `PublishBeadImageGroupResponseSchema` (`state` literal `PUBLISHED`, `publishedAssetKeys` ≥1 approved keys) | Transactional publication of one reviewed group into the formal catalog. |
 | `GET /api/admin/bead-import/groups/:groupId/publish-result` | no body | `GetBeadImageGroupPublishResultResponseSchema` | Re-reads the persisted publication result for refresh/recovery. |
-| `GET /api/assets/:assetKey` | `ResolveApprovedAssetParamsSchema` | `ResolveApprovedAssetResponseSchema` | Approved-only public delivery (see below). Draft, retired, unpublished, or private assets resolve to `404`. |
+| `GET /api/assets/:assetKey` | `ResolveApprovedAssetParamsSchema` | **Binary image bytes**, never JSON. Success headers are validated by `ApprovedAssetDeliveryHeadersSchema` (`Content-Type`, `Content-Length`, `ETag`, `Cache-Control`); `ApprovedAssetDeliveryMetadataSchema` is the internal resolver/service result only. | Approved-only public delivery (see below). Draft, retired, unpublished, or private assets resolve to `404`. |
 
 Draft save is an explicit boundary (`POST /groups/:groupId/draft`), not the `SET_NAME` review action: `SET_NAME` only records the human bead name during review, while draft save persists product fields across review steps. Drafts never appear in public catalog queries, AI recommendation, or inventory; publication is the only path to the live catalog, and it requires the complete publish request.
 
@@ -214,7 +214,7 @@ Publish example (all fields strict; unknown keys rejected):
 }
 ```
 
-Publication must resolve exactly one crystal reference. Instead of `crystalId`, a request may promote a human-completed crystal draft by supplying `"crystalDraftId": "draft-amethyst"` together with `"crystalDraftPromotionConfirmed": true`; both references, neither reference, or an unconfirmed promotion are `400`. `crystalNameConfirmedByOperator` must be `true`; `textureAssetKey` (and the optional `modelAssetKey`) must be approved public keys; `usagePermission` allows only `OWNED` or `GRANTED`. `allowAiRecommendation` is the AI-recommendation availability decision and is separate from `allowAiTraining` consent — both, plus `allowCommercialUse`, `allowPublicDisplay`, and `isAuthenticPhotograph`, are mandatory booleans. Example response (also served by `GET /groups/:groupId/publish-result`):
+Publication must resolve exactly one crystal reference. Instead of `crystalId`, a request may promote a human-completed crystal draft by supplying `"crystalDraftId": "draft-amethyst"` together with `"crystalDraftPromotionConfirmed": true`; both references, neither reference, or an unconfirmed promotion are `400`. `crystalNameConfirmedByOperator` must be `true`; `textureAssetKey` (and the optional `modelAssetKey`) must be approved public keys; `usagePermission` allows only `OWNED` or `GRANTED`. `allowPublicDisplay` and `allowCommercialUse` are affirmative-only grants and must be literal `true` — a publish request carrying `false` for either is `400`, because otherwise a product could be published while its approved image is contractually forbidden from public or commercial delivery. `allowAiTraining` and `allowAiRecommendation` are mandatory booleans that may deny consent (`false` is a valid decision; `allowAiRecommendation` is the AI-recommendation availability decision, separate from `allowAiTraining` consent). `isAuthenticPhotograph` is mandatory. Example response (also served by `GET /groups/:groupId/publish-result`):
 
 ```json
 {
@@ -326,28 +326,49 @@ Binary upload response example (`ARCHIVED` requires verified `sha256`, server `a
 }
 ```
 
-Approved asset delivery (`GET /api/assets/:assetKey`) resolves only approved, active, `allowPublicDisplay=true` bindings. Approved keys are stable and content-addressed (`approved:<sha256>`, `ApprovedAssetKeySchema`) and are deliberately unlike private archive keys (`imports/...`), which never parse as approved keys and never appear in public responses. Responses are immutable for a given key: the ETag is the content hash and `cacheControl` is `public, max-age=31536000, immutable`. Draft, retired, unpublished, or private assets resolve to `404`. Example response:
+Approved asset delivery (`GET /api/assets/:assetKey`) resolves only approved, active, `allowPublicDisplay=true` bindings. Approved keys are stable and content-addressed (`approved:<sha256>`, `ApprovedAssetKeySchema`) and are deliberately unlike private archive keys (`imports/...`), which never parse as approved keys and never appear in public responses. Draft, retired, unpublished, or private assets resolve to `404`.
 
-```json
-{
-  "assetKey": "approved:a3f5…(64 hex)",
-  "contentType": "image/webp",
-  "byteSize": 65536,
-  "sha256": "a3f5…(64 hex)",
-  "etag": "\"a3f5…(64 hex)\"",
-  "cacheControl": "public, max-age=31536000, immutable"
-}
+The successful HTTP response is **binary image bytes** — it is consumed by `<img src>` and is never a JSON body. Exactly four response headers are validated by `ApprovedAssetDeliveryHeadersSchema`:
+
+| Header | Contract |
+| --- | --- |
+| `Content-Type` | `image/webp`, `image/png`, or `image/jpeg` (`ApprovedAssetContentTypeSchema`). |
+| `Content-Length` | Positive decimal byte-count string, equal to the delivered byte size. |
+| `ETag` | Strong ETag quoting the exact SHA-256 of the delivered bytes: `"<sha256>"`. Weak or unquoted ETags are contract violations. |
+| `Cache-Control` | Exactly `public, max-age=31536000, immutable` (`APPROVED_ASSET_CACHE_CONTROL`). |
+
+Example response headers:
+
+```http
+HTTP/1.1 200 OK
+Content-Type: image/webp
+Content-Length: 65536
+ETag: "a3f5b9…(64 hex)"
+Cache-Control: public, max-age=31536000, immutable
+
+<binary image bytes>
 ```
+
+Content-addressed invariants are enforced by `ApprovedAssetDeliveryMetadataSchema`: `assetKey === approved:<sha256>` (the key digest must equal the delivered bytes' digest), the ETag is the strong quoted form of the same digest, and `cacheControl` is the exact immutable directive — any mismatch is a contract violation. That schema is the **internal resolver/service result only**; it is never serialized as the HTTP response body, so the Frontend Resolver task must use the delivery route URL directly as the image source and never treat a JSON document as an image.
 
 ### Typed error contract
 
-Asset-import failures serialize inside the repository's shared `{ "error": { code, message, requestId } }` outer envelope, extended with stable detail fields (`AssetImportErrorEnvelopeSchema`):
+Asset-import errors use five distinct layers, and the two code layers are strictly separated:
+
+1. **HTTP status** — the numeric response status (`ASSET_IMPORT_TRANSPORT_STATUS_BY_CODE`).
+2. **Shared transport code** (`error.code`) — the shared HTTP/transport vocabulary only (`AssetImportTransportErrorCodeSchema`): `UNAUTHORIZED`, `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE`, `UNPROCESSABLE_ENTITY`, `INTERNAL_ERROR`. Business codes never appear here.
+3. **Asset-specific code** (`error.assetCode`) — the bead-import business code (`AssetImportErrorCodeSchema`) covering the spec §11 failure categories.
+4. **`retryable`** — bound to the `assetCode` catalog, never to the transport code.
+5. **`recoveryAction`** — the safe recovery step, also bound to the `assetCode` catalog.
+
+Envelope shape (`AssetImportErrorEnvelopeSchema`), keeping the repository's shared `{ "error": { code, message, requestId } }` outer structure with the asset detail added inside:
 
 ```json
 {
   "error": {
-    "code": "STORAGE_FULL",
+    "code": "INTERNAL_ERROR",
     "message": "档案根目录剩余空间不足，归档已暂停",
+    "assetCode": "STORAGE_FULL",
     "retryable": true,
     "recoveryAction": "RESUME_FROM_CHECKPOINT",
     "requestId": "req-1"
@@ -355,30 +376,32 @@ Asset-import failures serialize inside the repository's shared `{ "error": { cod
 }
 ```
 
-Stable codes (`AssetImportErrorCodeSchema`) cover the spec §11 failure categories, and `ASSET_IMPORT_ERROR_CATALOG` fixes each code's `retryable` flag and `recoveryAction`, so client recovery logic can rely on them:
+**Backend compatibility note (honest):** the current canonical backend envelope (`apps/backend/src/contracts/api-error.ts`) is a strict object whose `ApiErrorCodeSchema` does not include `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE`, or `UNPROCESSABLE_ENTITY` and which rejects the extra `assetCode`/`retryable`/`recoveryAction` fields. It does **not** accept this extended shape today. TASK-ASSET-BE-001 must extend or adapt that serializer for the asset-import routes (adding the three transport classes and the asset detail fields) instead of claiming the existing schema is already compatible.
 
-| Code | Spec §11 category | retryable | recoveryAction |
-| --- | --- | --- | --- |
-| `UNSUPPORTED_FILE_KIND` | unsupported / corrupt files | false | `REUPLOAD_FILE` |
-| `CORRUPT_FILE_CONTENT` | unsupported / corrupt files | false | `REUPLOAD_FILE` |
-| `STORAGE_FULL` | storage exhaustion / verification failure | true | `RESUME_FROM_CHECKPOINT` |
-| `ARCHIVE_VERIFICATION_FAILED` | storage exhaustion / verification failure | true | `REUPLOAD_FILE` |
-| `ARCHIVE_CONFLICT` | archive / job lease conflicts | true | `RESUME_FROM_CHECKPOINT` |
-| `JOB_LEASE_CONFLICT` | archive / job lease conflicts | true | `RESUME_FROM_CHECKPOINT` |
-| `SEGMENTATION_FAILED` | segmentation failure / insufficient quality | true | `REPROCESS_GROUP` |
-| `QUALITY_INSUFFICIENT` | segmentation failure / insufficient quality | false | `REPROCESS_GROUP` |
-| `ADMIN_PERMISSION_EXPIRED` | expired admin permission | true | `RENEW_ADMIN_PERMISSION` |
-| `DRAFT_INCOMPLETE` | incomplete draft fields / missing references | false | `COMPLETE_DRAFT_FIELDS` |
-| `MISSING_REFERENCE` | incomplete draft fields / missing references | false | `COMPLETE_DRAFT_FIELDS` |
-| `SKU_CONFLICT` | publication conflicts | false | `RESOLVE_SKU_CONFLICT` |
-| `INVENTORY_VERSION_CONFLICT` | publication conflicts | true | `RETRY_WITH_FRESH_INVENTORY` |
-| `PUBLISH_TRANSACTION_FAILED` | publication transaction failure | true | `RETRY_REQUEST` |
+Stable asset codes and their fixed `retryable`/`recoveryAction` guidance (`ASSET_IMPORT_ERROR_CATALOG`), plus the transport code each one is bound to (`ASSET_IMPORT_ERROR_TRANSPORT_CODES`); the envelope rejects any other pairing:
 
-HTTP mapping keeps the shared envelope codes:
+| assetCode | Spec §11 category | transport code (`error.code`) | HTTP status | retryable | recoveryAction |
+| --- | --- | --- | --- | --- | --- |
+| `UNSUPPORTED_FILE_KIND` | unsupported / corrupt files | `UNSUPPORTED_MEDIA_TYPE` | 415 | false | `REUPLOAD_FILE` |
+| `CORRUPT_FILE_CONTENT` | unsupported / corrupt files | `UNPROCESSABLE_ENTITY` | 422 | false | `REUPLOAD_FILE` |
+| `STORAGE_FULL` | storage exhaustion / verification failure | `INTERNAL_ERROR` | 500 | true | `RESUME_FROM_CHECKPOINT` |
+| `ARCHIVE_VERIFICATION_FAILED` | storage exhaustion / verification failure | `CONFLICT` | 409 | true | `REUPLOAD_FILE` |
+| `ARCHIVE_CONFLICT` | archive / job lease conflicts | `CONFLICT` | 409 | true | `RESUME_FROM_CHECKPOINT` |
+| `JOB_LEASE_CONFLICT` | archive / job lease conflicts | `CONFLICT` | 409 | true | `RESUME_FROM_CHECKPOINT` |
+| `SEGMENTATION_FAILED` | segmentation failure / insufficient quality | `INTERNAL_ERROR` | 500 | true | `REPROCESS_GROUP` |
+| `QUALITY_INSUFFICIENT` | segmentation failure / insufficient quality | `UNPROCESSABLE_ENTITY` | 422 | false | `REPROCESS_GROUP` |
+| `ADMIN_PERMISSION_EXPIRED` | expired admin permission | `UNAUTHORIZED` | 401 | true | `RENEW_ADMIN_PERMISSION` |
+| `DRAFT_INCOMPLETE` | incomplete draft fields / missing references | `UNPROCESSABLE_ENTITY` | 422 | false | `COMPLETE_DRAFT_FIELDS` |
+| `MISSING_REFERENCE` | incomplete draft fields / missing references | `UNPROCESSABLE_ENTITY` | 422 | false | `COMPLETE_DRAFT_FIELDS` |
+| `SKU_CONFLICT` | publication conflicts | `CONFLICT` | 409 | false | `RESOLVE_SKU_CONFLICT` |
+| `INVENTORY_VERSION_CONFLICT` | publication conflicts | `CONFLICT` | 409 | true | `RETRY_WITH_FRESH_INVENTORY` |
+| `PUBLISH_TRANSACTION_FAILED` | publication transaction failure | `INTERNAL_ERROR` | 500 | true | `RETRY_REQUEST` |
+
+HTTP mapping by transport code:
 
 | Status | Code | When |
 | --- | --- | --- |
-| `400` | `VALIDATION_ERROR` | Strict-shape violations, unknown keys, hostile paths (absolute, `..`, backslash, drive letter), extension↔kind mismatch, non-positive sizes or revisions, and publish-shape violations: permission outside `OWNED`/`GRANTED`, missing/duplicated crystal reference, unconfirmed draft promotion, missing consent booleans, non-approved asset keys. |
+| `400` | `VALIDATION_ERROR` | Strict-shape violations, unknown keys, hostile paths (absolute, `..`, backslash, drive letter), extension↔kind mismatch, non-positive sizes or revisions, and publish-shape violations: permission outside `OWNED`/`GRANTED`, missing/duplicated crystal reference, unconfirmed draft promotion, missing consent decisions, `allowPublicDisplay` or `allowCommercialUse` not literal `true`, non-approved asset keys. |
 | `401` | `UNAUTHORIZED` | Missing or invalid `ASSET_ADMIN_API_KEY`. The key is never echoed or logged. |
 | `404` | `NOT_FOUND` | Unknown `sessionId`, `fileId`, `groupId`, job, or approved asset. Draft/retired/private assets requested through the public asset route also resolve to `404`. |
 | `409` | `CONFLICT` | Illegal session transition (including cancelling a terminal session), stale `expectedGroupRevision`, duplicate idempotency key with a different payload, SHA-256 conflict against an archived file, conflicting duplicate publish. |

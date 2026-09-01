@@ -708,6 +708,7 @@ export const DRAFT_COMPLETENESS_FIELDS = [
   "CRYSTAL_NAME",
   "CRYSTAL_REFERENCE",
   "PRODUCT_NAME",
+  "SKU",
   "SHAPE",
   "DIMENSIONS",
   "QUALITY_STATEMENT",
@@ -726,6 +727,35 @@ export const DRAFT_COMPLETENESS_FIELDS = [
   "PUBLIC_DISPLAY_DECISION",
   "AI_RECOMMENDATION_DECISION"
 ] as const;
+
+/**
+ * One-to-one mapping from every publish-required business field onto its
+ * completeness field. crystalReference covers the crystalId/crystalDraftId
+ * pair: exactly one of them satisfies CRYSTAL_REFERENCE.
+ */
+export const PUBLISH_REQUIRED_FIELDS_TO_COMPLETENESS = {
+  crystalReference: "CRYSTAL_REFERENCE",
+  crystalName: "CRYSTAL_NAME",
+  displayName: "PRODUCT_NAME",
+  sku: "SKU",
+  shape: "SHAPE",
+  diameterMm: "DIMENSIONS",
+  qualityStatement: "QUALITY_STATEMENT",
+  qualitySource: "QUALITY_SOURCE",
+  materialKey: "MATERIAL_KEY",
+  textureAssetKey: "TEXTURE_ASSET_KEY",
+  currency: "CURRENCY",
+  unitPriceMinor: "UNIT_PRICE",
+  costMinor: "COST",
+  availableQuantity: "AVAILABLE_QUANTITY",
+  rightsHolder: "RIGHTS_HOLDER",
+  usagePermission: "USAGE_PERMISSION",
+  isAuthenticPhotograph: "AUTHENTIC_PHOTO_DECLARATION",
+  allowAiTraining: "AI_TRAINING_DECISION",
+  allowCommercialUse: "COMMERCIAL_USE_DECISION",
+  allowPublicDisplay: "PUBLIC_DISPLAY_DECISION",
+  allowAiRecommendation: "AI_RECOMMENDATION_DECISION"
+} as const satisfies Record<string, DraftCompletenessField>;
 
 export const DraftCompletenessFieldSchema = z.enum(DRAFT_COMPLETENESS_FIELDS);
 export type DraftCompletenessField = z.infer<typeof DraftCompletenessFieldSchema>;
@@ -772,6 +802,9 @@ export type PublishBeadImageGroupParams = z.infer<typeof PublishBeadImageGroupPa
  * the AI-recommendation availability decision and is deliberately separate
  * from allowAiTraining consent. Crystal identity resolves through either an
  * existing crystalId or an explicitly confirmed CrystalDraft promotion.
+ * allowPublicDisplay and allowCommercialUse are affirmative-only grants:
+ * publishing while either is false would ship a product whose approved image
+ * is contractually forbidden from public or commercial delivery.
  */
 export const PublishBeadImageGroupRequestSchema = z
   .strictObject({
@@ -796,10 +829,10 @@ export const PublishBeadImageGroupRequestSchema = z
     unitPriceMinor: MinorAmountSchema,
     costMinor: MinorAmountSchema,
     availableQuantity: NonNegativeSafeIntegerSchema,
-    allowPublicDisplay: z.boolean(),
+    allowPublicDisplay: z.literal(true),
     allowAiRecommendation: z.boolean(),
     allowAiTraining: z.boolean(),
-    allowCommercialUse: z.boolean(),
+    allowCommercialUse: z.literal(true),
     rightsHolder: NonEmptyTextSchema,
     usagePermission: PublishAssetUsagePermissionSchema,
     isAuthenticPhotograph: z.boolean()
@@ -854,22 +887,121 @@ export const ResolveApprovedAssetParamsSchema = z.strictObject({
 });
 export type ResolveApprovedAssetParams = z.infer<typeof ResolveApprovedAssetParamsSchema>;
 
-export const ResolveApprovedAssetResponseSchema = z.strictObject({
-  assetKey: ApprovedAssetKeySchema,
-  contentType: z.enum(["image/webp", "image/png", "image/jpeg"]),
-  byteSize: PositiveSafeIntegerSchema,
-  sha256: Sha256Schema,
-  etag: NonEmptyTextSchema,
-  cacheControl: NonEmptyTextSchema
-});
-export type ResolveApprovedAssetResponse = z.infer<typeof ResolveApprovedAssetResponseSchema>;
+export const APPROVED_ASSET_CONTENT_TYPES = ["image/webp", "image/png", "image/jpeg"] as const;
+export const ApprovedAssetContentTypeSchema = z.enum(APPROVED_ASSET_CONTENT_TYPES);
+export type ApprovedAssetContentType = z.infer<typeof ApprovedAssetContentTypeSchema>;
+
+export const APPROVED_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
+
+const StrongEtagSchema = z
+  .string()
+  .regex(/^"[0-9a-f]{64}"$/, "Expected a strong ETag quoting the SHA-256 digest");
 
 /**
- * Stable typed errors for the spec §11 failure categories. Every error gives
- * a stable code, a human-readable message, retryability and a safe recovery
- * action; the envelope keeps the repository's shared `{ error: { code,
- * message, requestId } }` outer shape with the added detail fields.
+ * Internal resolver/service result describing one approved asset delivery.
+ * This is NOT the HTTP response body of GET /api/assets/:assetKey — that
+ * success response is binary image bytes whose headers are validated by
+ * ApprovedAssetDeliveryHeadersSchema. Frontends must use the route URL as an
+ * <img src> and never treat a JSON document as the delivered image.
+ *
+ * Content-addressed invariants: the key is exactly approved:<sha256>, the
+ * ETag is the strong quoted form of the same digest, and the cache directive
+ * is the exact immutable value.
  */
+export const ApprovedAssetDeliveryMetadataSchema = z
+  .strictObject({
+    assetKey: ApprovedAssetKeySchema,
+    contentType: ApprovedAssetContentTypeSchema,
+    byteSize: PositiveSafeIntegerSchema,
+    sha256: Sha256Schema,
+    etag: StrongEtagSchema,
+    cacheControl: z.literal(APPROVED_ASSET_CACHE_CONTROL)
+  })
+  .superRefine((metadata, context) => {
+    if (metadata.assetKey !== `approved:${metadata.sha256}`) {
+      context.addIssue({
+        code: "custom",
+        message: "assetKey must be the content address approved:<sha256> of the delivered bytes",
+        path: ["assetKey"]
+      });
+    }
+    if (metadata.etag !== `"${metadata.sha256}"`) {
+      context.addIssue({
+        code: "custom",
+        message: "ETag must be the strong quoted SHA-256 of the delivered bytes",
+        path: ["etag"]
+      });
+    }
+  });
+export type ApprovedAssetDeliveryMetadata = z.infer<typeof ApprovedAssetDeliveryMetadataSchema>;
+
+/**
+ * The four HTTP response headers of a successful approved asset delivery.
+ * The body is the binary image itself; header names are exact and no other
+ * header may be validated through this contract.
+ */
+export const ApprovedAssetDeliveryHeadersSchema = z.strictObject({
+  "Content-Type": ApprovedAssetContentTypeSchema,
+  "Content-Length": z
+    .string()
+    .regex(/^[1-9][0-9]{0,14}$/, "Content-Length must be a positive decimal byte count"),
+  ETag: StrongEtagSchema,
+  "Cache-Control": z.literal(APPROVED_ASSET_CACHE_CONTROL)
+});
+export type ApprovedAssetDeliveryHeaders = z.infer<typeof ApprovedAssetDeliveryHeadersSchema>;
+
+export function approvedAssetDeliveryHeaders(metadata: ApprovedAssetDeliveryMetadata): ApprovedAssetDeliveryHeaders {
+  return {
+    "Content-Type": metadata.contentType,
+    "Content-Length": String(metadata.byteSize),
+    ETag: metadata.etag,
+    "Cache-Control": metadata.cacheControl
+  };
+}
+
+/**
+ * Stable typed asset-import errors for the spec §11 failure categories.
+ *
+ * The HTTP envelope separates two code layers:
+ *  - `error.code` uses only the shared HTTP transport vocabulary
+ *    (ASSET_IMPORT_TRANSPORT_ERROR_CODES). It mirrors the canonical backend
+ *    ApiErrorCodeSchema plus the three transport classes this surface needs
+ *    that the backend vocabulary does not currently define
+ *    (PAYLOAD_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE, UNPROCESSABLE_ENTITY).
+ *  - `error.assetCode` carries the bead-import business code; retryability
+ *    and the recovery action bind to the assetCode catalog, never to the
+ *    transport code.
+ *
+ * The current backend `ApiErrorEnvelopeSchema` is a strict object that only
+ * accepts its own code enum, so it does NOT accept this extended shape today;
+ * TASK-ASSET-BE-001 must extend or adapt that serializer for the asset-import
+ * routes. Business asset codes must never masquerade as transport codes.
+ */
+export const ASSET_IMPORT_TRANSPORT_ERROR_CODES = [
+  "UNAUTHORIZED",
+  "VALIDATION_ERROR",
+  "NOT_FOUND",
+  "CONFLICT",
+  "PAYLOAD_TOO_LARGE",
+  "UNSUPPORTED_MEDIA_TYPE",
+  "UNPROCESSABLE_ENTITY",
+  "INTERNAL_ERROR"
+] as const;
+
+export const AssetImportTransportErrorCodeSchema = z.enum(ASSET_IMPORT_TRANSPORT_ERROR_CODES);
+export type AssetImportTransportErrorCode = z.infer<typeof AssetImportTransportErrorCodeSchema>;
+
+export const ASSET_IMPORT_TRANSPORT_STATUS_BY_CODE: Record<AssetImportTransportErrorCode, number> = {
+  UNAUTHORIZED: 401,
+  VALIDATION_ERROR: 400,
+  NOT_FOUND: 404,
+  CONFLICT: 409,
+  PAYLOAD_TOO_LARGE: 413,
+  UNSUPPORTED_MEDIA_TYPE: 415,
+  UNPROCESSABLE_ENTITY: 422,
+  INTERNAL_ERROR: 500
+};
+
 export const ASSET_IMPORT_ERROR_CODES = [
   "UNSUPPORTED_FILE_KIND",
   "CORRUPT_FILE_CONTENT",
@@ -889,6 +1021,24 @@ export const ASSET_IMPORT_ERROR_CODES = [
 
 export const AssetImportErrorCodeSchema = z.enum(ASSET_IMPORT_ERROR_CODES);
 export type AssetImportErrorCode = z.infer<typeof AssetImportErrorCodeSchema>;
+
+/** Fixed transport pairing for every asset code; the envelope enforces it. */
+export const ASSET_IMPORT_ERROR_TRANSPORT_CODES: Record<AssetImportErrorCode, AssetImportTransportErrorCode> = {
+  UNSUPPORTED_FILE_KIND: "UNSUPPORTED_MEDIA_TYPE",
+  CORRUPT_FILE_CONTENT: "UNPROCESSABLE_ENTITY",
+  STORAGE_FULL: "INTERNAL_ERROR",
+  ARCHIVE_VERIFICATION_FAILED: "CONFLICT",
+  ARCHIVE_CONFLICT: "CONFLICT",
+  JOB_LEASE_CONFLICT: "CONFLICT",
+  SEGMENTATION_FAILED: "INTERNAL_ERROR",
+  QUALITY_INSUFFICIENT: "UNPROCESSABLE_ENTITY",
+  ADMIN_PERMISSION_EXPIRED: "UNAUTHORIZED",
+  DRAFT_INCOMPLETE: "UNPROCESSABLE_ENTITY",
+  MISSING_REFERENCE: "UNPROCESSABLE_ENTITY",
+  SKU_CONFLICT: "CONFLICT",
+  INVENTORY_VERSION_CONFLICT: "CONFLICT",
+  PUBLISH_TRANSACTION_FAILED: "INTERNAL_ERROR"
+};
 
 export const ASSET_IMPORT_ERROR_RECOVERY_ACTIONS = [
   "RETRY_REQUEST",
@@ -932,24 +1082,24 @@ export const AssetImportFieldErrorSchema = z.strictObject({
 });
 export type AssetImportFieldError = z.infer<typeof AssetImportFieldErrorSchema>;
 
-function errorDetailMatchesCatalog(detail: {
-  code: AssetImportErrorCode;
+function assetErrorMatchesCatalog(detail: {
+  assetCode: AssetImportErrorCode;
   retryable: boolean;
   recoveryAction: AssetImportErrorRecoveryAction;
 }): boolean {
-  const guidance = ASSET_IMPORT_ERROR_CATALOG[detail.code];
+  const guidance = ASSET_IMPORT_ERROR_CATALOG[detail.assetCode];
   return guidance.retryable === detail.retryable && guidance.recoveryAction === detail.recoveryAction;
 }
 
 export const AssetImportErrorDetailSchema = z
   .strictObject({
-    code: AssetImportErrorCodeSchema,
+    assetCode: AssetImportErrorCodeSchema,
     message: NonEmptyTextSchema,
     retryable: z.boolean(),
     recoveryAction: AssetImportErrorRecoveryActionSchema,
     fieldErrors: z.array(AssetImportFieldErrorSchema).optional()
   })
-  .refine(errorDetailMatchesCatalog, {
+  .refine(assetErrorMatchesCatalog, {
     message: "retryable and recoveryAction must match the stable asset-import error catalog"
   });
 export type AssetImportErrorDetail = z.infer<typeof AssetImportErrorDetailSchema>;
@@ -957,15 +1107,20 @@ export type AssetImportErrorDetail = z.infer<typeof AssetImportErrorDetailSchema
 export const AssetImportErrorEnvelopeSchema = z.strictObject({
   error: z
     .strictObject({
-      code: AssetImportErrorCodeSchema,
+      code: AssetImportTransportErrorCodeSchema,
       message: NonEmptyTextSchema,
+      assetCode: AssetImportErrorCodeSchema,
       retryable: z.boolean(),
       recoveryAction: AssetImportErrorRecoveryActionSchema,
       fieldErrors: z.array(AssetImportFieldErrorSchema).optional(),
       requestId: NonEmptyTextSchema
     })
-    .refine(errorDetailMatchesCatalog, {
+    .refine(assetErrorMatchesCatalog, {
       message: "retryable and recoveryAction must match the stable asset-import error catalog"
     })
+    .refine(
+      (error) => error.code === ASSET_IMPORT_ERROR_TRANSPORT_CODES[error.assetCode],
+      { message: "error.code must be the transport code bound to the assetCode" }
+    )
 });
 export type AssetImportErrorEnvelope = z.infer<typeof AssetImportErrorEnvelopeSchema>;

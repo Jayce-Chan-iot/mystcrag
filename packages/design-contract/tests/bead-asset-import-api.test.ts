@@ -157,7 +157,7 @@ const publishResponse = (overrides: Record<string, unknown> = {}) => ({
   ...overrides
 });
 
-const resolverResponse = (overrides: Record<string, unknown> = {}) => ({
+const deliveryMetadata = (overrides: Record<string, unknown> = {}) => ({
   assetKey: approvedKey,
   contentType: "image/webp",
   byteSize: 65_536,
@@ -167,8 +167,16 @@ const resolverResponse = (overrides: Record<string, unknown> = {}) => ({
   ...overrides
 });
 
+const deliveryHeaders = (overrides: Record<string, unknown> = {}) => ({
+  "Content-Type": "image/webp",
+  "Content-Length": "65536",
+  ETag: `"${"a".repeat(64)}"`,
+  "Cache-Control": "public, max-age=31536000, immutable",
+  ...overrides
+});
+
 const errorDetail = (overrides: Record<string, unknown> = {}) => ({
-  code: "STORAGE_FULL",
+  assetCode: "STORAGE_FULL",
   message: "档案根目录剩余空间不足，归档已暂停",
   retryable: true,
   recoveryAction: "RESUME_FROM_CHECKPOINT",
@@ -176,7 +184,7 @@ const errorDetail = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const errorEnvelope = (overrides: Record<string, unknown> = {}) => ({
-  error: { ...errorDetail(), requestId: "req-1", ...overrides }
+  error: { code: "INTERNAL_ERROR", ...errorDetail(), requestId: "req-1", ...overrides }
 });
 
 test("session state enum exposes exactly the canonical states including CANCELLED", () => {
@@ -381,9 +389,10 @@ test("every object schema rejects unknown keys", () => {
     ["GetBeadImageGroupPublishResultParams", asset.GetBeadImageGroupPublishResultParamsSchema, { groupId: "group-1", bogus: 1 }],
     ["GetBeadImageGroupPublishResultResponse", asset.GetBeadImageGroupPublishResultResponseSchema, { ...publishResponse(), bogus: 1 }],
     ["ResolveApprovedAssetParams", asset.ResolveApprovedAssetParamsSchema, { assetKey: approvedKey, bogus: 1 }],
-    ["ResolveApprovedAssetResponse", asset.ResolveApprovedAssetResponseSchema, { ...resolverResponse(), bogus: 1 }],
+    ["ApprovedAssetDeliveryMetadata", asset.ApprovedAssetDeliveryMetadataSchema, { ...deliveryMetadata(), bogus: 1 }],
+    ["ApprovedAssetDeliveryHeaders", asset.ApprovedAssetDeliveryHeadersSchema, { ...deliveryHeaders(), bogus: 1 }],
     ["AssetImportErrorDetail", asset.AssetImportErrorDetailSchema, { ...errorDetail(), bogus: 1 }],
-    ["AssetImportErrorEnvelope", asset.AssetImportErrorEnvelopeSchema, { error: { ...errorDetail(), requestId: "req-1", bogus: 1 } }]
+    ["AssetImportErrorEnvelope", asset.AssetImportErrorEnvelopeSchema, { error: { code: "INTERNAL_ERROR", ...errorDetail(), requestId: "req-1", bogus: 1 } }]
   ];
   for (const [name, schema, value] of cases) {
     rejects(schema, value, `${name} with unknown key`);
@@ -879,6 +888,11 @@ test("product drafts save partially and keep unresolved permissions local", () =
   );
   accepts(
     asset.SaveBeadProductDraftRequestSchema,
+    { expectedGroupRevision: 2, allowPublicDisplay: false, allowCommercialUse: false },
+    "draft may record negative display and commercial decisions locally"
+  );
+  accepts(
+    asset.SaveBeadProductDraftRequestSchema,
     { expectedGroupRevision: 2, crystalId: "crystal-amethyst", displayName: "紫水晶 8mm 圆珠" },
     "draft linked to an existing crystal"
   );
@@ -916,6 +930,7 @@ test("draft completeness reports every publish-required field", () => {
   for (const field of asset.DRAFT_COMPLETENESS_FIELDS) {
     accepts(asset.DraftCompletenessFieldSchema, field, `completeness field ${field}`);
   }
+  accepts(asset.DraftCompletenessFieldSchema, "SKU", "SKU is a publish-required completeness field");
   rejects(asset.DraftCompletenessFieldSchema, "PRICE", "non-canonical completeness field");
 
   accepts(asset.CheckBeadProductDraftCompletenessParamsSchema, { groupId: "group-1" }, "completeness params");
@@ -930,14 +945,14 @@ test("draft completeness reports every publish-required field", () => {
       groupId: "group-1",
       state: "NAMED",
       complete: false,
-      missingFields: ["CRYSTAL_NAME", "QUALITY_STATEMENT", "AI_TRAINING_DECISION"],
+      missingFields: ["SKU", "CRYSTAL_NAME", "QUALITY_STATEMENT", "AI_TRAINING_DECISION"],
       checkedAt: now
     },
     "incomplete draft"
   );
   rejects(
     asset.CheckBeadProductDraftCompletenessResponseSchema,
-    { groupId: "group-1", state: "READY", complete: true, missingFields: ["SKU"], checkedAt: now },
+    { groupId: "group-1", state: "READY", complete: true, missingFields: ["QUALITY_SOURCE"], checkedAt: now },
     "complete flag with missing fields"
   );
   rejects(
@@ -949,6 +964,26 @@ test("draft completeness reports every publish-required field", () => {
     asset.CheckBeadProductDraftCompletenessResponseSchema,
     { groupId: "group-1", state: "NAMED", complete: false, missingFields: ["PRICE"], checkedAt: now },
     "unknown completeness field"
+  );
+});
+
+test("publish-required business fields map one-to-one onto completeness fields", () => {
+  const targets = Object.values(asset.PUBLISH_REQUIRED_FIELDS_TO_COMPLETENESS);
+  assert.ok(targets.length > 0, "publish-to-completeness mapping is exported");
+  assert.equal(new Set(targets).size, targets.length, "each publish field maps to a distinct completeness field");
+  assert.deepEqual(
+    [...targets].sort(),
+    [...asset.DRAFT_COMPLETENESS_FIELDS].sort(),
+    "every completeness field is covered by exactly one publish-required business field"
+  );
+  for (const field of targets) {
+    accepts(asset.DraftCompletenessFieldSchema, field, `mapped completeness field ${field}`);
+  }
+  assert.equal(asset.PUBLISH_REQUIRED_FIELDS_TO_COMPLETENESS.sku, "SKU", "sku maps to the SKU completeness field");
+  assert.equal(
+    asset.PUBLISH_REQUIRED_FIELDS_TO_COMPLETENESS.crystalReference,
+    "CRYSTAL_REFERENCE",
+    "the crystalId/crystalDraftId pair maps to CRYSTAL_REFERENCE"
   );
 });
 
@@ -974,19 +1009,95 @@ test("approved asset keys are stable, content-addressed and distinct from archiv
   }
 });
 
-test("approved asset resolver answers delivery metadata only", () => {
+test("approved asset delivery metadata is content-addressed and immutable", () => {
   accepts(asset.ResolveApprovedAssetParamsSchema, { assetKey: approvedKey }, "resolver params");
   rejects(asset.ResolveApprovedAssetParamsSchema, { assetKey: "imports/session-1/raw/a.jpg" }, "resolver params with archive key");
   rejects(asset.ResolveApprovedAssetParamsSchema, { assetKey: approvedKey, path: "/tmp/x" }, "resolver params with a filesystem path");
 
-  accepts(asset.ResolveApprovedAssetResponseSchema, resolverResponse(), "resolver response");
+  accepts(asset.ApprovedAssetDeliveryMetadataSchema, deliveryMetadata(), "content-addressed delivery metadata");
   for (const contentType of ["image/webp", "image/png", "image/jpeg"]) {
-    accepts(asset.ResolveApprovedAssetResponseSchema, resolverResponse({ contentType }), `resolver content type ${contentType}`);
+    accepts(asset.ApprovedAssetDeliveryMetadataSchema, deliveryMetadata({ contentType }), `delivery content type ${contentType}`);
   }
-  rejects(asset.ResolveApprovedAssetResponseSchema, resolverResponse({ contentType: "image/gif" }), "unsupported resolver content type");
-  rejects(asset.ResolveApprovedAssetResponseSchema, resolverResponse({ byteSize: 0 }), "zero-byte resolver response");
-  rejects(asset.ResolveApprovedAssetResponseSchema, resolverResponse({ sha256: "zz" }), "invalid resolver sha256");
-  rejects(asset.ResolveApprovedAssetResponseSchema, resolverResponse({ etag: undefined }), "missing etag");
+  rejects(asset.ApprovedAssetDeliveryMetadataSchema, deliveryMetadata({ contentType: "image/gif" }), "unsupported delivery content type");
+  rejects(asset.ApprovedAssetDeliveryMetadataSchema, deliveryMetadata({ byteSize: 0 }), "zero-byte delivery");
+  rejects(asset.ApprovedAssetDeliveryMetadataSchema, deliveryMetadata({ sha256: "zz" }), "invalid delivery sha256");
+  rejects(asset.ApprovedAssetDeliveryMetadataSchema, deliveryMetadata({ etag: undefined }), "missing etag");
+  rejects(asset.ApprovedAssetDeliveryMetadataSchema, deliveryMetadata({ cacheControl: undefined }), "missing cache control");
+
+  rejects(
+    asset.ApprovedAssetDeliveryMetadataSchema,
+    deliveryMetadata({ assetKey: otherApprovedKey }),
+    "assetKey digest differing from the delivered sha256"
+  );
+  rejects(
+    asset.ApprovedAssetDeliveryMetadataSchema,
+    deliveryMetadata({ sha256: "b".repeat(64) }),
+    "sha256 differing from the assetKey digest"
+  );
+  rejects(
+    asset.ApprovedAssetDeliveryMetadataSchema,
+    deliveryMetadata({ etag: `"${"b".repeat(64)}"` }),
+    "etag quoting a different digest"
+  );
+  rejects(
+    asset.ApprovedAssetDeliveryMetadataSchema,
+    deliveryMetadata({ etag: `W/"${"a".repeat(64)}"` }),
+    "weak etag"
+  );
+  rejects(
+    asset.ApprovedAssetDeliveryMetadataSchema,
+    deliveryMetadata({ etag: "a".repeat(64) }),
+    "unquoted etag"
+  );
+  rejects(
+    asset.ApprovedAssetDeliveryMetadataSchema,
+    deliveryMetadata({ cacheControl: "private, no-store" }),
+    "non-immutable cache directive"
+  );
+  rejects(
+    asset.ApprovedAssetDeliveryMetadataSchema,
+    deliveryMetadata({ cacheControl: "public, max-age=3600" }),
+    "mutable cache directive"
+  );
+});
+
+test("approved asset delivery answers binary image bytes with validated transport headers", () => {
+  accepts(asset.ApprovedAssetDeliveryHeadersSchema, deliveryHeaders(), "delivery transport headers");
+  for (const contentType of ["image/webp", "image/png", "image/jpeg"]) {
+    accepts(asset.ApprovedAssetDeliveryHeadersSchema, deliveryHeaders({ "Content-Type": contentType }), `header content type ${contentType}`);
+  }
+  rejects(asset.ApprovedAssetDeliveryHeadersSchema, deliveryHeaders({ "Content-Type": "application/json" }), "JSON is never the delivery body type");
+  rejects(
+    asset.ApprovedAssetDeliveryHeadersSchema,
+    deliveryHeaders({ "Content-Length": undefined }),
+    "missing Content-Length header"
+  );
+  rejects(asset.ApprovedAssetDeliveryHeadersSchema, deliveryHeaders({ "Content-Length": "0" }), "zero Content-Length");
+  rejects(asset.ApprovedAssetDeliveryHeadersSchema, deliveryHeaders({ "Content-Length": "-1" }), "negative Content-Length");
+  rejects(asset.ApprovedAssetDeliveryHeadersSchema, deliveryHeaders({ "Content-Length": 65_536 }), "numeric Content-Length instead of a header string");
+  rejects(asset.ApprovedAssetDeliveryHeadersSchema, deliveryHeaders({ ETag: undefined }), "missing ETag header");
+  rejects(asset.ApprovedAssetDeliveryHeadersSchema, deliveryHeaders({ ETag: `W/"${"a".repeat(64)}"` }), "weak ETag header");
+  rejects(asset.ApprovedAssetDeliveryHeadersSchema, deliveryHeaders({ "Cache-Control": undefined }), "missing Cache-Control header");
+  rejects(
+    asset.ApprovedAssetDeliveryHeadersSchema,
+    deliveryHeaders({ "Cache-Control": "private, no-store" }),
+    "non-immutable Cache-Control header"
+  );
+  rejects(
+    asset.ApprovedAssetDeliveryHeadersSchema,
+    { ...deliveryHeaders(), "X-Local-Path": "/Users/x/a.webp" },
+    "delivery headers leaking a filesystem path"
+  );
+
+  const metadata = accepts<{ byteSize: number }>(
+    asset.ApprovedAssetDeliveryMetadataSchema,
+    deliveryMetadata(),
+    "metadata for header derivation"
+  );
+  const headers = asset.approvedAssetDeliveryHeaders(metadata as never);
+  assert.deepEqual(headers, deliveryHeaders(), "derived headers are exactly the four validated transport headers");
+  assert.equal(headers["Content-Length"], String(metadata.byteSize), "Content-Length equals the metadata byte size");
+  accepts(asset.ApprovedAssetDeliveryHeadersSchema, headers, "derived headers validate");
 });
 
 test("publish requests require full product, consent and public-key fields", () => {
@@ -1086,6 +1197,22 @@ test("publish requests require full product, consent and public-key fields", () 
 
   rejects(
     asset.PublishBeadImageGroupRequestSchema,
+    publishRequest({ allowPublicDisplay: false }),
+    "publish without an affirmative public-display grant"
+  );
+  rejects(
+    asset.PublishBeadImageGroupRequestSchema,
+    publishRequest({ allowCommercialUse: false }),
+    "publish without an affirmative commercial-use grant"
+  );
+  accepts(
+    asset.PublishBeadImageGroupRequestSchema,
+    publishRequest({ allowAiTraining: false, allowAiRecommendation: false }),
+    "AI training and recommendation decisions may deny consent at publication"
+  );
+
+  rejects(
+    asset.PublishBeadImageGroupRequestSchema,
     publishRequest({ sourcePath: "/Users/chenyanyan/Desktop/珠子图/01/DSC0001.JPG" }),
     "publish with an absolute source path"
   );
@@ -1152,8 +1279,8 @@ test("publish responses and publish results only carry approved public keys", ()
   );
 });
 
-test("asset import errors carry stable codes, retryability and recovery actions", () => {
-  const expectedCodes = [
+test("asset import errors keep transport codes separate from asset codes", () => {
+  const expectedAssetCodes = [
     "UNSUPPORTED_FILE_KIND",
     "CORRUPT_FILE_CONTENT",
     "STORAGE_FULL",
@@ -1169,11 +1296,12 @@ test("asset import errors carry stable codes, retryability and recovery actions"
     "INVENTORY_VERSION_CONFLICT",
     "PUBLISH_TRANSACTION_FAILED"
   ] as const;
-  assert.deepEqual([...asset.ASSET_IMPORT_ERROR_CODES].sort(), [...expectedCodes].sort());
-  for (const code of expectedCodes) {
-    accepts(asset.AssetImportErrorCodeSchema, code, `error code ${code}`);
+  assert.deepEqual([...asset.ASSET_IMPORT_ERROR_CODES].sort(), [...expectedAssetCodes].sort());
+  for (const code of expectedAssetCodes) {
+    accepts(asset.AssetImportErrorCodeSchema, code, `asset code ${code}`);
   }
-  rejects(asset.AssetImportErrorCodeSchema, "LEGACY_ERROR", "non-canonical error code");
+  rejects(asset.AssetImportErrorCodeSchema, "LEGACY_ERROR", "non-canonical asset code");
+  rejects(asset.AssetImportErrorCodeSchema, "VALIDATION_ERROR", "shared transport code used as an asset code");
 
   const expectedRecoveryActions = [
     "RETRY_REQUEST",
@@ -1193,18 +1321,18 @@ test("asset import errors carry stable codes, retryability and recovery actions"
   }
   rejects(asset.AssetImportErrorRecoveryActionSchema, "IGNORE", "non-canonical recovery action");
 
-  assert.deepEqual(Object.keys(asset.ASSET_IMPORT_ERROR_CATALOG).sort(), [...expectedCodes].sort());
-  for (const [code, guidance] of Object.entries(asset.ASSET_IMPORT_ERROR_CATALOG)) {
-    assert.equal(typeof guidance.retryable, "boolean", `${code} retryability must be a boolean`);
-    accepts(asset.AssetImportErrorRecoveryActionSchema, guidance.recoveryAction, `${code} recovery action`);
+  assert.deepEqual(Object.keys(asset.ASSET_IMPORT_ERROR_CATALOG).sort(), [...expectedAssetCodes].sort());
+  for (const [assetCode, guidance] of Object.entries(asset.ASSET_IMPORT_ERROR_CATALOG)) {
+    assert.equal(typeof guidance.retryable, "boolean", `${assetCode} retryability must be a boolean`);
+    accepts(asset.AssetImportErrorRecoveryActionSchema, guidance.recoveryAction, `${assetCode} recovery action`);
     accepts(
       asset.AssetImportErrorDetailSchema,
-      errorDetail({ code, retryable: guidance.retryable, recoveryAction: guidance.recoveryAction }),
-      `error detail for ${code}`
+      errorDetail({ assetCode, retryable: guidance.retryable, recoveryAction: guidance.recoveryAction }),
+      `error detail for ${assetCode}`
     );
   }
 
-  // Every spec §11 failure category maps to at least one stable code.
+  // Every spec §11 failure category maps to at least one stable asset code.
   const categories: ReadonlyArray<readonly string[]> = [
     ["UNSUPPORTED_FILE_KIND", "CORRUPT_FILE_CONTENT"],
     ["STORAGE_FULL", "ARCHIVE_VERIFICATION_FAILED"],
@@ -1216,9 +1344,75 @@ test("asset import errors carry stable codes, retryability and recovery actions"
   ];
   for (const codes of categories) {
     for (const code of codes) {
-      assert.ok(expectedCodes.includes(code as never), `category code ${code} must exist`);
+      assert.ok(expectedAssetCodes.includes(code as never), `category code ${code} must exist`);
     }
   }
+
+  // error.code uses only the shared HTTP transport vocabulary.
+  const expectedTransportCodes = [
+    "UNAUTHORIZED",
+    "VALIDATION_ERROR",
+    "NOT_FOUND",
+    "CONFLICT",
+    "PAYLOAD_TOO_LARGE",
+    "UNSUPPORTED_MEDIA_TYPE",
+    "UNPROCESSABLE_ENTITY",
+    "INTERNAL_ERROR"
+  ] as const;
+  assert.deepEqual([...asset.ASSET_IMPORT_TRANSPORT_ERROR_CODES].sort(), [...expectedTransportCodes].sort());
+  for (const code of expectedTransportCodes) {
+    accepts(asset.AssetImportTransportErrorCodeSchema, code, `transport code ${code}`);
+  }
+  rejects(asset.AssetImportTransportErrorCodeSchema, "STORAGE_FULL", "asset code masquerading as a transport code");
+  rejects(asset.AssetImportTransportErrorCodeSchema, "PAYLOAD_LIMIT", "non-canonical transport code");
+  assert.deepEqual(asset.ASSET_IMPORT_TRANSPORT_STATUS_BY_CODE, {
+    UNAUTHORIZED: 401,
+    VALIDATION_ERROR: 400,
+    NOT_FOUND: 404,
+    CONFLICT: 409,
+    PAYLOAD_TOO_LARGE: 413,
+    UNSUPPORTED_MEDIA_TYPE: 415,
+    UNPROCESSABLE_ENTITY: 422,
+    INTERNAL_ERROR: 500
+  });
+
+  // Every asset code binds to exactly one transport code and the envelope enforces the pairing.
+  assert.deepEqual(Object.keys(asset.ASSET_IMPORT_ERROR_TRANSPORT_CODES).sort(), [...expectedAssetCodes].sort());
+  for (const assetCode of expectedAssetCodes) {
+    const transportCode = asset.ASSET_IMPORT_ERROR_TRANSPORT_CODES[assetCode];
+    accepts(asset.AssetImportTransportErrorCodeSchema, transportCode, `transport binding for ${assetCode}`);
+    const guidance = asset.ASSET_IMPORT_ERROR_CATALOG[assetCode];
+    accepts(
+      asset.AssetImportErrorEnvelopeSchema,
+      errorEnvelope({ code: transportCode, assetCode, retryable: guidance.retryable, recoveryAction: guidance.recoveryAction }),
+      `envelope binding ${assetCode} -> ${transportCode}`
+    );
+  }
+
+  accepts(asset.AssetImportErrorEnvelopeSchema, errorEnvelope(), "asset import error envelope");
+  rejects(
+    asset.AssetImportErrorEnvelopeSchema,
+    errorEnvelope({ code: "STORAGE_FULL" }),
+    "business asset code placed in the shared transport code slot"
+  );
+  rejects(
+    asset.AssetImportErrorEnvelopeSchema,
+    errorEnvelope({ code: "VALIDATION_ERROR" }),
+    "transport code disagreeing with the asset code binding"
+  );
+  rejects(asset.AssetImportErrorEnvelopeSchema, { error: { ...errorDetail() } }, "envelope without transport code and requestId");
+  rejects(
+    asset.AssetImportErrorEnvelopeSchema,
+    { error: { code: "INTERNAL_ERROR", message: "x", requestId: "req-1" } },
+    "envelope without asset detail"
+  );
+  rejects(
+    asset.AssetImportErrorEnvelopeSchema,
+    { error: { code: "INTERNAL_ERROR", ...errorDetail({ assetCode: undefined }), requestId: "req-1" } },
+    "envelope without assetCode"
+  );
+  rejects(asset.AssetImportErrorEnvelopeSchema, { ...errorEnvelope(), requestId: "outer" }, "requestId outside the shared error object");
+  rejects(asset.AssetImportErrorEnvelopeSchema, { error: { code: "INTERNAL_ERROR", ...errorDetail(), requestId: "req-1" }, extra: 1 }, "unknown envelope outer key");
 
   rejects(
     asset.AssetImportErrorDetailSchema,
@@ -1231,9 +1425,19 @@ test("asset import errors carry stable codes, retryability and recovery actions"
     "recovery action disagreeing with the stable catalog"
   );
   rejects(asset.AssetImportErrorDetailSchema, errorDetail({ message: "" }), "empty error message");
-
-  accepts(asset.AssetImportErrorEnvelopeSchema, errorEnvelope(), "asset import error envelope");
-  rejects(asset.AssetImportErrorEnvelopeSchema, { error: { ...errorDetail() } }, "envelope without requestId");
-  rejects(asset.AssetImportErrorEnvelopeSchema, { ...errorEnvelope(), requestId: "outer" }, "requestId outside the shared error object");
-  rejects(asset.AssetImportErrorEnvelopeSchema, { error: { ...errorDetail(), requestId: "req-1" }, extra: 1 }, "unknown envelope outer key");
+  rejects(
+    asset.AssetImportErrorDetailSchema,
+    errorDetail({ code: "STORAGE_FULL" }),
+    "legacy code field instead of assetCode"
+  );
+  rejects(
+    asset.AssetImportErrorEnvelopeSchema,
+    errorEnvelope({ retryable: false }),
+    "envelope retryability disagreeing with the catalog"
+  );
+  rejects(
+    asset.AssetImportErrorEnvelopeSchema,
+    errorEnvelope({ recoveryAction: "IGNORE" }),
+    "envelope recovery action disagreeing with the catalog"
+  );
 });
