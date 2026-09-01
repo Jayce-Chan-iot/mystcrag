@@ -10,7 +10,10 @@ import { standardAiDesignFixture } from "@mystcrag/design-contract/fixtures";
 import { PersistenceError, type TarotRecommendationSnapshot } from "@mystcrag/database";
 
 import { createApp } from "../../app.js";
-import type { AuthProvider, VerifiedAuthClaims } from "../../auth/auth-provider.js";
+import { AuthenticatedActorProvider } from "../../auth/authenticated-actor-provider.js";
+import { CredentialRejectedError } from "../../auth/auth-errors.js";
+import { InMemoryExternalIdentityMapping } from "../../auth/auth.test-utils.js";
+import type { AccessTokenVerifier, VerifiedAuthClaims } from "../../auth/auth-provider.js";
 import { resolveTarotFeatureEnabled } from "../../config/tarot-feature.js";
 import { TarotService } from "./tarot.service.js";
 import type { TarotApiService } from "./tarot.types.js";
@@ -21,26 +24,33 @@ import {
 
 const actorId = "route-tarot-owner";
 const otherActorId = "route-tarot-other-owner";
+const routeIssuer = "https://auth.test.mystcrag.local";
 
-class RouteAuthProvider implements AuthProvider {
+const routeVerifier: AccessTokenVerifier = {
   async verifyAccessToken(token: string): Promise<VerifiedAuthClaims> {
     const subject =
       token === "valid-route-token"
-        ? actorId
+        ? "auth0|route-tarot-owner"
         : token === "valid-other-route-token"
-          ? otherActorId
+          ? "auth0|route-tarot-other-owner"
           : undefined;
-    if (!subject) throw new Error("invalid credential");
+    if (!subject) throw new CredentialRejectedError("signature");
     return {
       subject,
-      issuer: "https://auth.test.mystcrag.local",
+      issuer: routeIssuer,
       audience: ["mystcrag-backend"],
       expiresAtEpochSeconds: 2_000_000_000
     };
   }
-}
+};
 
-const authProvider = new RouteAuthProvider();
+const authProvider = new AuthenticatedActorProvider({
+  provider: routeVerifier,
+  identities: new InMemoryExternalIdentityMapping([
+    [routeIssuer, "auth0|route-tarot-owner", actorId],
+    [routeIssuer, "auth0|route-tarot-other-owner", otherActorId]
+  ])
+});
 const ownerHeaders = { authorization: "Bearer valid-route-token" };
 const validCreatePayload = {
   requestId: "route-create",

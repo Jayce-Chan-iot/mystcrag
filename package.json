@@ -25,6 +25,7 @@
     "validate": "node scripts/workspace-gate.mjs validate"
   },
   "devDependencies": {
+    "@playwright/test": "1.62.1",
     "turbo": "^2.5.6",
     "typescript": "^6.0.3"
   }

@@ -9,7 +9,7 @@ import {
 } from "@mystcrag/design-contract";
 
 import { normalizeCandidateCompliance } from "../../compliance-agent/index";
-import { AiDesignCandidateSchema, type AiDesignCandidate } from "../schemas/ai-design-candidate.schema";
+import { AiBeadLayoutCandidateSchema, type AiBeadLayoutCandidate } from "../schemas/ai-bead-layout-candidate.schema";
 
 export type CatalogBeadEnrichment = {
   readonly crystalId: string;
@@ -56,7 +56,7 @@ export type AiDesignServerEnrichment = {
   readonly disclaimerKeys?: readonly DisclaimerKey[];
 };
 
-export type AiCandidateConversionIssue = {
+export type AiBeadLayoutConversionIssue = {
   readonly code:
     | "INVALID_CANDIDATE"
     | "CATALOG_PRODUCT_NOT_FOUND"
@@ -67,11 +67,11 @@ export type AiCandidateConversionIssue = {
   readonly fieldPath?: string;
 };
 
-export type AiCandidateConversionResult =
+export type AiBeadLayoutConversionResult =
   | { readonly status: "READY"; readonly design: DesignV1; readonly issues: readonly [] }
-  | { readonly status: "REJECTED"; readonly issues: readonly AiCandidateConversionIssue[] };
+  | { readonly status: "REJECTED"; readonly issues: readonly AiBeadLayoutConversionIssue[] };
 
-function findRestrictedCopy(candidate: AiDesignCandidate): AiCandidateConversionIssue[] {
+function findRestrictedCopy(candidate: AiBeadLayoutCandidate): AiBeadLayoutConversionIssue[] {
   const result = normalizeCandidateCompliance(candidate);
   return result.status === "PASSED"
     ? []
@@ -82,11 +82,11 @@ function findRestrictedCopy(candidate: AiDesignCandidate): AiCandidateConversion
       }));
 }
 
-export function aiCandidateToDesignV1(
+export function aiBeadLayoutCandidateToDesignV1(
   providerOutput: unknown,
   enrichment: AiDesignServerEnrichment
-): AiCandidateConversionResult {
-  const candidateResult = AiDesignCandidateSchema.safeParse(providerOutput);
+): AiBeadLayoutConversionResult {
+  const candidateResult = AiBeadLayoutCandidateSchema.safeParse(providerOutput);
   if (!candidateResult.success) {
     return {
       status: "REJECTED",
@@ -121,7 +121,7 @@ export function aiCandidateToDesignV1(
     (left, right) => left.positionIndex - right.positionIndex
   );
   const beads: BeadV1[] = [];
-  const catalogIssues: AiCandidateConversionIssue[] = [];
+  const catalogIssues: AiBeadLayoutConversionIssue[] = [];
 
   for (const [index, component] of sortedComponents.entries()) {
     const catalogItem = enrichment.catalogByProductId[component.beadProductId];

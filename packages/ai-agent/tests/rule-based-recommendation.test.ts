@@ -6,13 +6,13 @@ import { RuleBasedCrystalAgent } from "../crystal-agent/index";
 import { scoreDesignTemplates } from "../design-agent/index";
 import { RuleBasedEmotionAgent } from "../emotion-agent/index";
 import { PricingContextAgent } from "../pricing-agent/index";
-import { aiCandidateToDesignV1 } from "../src/adapters/index";
+import { aiBeadLayoutCandidateToDesignV1 } from "../src/adapters/index";
 import type { AgentContext } from "../src/contracts/agent";
 import { crystalFixtures } from "../src/fixtures/crystals";
 import { designDnaFixtures } from "../src/fixtures/design-dna";
 import { MockProvider, RuleBasedProvider } from "../src/providers/index";
 import { generateRecommendations } from "../src/recommendation/index";
-import { AiDesignCandidateSchema } from "../src/schemas/ai-design-candidate.schema";
+import { AiBeadLayoutCandidateSchema } from "../src/schemas/ai-bead-layout-candidate.schema";
 import { RecommendationProviderOutputSchema } from "../src/schemas/recommendation-output.schema";
 
 const context: AgentContext = { requestId: "request-ai-phase-3", locale: "zh-CN" };
@@ -189,7 +189,7 @@ test("RuleBasedProvider results are deterministic", async () => {
 test("all provider candidates pass the strict Candidate Schema", async () => {
   const candidates = await readyCandidates();
   assert.equal(RecommendationProviderOutputSchema.safeParse({ candidates }).success, true);
-  assert.ok(candidates.every((candidate) => AiDesignCandidateSchema.safeParse(candidate).success));
+  assert.ok(candidates.every((candidate) => AiBeadLayoutCandidateSchema.safeParse(candidate).success));
 });
 
 test("a generated AI Candidate can enter the server-owned DesignV1 adapter", async () => {
@@ -206,7 +206,7 @@ test("a generated AI Candidate can enter the server-owned DesignV1 adapter", asy
       }
     ])
   );
-  const result = aiCandidateToDesignV1(candidate, {
+  const result = aiBeadLayoutCandidateToDesignV1(candidate, {
     designId: "design-from-rule-provider",
     componentIds: candidate.components.map((_, index) => `component-${index}`),
     designMode: "AI_GENERATED",
@@ -273,6 +273,6 @@ test("AI cannot set price, cost, inventory, or publication state", async () => {
     { publishConsent: true }
   ]) {
     const attempted = { ...candidates[0], ...forbidden };
-    assert.equal(AiDesignCandidateSchema.safeParse(attempted).success, false);
+    assert.equal(AiBeadLayoutCandidateSchema.safeParse(attempted).success, false);
   }
 });

@@ -10,10 +10,6 @@ export function resolveMockMode({
 
 export const isMockApiEnabled = resolveMockMode();
 
-export function resolveAccessToken(): string {
-  return process.env.NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN?.trim() ?? "";
-}
-
 /** Exact, fail-closed rollout semantics shared with Backend startup. */
 export function resolveTarotFeatureEnabled(value: string | undefined): boolean {
   return value === "true";

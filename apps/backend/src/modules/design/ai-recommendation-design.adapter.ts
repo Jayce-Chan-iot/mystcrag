@@ -1,7 +1,7 @@
 import {
   RuleBasedProvider,
   generateRecommendations,
-  type AiDesignCandidate
+  type AiBeadLayoutCandidate
 } from "@mystcrag/ai-agent";
 import type { GenerateDesignRequest } from "@mystcrag/design-contract";
 
@@ -51,7 +51,7 @@ function recommendationRequest(request: GenerateDesignRequest) {
 }
 
 function adaptCandidate(
-  candidate: AiDesignCandidate,
+  candidate: AiBeadLayoutCandidate,
   catalog: readonly CatalogProduct[],
   optionIndex: number,
   excludedProductIds: readonly string[]

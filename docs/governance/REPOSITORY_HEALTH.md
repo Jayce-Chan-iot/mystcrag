@@ -1,34 +1,38 @@
 # Repository Health
 
-**Score:** 77 / 100<br>
-**Observed product commit:** local `main` at `1a34c16`<br>
-**Assessment date:** 2026-08-24<br>
-**Baseline:** `NOT READY`
+**Frozen score:** 89 / 100<br>
+**Assessment date:** 2026-08-31<br>
+**Baseline:** `READY`<br>
+**Baseline reference:** annotated tag `baseline/v0.1.0-20260825`
 
-The codebase has a credible, tested MVP core. The score is held below the dispatch threshold by governance drift from `main`, two shared-contract collisions, the absence of production identity, and the lack of a reproducible authenticated browser gate.
+The repository has a validated P0 baseline and the FEAT-018 production identity runtime is integrated. AUTH-007 independently passed workspace validation, fresh PostgreSQL, build, 54/54 isolated authenticated browser checks, cleanup, and artifact scanning. Authentication implementation health is green; production Auth acceptance is deferred by Product Owner until a future deployment phase supplies real Origins, Auth0 allowlist/smoke evidence and the approved same-region staging benchmark. This deployment-only gate does not lower the frozen technical score or block separately registered non-auth development.
+
+TASK-AUDIT-002 reconfirmed that Design Contract edit operations and Bracelet Engine layout/fit/slot behavior are portable authorities and already sufficient for the first Web UX task. The 1,275-line `DiyEditor` contains exactly 25 `React.useState` hooks, while request-bound structural edits, memory-only history and incomplete insertion/reflow/recovery feedback keep the core mobile experience below L3. White Label, commerce and Mini Program shells remain unimplemented and must not be inferred from package portability.
 
 ## Scorecard
 
 | Dimension | Score | Evidence |
 | --- | ---: | --- |
-| Architecture | 17 / 20 | Clear monorepo boundaries, independent Bracelet Engine and canonical Design Contract; large application services and dormant paths concentrate risk. |
-| Module ownership | 9 / 10 | All current modules have an explicit owner; cross-module integration still depends on governance reaching `main`. |
-| Duplicate implementation | 10 / 15 | Renderers are complementary and correctly classified; Tarot public enums and AI candidate naming are unresolved duplicates/collisions. |
-| Type / contract consistency | 8 / 10 | `DesignV1` consumer uniqueness is architecture-tested; two cross-module contract conflicts remain. |
-| Testability | 8 / 10 | Broad unit, architecture and real PostgreSQL coverage; no automated authenticated browser suite. |
-| Build / CI health | 9 / 10 | Install, lint, typecheck, tests, build and PostgreSQL checks pass; CI lacks browser E2E. |
-| Maintainability | 7 / 10 | Four files exceed roughly 900 lines; some wrappers, shells and compatibility paths need lifecycle decisions. |
-| Agent collaboration safety | 6 / 10 | Candidate has strong locks/DAG rules, but protected `main` lacks those commits and no baseline is frozen. |
-| Documentation | 3 / 5 | Controlling docs are extensive; catalog seed counts and architecture/3D status contain known contradictions. |
-| **Total** | **77 / 100** | Evidence-backed current score; not a production-readiness certification. |
+| Architecture | 17 / 20 | Clear monorepo boundaries, independent Bracelet Engine and canonical Design Contract; large application services and dormant paths still concentrate risk. |
+| Module ownership | 9 / 10 | All current modules have explicit owners and exact shared-path task locks. |
+| Duplicate implementation | 15 / 15 | Public Tarot schemas have one runtime authority; the two formerly ambiguous AI/backend concepts are distinctly named and architecture-tested. |
+| Type / contract consistency | 10 / 10 | Canonical Tarot and AI candidate boundaries are integrated; old AI identifiers and duplicate definitions are rejected by tests. |
+| Testability | 9 / 10 | Broad unit, architecture, real PostgreSQL, and 54-test isolated authenticated browser evidence; the browser gate is registered in CI, while real deployment-tenant smoke remains outstanding. |
+| Build / CI health | 9 / 10 | Frozen install, lint, typecheck, tests, build, Prisma and PostgreSQL checks pass; CI includes the isolated browser gate, but its first GitHub-hosted execution is not yet recorded. |
+| Maintainability | 7 / 10 | Four files exceed roughly 900 lines; wrappers, shells and compatibility paths need lifecycle decisions. |
+| Agent collaboration safety | 10 / 10 | Governance, exact locks, serial P0 DAG, clean candidate and annotated rollback tag define a reproducible handoff boundary. |
+| Documentation | 3 / 5 | Baseline/canonical records are reconciled; known catalog seed and architecture/3D status contradictions remain registered. |
+| **Total** | **89 / 100** | Evidence-backed frozen score after BASE-004. |
 
 ## Priority summary
 
-P0: integrate governance into `main`, resolve Tarot and AI candidate contract authority, then freeze and replay-validate a candidate baseline.
-
-P1: production identity/session, reproducible authenticated E2E, current-document reconciliation, and lifecycle decisions for dormant/experimental code.
-
-P2: split concentration hotspots, review branch/worktree metadata, and retire justified compatibility/asset divergence.
+- Baseline P0: none.
+- FEAT-018 production release gate: measure the approved steady-state session lookup budget (p95 added latency <= 100 ms after 30 warm-ups over >= 300 same-region staging samples; renewal/JWKS cold paths separate) and supply byte-exact staging/production Auth0 allowlists plus login/logout smoke when Product Owner resumes deployment.
+- Development gate: `OPEN` for separately registered non-auth Features whose own dependencies, ownership, path locks and acceptance criteria are satisfied; the frozen Auth boundary remains read-only except for an explicitly registered P0 security defect.
+- P0 product/UX: propose exactly one first Worker, Qwen/TASK-FE-002, for competitive direct manipulation, mobile feedback and safe frontend reconciliation. It awaits Human Product Owner dispatch.
+- P0 commercial: checkout/fulfillment contract is blocked on provider and policy decisions; no runtime/schema task is authorized.
+- P1: asset-provenance/realism evidence, versioned sharing, grounded conversational refinement after TASK-FE-002, durable profile boundaries and a later cross-platform extraction decision.
+- P2: evidence-based 3D lifecycle, White Label tenancy spike, compatibility review and repository metadata cleanup.
 
 ## Strengths to preserve
 
@@ -38,11 +42,11 @@ P2: split concentration hotspots, review branch/worktree metadata, and retire ju
 - Bracelet geometry is renderer-independent and shared with Three Engine.
 - Mock API and signed-test authentication fail closed in production.
 - MVP positioning remains 2.5D-first; experimental 3D is not misclassified as a release blocker.
+- Contract authority is enforced by architecture tests, not documentation alone.
 
-## Score exit targets
+## Score interpretation
 
-- 80+: governance and shared-contract P0 tasks integrated into a frozen candidate.
-- 85+: authenticated E2E gate and controlling-document reconciliation complete.
-- 90+: production identity/security/deployment and commercial order flow verified.
+- 85+: stable baseline with authenticated end-to-end evidence and reconciled controlling baseline contracts.
+- 90+: production identity/security/deployment plus commercial order flow must be verified.
 
 The score changes only with integrated evidence, not with planning claims.

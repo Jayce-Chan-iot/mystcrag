@@ -31,7 +31,7 @@ Use this checklist for every Agent handoff and repeat it during Tech Lead merge 
 - [ ] Database models, JSON validation, BIGINT minor-unit conversion, revisions, and order snapshots remain compatible.
 - [ ] Frontend imports and renders only Public DTOs and never imports database or internal commercial types.
 - [ ] 3D consumes validated `DesignV1` through `designV1ToSceneDescriptor` or its approved adapter boundary.
-- [ ] AI provider output is treated as `unknown`, passes `AiDesignCandidateSchema`, is enriched by trusted inputs, and passes `DesignV1Schema` before use.
+- [ ] AI provider output is treated as `unknown`, passes `AiBeadLayoutCandidateSchema`, is enriched by trusted inputs, and passes `DesignV1Schema` before use.
 - [ ] Commercial cost fields, supplier references, hidden reasoning, prompts, and private conversations do not leak into public DTOs, logs, Frontend, community views, or 3D descriptors.
 
 ## Verification and merge gate

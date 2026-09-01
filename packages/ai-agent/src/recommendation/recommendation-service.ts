@@ -2,7 +2,7 @@ import { normalizeCandidateCompliance, type ComplianceIssue } from "../../compli
 import type { AgentContext } from "../contracts/agent";
 import { RecommendationRequestSchema } from "../contracts/recommendation";
 import type { LLMProvider } from "../providers/llm-provider";
-import type { AiDesignCandidate } from "../schemas/ai-design-candidate.schema";
+import type { AiBeadLayoutCandidate } from "../schemas/ai-bead-layout-candidate.schema";
 import { RecommendationProviderOutputSchema } from "../schemas/recommendation-output.schema";
 
 export type RecommendationIssue = {
@@ -13,7 +13,7 @@ export type RecommendationIssue = {
 };
 
 export type RecommendationResult =
-  | { readonly status: "READY"; readonly candidates: readonly [AiDesignCandidate, AiDesignCandidate, AiDesignCandidate]; readonly issues: readonly [] }
+  | { readonly status: "READY"; readonly candidates: readonly [AiBeadLayoutCandidate, AiBeadLayoutCandidate, AiBeadLayoutCandidate]; readonly issues: readonly [] }
   | { readonly status: "REJECTED"; readonly issues: readonly RecommendationIssue[] };
 
 export async function generateRecommendations(

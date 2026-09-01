@@ -20,7 +20,7 @@ export const AiBeadCandidateSchema = z.strictObject({
   role: BeadRoleSchema
 });
 
-export const AiDesignCandidateSchema = z
+export const AiBeadLayoutCandidateSchema = z
   .strictObject({
     designName: z.string().trim().min(1).max(200),
     emotionTags: z.array(IdentifierSchema).max(30),
@@ -55,4 +55,4 @@ export const AiDesignCandidateSchema = z
   });
 
 export type AiBeadCandidate = z.infer<typeof AiBeadCandidateSchema>;
-export type AiDesignCandidate = z.infer<typeof AiDesignCandidateSchema>;
+export type AiBeadLayoutCandidate = z.infer<typeof AiBeadLayoutCandidateSchema>;

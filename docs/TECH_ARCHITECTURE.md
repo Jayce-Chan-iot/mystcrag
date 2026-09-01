@@ -29,7 +29,7 @@ packages/
 ## Phase 2B consumer flow
 
 ```text
-provider unknown -> AI candidate validation -> server enrichment -> DesignV1
+provider unknown -> AI bead-layout candidate validation -> server enrichment -> DesignV1
                                                               |-> backend shared DTO boundary
                                                               |-> frontend PublicDesignV1 views
                                                               `-> Three Engine scene descriptor

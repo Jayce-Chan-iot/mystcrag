@@ -436,6 +436,24 @@ Record cross-module and shared-asset proposals here before implementation. `PROP
 
 ---
 
+### DEC-AUTH-001 — Freeze Auth0 identity and Next.js BFF session topology
+
+- Date: 2026-08-25
+- Proposed by Agent: SOL / Chief Architect
+- Affected modules: future `apps/frontend` Next.js session boundary, `apps/backend` AuthProvider, `packages/database` external identity mapping, FEAT-018 API/security/deployment contracts and QA
+- Decision: Use isolated Auth0 Applications/Clients for development, staging, and production with exact callback/logout/web-origin allowlists and no wildcard callback. Use OIDC/OAuth 2.0 Authorization Code + PKCE (`S256`). The sole FEAT-018 session mode is the Auth0 Next.js SDK authenticated-encrypted, HttpOnly, host-only Cookie Session; it may carry encrypted session/token material but never plaintext Token or Claim, and browser JavaScript cannot read it. No Redis, persistent `SessionStore`, session database, or `AuthSession` Prisma model is authorized. The BFF calls Fastify with an audience-specific Access Token of at most 15 minutes. Active logout immediately clears the current browser cookie; provider/admin grant revocation becomes effective by the next renewal or no later than the Access Token expiry. Fastify verifies signature, exact issuer, required audience and expiry, projects provider-neutral `VerifiedIdentity`, maps unique `(issuer, subject)` through `ExternalIdentity` to internal `User.id`, and passes only that internal id to actor-scoped repositories. Full endpoint, cookie, expiry/revocation, CSRF/Origin, redirect, cache, persistence, environment, logging and failure behavior is frozen in `docs/AUTH_SESSION_CONTRACT.md`.
+- Rationale: The current public fixed-token Frontend and direct provider-subject actor mapping cannot provide production browser-session custody or collision-safe identity. A BFF keeps reusable credentials out of browser-readable surfaces while preserving Fastify as the canonical resource-server verifier and existing repositories as authorization authorities.
+- Rejected alternatives: Browser-stored Access/Refresh Tokens; direct SPA-to-Fastify bearer calls; provider subject as `User.id`; email-based silent linking; a custom password provider; reuse of Knowledge Admin authentication; wildcard/multi-environment Auth0 clients; a second public auth error envelope.
+- Contract impact: Add provider-neutral `VerifiedIdentity` semantics in documentation only. Auth0 SDK/provider types are forbidden from public Domain and Design Contract boundaries. Existing Design DTOs and stable error envelope remain unchanged.
+- Database impact: Future additive `ExternalIdentity` with unique `(issuer, subject)` and restrictive `User` FK; no Prisma or migration change in AUTH-001; no token storage.
+- API impact: Freeze `GET /auth/login`, `GET /auth/callback`, `POST /auth/logout`, and `GET /auth/session`; protected verification failures remain generic `401`, owner mismatch remains generic `403`, and provider/JWKS/session dependency outage fails closed as HTTP `500` with `INTERNAL_ERROR` in the existing envelope.
+- Approval status: `APPROVED`
+- Approved by: Product Owner
+- Approval date: 2026-08-25
+- Implementation branch or commit: `task/auth-001-identity-contract`; SOL-accepted contract candidate `10d1f5df44f6dff84034d09c7a5e93a2234ae745`, integrated by its local `main` descendant. State is `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`, not Feature acceptance.
+
+---
+
 ## New decision template
 
 ### P3-NNN — Short decision title

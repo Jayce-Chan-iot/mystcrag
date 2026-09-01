@@ -1,17 +1,15 @@
+import {
+  TarotOrientationSchema,
+  TarotSlotSchema,
+  TarotSpreadTypeSchema,
+  type TarotOrientation,
+  type TarotSlot,
+  type TarotSpreadType
+} from "@mystcrag/design-contract";
 import { z } from "zod";
 
 import { TAROT_CARD_CATALOG } from "./card-catalog";
 import { requiredSlotsForSpread } from "./spreads";
-
-export type TarotSpreadType = "SINGLE" | "PAST_PRESENT_FUTURE";
-export type TarotSlot = "GUIDANCE" | "PAST" | "PRESENT" | "FUTURE";
-export type TarotOrientation = "UPRIGHT" | "REVERSED";
-export type TarotTheme =
-  | "RELATIONSHIPS"
-  | "CAREER"
-  | "SELF_GROWTH"
-  | "NEW_BEGINNINGS"
-  | "FINANCIAL_PLANNING";
 
 export interface RandomSource {
   nextInt(maxExclusive: number): number;
@@ -62,17 +60,6 @@ export interface PublicDrawState {
 }
 
 const VersionedTagSchema = z.string().regex(/^[a-z]+-v\d+:[a-z0-9-]+$/);
-
-export const TarotSpreadTypeSchema = z.enum(["SINGLE", "PAST_PRESENT_FUTURE"]);
-export const TarotSlotSchema = z.enum(["GUIDANCE", "PAST", "PRESENT", "FUTURE"]);
-export const TarotOrientationSchema = z.enum(["UPRIGHT", "REVERSED"]);
-export const TarotThemeSchema = z.enum([
-  "RELATIONSHIPS",
-  "CAREER",
-  "SELF_GROWTH",
-  "NEW_BEGINNINGS",
-  "FINANCIAL_PLANNING",
-]);
 
 export const TarotCardDefinitionSchema = z.strictObject({
   id: z.string().min(1),

@@ -2,7 +2,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { z } from "zod";
 
-import type { AuthProvider, VerifiedAuthClaims } from "./auth-provider.js";
+import type { AccessTokenVerifier, VerifiedAuthClaims } from "./auth-provider.js";
+import { CredentialRejectedError } from "./auth-errors.js";
 
 const TokenHeaderSchema = z.strictObject({
   alg: z.literal("HS256"),
@@ -44,7 +45,7 @@ function parseJsonSegment(segment: string): unknown {
   return JSON.parse(Buffer.from(segment, "base64url").toString("utf8"));
 }
 
-export class SignedTestTokenAuthProvider implements AuthProvider {
+export class SignedTestTokenAuthProvider implements AccessTokenVerifier {
   readonly #secret: string;
   readonly #issuer: string;
   readonly #audience: string;
@@ -63,7 +64,7 @@ export class SignedTestTokenAuthProvider implements AuthProvider {
   async verifyAccessToken(token: string): Promise<VerifiedAuthClaims> {
     const segments = token.split(".");
     if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) {
-      throw new Error("Invalid access token");
+      throw new CredentialRejectedError("malformed");
     }
     const [encodedHeader, encodedClaims, encodedSignature] = segments as [string, string, string];
     const signature = Buffer.from(encodedSignature, "base64url");
@@ -72,19 +73,30 @@ export class SignedTestTokenAuthProvider implements AuthProvider {
       signature.length !== expectedSignature.length ||
       !timingSafeEqual(signature, expectedSignature)
     ) {
-      throw new Error("Invalid access token");
+      throw new CredentialRejectedError("signature");
     }
 
-    TokenHeaderSchema.parse(parseJsonSegment(encodedHeader));
-    const claims = TokenClaimsSchema.parse(parseJsonSegment(encodedClaims));
+    try {
+      TokenHeaderSchema.parse(parseJsonSegment(encodedHeader));
+    } catch {
+      throw new CredentialRejectedError("malformed");
+    }
+    let claims: z.infer<typeof TokenClaimsSchema>;
+    try {
+      claims = TokenClaimsSchema.parse(parseJsonSegment(encodedClaims));
+    } catch {
+      throw new CredentialRejectedError("malformed");
+    }
     const audience = typeof claims.aud === "string" ? [claims.aud] : claims.aud;
     const nowEpochSeconds = Math.floor(this.#now().getTime() / 1000);
-    if (
-      claims.iss !== this.#issuer ||
-      !audience.includes(this.#audience) ||
-      claims.exp <= nowEpochSeconds
-    ) {
-      throw new Error("Invalid access token");
+    if (claims.iss !== this.#issuer) {
+      throw new CredentialRejectedError("issuer");
+    }
+    if (!audience.includes(this.#audience)) {
+      throw new CredentialRejectedError("audience");
+    }
+    if (claims.exp <= nowEpochSeconds) {
+      throw new CredentialRejectedError("expired");
     }
 
     return {

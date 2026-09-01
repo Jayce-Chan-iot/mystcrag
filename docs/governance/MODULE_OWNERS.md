@@ -46,3 +46,4 @@ One task has one accountable owner. Reviewers may advise, but they do not share 
 - Cross-module runtime work must be split into dependency-ordered `GLM`/`QWEN` tasks; `SOL` may own only the corresponding plan, review and archive tasks.
 - Generated clients, `.next`, `dist`, screenshots, local databases, and environment files are never valid task-owned source paths.
 - When a suspected duplicate crosses owners, the owner of the canonical component owns the decision task; consumer cleanup tasks depend on that decision.
+- Platform shells own their storage, navigation, rendering, identity and transport adapters. Any future cross-platform extraction requires a separately approved owner/task after Web interaction evidence; it may not absorb Web Auth0, DOM/Canvas/WebGL or future WeChat identity/runtime APIs.

@@ -1,12 +1,16 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 import { DomainApiError, toApiErrorEnvelope } from "../contracts/api-error.js";
+import { authErrorCategory, CredentialRejectedError } from "./auth-errors.js";
 
 export type VerifiedAuthClaims = {
   readonly subject: string;
   readonly issuer: string;
   readonly audience: readonly string[];
   readonly expiresAtEpochSeconds: number;
+  readonly email?: string;
+  readonly emailVerified?: boolean;
+  readonly displayName?: string;
 };
 
 export type ActorContext = {
@@ -14,8 +18,12 @@ export type ActorContext = {
   readonly claims: VerifiedAuthClaims;
 };
 
-export interface AuthProvider {
+export interface AccessTokenVerifier {
   verifyAccessToken(token: string): Promise<VerifiedAuthClaims>;
+}
+
+export interface AuthProvider {
+  authenticateAccessToken(token: string): Promise<ActorContext>;
 }
 
 declare module "fastify" {
@@ -24,28 +32,54 @@ declare module "fastify" {
   }
 }
 
-function bearerTokenFromRequest(request: FastifyRequest): string {
+function bearerTokenFromRequest(request: FastifyRequest): string | null {
   const authorization = request.headers.authorization;
   const match =
     typeof authorization === "string" ? /^Bearer ([^\s]+)$/.exec(authorization) : null;
-  if (!match) {
-    throw new DomainApiError("UNAUTHORIZED", "Authentication is required.");
-  }
-  return match[1]!;
+  return match ? match[1]! : null;
+}
+
+function sendUnauthorized(request: FastifyRequest, reply: FastifyReply) {
+  const error = new DomainApiError("UNAUTHORIZED", "Authentication is required.");
+  return reply.status(error.statusCode).send(toApiErrorEnvelope(error, request.id));
+}
+
+function sendInternalError(request: FastifyRequest, reply: FastifyReply) {
+  const error = new DomainApiError("INTERNAL_ERROR", "An internal error occurred.");
+  return reply.status(error.statusCode).send(toApiErrorEnvelope(error, request.id));
 }
 
 export function createAuthenticationPreHandler(provider: AuthProvider) {
   return async function authenticateRequest(request: FastifyRequest, reply: FastifyReply) {
+    const startedAtMs = Date.now();
+    const token = bearerTokenFromRequest(request);
+    if (!token) {
+      return sendUnauthorized(request, reply);
+    }
+
     try {
-      const token = bearerTokenFromRequest(request);
-      const claims = await provider.verifyAccessToken(token);
-      if (claims.subject.trim().length === 0) {
-        throw new Error("Verified subject is empty");
+      request.actorContext = await provider.authenticateAccessToken(token);
+    } catch (error) {
+      if (error instanceof CredentialRejectedError) {
+        request.log.warn(
+          {
+            authCategory: error.category,
+            authReason: error.reason,
+            authKid: error.kid,
+            authDurationMs: Date.now() - startedAtMs
+          },
+          "Access token rejected."
+        );
+        return sendUnauthorized(request, reply);
       }
-      request.actorContext = { actorId: claims.subject.trim(), claims };
-    } catch {
-      const error = new DomainApiError("UNAUTHORIZED", "Authentication is required.");
-      return reply.status(error.statusCode).send(toApiErrorEnvelope(error, request.id));
+      request.log.error(
+        {
+          authCategory: authErrorCategory(error),
+          authDurationMs: Date.now() - startedAtMs
+        },
+        "Authentication failed."
+      );
+      return sendInternalError(request, reply);
     }
   };
 }

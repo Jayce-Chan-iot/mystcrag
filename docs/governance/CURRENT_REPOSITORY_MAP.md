@@ -1,7 +1,7 @@
 # Current Repository Map
 
-**Observed product baseline:** local `main` commit `1a34c16`, audited on 2026-08-24<br>
-**Governance candidate:** `7649f59` plus TASK-AUDIT-001 documentation; not integrated into `main`
+**Observed product baseline:** `main` commit `2abfdfe76df3302f2c9ae88cfa749832b71e2578`, audited on 2026-08-31<br>
+**Governance state:** baseline `READY`; Development Gate `OPEN`; Auth implementation integrated/frozen with deployment acceptance deferred
 **Scope:** tracked repository plus current branch/worktree metadata
 **Method:** workspace manifests, import boundaries, route registrations, Prisma schema, tests, asset references, Git branches, and worktrees
 
@@ -48,7 +48,7 @@ Applications do not import other applications. The public design contract remain
 | Application | Current responsibility | Runtime status | Main dependencies |
 | --- | --- | --- | --- |
 | `apps/frontend` | Next.js UI: home, AI questionnaire/results, DIY editor, library, personal gallery, profile, Tarot, knowledge admin | Production MVP | Bracelet, Design Contract, Three, UI |
-| `apps/backend` | Fastify APIs, auth boundary, design/recommendation orchestration, pricing/inventory/order, Tarot and knowledge admin | Production MVP; commercial auth is development-grade | AI, Context, DB, Contract, Design, Knowledge, Tarot |
+| `apps/backend` | Fastify APIs, auth boundary, design/recommendation orchestration, pricing/inventory/order, Tarot and knowledge admin | Production MVP; Auth implementation complete, deployment acceptance deferred | AI, Context, DB, Contract, Design, Knowledge, Tarot |
 | `apps/knowledge-worker` | Knowledge collection/review/maintenance job entry point | Active operational worker | DB, Contract, Knowledge Core/Ingestion |
 | `apps/mcp-server` | MCP tools for knowledge retrieval and design operations | Active integration service | Context, DB, Contract, Design, Knowledge |
 
@@ -91,28 +91,36 @@ The `user`, `crystal`, `community`, and `order` module descriptors are registere
 
 ## Persistence map
 
-The Prisma schema owns 21 models:
+The Prisma schema owns 22 models:
 
-- Identity/catalog: `User`, `Crystal`, `DesignTemplate`, `MaterialProduct`, `AccessoryProduct`, `InventorySnapshot`, `PricingRule`.
+- Identity/catalog: `User`, `ExternalIdentity`, `Crystal`, `DesignTemplate`, `MaterialProduct`, `AccessoryProduct`, `InventorySnapshot`, `PricingRule`.
 - Design/commerce: `Design`, `DesignRevision`, `DesignDecisionTrace`, `DesignPublication`, `Order`, `OrderDesignSnapshot`.
 - Knowledge: `KnowledgeSource`, `KnowledgeDocument`, `KnowledgeRule`, `KnowledgeCollectionRun`, `KnowledgeVersion`, `KnowledgeUsageEvent`.
 - Tarot: `TarotSession`, `TarotDesignRecommendation`.
 
 `DesignTemplate` currently has no production repository/service consumer. Design-template provenance is represented as strings in generated designs, so the model is classified dormant pending TASK-DB-001.
 
-## Repository evidence and concurrent state
+## Cross-platform boundary map
 
-- No open GitHub pull requests were present at audit time.
-- Local `main` was 22 commits ahead of `origin/main`; publishing remains a separate owner action.
-- The governance candidate is two commits ahead of local `main`; therefore `main` does not yet contain the task registry, canonical registry, or expanded root governance rules.
-- Most historical branches are merged but retained. Six old branches are unmerged and require provenance review.
-- Three non-root worktrees are live; multiple `/private/tmp` worktree registrations are prunable but untouched.
-- Pre-existing user changes in `apps/frontend/next-env.d.ts`, `docs/audit/`, and `docs/progress/` are explicitly outside TASK-GOV-001.
+```text
+Web shell (Next/React/Auth0 BFF/DOM/Canvas/WebGL/browser storage)
+             |
+             v
+platform API + storage + navigation + rendering adapters
+             |
+             v
+Shared Domain/Core (Design Contract + Bracelet Engine)
+             |
+             v
+backend authority (identity mapping, ownership, price, inventory, revisions, orders)
+```
+
+Design Contract and Bracelet Engine are portable authorities and are sufficient for the first competitive Web UX task. The current Web editor, Three renderer, API transport, navigation and browser storage are platform adapters. A future Mini Program must provide its own request/storage/navigation/rendering and identity adapters; it must not import the Auth0 Web session or create a second business identity model. Cross-platform session extraction follows accepted Web interaction evidence rather than preceding it.
 
 ## Known current-state pressure points
 
 - Three large orchestration files concentrate change risk: design API (1,284 lines), recommendation service (1,127), Tarot service (941); DIY editor is 1,275 lines.
 - The production DIY page deliberately renders `FlatBraceletEditor`; the tested 3D preview wrapper is not mounted.
-- Public contract duplication exists around Tarot enums and AI candidate naming.
+- `DiyEditor` contains exactly 25 `React.useState` hooks, while every structural update waits for the server before settling the visible design. TASK-AUDIT-002 proposes Qwen/TASK-FE-002 as the direct L3 UX intervention; no Core package is authorized.
 - Compatibility, mock, placeholder, and QA evidence paths are not consistently labeled or isolated.
-- Tracked QA screenshots and outputs are spread across at least ten locations. See `DUPLICATE_CODE_AUDIT.md` for evidence and disposition.
+- User profile/address/favorites remain browser-local, while White Label has no tenant/brand/theme boundary.

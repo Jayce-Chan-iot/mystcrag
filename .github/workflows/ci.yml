@@ -35,3 +35,99 @@ jobs:
         run: pnpm test
       - name: Production builds
         run: pnpm build
+
+  # AUTH-006 — isolated authentication security and full-loop E2E gate.
+  # One command boots its own isolated resources (database, synthetic OIDC provider,
+  # backend, frontend) via the Playwright global setup in tests/auth-e2e; nothing from
+  # a developer machine is reused. Per-run secrets are generated on the runner with
+  # openssl and exported through $GITHUB_ENV, which GitHub Actions materialises as a
+  # temporary env file ON THE RUNNER for the duration of the job — so they are never
+  # "in memory only": they exist in the runner process env and in that temp file.
+  # They are never hardcoded in YAML, never echoed to any log, and each value is
+  # registered with add-mask the moment it is created so an accidental echo is
+  # redacted in the log view.
+  auth-006-security-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        # The migrations require the pgvector extension, hence the pgvector image.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Only the admin endpoint is pinned; the gate derives its own isolated database
+      # name from the per-run id and drops it in teardown.
+      AUTH006_DATABASE_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.4.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+      # Per-run secrets, generated on the runner and exported through $GITHUB_ENV so
+      # the gate's teardown scan AND the evidence sanitizer can search for their
+      # literal values. Each value is masked IMMEDIATELY after generation: if it ever
+      # reaches a log by accident, GitHub replaces it with ***. The generated values
+      # live in the runner process env and the $GITHUB_ENV temp file — nowhere else,
+      # never in YAML, never in argv (argv is visible in process listings and in the
+      # workflow's rendered command line, where a masked value would still be shown).
+      - name: Generate per-run AUTH-006 secrets
+        run: |
+          client_secret="$(openssl rand -hex 32)"
+          session_secret="$(openssl rand -hex 32)"
+          admin_token="$(openssl rand -hex 32)"
+          echo "::add-mask::${client_secret}"
+          echo "::add-mask::${session_secret}"
+          echo "::add-mask::${admin_token}"
+          echo "AUTH006_CLIENT_SECRET=${client_secret}" >> "$GITHUB_ENV"
+          echo "AUTH006_SESSION_SECRET=${session_secret}" >> "$GITHUB_ENV"
+          echo "AUTH006_ADMIN_TOKEN=${admin_token}" >> "$GITHUB_ENV"
+      - name: AUTH-006 isolated security and full-loop E2E gate
+        run: pnpm exec playwright test --config tests/auth-e2e/playwright.config.mts
+      # The sanitizer reads the run secrets ONLY from the named environment
+      # variables (AUTH006_CLIENT_SECRET, AUTH006_SESSION_SECRET,
+      # AUTH006_ADMIN_TOKEN — already in the job env through $GITHUB_ENV), never
+      # from the command line: argv is visible in process listings and in the
+      # workflow's rendered command display.
+      - name: Sanitize run evidence on failure
+        id: sanitize_auth006
+        if: failure()
+        run: >
+          node tests/auth-e2e/scripts/sanitize-evidence.mjs
+          output/playwright/auth-006
+          output/playwright/auth-006-sanitized
+      # The upload is DOUBLE-gated: the gate must have failed (failure()) AND the
+      # sanitizer must have completed successfully (outcome == 'success'). When the
+      # sanitizer itself fails — a detected violation or an internal error — its
+      # outcome is 'failure' (or 'cancelled') and this step is skipped: a partial
+      # or unverified sanitized directory must never be published. GitHub Actions
+      # evaluates steps.<id>.outcome only for steps that have already concluded,
+      # so a skipped sanitizer here means the gate passed and failure() is false
+      # anyway.
+      - name: Retain sanitized run evidence on failure
+        if: failure() && steps.sanitize_auth006.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: auth-006-run-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          # ONLY the sanitized, explicitly allowlisted directory is ever uploaded,
+          # and only after the sanitizer exited 0 over the FULL run directory.
+          # The raw run directory (TLS keys, traces, logs) stays on the runner.
+          path: output/playwright/auth-006-sanitized/
+          retention-days: 7
+          if-no-files-found: error

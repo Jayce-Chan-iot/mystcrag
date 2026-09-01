@@ -14,6 +14,8 @@ import {
 } from "@mystcrag/knowledge-core";
 
 import { createApp } from "../../app.js";
+import { AuthenticatedActorProvider } from "../../auth/authenticated-actor-provider.js";
+import { InMemoryExternalIdentityMapping } from "../../auth/auth.test-utils.js";
 import {
   SignedTestTokenAuthProvider,
   signTestAccessToken
@@ -28,11 +30,17 @@ const fixedNow = new Date("2026-08-21T10:00:00.000Z");
 const authSecret = "mystcrag-backend-auth-test-secret-2026";
 const authIssuer = "https://auth.test.mystcrag.local";
 const authAudience = "mystcrag-backend";
-const authProvider = new SignedTestTokenAuthProvider({
-  secret: authSecret,
-  issuer: authIssuer,
-  audience: authAudience,
-  now: () => fixedNow
+const authProvider = new AuthenticatedActorProvider({
+  provider: new SignedTestTokenAuthProvider({
+    secret: authSecret,
+    issuer: authIssuer,
+    audience: authAudience,
+    now: () => fixedNow
+  }),
+  identities: new InMemoryExternalIdentityMapping([
+    [authIssuer, "auth0|actor-owner", actorId],
+    [authIssuer, "auth0|actor-intruder", "actor-intruder"]
+  ])
 });
 
 const CATALOG_MATERIALS: CatalogProduct[] = [
@@ -376,7 +384,7 @@ function requestHeaders(
 ) {
   const token = signTestAccessToken(
     {
-      subject: owner,
+      subject: `auth0|${owner}`,
       issuer: authIssuer,
       audience: overrides.audience ?? authAudience,
       expiresAtEpochSeconds: Math.floor(fixedNow.getTime() / 1000) + 3600

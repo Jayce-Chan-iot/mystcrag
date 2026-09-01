@@ -1,7 +1,7 @@
 import type { SupportedCurrency } from "@mystcrag/design-contract";
 
 import type { EmotionTag, StyleTag } from "../contracts/recommendation";
-import type { AiBeadCandidate } from "../schemas/ai-design-candidate.schema";
+import type { AiBeadCandidate } from "../schemas/ai-bead-layout-candidate.schema";
 
 type BeadRole = AiBeadCandidate["role"];
 type BeadShape = AiBeadCandidate["shape"];

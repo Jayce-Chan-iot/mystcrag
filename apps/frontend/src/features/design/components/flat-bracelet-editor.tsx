@@ -1,6 +1,6 @@
 "use client";
 
-import { createBraceletLayout, resolveSlotAtAngle, type BraceletLayoutResult } from "@mystcrag/bracelet-engine";
+import { createBraceletLayout, normalizeAngle, resolveSlotAtAngle, type BraceletLayoutResult } from "@mystcrag/bracelet-engine";
 import type { PublicDesignV1 } from "@mystcrag/design-contract";
 import Image from "next/image";
 import * as React from "react";
@@ -75,7 +75,7 @@ export function calculateSizeAwareRingLayout(components: RingComponent[], connec
   });
 }
 
-function targetPositionForAngle(layout: ReturnType<typeof calculateSizeAwareRingLayout>, angle: number, fallback: number) {
+export function targetPositionForAngle(layout: ReturnType<typeof calculateSizeAwareRingLayout>, angle: number, fallback: number) {
   const engineLayout: BraceletLayoutResult = {
     center: { x: 0, y: 0 },
     circumference: 0,
@@ -96,6 +96,40 @@ function targetPositionForAngle(layout: ReturnType<typeof calculateSizeAwareRing
   };
   const slot = resolveSlotAtAngle(engineLayout, angle);
   return layout.find((item) => item.component.componentId === slot?.componentId)?.component.positionIndex ?? fallback;
+}
+
+// Mirrors the Backend splice-out/splice-in MOVE semantics so the optimistic
+// projection and the visual reflow preview never disagree.
+export function previewMovedRing(
+  components: readonly RingComponent[],
+  componentId: string,
+  targetPositionIndex: number
+): RingComponent[] {
+  const index = components.findIndex((component) => component.componentId === componentId);
+  if (index < 0 || targetPositionIndex < 0 || targetPositionIndex >= components.length) return [...components];
+  const next = [...components];
+  const [component] = next.splice(index, 1);
+  next.splice(Math.max(0, targetPositionIndex), 0, component!);
+  return next;
+}
+
+export function dragMetrics(rect: DOMRect, clientX: number, clientY: number, ringRadiusPercent: number) {
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  const centerX = rect.width / 2;
+  const centerY = rect.height / 2;
+  const ringRadius = rect.width * (ringRadiusPercent / 100);
+  const distance = Math.hypot(x - centerX, y - centerY);
+  // Slots are positioned with cos/sin in this same stage frame, so the pointer
+  // angle is the plain atan2; any extra rotation offsets every drop target.
+  const angle = normalizeAngle(Math.atan2(y - centerY, x - centerX));
+  return {
+    angle,
+    nearRing: Math.abs(distance - ringRadius) <= rect.width * 0.16,
+    outsideTray: isPointOutsideTray({ x, y }, rect),
+    x,
+    y
+  };
 }
 
 export function FlatBraceletEditor({
@@ -131,6 +165,7 @@ export function FlatBraceletEditor({
   const [drag, setDrag] = React.useState<DragState | null>(null);
   const [nativeDraggedComponentId, setNativeDraggedComponentId] = React.useState("");
   const [nativeOutsideTray, setNativeOutsideTray] = React.useState(false);
+  const [nativeDragTarget, setNativeDragTarget] = React.useState<number | null>(null);
 
   const canRemove = (componentId: string) => {
     const component = components.find((item) => item.componentId === componentId);
@@ -148,28 +183,23 @@ export function FlatBraceletEditor({
     nativeDragIdRef.current = "";
     setNativeDraggedComponentId("");
     setNativeOutsideTray(false);
+    setNativeDragTarget(null);
   };
 
   const updateDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
     const currentDrag = dragRef.current;
     if (!currentDrag || currentDrag.pointerId !== event.pointerId || !stageRef.current) return;
     const rect = stageRef.current.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
-    const ringRadius = rect.width * (ringRadiusPercent / 100);
-    const distance = Math.hypot(x - centerX, y - centerY);
-    const angle = (Math.atan2(y - centerY, x - centerX) + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2);
+    const metrics = dragMetrics(rect, event.clientX, event.clientY, ringRadiusPercent);
     const moved = currentDrag.moved || Math.hypot(event.clientX - currentDrag.startX, event.clientY - currentDrag.startY) > 5;
     commitDrag({
       ...currentDrag,
-      x: (x / rect.width) * 100,
-      y: (y / rect.height) * 100,
+      x: (metrics.x / rect.width) * 100,
+      y: (metrics.y / rect.height) * 100,
       moved,
-      nearRing: Math.abs(distance - ringRadius) <= rect.width * 0.16,
-      outsideTray: isPointOutsideTray({ x, y }, rect),
-      targetPositionIndex: targetPositionForAngle(componentLayouts, angle, currentDrag.targetPositionIndex)
+      nearRing: metrics.nearRing,
+      outsideTray: metrics.outsideTray,
+      targetPositionIndex: targetPositionForAngle(componentLayouts, metrics.angle, currentDrag.targetPositionIndex)
     });
   };
 
@@ -181,16 +211,10 @@ export function FlatBraceletEditor({
     let targetPositionIndex = currentDrag.targetPositionIndex;
     if (stageRef.current) {
       const rect = stageRef.current.getBoundingClientRect();
-      const x = event.clientX - rect.left;
-      const y = event.clientY - rect.top;
-      const centerX = rect.width / 2;
-      const centerY = rect.height / 2;
-      const ringRadius = rect.width * (ringRadiusPercent / 100);
-      const distance = Math.hypot(x - centerX, y - centerY);
-      const angle = (Math.atan2(y - centerY, x - centerX) + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2);
-      nearRing = Math.abs(distance - ringRadius) <= rect.width * 0.16;
-      outsideTray = isPointOutsideTray({ x, y }, rect);
-      targetPositionIndex = targetPositionForAngle(componentLayouts, angle, targetPositionIndex);
+      const metrics = dragMetrics(rect, event.clientX, event.clientY, ringRadiusPercent);
+      nearRing = metrics.nearRing;
+      outsideTray = metrics.outsideTray;
+      targetPositionIndex = targetPositionForAngle(componentLayouts, metrics.angle, targetPositionIndex);
     }
     if (currentDrag.moved) {
       if (outsideTray && canRemove(currentDrag.componentId)) onRemove(currentDrag.componentId);
@@ -201,11 +225,26 @@ export function FlatBraceletEditor({
     clearDrag();
   };
 
+  const pointerReflowActive = Boolean(drag && drag.moved && drag.nearRing && !drag.outsideTray);
+  const nativeReflowActive = Boolean(nativeDraggedComponentId && !nativeOutsideTray && nativeDragTarget !== null);
+  const reflowComponentId = pointerReflowActive && drag ? drag.componentId : nativeDraggedComponentId;
+  const reflowTargetIndex = pointerReflowActive && drag ? drag.targetPositionIndex : nativeDragTarget ?? 0;
+  const reflowActive = (pointerReflowActive || nativeReflowActive)
+    && components.some((component) => component.componentId === reflowComponentId);
+  const previewComponents = reflowActive ? previewMovedRing(components, reflowComponentId, reflowTargetIndex) : components;
+  const previewLayouts = previewComponents === components
+    ? componentLayouts
+    : calculateSizeAwareRingLayout(previewComponents, connected);
+  const draggedSlotLayout = reflowActive
+    ? previewLayouts.find((item) => item.component.componentId === reflowComponentId)
+    : undefined;
+
   return (
     <div
       aria-label="2D 手串编辑预览"
       className="relative mx-auto aspect-square w-full max-w-[35rem] select-none"
       data-bracelet-layout={connected ? "connected" : "spread"}
+      data-drag-reflow-active={reflowActive}
       data-flat-bracelet-editor="true"
       style={fitDesktopViewport ? { maxWidth: "clamp(14rem, calc(100dvh - 20.5rem), 35rem)" } : undefined}
       onDragOver={(event) => {
@@ -213,29 +252,39 @@ export function FlatBraceletEditor({
         if (!componentId || !stageRef.current) return;
         event.preventDefault();
         const rect = stageRef.current.getBoundingClientRect();
-        setNativeOutsideTray(isPointOutsideTray({ x: event.clientX - rect.left, y: event.clientY - rect.top }, rect));
+        const metrics = dragMetrics(rect, event.clientX, event.clientY, ringRadiusPercent);
+        setNativeOutsideTray(metrics.outsideTray);
+        setNativeDragTarget(metrics.nearRing ? targetPositionForAngle(componentLayouts, metrics.angle, 0) : null);
       }}
       onDrop={(event) => {
         const componentId = nativeDragIdRef.current;
         if (!componentId || !stageRef.current) return;
         event.preventDefault();
         const rect = stageRef.current.getBoundingClientRect();
-        const x = event.clientX - rect.left;
-        const y = event.clientY - rect.top;
-        const centerX = rect.width / 2;
-        const centerY = rect.height / 2;
-        const distance = Math.hypot(x - centerX, y - centerY);
-        const ringRadius = rect.width * (ringRadiusPercent / 100);
-        const angle = (Math.atan2(y - centerY, x - centerX) + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2);
-        if (isPointOutsideTray({ x, y }, rect) && canRemove(componentId)) onRemove(componentId);
-        else if (Math.abs(distance - ringRadius) <= rect.width * 0.16) {
-          onMove(componentId, targetPositionForAngle(componentLayouts, angle, 0));
+        const metrics = dragMetrics(rect, event.clientX, event.clientY, ringRadiusPercent);
+        if (metrics.outsideTray && canRemove(componentId)) onRemove(componentId);
+        else if (metrics.nearRing) {
+          onMove(componentId, targetPositionForAngle(componentLayouts, metrics.angle, 0));
         }
         clearNativeDrag();
       }}
       ref={stageRef}
     >
       <DisplayTray material={trayMaterial} />
+
+      {reflowActive && draggedSlotLayout ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute z-0 block -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-dashed border-[var(--accent)] bg-[var(--accent-soft)]/55 transition-[left,top] duration-200 motion-reduce:transition-none"
+          data-drag-target-slot="true"
+          style={{
+            height: `${draggedSlotLayout.heightPercent}%`,
+            left: `${draggedSlotLayout.leftPercent}%`,
+            top: `${draggedSlotLayout.topPercent}%`,
+            width: `${draggedSlotLayout.widthPercent}%`
+          }}
+        />
+      ) : null}
 
       {drag?.moved || nativeDraggedComponentId ? (
         <div
@@ -268,7 +317,7 @@ export function FlatBraceletEditor({
         </div>
       ) : null}
 
-      {componentLayouts.map(({ component, heightPercent, leftPercent: defaultX, topPercent: defaultY, widthPercent }, index) => {
+      {previewLayouts.map(({ component, heightPercent, leftPercent: defaultX, topPercent: defaultY, widthPercent }, index) => {
         const dragging = drag?.componentId === component.componentId;
         const isBead = component.kind === "BEAD";
         const selected = component.componentId === selectedComponentId;
@@ -281,8 +330,9 @@ export function FlatBraceletEditor({
           <button
             aria-label={isBead ? `第 ${component.positionIndex + 1} 颗珠子，拖动可调整位置` : `第 ${component.positionIndex + 1} 个配件`}
             aria-pressed={isBead ? selected : undefined}
-            className={`absolute z-10 -translate-x-1/2 -translate-y-1/2 touch-none rounded-full transition-[transform,left,top] duration-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${isBead ? "cursor-grab active:cursor-grabbing" : "cursor-default"} ${selected ? "ring-2 ring-[var(--accent)] ring-offset-2 ring-offset-[var(--surface)]" : ""} ${dragging ? "z-30 cursor-grabbing transition-none" : "hover:scale-105"}`}
+            className={`absolute z-10 -translate-x-1/2 -translate-y-1/2 touch-none rounded-full transition-[transform,left,top] duration-300 motion-reduce:transition-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${isBead ? "cursor-grab active:cursor-grabbing" : "cursor-default"} ${selected ? "ring-2 ring-[var(--accent)] ring-offset-2 ring-offset-[var(--surface)]" : ""} ${dragging ? "z-30 scale-110 cursor-grabbing transition-none drop-shadow-[0_16px_20px_rgb(57_45_67/0.32)]" : "hover:scale-105"}`}
             data-component-id={component.componentId}
+            data-drag-lifted={dragging || undefined}
             disabled={busy || !isBead}
             draggable={isBead && !busy}
             key={component.componentId}
@@ -290,17 +340,11 @@ export function FlatBraceletEditor({
               const componentId = nativeDragIdRef.current;
               if (componentId && stageRef.current) {
                 const rect = stageRef.current.getBoundingClientRect();
-                const x = event.clientX - rect.left;
-                const y = event.clientY - rect.top;
-                const centerX = rect.width / 2;
-                const centerY = rect.height / 2;
-                const distance = Math.hypot(x - centerX, y - centerY);
-                const ringRadius = rect.width * (ringRadiusPercent / 100);
-                const angle = (Math.atan2(y - centerY, x - centerX) + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2);
-                if (isPointOutsideTray({ x, y }, rect) && canRemove(componentId)) {
+                const metrics = dragMetrics(rect, event.clientX, event.clientY, ringRadiusPercent);
+                if (metrics.outsideTray && canRemove(componentId)) {
                   onRemove(componentId);
-                } else if (Math.abs(distance - ringRadius) <= rect.width * 0.16) {
-                  onMove(componentId, targetPositionForAngle(componentLayouts, angle, 0));
+                } else if (metrics.nearRing) {
+                  onMove(componentId, targetPositionForAngle(componentLayouts, metrics.angle, 0));
                 }
               }
               clearNativeDrag();
@@ -314,11 +358,21 @@ export function FlatBraceletEditor({
               setNativeDraggedComponentId(component.componentId);
               onSelect(component.componentId);
             }}
+            onFocus={() => { if (isBead) onSelect(component.componentId); }}
             onKeyDown={(event) => {
               if (!isBead || busy) return;
-              if (event.key === "ArrowLeft") onMove(component.componentId, Math.max(0, component.positionIndex - 1));
-              if (event.key === "ArrowRight") onMove(component.componentId, Math.min(components.length - 1, component.positionIndex + 1));
-              if ((event.key === "Delete" || event.key === "Backspace") && canRemove(component.componentId)) onRemove(component.componentId);
+              if (event.key === "ArrowLeft") {
+                event.preventDefault();
+                onMove(component.componentId, Math.max(0, component.positionIndex - 1));
+              }
+              if (event.key === "ArrowRight") {
+                event.preventDefault();
+                onMove(component.componentId, Math.min(components.length - 1, component.positionIndex + 1));
+              }
+              if ((event.key === "Delete" || event.key === "Backspace") && canRemove(component.componentId)) {
+                event.preventDefault();
+                onRemove(component.componentId);
+              }
             }}
             onPointerCancel={clearDrag}
             onPointerDown={(event) => {

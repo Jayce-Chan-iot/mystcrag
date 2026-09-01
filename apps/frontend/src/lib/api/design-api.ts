@@ -45,7 +45,7 @@ import {
   type UpdateDesignResponse
 } from "@mystcrag/design-contract";
 import { FrontendApiError, type FrontendErrorCode } from "./frontend-api-error";
-import { isMockApiEnabled, resolveAccessToken } from "./api-runtime";
+import { isMockApiEnabled } from "./api-runtime";
 import {
   getMockDesign,
   MOCK_MATERIALS,
@@ -106,19 +106,15 @@ async function callApi<T>(
   path: string,
   schema: RuntimeSchema<T>,
   options: { method?: "GET" | "POST"; body?: unknown },
-  fetcher: FetchLike,
-  accessToken: string
+  fetcher: FetchLike
 ): Promise<T> {
-  if (!accessToken) {
-    throw new FrontendApiError("UNAUTHORIZED", "A verified Mystcrag session credential is required.");
-  }
+  // Authorization is handled by the BFF proxy using the Auth0 session cookie.
   let response: Response;
   try {
     response = await fetcher(path, {
       method: options.method ?? "POST",
       headers: {
-        ...(options.body === undefined ? {} : { "content-type": "application/json" }),
-        authorization: `Bearer ${accessToken}`
+        ...(options.body === undefined ? {} : { "content-type": "application/json" })
       },
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
       cache: "no-store"
@@ -137,13 +133,11 @@ async function callApi<T>(
 
 export type DesignApiClientOptions = {
   fetcher?: FetchLike;
-  accessToken?: string;
   useMock?: boolean;
 };
 
 export function createDesignApiClient({
   fetcher = fetch,
-  accessToken = resolveAccessToken(),
   useMock = isMockApiEnabled
 }: DesignApiClientOptions = {}) {
   return {
@@ -154,7 +148,7 @@ export function createDesignApiClient({
         if (!response) throw new FrontendApiError("AI_GENERATION_FAILED", "Mock provider returned no design.");
         return GenerateDesignResponseSchema.parse(response);
       }
-      return callApi("/api/design/generate", GenerateDesignResponseSchema, { body: request }, fetcher, accessToken);
+      return callApi("/api/design/generate", GenerateDesignResponseSchema, { body: request }, fetcher);
     },
 
     async get(designId: string): Promise<PublicDesignV1> {
@@ -163,7 +157,7 @@ export function createDesignApiClient({
         if (!design) throw new FrontendApiError("NOT_FOUND", "Mock design not found.");
         return PublicDesignV1Schema.parse(design);
       }
-      return callApi(`/api/design/${encodeURIComponent(designId)}`, PublicDesignV1Schema, { method: "GET" }, fetcher, accessToken);
+      return callApi(`/api/design/${encodeURIComponent(designId)}`, PublicDesignV1Schema, { method: "GET" }, fetcher);
     },
 
     async materials(currency: PublicDesignV1["currency"]): Promise<ListCatalogMaterialsResponse> {
@@ -194,8 +188,7 @@ export function createDesignApiClient({
         `/api/catalog/materials?currency=${encodeURIComponent(currency)}`,
         ListCatalogMaterialsResponseSchema,
         { method: "GET" },
-        fetcher,
-        accessToken
+        fetcher
       );
     },
 
@@ -203,14 +196,14 @@ export function createDesignApiClient({
       if (useMock) {
         throw new FrontendApiError("VALIDATION_ERROR", "Mock mode does not fabricate design lists.");
       }
-      return callApi("/api/designs", ListMyDesignsResponseSchema, { method: "GET" }, fetcher, accessToken);
+      return callApi("/api/designs", ListMyDesignsResponseSchema, { method: "GET" }, fetcher);
     },
 
     async listOrders(): Promise<ListMyOrdersResponse> {
       if (useMock) {
         throw new FrontendApiError("VALIDATION_ERROR", "Mock mode does not fabricate order lists.");
       }
-      return callApi("/api/orders", ListMyOrdersResponseSchema, { method: "GET" }, fetcher, accessToken);
+      return callApi("/api/orders", ListMyOrdersResponseSchema, { method: "GET" }, fetcher);
     },
 
     async update(input: UpdateDesignRequest): Promise<UpdateDesignResponse> {
@@ -229,7 +222,7 @@ export function createDesignApiClient({
           expectedRevision: request.expectedRevision
         });
       }
-      return callApi("/api/design/update", UpdateDesignResponseSchema, { body: request }, fetcher, accessToken);
+      return callApi("/api/design/update", UpdateDesignResponseSchema, { body: request }, fetcher);
     },
 
     async price(design: PublicDesignV1): Promise<PriceDesignResponse> {
@@ -241,7 +234,7 @@ export function createDesignApiClient({
       if (useMock) {
         return PriceDesignResponseSchema.parse({ requestId: request.requestId, design, warnings: [] });
       }
-      return callApi("/api/design/price", PriceDesignResponseSchema, { body: request }, fetcher, accessToken);
+      return callApi("/api/design/price", PriceDesignResponseSchema, { body: request }, fetcher);
     },
 
     async save(design: PublicDesignV1): Promise<SaveDesignResponse> {
@@ -249,7 +242,7 @@ export function createDesignApiClient({
       if (useMock) {
         return SaveDesignResponseSchema.parse({ requestId: request.requestId, design, warnings: [], savedAt: new Date().toISOString() });
       }
-      return callApi("/api/design/save", SaveDesignResponseSchema, { body: request }, fetcher, accessToken);
+      return callApi("/api/design/save", SaveDesignResponseSchema, { body: request }, fetcher);
     },
 
     async deleteDesign(designId: string, expectedRevision: number): Promise<DeleteDesignResponse> {
@@ -260,8 +253,7 @@ export function createDesignApiClient({
         "/api/design/delete",
         DeleteDesignResponseSchema,
         { body: { requestId: requestId("delete"), designId, expectedRevision } },
-        fetcher,
-        accessToken
+        fetcher
       );
     },
 
@@ -273,8 +265,7 @@ export function createDesignApiClient({
         "/api/design/clone",
         CloneDesignResponseSchema,
         { body: { requestId: requestId("clone"), designId, expectedRevision } },
-        fetcher,
-        accessToken
+        fetcher
       );
     },
 
@@ -289,7 +280,7 @@ export function createDesignApiClient({
       if (useMock) {
         throw new FrontendApiError("VALIDATION_ERROR", "Mock mode does not fabricate order success.");
       }
-      return callApi("/api/orders/from-design", CreateOrderFromDesignResponseSchema, { body: request }, fetcher, accessToken);
+      return callApi("/api/orders/from-design", CreateOrderFromDesignResponseSchema, { body: request }, fetcher);
     },
 
     async recommend(input: RecommendDesignRequest): Promise<RecommendDesignResponse> {
@@ -318,7 +309,7 @@ export function createDesignApiClient({
           warnings: []
         });
       }
-      return callApi("/api/design/recommend", RecommendDesignResponseSchema, { body: request }, fetcher, accessToken);
+      return callApi("/api/design/recommend", RecommendDesignResponseSchema, { body: request }, fetcher);
     },
 
     async evaluate(designId: string): Promise<EvaluateDesignResponse> {
@@ -329,8 +320,7 @@ export function createDesignApiClient({
         "/api/design/evaluate",
         EvaluateDesignResponseSchema,
         { body: { requestId: requestId("evaluate"), designId } },
-        fetcher,
-        accessToken
+        fetcher
       );
     },
 
@@ -347,7 +337,7 @@ export function createDesignApiClient({
         expectedRevision: design.revision,
         lockedComponentIds: [...lockedComponentIds]
       });
-      return callApi("/api/design/optimize", OptimizeDesignResponseSchema, { body: request }, fetcher, accessToken);
+      return callApi("/api/design/optimize", OptimizeDesignResponseSchema, { body: request }, fetcher);
     },
 
     async suggestMaterials(
@@ -365,8 +355,7 @@ export function createDesignApiClient({
         `/api/materials/${encodeURIComponent(materialId)}/suggest?currency=${encodeURIComponent(currency)}`,
         MaterialSuggestResponseSchema,
         { method: "GET" },
-        fetcher,
-        accessToken
+        fetcher
       );
     }
   };

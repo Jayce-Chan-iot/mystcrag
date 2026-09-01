@@ -61,6 +61,19 @@ async function matchingFiles(roots, pattern, excluded = new Set()) {
   return matches;
 }
 
+const stripImportStatements = (source) =>
+  source.replace(/^[ \t]*import\b[\s\S]*?from\s+["'][^"']*["'];?/gm, "");
+
+async function matchingDeclarations(roots, pattern) {
+  const files = (await Promise.all(roots.map(sourceFiles))).flat();
+  const matches = [];
+  for (const file of files) {
+    const source = stripImportStatements(await readFile(file, "utf8"));
+    if (pattern.test(source)) matches.push(file);
+  }
+  return matches;
+}
+
 test("frontend cannot import server-only contract or database modules", async () => {
   const matches = await matchingFiles(
     ["apps/frontend"],
@@ -183,6 +196,88 @@ test("shared contract dependency direction stays application-independent", async
     (name) => name.startsWith("@mystcrag/") || ["fastify", "next", "react", "three", "@prisma/client"].includes(name)
   );
   assertNoMatches(forbidden);
+});
+
+test("Design Contract is the only public Tarot schema authority", async () => {
+  const canonicalFile = "packages/design-contract/src/schemas/tarot.schema.ts";
+
+  const schemaNames = [
+    "TarotThemeSchema",
+    "TarotSpreadTypeSchema",
+    "TarotSlotSchema",
+    "TarotOrientationSchema"
+  ];
+
+  for (const schemaName of schemaNames) {
+    const definitions = await matchingFiles(
+      ["apps", "packages"],
+      new RegExp(`(?:export\\s+)?const\\s+${schemaName}\\s*=`)
+    );
+
+    assert.deepEqual(
+      definitions,
+      [canonicalFile],
+      `${schemaName} must have exactly one definition in Design Contract`
+    );
+  }
+
+  const localDeclarations = await matchingDeclarations(
+    ["packages/tarot-engine"],
+    /(?:export\s+)?(?:type|interface|class|const)\s+Tarot(?:Theme|SpreadType|Slot|Orientation)(?:Schema)?\b/
+  );
+  assertNoMatches(localDeclarations);
+
+  const tarotManifest = JSON.parse(
+    await readFile("packages/tarot-engine/package.json", "utf8")
+  );
+  assert.equal(
+    tarotManifest.dependencies?.["@mystcrag/design-contract"],
+    "workspace:*"
+  );
+
+  const contractManifest = JSON.parse(
+    await readFile("packages/design-contract/package.json", "utf8")
+  );
+  assert.equal(
+    contractManifest.dependencies?.["@mystcrag/tarot-engine"],
+    undefined
+  );
+});
+
+test("AI bead layouts and backend catalog drafts have distinct names", async () => {
+  const ambiguousNames = await matchingFiles(
+    ["apps", "packages"],
+    /\bAiDesignCandidate(?:Schema)?\b/
+  );
+  assertNoMatches(ambiguousNames);
+
+  const beadLayoutDefinitions = await matchingDeclarations(
+    ["apps", "packages"],
+    /(?:export\s+)?(?:const|type|interface|class)\s+AiBeadLayoutCandidate(?:Schema)?\b/
+  );
+  const aiSchemaDefinitions = [];
+  for (const file of beadLayoutDefinitions) {
+    if (/const\s+AiBeadLayoutCandidateSchema\s*=/.test(
+      stripImportStatements(await readFile(file, "utf8"))
+    )) {
+      aiSchemaDefinitions.push(file);
+    }
+  }
+  assert.deepEqual(
+    aiSchemaDefinitions,
+    ["packages/ai-agent/src/schemas/ai-bead-layout-candidate.schema.ts"],
+    "AiBeadLayoutCandidateSchema must have exactly one definition in AI Agent"
+  );
+
+  const catalogDraftDeclarations = await matchingDeclarations(
+    ["apps", "packages"],
+    /(?:export\s+)?(?:const|type|interface|class)\s+CatalogDesignGenerationDraft(?:Schema)?\b/
+  );
+  assert.deepEqual(
+    catalogDraftDeclarations,
+    ["apps/backend/src/modules/design/design-api.service.ts"],
+    "CatalogDesignGenerationDraftSchema must have exactly one definition in the backend design service"
+  );
 });
 
 test("pnpm dev isolates each app's documented environment", () => {

@@ -1,6 +1,6 @@
 # Database Schema
 
-The executable source is `packages/database/prisma/schema.prisma`; the reviewed baseline is `20260721140000_init_mystcrag_persistence_v1`. Additive migrations then introduce order idempotency, Tarot sessions, Product V2 visual profiles, knowledge storage and pgvector embeddings, design decision traces, knowledge usage events, Source Registry v2, knowledge-rule claim types, collection runs, and backorder fulfillment through `20260822150000_add_backorder_fulfillment`. Existing migrations are immutable. PostgreSQL tables use snake_case and Prisma fields use camelCase.
+The executable source is `packages/database/prisma/schema.prisma`; the reviewed baseline is `20260721140000_init_mystcrag_persistence_v1`. Additive migrations then introduce order idempotency, Tarot sessions, Product V2 visual profiles, knowledge storage and pgvector embeddings, design decision traces, knowledge usage events, Source Registry v2, knowledge-rule claim types, collection runs, backorder fulfillment, and external identities through `20260825100000_add_external_identities`. Existing migrations are immutable. PostgreSQL tables use snake_case and Prisma fields use camelCase.
 
 ## Transactional model
 
@@ -15,6 +15,7 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 - Source Registry v2 (migration `20260822090000_source_registry_v2`, Knowledge Quality Phase Q0): `KnowledgeSource` gains editorial classification (`sourceCategory` across OFFICIAL/ACADEMIC/BOOK/DESIGN_REFERENCE/JEWELRY_REFERENCE/GEMOLOGY/INDUSTRY/FORUM/SOCIAL_OBSERVATION/MANUAL, `reliabilityLevel`, `countryOrRegion`, `contentType`), a per-source `crawlStrategy` (maxPages, followLinks; robots.txt always enforced regardless), an explicit `rateLimit` (maxRequestsPerMinute, enforced by the crawler), and a human review workflow: `reviewStatus` DISCOVERED → NEEDS_REVIEW → APPROVED with a terminal REJECTED/DISABLED path. Only `APPROVED` **and** `enabled` sources are crawlable (`listCrawlableSources`); the discover-source worker job iterates exactly that set. `lastSuccessfulFetch`, `lastFailure`, and `consecutiveFailures` track fetch health — three consecutive failures auto-disable the source while keeping its review status. The curated bootstrap registry (36 candidates across all ten categories, forums pinned to market-observation only) is seeded by `pnpm --filter @mystcrag/knowledge-core seed:sources` as NEEDS_REVIEW and stays disabled until a human approves it.
 - `KnowledgeCollectionRun` (migration `20260822140000_add_knowledge_collection_runs`, spec §18.2) records one row per `knowledge:collect` execution: `RUNNING` → `COMPLETED`/`FAILED` with `startedAt`/`finishedAt`, per-run counters (sourcesCrawled, documentsAdded, documentDuplicates, candidatesInserted, corroboratedCandidates, candidateDuplicates, needsReview, conflicts), a JSONB `errors` array, and per-source results. A dead source is recorded as an error without voiding the batch; rows are append-only observability, never a production truth source for the console.
 - `TarotSession` is an owner-scoped, revisioned draw aggregate. It stores canonical private engine state separately from strict contract-safe draw and recommendation snapshots. `TarotDesignRecommendation` links exactly three ranked, distinct designs without duplicating design snapshots.
+- `ExternalIdentity` (migration `20260825100000_add_external_identities`, TASK-AUTH-003) maps one verified provider identity `(issuer, subject)` to exactly one internal `User`. See "External identity persistence" below.
 - `KnowledgeUsageEvent` (migration `20260821120000_add_knowledge_usage_events`) is the collect-only observability log (spec section 11, EPIC 12). Rows are appended after `POST /api/design/recommend|evaluate|optimize`, design generate/update/save, and Tarot recommendation/session-save flows. Each row anchors optional `actorId`, `designId`, `revisionNumber`, `knowledgeVersion`, and `productCatalogVersion` plus a typed `payload` (`recommendation.served`, `rule.fired`, `design.created|updated|saved|evaluated|optimized`, `tarot.session_saved`). A trigger rejects updates and deletes; the restrictive design FK keeps event evidence stable. No read API ships with the events — analysis is offline SQL.
 
 ## Guardrails
@@ -29,6 +30,38 @@ The executable source is `packages/database/prisma/schema.prisma`; the reviewed 
 - Tarot question text has no database field. The default path stores neither question text nor ciphertext; explicit opt-in may populate only the paired nullable `questionCiphertext` and `questionSavedAt` fields, and public DTO mapping must omit ciphertext. At the repository boundary, only the exact ciphertext and timestamp pair is an immutable no-op; a different randomized envelope is a conflict. The Backend resolves a concurrent same-question CAS loss by rereading the winner and verifying its keyed envelope identity, while a different question remains a conflict. A later opt-in cannot mutate a recommendation originally committed without question storage.
 - New recommendation snapshots persist an internal `copySource` marker with provider or deterministic-fallback mode, provider ID/version, and copy-policy version. The marker is optional only so existing persisted snapshots remain readable; every newly generated recommendation supplies it.
 - An empty or absent `MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY` means no encryption port is installed. In that mode `saveQuestion: true` fails before repository access and the nullable question columns remain null. A non-empty malformed key fails Backend startup; it never downgrades to plaintext storage.
+
+## External identity persistence (TASK-AUTH-003)
+
+The controlling semantics remain frozen in [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md). Migration `20260825100000_add_external_identities` is additive: it creates the `external_identities` table with a unique `(issuer, subject)` index, a `user_id` index, and a foreign key to `users.id` that is explicitly `ON DELETE RESTRICT ON UPDATE RESTRICT` (the Prisma relation declares both `onDelete: Restrict` and `onUpdate: Restrict`; the default `onUpdate` cascade is deliberately overridden). No existing table or business datum changes.
+
+Final FEAT-018 reconciliation confirms that this is the only authentication-related persistence. The encrypted Auth0 SDK Cookie Session remains stateless at the application boundary: there is no Redis session store, session database, `AuthSession` Prisma model, token column, authorization-code column or PKCE-verifier column.
+
+Model and constraints:
+
+- `ExternalIdentity.id` is an internal opaque cuid primary key; it is never a provider subject.
+- `(issuer, subject)` is unique and is the only external identity key. Issuer and subject are stored exactly after deterministic trim normalization; `subject` alone is not globally unique, so the same subject under two issuers is two distinct rows mapping to two distinct `User`s.
+- `userId` is a required restrictive foreign key to `User.id`; one `ExternalIdentity` maps to exactly one internal `User`, and `User.id` remains every business repository's `actorId`. Provider subjects are never copied into `User.id`.
+- `email`, `emailVerified`, and `displayName` are optional, mutable profile hints held by `ExternalIdentity`. They are never identity lookup, account-merge, or authorization inputs, and the provider email is deliberately not copied into `users.email` (which is a nullable unique field) so that same-email identities under different issuers cannot collide.
+- `createdAt`/`updatedAt` are server-managed audit timestamps.
+- Access Tokens, Refresh Tokens, ID Tokens, authorization codes, PKCE verifiers, cookies, session secrets, and raw provider profiles are never stored in `ExternalIdentity` or any business table.
+
+Canonical repository API: `ExternalIdentityRepository.findOrProvisionExternalIdentity(input)` in `packages/database/src/repositories/identity.repository.ts`. It validates and normalizes `issuer`/`subject` (non-empty, ≤512 chars, no control characters, deterministic trim) and the optional hints (email trimmed/lowercased with a basic address shape check, display name trimmed, ≤200 chars) before any database access, returning stable `PersistenceError("VALIDATION_ERROR", …)` for invalid input.
+
+Transaction and concurrency behavior:
+
+- First login runs in one Prisma interactive transaction: create the internal `User`, then create the `ExternalIdentity`. The unique `(issuer, subject)` index is the concurrency authority — there is no process-level mutex and no rely on check-then-insert.
+- A unique-key race loser has its whole transaction rolled back, including the just-created `User`, so no orphan `User` can remain; the loser then rereads the winning mapping and returns the winner's `actorId`. Twenty simultaneous first-login calls for one `(issuer, subject)` therefore yield exactly one `ExternalIdentity`, exactly one new `User`, and one identical `actorId` for every caller.
+- A returning mapping always returns the same `actorId`. Provided hint values update only the permitted profile-hint columns; omitted hints keep their persisted values, and hint changes can never change `actorId` or `userId`.
+- The API accepts no target user, so an existing mapping cannot be remapped; any duplicate `(issuer, subject)` insert (including a direct one) fails closed on the unique constraint and never overwrites the original mapping. Account linking remains a separate future audited task.
+
+Rollback procedure for `20260825100000_add_external_identities`:
+
+1. Precondition check: confirm no valid external login traffic depends on the mappings — `SELECT count(*) FROM external_identities;`. This rollback intentionally destroys the provider-to-user login links; it does not delete the mapped `users` rows or any business data. Only proceed when losing identity mappings is an accepted operational decision (otherwise keep the table; it is additive and harmless to other features).
+2. Ensure no application code path calls `findOrProvisionExternalIdentity` (deploy the Prisma schema and client without the `ExternalIdentity` model first).
+3. `DROP TABLE IF EXISTS "external_identities";` — safe order because nothing else references it; `users` is the referenced parent and is untouched.
+4. Remove the migration record so `prisma migrate deploy` state stays consistent: `DELETE FROM "_prisma_migrations" WHERE migration_name = '20260825100000_add_external_identities';` (only on databases where step 3 ran).
+5. This procedure cannot losslessly drop the table while valid mappings exist — the mappings themselves are the data being destroyed (step 1 is the explicit acceptance gate).
 
 ## Tarot lifecycle persistence
 

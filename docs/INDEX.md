@@ -11,7 +11,9 @@ Repository governance entry points:
 - Feature and ownership registries: `governance/FEATURE_REGISTRY.md`, `governance/MODULE_OWNERS.md`
 - Canonical implementations and duplicate audit: `governance/CANONICAL_COMPONENTS.md`, `governance/DUPLICATE_CODE_AUDIT.md`
 - Branches, health, and active tasks: `governance/BRANCH_REGISTRY.md`, `governance/REPOSITORY_HEALTH.md`, `tasks/TASK_REGISTRY.md`
-- Current audit and planning handoff: `audit/MYSTCRAG_2_0_AUDIT.md`, `progress/PROJECT_STATUS.md`, `governance/BASELINE_VALIDATION.md`, `CURRENT_PRODUCT_STATUS.md`, `NEXT_PHASE_BACKLOG.md`, `FEATURE-018_PLAN.md`, `TASK_DISPATCH_PACKAGE.md`
+- Current audit and planning handoff: `governance/BASELINE_VALIDATION.md`, `CURRENT_PRODUCT_STATUS.md`, `NEXT_PHASE_BACKLOG.md`, `FEATURE-018_PLAN.md`, `TASK_DISPATCH_PACKAGE.md`
+- P0 baseline closure: `P0_BASELINE_CLOSURE_DISPATCH.md`, `superpowers/plans/2026-08-24-p0-schema-closure.md`
+- Bead asset import: `superpowers/specs/2026-08-31-bead-asset-import-assistant-design.md`, `superpowers/plans/2026-08-31-bead-asset-import-assistant-implementation-plan.md`
 - QA/output evidence retention: `governance/QA_EVIDENCE_RETENTION.md`
 
 | Task | Controlling documents |
@@ -20,13 +22,13 @@ Repository governance entry points:
 | Product / MVP | `PRODUCT_REQUIREMENT.md`, `MVP_DEVELOPMENT_PLAN.md`, `UI_DESIGN_SYSTEM.md` |
 | Frontend / interaction | `UI_DESIGN_SYSTEM.md`, `INTERACTION_TEST_PLAN.md`, `API_SPECIFICATION.md` |
 | UI reference implementation | `UI_REFERENCE_AND_ASSET_MANIFEST.md`, `AGENT_FULL_UI_REBUILD_AND_QA_PROMPT.md`, `UI_DESIGN_SYSTEM.md`, `INTERACTION_TEST_PLAN.md` |
-| Bead asset import assistant | `superpowers/specs/2026-08-31-bead-asset-import-assistant-design.md`, `UI_REFERENCE_AND_ASSET_MANIFEST.md`, `DATABASE_SCHEMA.md`, `API_SPECIFICATION.md`, `SECURITY_AND_PRIVACY.md` |
 | Bracelet Engine | `BRACELET_GEOMETRY.md`, `DESIGN_CONTRACT_V1.md`, `THREE_ENGINE_SPEC.md` |
 | Backend / API | `API_SPECIFICATION.md`, `DESIGN_CONTRACT_V1.md`, `SECURITY_AND_PRIVACY.md` |
 | Database | `DATABASE_SCHEMA.md`, `PERSISTENCE_MODEL_V1.md`, `SECURITY_AND_PRIVACY.md` |
 | AI | `AI_AGENT_SPEC.md`, `DESIGN_CONTRACT_V1.md` |
 | Knowledge system | `KNOWLEDGE_SYSTEM_SPEC.md` (status: APPROVED, DEC-KNOWLEDGE-SYSTEM-001), `API_SPECIFICATION.md`, `DATABASE_SCHEMA.md` |
 | Combined original UI + knowledge architecture | `superpowers/specs/2026-08-24-original-ui-knowledge-merge-design.md`, `API_SPECIFICATION.md`, `DATABASE_SCHEMA.md`, `DESIGN_CONTRACT_V1.md` |
+| Bead asset import | `superpowers/specs/2026-08-31-bead-asset-import-assistant-design.md`, `superpowers/plans/2026-08-31-bead-asset-import-assistant-implementation-plan.md`, `API_SPECIFICATION.md`, `DATABASE_SCHEMA.md` |
 | 3D | `THREE_ENGINE_SPEC.md`, `BRACELET_GEOMETRY.md`, `DESIGN_CONTRACT_V1.md` |
 | QA / browser | `INTERACTION_TEST_PLAN.md`, `USER_ACCEPTANCE_CHECKLIST.md`, `DIY_V2_BASELINE.md` |
 | Local operation | `LOCAL_DEMO_GUIDE.md`, `ENGINEERING_GUIDE.md`, `DEPLOYMENT_GUIDE.md` |

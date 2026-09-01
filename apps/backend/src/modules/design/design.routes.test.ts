@@ -9,6 +9,8 @@ import {
 import { standardAiDesignFixture } from "@mystcrag/design-contract/fixtures";
 
 import { createApp } from "../../app.js";
+import { AuthenticatedActorProvider } from "../../auth/authenticated-actor-provider.js";
+import { InMemoryExternalIdentityMapping } from "../../auth/auth.test-utils.js";
 import {
   SignedTestTokenAuthProvider,
   signTestAccessToken
@@ -51,11 +53,18 @@ const fixedNow = new Date("2026-07-21T10:00:00.000Z");
 const authSecret = "mystcrag-backend-auth-test-secret-2026";
 const authIssuer = "https://auth.test.mystcrag.local";
 const authAudience = "mystcrag-backend";
-const authProvider = new SignedTestTokenAuthProvider({
+const accessTokenVerifier = new SignedTestTokenAuthProvider({
   secret: authSecret,
   issuer: authIssuer,
   audience: authAudience,
   now: () => fixedNow
+});
+const authProvider = new AuthenticatedActorProvider({
+  provider: accessTokenVerifier,
+  identities: new InMemoryExternalIdentityMapping([
+    [authIssuer, "auth0|actor-owner", actorId],
+    [authIssuer, "auth0|different-actor", "different-actor"]
+  ])
 });
 const cloneDesign = () => structuredClone(standardAiDesignFixture);
 
@@ -527,7 +536,7 @@ function requestHeaders(
 ) {
   const token = signTestAccessToken(
     {
-      subject: owner,
+      subject: `auth0|${owner}`,
       issuer: overrides.issuer ?? authIssuer,
       audience: overrides.audience ?? authAudience,
       expiresAtEpochSeconds:

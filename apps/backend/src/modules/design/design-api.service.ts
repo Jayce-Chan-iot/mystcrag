@@ -222,7 +222,7 @@ type OrderStore = {
   }>>;
 };
 
-const AiDesignCandidateSchema = z.strictObject({
+const CatalogDesignGenerationDraftSchema = z.strictObject({
   designName: z.string().trim().min(1).max(120),
   materialProductIds: z.array(z.string().min(1)).min(1),
   accessoryProductIds: z.array(z.string().min(1)),
@@ -245,6 +245,8 @@ const AiDesignCandidateSchema = z.strictObject({
     }).optional()
   })
 });
+
+type CatalogDesignGenerationDraft = z.infer<typeof CatalogDesignGenerationDraftSchema>;
 
 export interface DesignGenerationAdapter {
   generate(request: GenerateDesignRequest, catalog: readonly CatalogProduct[]): Promise<unknown>;
@@ -491,7 +493,7 @@ function buildGeneratedDesign(
   createComponentId: (prefix: string) => string,
   designMode: "AI_GENERATED" | "TAROT_GUIDED"
 ): DesignV1 {
-  const candidate = AiDesignCandidateSchema.parse(candidateInput);
+  const candidate: CatalogDesignGenerationDraft = CatalogDesignGenerationDraftSchema.parse(candidateInput);
   if (
     (designMode === "TAROT_GUIDED") !==
     (candidate.providerMetadata.tarotCandidate !== undefined)

@@ -1,4 +1,5 @@
-import type { RevealedTarotCard, TarotSpreadType, TarotTheme } from "./types";
+import type { TarotSpreadType, TarotTheme } from "@mystcrag/design-contract";
+import type { RevealedTarotCard } from "./types";
 
 export const TAROT_DESIGN_RULE_VERSION = "tarot-design-rules-v1";
 

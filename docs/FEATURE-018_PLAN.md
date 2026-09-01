@@ -1,9 +1,9 @@
 # FEAT-018 Plan — Production Identity & Session
 
 **Priority:** P0 for commercial release<br>
-**Recommended next Feature:** yes, and the only major Feature selected<br>
-**Dispatch state:** blocked by baseline P0 and provider/session-topology decision<br>
-**Contract marker:** `CONTRACT_REQUIRES_IMPLEMENTATION_VALIDATION`
+**Recommended next Feature:** implementation complete; production deployment acceptance deferred<br>
+**Dispatch state:** AUTH-001 through AUTH-006 and AUTH-008 integrated; AUTH-007 is `BLOCKED — DEPLOYMENT_ACCEPTANCE_DEFERRED_BY_PRODUCT_OWNER`<br>
+**Contract marker:** `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`
 
 ## Objective
 
@@ -15,23 +15,21 @@ As a customer, I can sign in, return to the app, access only my saved work and o
 
 ## Current state
 
-- Backend protected routes require a Bearer token through one `AuthProvider` interface.
-- Verified subject becomes `actorId`; repositories apply actor-scoped queries.
-- `SignedTestTokenAuthProvider` verifies signature, issuer, audience and expiry, and cannot start in production.
-- Prisma `User` owns designs, revisions, publications, orders and Tarot sessions.
-- Test fixtures pre-create users whose IDs match actor subjects.
-- Frontend reads `NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN`, which is public build-time configuration rather than a user session.
-- There is no production provider, login/callback/logout UX, refresh/revocation policy, external-identity mapping or idempotent user provisioning path.
+- Backend protected routes accept only verified internal actors through the composed Auth0/JWKS verification and external-identity mapping boundary.
+- Provider `(issuer, subject)` identities map idempotently to internal `User.id`; repositories continue applying actor-scoped queries.
+- `SignedTestTokenAuthProvider` remains development/test-only and cannot start in production.
+- Frontend uses the Auth0 SDK authenticated-encrypted, host-only HttpOnly Cookie Session and same-origin BFF; browser JavaScript receives no production Token.
+- Login, callback, session restoration/rolling, exact-Origin POST logout, expiry/renewal handling and accessible desktop/mobile session affordances are implemented.
+- AUTH-006 proved the integrated stack in two clean 54/54 candidate runs and a 54/54 post-main run; AUTH-007 independently replayed 54/54 again as `rmtf8try9fmdt97x3ho`, including responsive flows, expiry/revocation/provider outage, production-start negatives, two-user isolation, cleanup, and artifact scanning.
 
-## Gap
+## Remaining final-acceptance gaps
 
-1. Product Owner selection of an identity provider, environments, callback/logout domains and account-recovery policy.
-2. A provider-neutral verified-identity contract including issuer, subject, audience, expiry and permitted claims.
-3. A collision-safe `(issuer, subject) -> User` persistence mapping and idempotent provisioning rule.
-4. A browser-safe session topology. Tokens must not be stored in `localStorage`, rendered into client bundles or exposed through `NEXT_PUBLIC_*`.
-5. Login, callback/loading/error, authenticated shell and logout behavior on desktop/mobile.
-6. Expiry/revocation/error envelopes, operational key rotation and deployment configuration.
-7. Automated cross-user isolation and full protected-flow browser verification.
+Product Owner decisions and all cross-module semantics remain frozen by [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md). Implementation, workspace validation, fresh PostgreSQL verification, security/full-loop E2E, production-start negatives, cleanup, and evidence scanning pass. Product Owner approved the measurable performance contract but intentionally deferred staging/production deployment. AUTH-007 cannot truthfully close the following release acceptance items until deployment resumes:
+
+1. Measure steady-state session lookup added latency at p95 <= 100 ms after 30 warm-up requests using at least 300 valid samples in a same-region staging environment. Token renewal and JWKS cold paths are measured separately. The approved threshold remains frozen and is not waived by the deferral.
+2. Verify byte-exact staging and production Auth0 origin/callback/logout/web-origin allowlists plus real login/logout smoke. Real Origins have not been provided and must not be fabricated or replaced with localhost.
+
+`DEVELOPMENT GATE = OPEN`: this deployment-only blocker does not prevent separately registered non-authentication product Features from entering `READY` or `IN_PROGRESS` when their own dependencies and acceptance criteria are satisfied. `PRODUCTION AUTH RELEASE GATE = BLOCKED`: AUTH-007 itself may not expand scope, redesign authentication, weaken security gates or implement unrelated Feature work.
 
 ## Architecture impact
 
@@ -55,7 +53,7 @@ As a customer, I can sign in, return to the app, access only my saved work and o
 
 ## Contract first
 
-TASK-AUTH-001 must freeze these decisions before implementation:
+TASK-AUTH-001 freezes these decisions before implementation:
 
 - **Domain contract:** immutable provider identity key is `(issuer, subject)`; email/display name are optional mutable profile claims and never an authorization key.
 - **API contract:** stable semantics for login initiation, callback, session read, logout, `401 UNAUTHORIZED` and any `403 FORBIDDEN`; exact endpoints depend on selected topology.
@@ -64,7 +62,7 @@ TASK-AUTH-001 must freeze these decisions before implementation:
 - **Events:** sign-in success/failure, logout, provisioning and verification failure are structured operational events without token or sensitive-claim logging.
 - **Security contract:** issuer/audience/expiry/signature validation, clock-skew limit, key rotation/cache behavior, CSRF/state/nonce/PKCE as applicable, cookie properties as applicable, and fail-closed startup.
 
-The selected provider SDK, callback hosting topology and whether the browser uses a backend cookie or a Next server/BFF session cannot be inferred safely from current code or deployment docs. TASK-AUTH-001 must record the decision and validate it against the provider's current implementation before dependency or code tasks begin.
+The frozen decisions are Auth0 OIDC Authorization Code + PKCE (`S256`), exact environment-specific allowlists, and a Next.js Server/BFF session with a host-only HttpOnly cookie. Exact SDK/package versions are deliberately an AUTH-002 implementation-validation probe, not an unresolved product decision.
 
 ## Constraints
 
@@ -93,11 +91,11 @@ The Feature may report `FEATURE ACCEPTANCE: PASS` only when all are true:
 - **Functional:** login, callback/session restoration, logout, expiry and revocation behave according to the frozen contract.
 - **Desktop/mobile:** at 1440×900 and 375×812 there is no horizontal scroll; sign-in/out and session-error actions remain visible and keyboard-operable.
 - **Regression:** anonymous home/library behavior and authenticated design/recommendation/DIY/order/Tarot flows retain existing behavior.
-- **Performance:** session lookup does not add more than the contract budget to p95 protected navigation; verifier key retrieval is bounded and cached per provider guidance.
+- **Performance:** steady-state session lookup adds no more than 100 ms at p95 after 30 warm-up requests over at least 300 valid same-region staging samples; Token renewal and JWKS cold paths are measured separately; verifier key retrieval remains bounded and cached per provider guidance.
 - **Error handling:** provider unavailable, invalid state/nonce, expired/revoked token and missing user mapping fail closed with no secret/claim leakage.
 - **Data persistence:** concurrent first login creates one identity mapping and one user; cross-user repository access is rejected.
 - **Build:** install, lint, typecheck, unit/integration tests, production build and PostgreSQL verification pass.
 - **E2E:** clean authenticated full-loop and two-user isolation tests pass in CI-compatible isolated runtime output.
 - **Operations:** production startup validates required configuration; key rotation/revocation and rollback procedure are documented and exercised in test.
 
-Until the baseline and contract gates close, this is an approved planning candidate—not implementation authorization.
+TASK-AUTH-001 originally recorded `CONTRACT_FROZEN_IMPLEMENTATION_PENDING`; the current contract marker is `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`. AUTH-002 through AUTH-006 and AUTH-008 are integrated. AUTH-007 remains the sole production acceptance authority and records `FEATURE ACCEPTANCE: FAIL` until the deferred deployment evidence exists. That restriction applies to AUTH-007 and the frozen Auth boundary; it does not globally prohibit a separately registered non-auth Feature.

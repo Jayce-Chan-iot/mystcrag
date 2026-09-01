@@ -1,6 +1,6 @@
 # Duplicate, Dormant, and Unused Code/Resource Audit
 
-**Audit date:** 2026-08-24
+**Audit date:** 2026-08-25
 **Deletion performed:** none
 **Interpretation:** “unused” means no production reference was found by repository-wide static search and composition-root inspection. Dynamic imports, external package consumers, operational use, and historical evidence can invalidate a static conclusion, so every deletion requires its own task and regression proof.
 
@@ -20,8 +20,8 @@
 
 | ID | Classification | Finding and evidence | Risk | Disposition/task |
 | --- | --- | --- | --- | --- |
-| DUP-001 | CONFIRMED_DUPLICATE | `TarotThemeSchema`, `TarotSpreadTypeSchema`, `TarotSlotSchema`, and `TarotOrientationSchema` are defined with the same values in both `packages/design-contract/src/schemas/tarot.schema.ts` and `packages/tarot-engine/src/types.ts`. | P1: drift between public DTO and engine | Contract owns public enums; decide private refinements in TASK-CONTRACT-001 |
-| DUP-002 | SEMANTIC_COLLISION | `AiDesignCandidateSchema` exists in AI Agent and as a route-local schema in backend `design-api.service.ts`. The AI schema is positional bead composition; backend schema is product-ID selection plus provider metadata. Same name implies false interchangeability. | P1: wrong adapter/schema imported during changes | Rename/project/centralize boundary in TASK-AI-001 |
+| DUP-001 | RESOLVED CONFIRMED_DUPLICATE | BASE-002 made Design Contract the sole runtime authority for `TarotThemeSchema`, `TarotSpreadTypeSchema`, `TarotSlotSchema`, and `TarotOrientationSchema`; Tarot Engine imports those public values and retains private mechanics. | Resolved; architecture test guards against a second definition | Closed by `d5d6fc3` + `be5646b` |
+| DUP-002 | RESOLVED SEMANTIC_COLLISION | BASE-003 named the AI contiguous bead-layout proposal `AiBeadLayoutCandidateSchema` and the backend catalog/provenance draft `CatalogDesignGenerationDraftSchema`; the ambiguous old runtime identifier was removed. | Resolved; architecture tests reject old names and duplicate definitions | Closed by `f2c03f2` + `8d31f28` |
 | DUP-003 | COMPLEMENTARY | `BraceletPreview` is compact/read-only while `FlatBraceletEditor` is production editing. Both render a bracelet but are not duplicates. | P2: future contributors may collapse responsibilities | Retain; keep canonical roles documented |
 | DUP-004 | DORMANT | `BraceletSequenceEditor` is referenced only by `frontend-ai-flow.test.tsx`; no app route or production component imports it. | P1: unowned UI behavior and maintenance | Product-role or retirement decision in TASK-FE-001 |
 | DUP-005 | DORMANT | `ThreeBraceletPreview`/`ThreeBraceletSceneClient` are imported by 3D tests, while `three-integration.test.tsx` explicitly asserts the DIY source contains `FlatBraceletEditor` and not `ThreeBraceletPreview`. | P1: implemented capability is mistaken for shipped capability | Mount or retain experimental in TASK-3D-001 |
@@ -62,5 +62,5 @@ Before removing any item above, its task must:
 ## Priority summary
 
 - P0: none established by the Phase 0 audit.
-- P1: Tarot/AI contract collisions, dormant renderers, uncomposed service wrappers, placeholder modules, dormant template model, unwired state assets, export visual divergence, and evidence sprawl.
+- P1: dormant renderers, uncomposed service wrappers, placeholder modules, dormant template model, unwired state assets, export visual divergence, and remaining document reconciliation.
 - P2: explicit compatibility surfaces, unattributed raw image, and large-file maintainability hotspots.
