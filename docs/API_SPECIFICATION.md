@@ -357,11 +357,31 @@ Asset-import errors use five distinct layers, and the two code layers are strict
 
 1. **HTTP status** — the numeric response status (`ASSET_IMPORT_TRANSPORT_STATUS_BY_CODE`).
 2. **Shared transport code** (`error.code`) — the shared HTTP/transport vocabulary only (`AssetImportTransportErrorCodeSchema`): `UNAUTHORIZED`, `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE`, `UNPROCESSABLE_ENTITY`, `INTERNAL_ERROR`. Business codes never appear here.
-3. **Asset-specific code** (`error.assetCode`) — the bead-import business code (`AssetImportErrorCodeSchema`) covering the spec §11 failure categories.
-4. **`retryable`** — bound to the `assetCode` catalog, never to the transport code.
-5. **`recoveryAction`** — the safe recovery step, also bound to the `assetCode` catalog.
+3. **Asset-specific code** (`error.assetCode`) — the bead-import business code (`AssetImportErrorCodeSchema`) covering the spec §11 failure categories. Present only in the business variant below.
+4. **`retryable`** — bound to the `assetCode` catalog, never to the transport code. Present only in the business variant.
+5. **`recoveryAction`** — the safe recovery step, also bound to the `assetCode` catalog. Present only in the business variant.
 
-Envelope shape (`AssetImportErrorEnvelopeSchema`), keeping the repository's shared `{ "error": { code, message, requestId } }` outer structure with the asset detail added inside:
+Envelope shape (`AssetImportErrorEnvelopeSchema`) is a union of **exactly two strict variants**, keeping the repository's shared `{ "error": { code, message, requestId } }` outer structure:
+
+1. **Pure transport error** (`AssetTransportErrorEnvelopeSchema`): `code`, `message`, optional `fieldErrors`, `requestId`. `assetCode`/`retryable`/`recoveryAction` are forbidden — shape violations (`400 VALIDATION_ERROR`), unknown ids (`404 NOT_FOUND`) and oversized uploads (`413 PAYLOAD_TOO_LARGE`) carry no business code.
+2. **Asset business error** (`AssetBusinessErrorEnvelopeSchema`): the same fields plus mandatory `assetCode`, `retryable`, and `recoveryAction`, validated against the stable catalog and the fixed transport pairing below.
+
+Partial business detail is rejected by both arms: the transport variant refuses the extra keys and the business variant refuses the missing ones (only `assetCode`, only `retryable`, a missing `recoveryAction`, or a missing `retryable` all fail).
+
+Pure transport example:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "files.0.kind: 扩展名与声明类型不符",
+    "fieldErrors": [{ "fieldPath": "files.0.kind", "message": "扩展名与声明类型不符" }],
+    "requestId": "req-2"
+  }
+}
+```
+
+Asset business example:
 
 ```json
 {
@@ -376,7 +396,7 @@ Envelope shape (`AssetImportErrorEnvelopeSchema`), keeping the repository's shar
 }
 ```
 
-**Backend compatibility note (honest):** the current canonical backend envelope (`apps/backend/src/contracts/api-error.ts`) is a strict object whose `ApiErrorCodeSchema` does not include `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE`, or `UNPROCESSABLE_ENTITY` and which rejects the extra `assetCode`/`retryable`/`recoveryAction` fields. It does **not** accept this extended shape today. TASK-ASSET-BE-001 must extend or adapt that serializer for the asset-import routes (adding the three transport classes and the asset detail fields) instead of claiming the existing schema is already compatible.
+**Backend compatibility note (honest):** the pure transport variant is field-for-field identical to the current canonical backend envelope (`apps/backend/src/contracts/api-error.ts`), but that strict `ApiErrorCodeSchema` does not include `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE`, or `UNPROCESSABLE_ENTITY`, and the backend envelope rejects the business variant's extra `assetCode`/`retryable`/`recoveryAction` fields. It does **not** accept the full asset-import contract today. TASK-ASSET-BE-001 must extend or adapt that serializer for the asset-import routes (adding the three transport classes and the asset detail variant) instead of claiming the existing schema is already compatible.
 
 Stable asset codes and their fixed `retryable`/`recoveryAction` guidance (`ASSET_IMPORT_ERROR_CATALOG`), plus the transport code each one is bound to (`ASSET_IMPORT_ERROR_TRANSPORT_CODES`); the envelope rejects any other pairing:
 

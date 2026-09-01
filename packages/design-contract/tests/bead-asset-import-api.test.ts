@@ -187,6 +187,10 @@ const errorEnvelope = (overrides: Record<string, unknown> = {}) => ({
   error: { code: "INTERNAL_ERROR", ...errorDetail(), requestId: "req-1", ...overrides }
 });
 
+const transportEnvelope = (overrides: Record<string, unknown> = {}) => ({
+  error: { code: "VALIDATION_ERROR", message: "请求形状不合法", requestId: "req-2", ...overrides }
+});
+
 test("session state enum exposes exactly the canonical states including CANCELLED", () => {
   for (const state of sessionStates) {
     accepts(asset.AssetImportSessionStateSchema, state, `session state ${state}`);
@@ -392,6 +396,8 @@ test("every object schema rejects unknown keys", () => {
     ["ApprovedAssetDeliveryMetadata", asset.ApprovedAssetDeliveryMetadataSchema, { ...deliveryMetadata(), bogus: 1 }],
     ["ApprovedAssetDeliveryHeaders", asset.ApprovedAssetDeliveryHeadersSchema, { ...deliveryHeaders(), bogus: 1 }],
     ["AssetImportErrorDetail", asset.AssetImportErrorDetailSchema, { ...errorDetail(), bogus: 1 }],
+    ["AssetTransportErrorEnvelope", asset.AssetTransportErrorEnvelopeSchema, { error: { code: "VALIDATION_ERROR", message: "请求形状不合法", requestId: "req-2", bogus: 1 } }],
+    ["AssetBusinessErrorEnvelope", asset.AssetBusinessErrorEnvelopeSchema, { error: { code: "INTERNAL_ERROR", ...errorDetail(), requestId: "req-1", bogus: 1 } }],
     ["AssetImportErrorEnvelope", asset.AssetImportErrorEnvelopeSchema, { error: { code: "INTERNAL_ERROR", ...errorDetail(), requestId: "req-1", bogus: 1 } }]
   ];
   for (const [name, schema, value] of cases) {
@@ -1401,15 +1407,65 @@ test("asset import errors keep transport codes separate from asset codes", () =>
     "transport code disagreeing with the asset code binding"
   );
   rejects(asset.AssetImportErrorEnvelopeSchema, { error: { ...errorDetail() } }, "envelope without transport code and requestId");
-  rejects(
+
+  // Pure transport errors carry no business asset detail (400/404/413 and friends).
+  accepts(asset.AssetTransportErrorEnvelopeSchema, transportEnvelope(), "transport variant accepts pure transport error");
+  rejects(asset.AssetTransportErrorEnvelopeSchema, errorEnvelope(), "transport variant rejects business asset detail");
+  accepts(asset.AssetBusinessErrorEnvelopeSchema, errorEnvelope(), "business variant accepts catalog-conformant detail");
+  rejects(asset.AssetBusinessErrorEnvelopeSchema, transportEnvelope(), "business variant rejects missing asset detail");
+
+  accepts(asset.AssetImportErrorEnvelopeSchema, transportEnvelope(), "pure transport VALIDATION_ERROR without asset detail");
+  accepts(
     asset.AssetImportErrorEnvelopeSchema,
-    { error: { code: "INTERNAL_ERROR", message: "x", requestId: "req-1" } },
-    "envelope without asset detail"
+    transportEnvelope({ code: "NOT_FOUND", message: "未知的会话、文件或分组" }),
+    "pure transport NOT_FOUND without asset detail"
+  );
+  accepts(
+    asset.AssetImportErrorEnvelopeSchema,
+    transportEnvelope({ code: "PAYLOAD_TOO_LARGE", message: "上传字节超过单文件上限" }),
+    "pure transport PAYLOAD_TOO_LARGE without asset detail"
+  );
+  accepts(
+    asset.AssetImportErrorEnvelopeSchema,
+    transportEnvelope({ code: "INTERNAL_ERROR", message: "x" }),
+    "pure transport INTERNAL_ERROR without asset detail"
+  );
+  accepts(
+    asset.AssetImportErrorEnvelopeSchema,
+    transportEnvelope({ fieldErrors: [{ fieldPath: "files.0.kind", message: "扩展名与声明类型不符" }] }),
+    "pure transport error with field errors"
   );
   rejects(
     asset.AssetImportErrorEnvelopeSchema,
-    { error: { code: "INTERNAL_ERROR", ...errorDetail({ assetCode: undefined }), requestId: "req-1" } },
-    "envelope without assetCode"
+    transportEnvelope({ assetCode: "STORAGE_FULL", retryable: true, recoveryAction: "RESUME_FROM_CHECKPOINT" }),
+    "transport shape carrying business asset detail"
+  );
+
+  // Partial business details must fail both strict variants.
+  rejects(
+    asset.AssetImportErrorEnvelopeSchema,
+    { error: { code: "INTERNAL_ERROR", message: "x", requestId: "req-1", assetCode: "STORAGE_FULL" } },
+    "business envelope with only assetCode"
+  );
+  rejects(
+    asset.AssetImportErrorEnvelopeSchema,
+    { error: { code: "INTERNAL_ERROR", message: "x", requestId: "req-1", retryable: true } },
+    "business envelope with only retryable"
+  );
+  rejects(
+    asset.AssetImportErrorEnvelopeSchema,
+    { error: { code: "INTERNAL_ERROR", message: "x", requestId: "req-1", retryable: true, recoveryAction: "RESUME_FROM_CHECKPOINT" } },
+    "business envelope without assetCode"
+  );
+  rejects(
+    asset.AssetImportErrorEnvelopeSchema,
+    { error: { code: "INTERNAL_ERROR", message: "x", requestId: "req-1", assetCode: "STORAGE_FULL", retryable: true } },
+    "business envelope missing recoveryAction"
+  );
+  rejects(
+    asset.AssetImportErrorEnvelopeSchema,
+    { error: { code: "INTERNAL_ERROR", message: "x", requestId: "req-1", assetCode: "STORAGE_FULL", recoveryAction: "RESUME_FROM_CHECKPOINT" } },
+    "business envelope missing retryable"
   );
   rejects(asset.AssetImportErrorEnvelopeSchema, { ...errorEnvelope(), requestId: "outer" }, "requestId outside the shared error object");
   rejects(asset.AssetImportErrorEnvelopeSchema, { error: { code: "INTERNAL_ERROR", ...errorDetail(), requestId: "req-1" }, extra: 1 }, "unknown envelope outer key");

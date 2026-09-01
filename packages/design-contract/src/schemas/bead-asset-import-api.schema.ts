@@ -1104,7 +1104,26 @@ export const AssetImportErrorDetailSchema = z
   });
 export type AssetImportErrorDetail = z.infer<typeof AssetImportErrorDetailSchema>;
 
-export const AssetImportErrorEnvelopeSchema = z.strictObject({
+/**
+ * The shared error envelope has exactly two strict variants. Pure transport
+ * failures (400 shape violations, 404 unknown ids, 413 oversized uploads and
+ * friends) carry no business detail and must not include asset fields; asset
+ * business failures carry full catalog-conformant detail and keep the
+ * transport pairing invariant. Partial business detail fails both arms: the
+ * transport arm rejects the extra keys and the business arm rejects the
+ * missing ones.
+ */
+export const AssetTransportErrorEnvelopeSchema = z.strictObject({
+  error: z.strictObject({
+    code: AssetImportTransportErrorCodeSchema,
+    message: NonEmptyTextSchema,
+    fieldErrors: z.array(AssetImportFieldErrorSchema).optional(),
+    requestId: NonEmptyTextSchema
+  })
+});
+export type AssetTransportErrorEnvelope = z.infer<typeof AssetTransportErrorEnvelopeSchema>;
+
+export const AssetBusinessErrorEnvelopeSchema = z.strictObject({
   error: z
     .strictObject({
       code: AssetImportTransportErrorCodeSchema,
@@ -1123,4 +1142,10 @@ export const AssetImportErrorEnvelopeSchema = z.strictObject({
       { message: "error.code must be the transport code bound to the assetCode" }
     )
 });
+export type AssetBusinessErrorEnvelope = z.infer<typeof AssetBusinessErrorEnvelopeSchema>;
+
+export const AssetImportErrorEnvelopeSchema = z.union([
+  AssetTransportErrorEnvelopeSchema,
+  AssetBusinessErrorEnvelopeSchema
+]);
 export type AssetImportErrorEnvelope = z.infer<typeof AssetImportErrorEnvelopeSchema>;
