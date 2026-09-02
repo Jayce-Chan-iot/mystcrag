@@ -13,7 +13,7 @@
 ## Global constraints
 
 - SOL owns planning, review, acceptance recording and archival only. SOL must not write runtime implementation.
-- QWEN implements contract, database, backend and integration/QA tasks. GLM implements the image pipeline/worker, frontend flow and runtime visual resolver.
+- GLM implements database, backend, storage and the image pipeline/worker. QWEN implements the frontend flow, runtime visual resolver and frontend-oriented integration/QA. The already completed Task 1 Contract assignment to QWEN remains historical and is not a precedent for backend/database ownership.
 - Before each implementation task, its executor creates the registered branch/worktree, changes the registry row to `IN_PROGRESS`, and confirms that no other task locks its writable paths.
 - After each implementation commit, SOL reviews the diff and verification evidence. The executor addresses review findings before the row moves to `DONE`.
 - Never commit files from `/Users/chenyanyan/Desktop/珠子图`, originals, processed photographs, QA screenshots, local databases, credentials, `.next`, `dist`, coverage or generated Prisma clients.
@@ -27,15 +27,15 @@
 ```text
 QWEN Contract
       |
-QWEN Database
+GLM Database
       |
 GLM Pipeline + Worker
       |
-QWEN Backend API
+GLM Backend API
       |
-GLM Admin UI
+QWEN Admin UI
       |
-GLM Runtime Resolver
+QWEN Runtime Resolver
       |
 QWEN Integration QA
       |
@@ -47,7 +47,7 @@ SOL Acceptance + Archive
 ## Task 1: Shared import contract
 
 **Registry:** `TASK-ASSET-CONTRACT-001`  
-**Executor:** QWEN  
+**Executor:** QWEN
 **Branch:** `task/asset-contract-001-admin-dtos`
 
 **Files:**
@@ -118,7 +118,7 @@ Commit: `feat(contract): define bead asset import API`
 ## Task 2: Draft persistence, job leases and transactional publication
 
 **Registry:** `TASK-ASSET-DB-001`  
-**Executor:** QWEN  
+**Executor:** GLM
 **Branch:** `task/asset-db-001-draft-persistence`
 
 **Files:**
@@ -192,7 +192,7 @@ Commit: `feat(database): persist bead asset import drafts`
 ## Task 3: Deterministic image pipeline and separate local worker
 
 **Registry:** `TASK-ASSET-WORKER-001`  
-**Executor:** GLM  
+**Executor:** GLM
 **Branch:** `task/asset-worker-001-local-pipeline`
 
 **Files:**
@@ -269,7 +269,7 @@ Commit: `feat(asset): add local bead processing worker`
 ## Task 4: Authenticated import API and approved asset delivery
 
 **Registry:** `TASK-ASSET-BE-001`  
-**Executor:** QWEN  
+**Executor:** GLM
 **Branch:** `task/asset-be-001-import-api`
 
 **Files:**
@@ -333,7 +333,7 @@ Commit: `feat(backend): expose bead asset import API`
 ## Task 5: Standalone four-step admin experience
 
 **Registry:** `TASK-ASSET-FE-001`  
-**Executor:** GLM  
+**Executor:** QWEN
 **Branch:** `task/asset-fe-001-admin-flow`
 
 **Files:**
@@ -401,7 +401,7 @@ Commit: `feat(frontend): add bead asset import admin`
 ## Task 6: Approved asset resolver in existing product UI
 
 **Registry:** `TASK-ASSET-RESOLVER-001`  
-**Executor:** GLM  
+**Executor:** QWEN
 **Branch:** `task/asset-resolver-001-runtime-visuals`
 
 **Files:**

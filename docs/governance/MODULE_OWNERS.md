@@ -7,8 +7,8 @@ One task has one accountable owner. Reviewers may advise, but they do not share 
 | Owner ID | Accountable scope | Paths | Required controlling documents |
 | --- | --- | --- | --- |
 | `SOL` | Planning, task registration, review, acceptance recording and archival; no runtime implementation | `docs/governance`, `docs/tasks`, specifications, plans and review/archive records explicitly named by its task | `AGENTS.md`, current/target maps |
-| `GLM` | Assigned implementation executor for image processing, visual asset, frontend and resolver tasks | only the exact runtime/test/docs paths granted by its `IN_PROGRESS` task | task specification, UI/asset manifests and affected module contracts |
-| `QWEN` | Assigned implementation executor for contract, database, backend and integration/QA tasks | only the exact runtime/test/docs paths granted by its `IN_PROGRESS` task | task specification and affected module contracts |
+| `GLM` | Assigned implementation executor for database, backend, storage, image-processing pipeline and worker tasks | only the exact runtime/test/docs paths granted by its `IN_PROGRESS` task | task specification, persistence/API contracts and affected module contracts |
+| `QWEN` | Assigned implementation executor for frontend, UI interaction, renderer/resolver and frontend-oriented integration/QA tasks; the completed asset Contract task remains a recorded historical assignment | only the exact runtime/test/docs paths granted by its `IN_PROGRESS` task | task specification, UI/asset manifests and affected module contracts |
 | `FRONTEND` | Next.js composition, product UI, frontend API client | `apps/frontend` | UI system, interaction plan, API spec |
 | `UI` | Reusable presentation primitives | `packages/ui` | UI design system |
 | `BACKEND` | Fastify transport, application orchestration, auth and server policy | `apps/backend` | API spec, security, DesignV1 |
