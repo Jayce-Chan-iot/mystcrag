@@ -26,8 +26,7 @@ const migrationNames = [
   "20260822140000_add_knowledge_collection_runs",
   "20260822150000_add_backorder_fulfillment",
   "20260825100000_add_external_identities",
-  "20260831_add_bead_asset_import",
-  "20260902_harden_asset_import_persistence"
+  "20260831_add_bead_asset_import"
 ];
 
 function nextRevision(

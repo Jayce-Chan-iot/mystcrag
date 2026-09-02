@@ -1,7 +1,12 @@
 -- TASK-ASSET-DB-001: bead asset import draft persistence, job leases and
--- transactional publication. Additive only: new enums, new tables, new
--- indexes and new partial unique constraints. No existing table, column,
--- constraint or datum is dropped, renamed or rewritten.
+-- transactional publication, including the SOL review hardening (manifest
+-- mtime, skipped-file count, manual CrystalDraft curation columns, the
+-- publication approval-decision record with Restrict evidence keys, and the
+-- QC/human-approval separation on processed assets). Additive only: new
+-- enums, new tables, new indexes and new partial unique constraints. No
+-- existing table, column, constraint or datum is dropped, renamed or
+-- rewritten. Nothing was ever deployed from an intermediate shape: the
+-- hardening round was folded back into this single migration.
 
 -- Enums mirror the accepted design contract lifecycle vocabulary exactly.
 
@@ -37,6 +42,7 @@ CREATE TABLE "asset_import_sessions" (
     "declared_file_count" INTEGER NOT NULL DEFAULT 0,
     "archived_file_count" INTEGER NOT NULL DEFAULT 0,
     "failed_file_count" INTEGER NOT NULL DEFAULT 0,
+    "skipped_file_count" INTEGER NOT NULL DEFAULT 0,
     "declared_bytes" BIGINT NOT NULL DEFAULT 0,
     "uploaded_bytes" BIGINT NOT NULL DEFAULT 0,
     "manifest_idempotency_key" TEXT,
@@ -59,6 +65,7 @@ CREATE TABLE "asset_source_files" (
     "byte_size" BIGINT NOT NULL,
     "kind" "AssetSourceFileKind" NOT NULL,
     "state" "AssetSourceFileState" NOT NULL DEFAULT 'PENDING',
+    "last_modified_ms" BIGINT,
     "sha256" TEXT,
     "archive_key" TEXT,
     "storage_provider" TEXT,
@@ -104,6 +111,10 @@ CREATE TABLE "crystal_drafts" (
     "mineral_name" TEXT NOT NULL,
     "gemological_info" JSONB NOT NULL DEFAULT '{}',
     "compliance_note" TEXT NOT NULL,
+    "color_tags" TEXT[] NOT NULL DEFAULT '{}',
+    "visual_tags" TEXT[] NOT NULL DEFAULT '{}',
+    "style_tags" TEXT[] NOT NULL DEFAULT '{}',
+    "price_level" INTEGER,
     "promoted_crystal_id" TEXT,
     "promoted_at" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -168,10 +179,13 @@ CREATE TABLE "processed_assets" (
     "qc_result" JSONB NOT NULL,
     "qc_passed_at" TIMESTAMP(3),
     "approved_at" TIMESTAMP(3),
-    "usage_permission" "AssetUsagePermission" NOT NULL,
+    "usage_permission" "AssetUsagePermission" NOT NULL DEFAULT 'UNKNOWN',
+    "rights_holder" TEXT,
     "is_authentic_photograph" BOOLEAN NOT NULL DEFAULT false,
     "allow_commercial_use" BOOLEAN NOT NULL DEFAULT false,
     "allow_public_display" BOOLEAN NOT NULL DEFAULT false,
+    "allow_ai_training" BOOLEAN,
+    "allow_ai_recommendation" BOOLEAN,
     "is_current_version" BOOLEAN NOT NULL DEFAULT false,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
@@ -247,6 +261,15 @@ CREATE TABLE "bead_group_publications" (
     "material_product_id" TEXT NOT NULL,
     "crystal_id" TEXT NOT NULL,
     "inventory_snapshot_id" TEXT NOT NULL,
+    "quality_statement" TEXT NOT NULL,
+    "quality_source" TEXT NOT NULL,
+    "rights_holder" TEXT NOT NULL,
+    "usage_permission" TEXT NOT NULL,
+    "is_authentic_photograph" BOOLEAN NOT NULL,
+    "allow_ai_training" BOOLEAN NOT NULL,
+    "allow_ai_recommendation" BOOLEAN NOT NULL,
+    "allow_commercial_use" BOOLEAN NOT NULL,
+    "allow_public_display" BOOLEAN NOT NULL,
     "published_asset_keys" TEXT[] NOT NULL,
     "published_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -291,6 +314,16 @@ ALTER TABLE "product_asset_bindings" ADD CONSTRAINT "product_asset_bindings_mate
 ALTER TABLE "product_asset_bindings" ADD CONSTRAINT "product_asset_bindings_processed_asset_id_fkey" FOREIGN KEY ("processed_asset_id") REFERENCES "processed_assets"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 ALTER TABLE "bead_group_publications" ADD CONSTRAINT "bead_group_publications_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "bead_image_groups"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- Publish evidence is anchored to live catalog rows: deleting the published
+-- product, crystal, or inventory snapshot is restricted while the
+-- publication row exists.
+
+ALTER TABLE "bead_group_publications" ADD CONSTRAINT "bead_group_publications_material_product_id_fkey" FOREIGN KEY ("material_product_id") REFERENCES "material_products"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+ALTER TABLE "bead_group_publications" ADD CONSTRAINT "bead_group_publications_crystal_id_fkey" FOREIGN KEY ("crystal_id") REFERENCES "crystals"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+ALTER TABLE "bead_group_publications" ADD CONSTRAINT "bead_group_publications_inventory_snapshot_id_fkey" FOREIGN KEY ("inventory_snapshot_id") REFERENCES "inventory_snapshots"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- Partial unique constraints Prisma cannot express. These are the database's
 -- last line of defense for exact deduplication, single-current-version and

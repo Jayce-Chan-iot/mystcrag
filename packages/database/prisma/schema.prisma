@@ -812,10 +812,14 @@ model MaterialProductDraft {
   @@map("material_product_drafts")
 }
 
-/// One processed output version. `assetKey` is the content-addressed public key
-/// `approved:<sha256>` and is globally unique among approved assets; the
-/// partial unique index on `(group_id, purpose) WHERE is_current_version`
-/// (migration SQL) keeps exactly one current version per purpose.
+/// One processed output version. Worker completion records output and
+/// automatic QC only: a QC pass parks the asset in QC_PENDING with neutral
+/// permission defaults. `assetKey` is the content-addressed public key
+/// `approved:<sha256>`; it is minted only by the human review approval
+/// (reviewProcessedAsset), which is also the only writer of the usage
+/// permission columns. The partial unique index on
+/// `(group_id, purpose) WHERE is_current_version` (migration SQL) keeps
+/// exactly one current version per purpose.
 model ProcessedAsset {
   id                    String               @id @default(cuid())
   sourceFileId          String               @map("source_file_id")
@@ -836,10 +840,13 @@ model ProcessedAsset {
   qcResult              Json                 @map("qc_result")
   qcPassedAt            DateTime?            @map("qc_passed_at")
   approvedAt            DateTime?            @map("approved_at")
-  usagePermission       AssetUsagePermission @map("usage_permission")
+  usagePermission       AssetUsagePermission @default(UNKNOWN) @map("usage_permission")
+  rightsHolder          String?              @map("rights_holder")
   isAuthenticPhotograph Boolean              @default(false) @map("is_authentic_photograph")
   allowCommercialUse    Boolean              @default(false) @map("allow_commercial_use")
   allowPublicDisplay    Boolean              @default(false) @map("allow_public_display")
+  allowAiTraining       Boolean?             @map("allow_ai_training")
+  allowAiRecommendation Boolean?             @map("allow_ai_recommendation")
   isCurrentVersion      Boolean              @default(false) @map("is_current_version")
   createdAt             DateTime             @default(now()) @map("created_at")
   updatedAt             DateTime             @updatedAt @map("updated_at")

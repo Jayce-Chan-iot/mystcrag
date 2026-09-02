@@ -98,15 +98,28 @@ const CompleteArchiveFileJobResultSchema = z.strictObject({
   storageProvider: z.string().trim().min(1).max(120)
 });
 
+// Workers report processing output and automatic QC evidence only. Usage
+// permissions are human review decisions: strictObject rejects any result
+// that tries to smuggle them in before a single row is written.
 const CompleteProcessGroupJobResultSchema = z.strictObject({
   kind: z.literal("PROCESS_GROUP"),
   processingVersion: z.number().int().positive(),
   output: ProcessedOutputSchema,
-  qc: AssetQcResultSchema,
+  qc: AssetQcResultSchema
+});
+
+// Operator decision recorded by reviewProcessedAsset. Local schema on
+// purpose: the accepted design contract has no human asset-review DTO yet
+// (Contract blocker — see the delivery report); migrating it into
+// @mystcrag/design-contract is a QWEN revision task.
+const ProcessedAssetReviewDecisionSchema = z.strictObject({
   usagePermission: z.enum(["UNKNOWN", "OWNED", "GRANTED", "PROHIBITED"]),
+  rightsHolder: z.string().trim().min(1).max(300),
   isAuthenticPhotograph: z.boolean(),
+  allowPublicDisplay: z.boolean(),
   allowCommercialUse: z.boolean(),
-  allowPublicDisplay: z.boolean()
+  allowAiTraining: z.boolean(),
+  allowAiRecommendation: z.boolean()
 });
 
 const CompleteGroupSessionJobResultSchema = z.strictObject({
@@ -495,6 +508,15 @@ export type CompleteAssetJobOutcome = {
   jobId: string;
   state: "COMPLETED";
   completedAt: Date;
+};
+
+export type ProcessedAssetReviewDecision = z.infer<typeof ProcessedAssetReviewDecisionSchema>;
+
+export type ProcessedAssetReviewResult = {
+  assetId: string;
+  state: "APPROVED";
+  assetKey: string;
+  approvedAt: Date;
 };
 
 export type FailAssetJobOutcome = {
@@ -952,6 +974,67 @@ export class AssetImportRepository {
           );
         }
         return { jobId, state: "COMPLETED", completedAt };
+      });
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  /**
+   * Human approval of a processed asset. Only the current, QC-passed version
+   * still sitting in QC_PENDING is approvable; a single conditional UPDATE
+   * decides ownership, so two operators racing on the same asset resolve to
+   * one winner and one CONFLICT. Approval is the only writer of the usage
+   * permission columns and of the public, content-addressed asset key — the
+   * minted key is derived from the stored output digest, never from client
+   * input.
+   */
+  async reviewProcessedAsset(
+    assetId: string,
+    decision: ProcessedAssetReviewDecision
+  ): Promise<ProcessedAssetReviewResult> {
+    validateIdentifierParam(assetId, "assetId");
+    const request = parseContract(
+      ProcessedAssetReviewDecisionSchema,
+      decision,
+      "processed asset review decision"
+    );
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const asset = await tx.processedAsset.findUnique({ where: { id: assetId } });
+        if (!asset) {
+          throw new PersistenceError("NOT_FOUND", `Processed asset ${assetId} was not found`);
+        }
+        const assetKey = `approved:${asset.outputSha256}`;
+        const approvedAt = new Date();
+        const cas = await tx.processedAsset.updateMany({
+          where: {
+            id: assetId,
+            state: "QC_PENDING",
+            isCurrentVersion: true,
+            qcPassedAt: { not: null }
+          },
+          data: {
+            state: "APPROVED",
+            assetKey,
+            approvedAt,
+            usagePermission: request.usagePermission,
+            rightsHolder: request.rightsHolder,
+            isAuthenticPhotograph: request.isAuthenticPhotograph,
+            allowPublicDisplay: request.allowPublicDisplay,
+            allowCommercialUse: request.allowCommercialUse,
+            allowAiTraining: request.allowAiTraining,
+            allowAiRecommendation: request.allowAiRecommendation
+          }
+        });
+        if (cas.count !== 1) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Processed asset ${assetId} is not a current QC-passed version awaiting human review`
+          );
+        }
+        return { assetId, state: "APPROVED" as const, assetKey, approvedAt };
       });
     } catch (error) {
       rethrowPersistenceError(error);
@@ -1634,10 +1717,14 @@ export class AssetImportRepository {
         groupId,
         purpose: request.output.purpose,
         processingVersion: request.processingVersion,
-        state: qcPassed ? "APPROVED" : "QC_FAILED",
+        // A QC pass is evidence, not a verdict: the asset waits in QC_PENDING
+        // until an operator approves it via reviewProcessedAsset. The neutral
+        // permission defaults are written explicitly so a worker completion
+        // alone can never leave an approval-shaped row behind.
+        state: qcPassed ? "QC_PENDING" : "QC_FAILED",
         storageProvider: request.output.storageProvider,
         storageKey: request.output.storageKey,
-        assetKey: qcPassed ? `approved:${request.output.outputSha256}` : null,
+        assetKey: null,
         outputSha256: request.output.outputSha256,
         outputBytes: BigInt(request.output.byteSize),
         outputContentType: request.output.outputContentType,
@@ -1647,11 +1734,14 @@ export class AssetImportRepository {
         parameters: toPrismaJson(request.output.parameters ?? {}),
         qcResult: toPrismaJson(request.qc),
         qcPassedAt: qcPassed ? now : null,
-        approvedAt: qcPassed ? now : null,
-        usagePermission: request.usagePermission,
-        isAuthenticPhotograph: request.isAuthenticPhotograph,
-        allowCommercialUse: request.allowCommercialUse,
-        allowPublicDisplay: request.allowPublicDisplay,
+        approvedAt: null,
+        usagePermission: "UNKNOWN",
+        rightsHolder: null,
+        isAuthenticPhotograph: false,
+        allowPublicDisplay: false,
+        allowCommercialUse: false,
+        allowAiTraining: null,
+        allowAiRecommendation: null,
         isCurrentVersion: qcPassed
       }
     });

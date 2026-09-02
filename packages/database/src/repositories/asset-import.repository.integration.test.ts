@@ -41,11 +41,19 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         processorVersion: "sharp-test-1.0.0",
         parameters: { maskThreshold: 0.5 }
       },
-      qc: { passed: true, checks: [{ id: "alpha-coverage", passed: true }], summary: null },
-      usagePermission: "OWNED",
+      qc: { passed: true, checks: [{ id: "alpha-coverage", passed: true }], summary: null }
+    };
+  }
+
+  function reviewDecision() {
+    return {
+      usagePermission: "OWNED" as const,
+      rightsHolder: "Mystcrag Studio",
       isAuthenticPhotograph: true,
+      allowPublicDisplay: true,
       allowCommercialUse: true,
-      allowPublicDisplay: true
+      allowAiTraining: false,
+      allowAiRecommendation: true
     };
   }
 
@@ -156,6 +164,15 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       claimed.lease
     );
     assert.equal(completed.state, "COMPLETED");
+    // QC pass parks the asset in QC_PENDING; the operator approval is what
+    // makes it publishable.
+    const pendingAsset = await prisma.processedAsset.findFirstOrThrow({
+      where: { groupId: group.id, isCurrentVersion: true }
+    });
+    assert.equal(pendingAsset.state, "QC_PENDING");
+    const review = await repository.reviewProcessedAsset(pendingAsset.id, reviewDecision());
+    assert.equal(review.state, "APPROVED");
+    assert.equal(review.assetKey, `approved:${outputSha256}`);
     const groupRow = await prisma.beadImageGroup.findUniqueOrThrow({ where: { id: group.id } });
     assert.equal(groupRow.state, "READY");
     return {
@@ -188,7 +205,11 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       );
       const names = migrations.map(({ migration_name }) => migration_name);
       assert.ok(names.includes("20260831_add_bead_asset_import"));
-      assert.ok(names.includes("20260902_harden_asset_import_persistence"));
+      assert.equal(
+        names.includes("20260902_harden_asset_import_persistence"),
+        false,
+        "the hardening round is folded into 20260831; a second asset import migration must not exist"
+      );
       assert.ok(names.includes("20260721140000_init_mystcrag_persistence_v1"));
       assert.equal(migrations.every(({ finished_at }) => finished_at !== null), true);
       assert.equal(migrations.every(({ rolled_back_at }) => rolled_back_at === null), true);
@@ -257,6 +278,9 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
            (table_name = 'asset_source_files' AND column_name = 'last_modified_ms')
            OR (table_name = 'asset_import_sessions' AND column_name = 'skipped_file_count')
            OR (table_name = 'crystal_drafts' AND column_name IN ('color_tags', 'visual_tags', 'style_tags', 'price_level'))
+           OR (table_name = 'processed_assets' AND column_name IN (
+             'usage_permission', 'rights_holder', 'allow_ai_training', 'allow_ai_recommendation'
+           ))
            OR (table_name = 'bead_group_publications' AND column_name IN (
              'quality_statement', 'quality_source', 'rights_holder', 'usage_permission',
              'is_authentic_photograph', 'allow_ai_training', 'allow_ai_recommendation',
@@ -273,6 +297,10 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         "crystal_drafts.visual_tags",
         "crystal_drafts.style_tags",
         "crystal_drafts.price_level",
+        "processed_assets.usage_permission",
+        "processed_assets.rights_holder",
+        "processed_assets.allow_ai_training",
+        "processed_assets.allow_ai_recommendation",
         "bead_group_publications.quality_statement",
         "bead_group_publications.quality_source",
         "bead_group_publications.rights_holder",
@@ -1674,6 +1702,120 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         assert.equal(publication.allowAiRecommendation, true);
         assert.equal(publication.allowCommercialUse, true);
         assert.equal(publication.allowPublicDisplay, true);
+      }
+    );
+
+    await t.test(
+      "20. QC pass stays pending human review: unapproved assets can neither publish nor resolve",
+      async () => {
+        const scenario = "qcpending";
+        const session = await repository.createSession({ idempotencyKey: keyOf(`session-${scenario}`) });
+        const registered = await repository.registerManifest(session.sessionId, {
+          idempotencyKey: keyOf(`manifest-${scenario}`),
+          files: [
+            {
+              clientFileId: `${scenario}-cf-1`,
+              relativePath: `imports/${scenario}/${scenario}-cf-1.jpg`,
+              byteSize: 2048,
+              lastModifiedMs: 1_750_000_000_000,
+              kind: "JPEG" as const
+            }
+          ]
+        });
+        const fileIds = registered.files.map((file) => file.fileId);
+        const outputSha256 = shaOf(`output-${scenario}`);
+        await repository.recordUploadedFile(fileIds[0]!, outputSha256, `imports/${prefix}/raw/${scenario}-1.jpg`, {
+          storageProvider: "local-fs"
+        });
+        const group = await prisma.beadImageGroup.create({
+          data: { sessionId: session.sessionId, state: "NAMED", revision: 1 }
+        });
+        await prisma.assetSourceFile.update({
+          where: { id: fileIds[0]! },
+          data: { groupId: group.id }
+        });
+        const job = await prisma.assetProcessingJob.create({
+          data: {
+            sessionId: session.sessionId,
+            groupId: group.id,
+            jobType: "PROCESS_GROUP",
+            state: "QUEUED",
+            payload: {},
+            maxRetries: 3
+          }
+        });
+        const claimed = await repository.claimNextJob(`worker-${scenario}`, new Date(Date.now() + 60_000));
+        assert.ok(claimed);
+        assert.equal(claimed.jobId, job.id);
+        const output = processResult(
+          fileIds[0]!,
+          outputSha256,
+          `imports/${prefix}/processed/${scenario}/v1/bead-512.webp`
+        );
+
+        const smuggled = {
+          ...output,
+          usagePermission: "OWNED",
+          isAuthenticPhotograph: true,
+          allowCommercialUse: true,
+          allowPublicDisplay: true
+        } as unknown as typeof output;
+        await assert.rejects(
+          () => repository.completeJob(claimed.jobId, smuggled, claimed.lease),
+          expectCode("VALIDATION_ERROR"),
+          "a worker result carrying permission decisions must be rejected before any write"
+        );
+        assert.equal(
+          await prisma.processedAsset.count({ where: { groupId: group.id } }),
+          0,
+          "the rejected completion must not have written an asset row"
+        );
+
+        const completed = await repository.completeJob(claimed.jobId, output, claimed.lease);
+        assert.equal(completed.state, "COMPLETED");
+        const pending = await prisma.processedAsset.findFirstOrThrow({ where: { groupId: group.id } });
+        assert.equal(pending.state, "QC_PENDING", "a QC pass must await human review, never auto-approve");
+        assert.equal(pending.assetKey, null);
+        assert.equal(pending.approvedAt, null);
+        assert.equal(pending.qcPassedAt !== null, true);
+        assert.equal(pending.usagePermission, "UNKNOWN");
+        assert.equal(pending.rightsHolder, null);
+        assert.equal(pending.allowPublicDisplay, false);
+        assert.equal(pending.allowCommercialUse, false);
+
+        assert.equal(
+          await repository.findApprovedPublicAsset(`approved:${outputSha256}`),
+          null,
+          "a QC-passed but unapproved asset must be invisible to the public resolver"
+        );
+
+        const crystalId = await createCrystal(scenario);
+        await assert.rejects(
+          () => repository.publishGroup(group.id, publishInput(scenario, crystalId, `approved:${outputSha256}`)),
+          expectCode("COMPLIANCE_BLOCKED"),
+          "publishing a group whose current asset is only QC-passed must fail closed"
+        );
+        assert.equal(await prisma.materialProduct.count({ where: { sku: keyOf(`sku-${scenario}`) } }), 0);
+        assert.equal(await prisma.beadGroupPublication.count({ where: { groupId: group.id } }), 0);
+
+        const review = await repository.reviewProcessedAsset(pending.id, reviewDecision());
+        assert.equal(review.state, "APPROVED");
+        assert.equal(review.assetKey, `approved:${outputSha256}`);
+        await assert.rejects(
+          () => repository.reviewProcessedAsset(pending.id, reviewDecision()),
+          expectCode("CONFLICT"),
+          "a second review of the same asset must conflict"
+        );
+
+        const published = await repository.publishGroup(
+          group.id,
+          publishInput(scenario, crystalId, `approved:${outputSha256}`)
+        );
+        assert.equal(published.state, "PUBLISHED");
+        assert.deepEqual(published.publishedAssetKeys, [`approved:${outputSha256}`]);
+        const resolved = await repository.findApprovedPublicAsset(`approved:${outputSha256}`);
+        assert.ok(resolved, "after human approval the published asset must resolve");
+        assert.equal(resolved.assetKey, `approved:${outputSha256}`);
       }
     );
   } finally {
