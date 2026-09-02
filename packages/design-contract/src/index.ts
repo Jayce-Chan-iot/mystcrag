@@ -11,6 +11,7 @@ export * from "./projections/to-public-design";
 export * from "./schemas/accessory.schema";
 export * from "./schemas/api-dto.schema";
 export * from "./schemas/bead.schema";
+export * from "./schemas/bead-asset-import-api.schema";
 export * from "./schemas/bracelet.schema";
 export * from "./schemas/catalog.schema";
 export * from "./schemas/community.schema";

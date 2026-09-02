@@ -154,6 +154,297 @@ Authentication is a dedicated admin key: the `X-Admin-Key` header compared again
 
 Error mapping follows the shared envelope: unknown ids → `404 NOT_FOUND`, illegal status transitions and duplicate versions → `409 CONFLICT`, request-shape violations → `400 VALIDATION_ERROR`, missing/wrong key → `403 FORBIDDEN`. Route coverage — fail-closed key handling, filter validation, verdict mapping, and error codes — is in `apps/backend/src/modules/knowledge-admin/knowledge-admin.routes.test.ts`.
 
+## Bead Asset Import Admin API
+
+Contract-first surface for the bead asset import assistant (`/admin/bead-import`, spec [docs/superpowers/specs/2026-08-31-bead-asset-import-assistant-design.md](superpowers/specs/2026-08-31-bead-asset-import-assistant-design.md)). All DTOs are strict Zod objects in [bead-asset-import-api.schema](../packages/design-contract/src/schemas/bead-asset-import-api.schema.ts): every request rejects unknown keys, and clients never submit absolute filesystem paths, private archive keys, processed-result paths, or server storage keys — manifest paths are normalized relative paths, every stored `archiveKey` is server-generated, and only content-addressed `approved:<sha256>` keys ever appear in public responses. This section defines the contract; routes are implemented by TASK-ASSET-BE-001 with a dedicated `ASSET_ADMIN_API_KEY` (timing-safe comparison, independent of the knowledge admin key). Images are never used to infer mineral identity, quality, treatment, or efficacy — the only identity input is the human-confirmed bead name.
+
+Session lifecycle uses exactly these states (`AssetImportSessionStateSchema`): `CREATED → UPLOADING → ARCHIVING → PROCESSING → NEEDS_REVIEW → READY_TO_PUBLISH → PUBLISHING → PUBLISHED`, with `PARTIALLY_FAILED` reachable from `ARCHIVING`, `PROCESSING`, and `PUBLISHING` (recoverable back into `PROCESSING`/`NEEDS_REVIEW` or down to `FAILED`). Every non-terminal state can also move to `CANCELLED`; `PUBLISHED`, `FAILED`, and `CANCELLED` are terminal. Legal moves are enumerated in `ASSET_IMPORT_SESSION_TRANSITIONS`; any other move is `409`.
+
+Recovery checkpoints are a separate ordered enum (`AssetImportCheckpointSchema`): `ARCHIVED → GROUPED → LABELED → PROCESSED → REVIEWED → PUBLISHED`. Session responses expose `lastVerifiedCheckpoint` (nullable until the first checkpoint verifies); after a crash, cancellation, or restart the backend resumes from the last verified checkpoint instead of restarting the import.
+
+| Route | Request DTO | Response DTO | Behavior |
+| --- | --- | --- | --- |
+| `POST /api/admin/bead-import/sessions` | `CreateAssetImportSessionRequestSchema` (`idempotencyKey` only) | `CreateAssetImportSessionResponseSchema` (`state` literal `CREATED`) | Creates a session. No client-supplied `sessionId` or filesystem root is accepted. |
+| `GET /api/admin/bead-import/sessions` | `ListAssetImportSessionsQuerySchema` (query: optional `state` filter, `limit` 1–100, `cursor`) | `ListAssetImportSessionsResponseSchema` | Lists session summaries including `lastVerifiedCheckpoint` and progress counts; terminal sessions (including `CANCELLED`) stay listable. `nextCursor` is `null` on the last page. |
+| `POST /api/admin/bead-import/sessions/:sessionId/cancel` | `CancelAssetImportSessionRequestSchema` | `CancelAssetImportSessionResponseSchema` (`state` literal `CANCELLED`) | Cancels from any non-terminal state; already-terminal sessions are `409`. Cancellation never deletes user source files. |
+| `POST /api/admin/bead-import/sessions/:sessionId/manifest` | `RegisterAssetManifestRequestSchema` | `RegisterAssetManifestResponseSchema` | Registers the file inventory before any bytes move. Each entry carries `clientFileId`, normalized `relativePath`, `byteSize`, `lastModifiedMs`, and declared `kind` (`ARW`/`JPEG`/`PNG`/`WEBP`). Enforces ≤500 files, ≤256 MiB per file, ≤8 GiB per session (`ASSET_MANIFEST_LIMITS`), unique `clientFileId`/`relativePath`, extension↔kind agreement, and `registeredFileCount === files.length`. |
+| `PUT /api/admin/bead-import/sessions/:sessionId/files/:fileId/content` | `UploadAssetFileParamsSchema` (`contentLengthBytes` > 0, binary body) | `UploadAssetFileResponseSchema` | Streams one registered file, verifies declared length, content magic bytes, and final SHA-256, then reports the server-assigned `archiveKey`. The client supplies no path; the response never echoes local paths. |
+| `GET /api/admin/bead-import/sessions/:sessionId` | no body | `AssetImportSessionResponseSchema` | Polls progress: counts, bytes, `lastVerifiedCheckpoint`, per-file state (`PENDING`/`UPLOADING`/`ARCHIVED`/`FAILED`/`SKIPPED_DUPLICATE`), and group review state. Short-polling only in V1. |
+| `POST /api/admin/bead-import/sessions/:sessionId/grouping/start` | `StartAssetImportGroupingRequestSchema` | `StartAssetImportGroupingResponseSchema` (`state` literal `PROCESSING`) | Starts deterministic grouping over fully archived files (`ARCHIVING → PROCESSING`) and returns `queuedJobCount`. Sessions with files that are not archive-verified are `409`. |
+| `POST /api/admin/bead-import/sessions/:sessionId/processing/start` | `StartAssetImportProcessingRequestSchema` | `StartAssetImportProcessingResponseSchema` (`state` literal `PROCESSING`) | Starts cut-out processing for confirmed, named groups (`NEEDS_REVIEW → PROCESSING`) and returns `queuedJobCount`. |
+| `PATCH /api/admin/bead-import/groups/:groupId` | `UpdateBeadImageGroupRequestSchema` | `UpdateBeadImageGroupResponseSchema` | Review actions: `SET_NAME`, `MERGE_GROUPS`, `SPLIT_GROUP`, `MOVE_FILES`, `SET_PRIMARY`, `IGNORE_FILES`. Every action requires `expectedGroupRevision`; responses return the incremented `revision`. `SET_PRIMARY` carries only `primaryFileId` — authoritative membership is checked server-side from `groupId` + `expectedGroupRevision`, never from a client-supplied member list. |
+| `POST /api/admin/bead-import/groups/:groupId/reprocess` | `ReprocessBeadImageGroupRequestSchema` | `ReprocessBeadImageGroupResponseSchema` | Queues a new processing version. Only bounded settings are accepted (`maskThreshold` 0–1, `edgeFeatherPx` 0–8); no model choice, no output path. |
+| `POST /api/admin/bead-import/groups/:groupId/processed-version` | `SelectProcessedVersionRequestSchema` | `SelectProcessedVersionResponseSchema` | Explicitly selects the current processed version for review/publication. New versions never delete old ones; the selection is an explicit reference guarded by `expectedGroupRevision`. |
+| `POST /api/admin/bead-import/groups/:groupId/draft` | `SaveBeadProductDraftRequestSchema` | `SaveBeadProductDraftResponseSchema` | Explicit partial product-draft save: at least one product field plus `expectedGroupRevision`. Accepts the full permission vocabulary including `UNKNOWN` and `PROHIBITED` — such drafts persist locally as review-only records. A draft may reference an existing `crystalId` or a `crystalDraftId`, never both. |
+| `GET /api/admin/bead-import/groups/:groupId/draft-completeness` | no body | `CheckBeadProductDraftCompletenessResponseSchema` | Reports `complete` and `missingFields` against the publish-required field list (`DRAFT_COMPLETENESS_FIELDS`, including `SKU`); `PUBLISH_REQUIRED_FIELDS_TO_COMPLETENESS` maps every publish-required business field one-to-one onto those fields. `complete` is true exactly when `missingFields` is empty. |
+| `POST /api/admin/bead-import/groups/:groupId/publish` | `PublishBeadImageGroupRequestSchema` | `PublishBeadImageGroupResponseSchema` (`state` literal `PUBLISHED`, `publishedAssetKeys` ≥1 approved keys) | Transactional publication of one reviewed group into the formal catalog. |
+| `GET /api/admin/bead-import/groups/:groupId/publish-result` | no body | `GetBeadImageGroupPublishResultResponseSchema` | Re-reads the persisted publication result for refresh/recovery. |
+| `GET /api/assets/:assetKey` | `ResolveApprovedAssetParamsSchema` | **Binary image bytes**, never JSON. Success headers are validated by `ApprovedAssetDeliveryHeadersSchema` (`Content-Type`, `Content-Length`, `ETag`, `Cache-Control`); `ApprovedAssetDeliveryMetadataSchema` is the internal resolver/service result only. | Approved-only public delivery (see below). Draft, retired, unpublished, or private assets resolve to `404`. |
+
+Draft save is an explicit boundary (`POST /groups/:groupId/draft`), not the `SET_NAME` review action: `SET_NAME` only records the human bead name during review, while draft save persists product fields across review steps. Drafts never appear in public catalog queries, AI recommendation, or inventory; publication is the only path to the live catalog, and it requires the complete publish request.
+
+Publish example (all fields strict; unknown keys rejected):
+
+```json
+{
+  "idempotencyKey": "publish-group-1",
+  "expectedGroupRevision": 3,
+  "crystalId": "crystal-amethyst",
+  "crystalName": "紫水晶",
+  "crystalNameConfirmedByOperator": true,
+  "displayName": "紫水晶 8mm 圆珠",
+  "sku": "BEAD-AMETHYST-8",
+  "materialKey": "amethyst-round-8",
+  "shape": "ROUND",
+  "diameterMm": 8,
+  "qualityStatement": "天然紫水晶，肉眼可见少量棉絮，无注胶",
+  "qualitySource": "到货批次人工目检（2026-08-30）",
+  "textureAssetKey": "approved:a3f5…(64 hex)",
+  "currency": "CNY",
+  "unitPriceMinor": 12800,
+  "costMinor": 4000,
+  "availableQuantity": 12,
+  "allowPublicDisplay": true,
+  "allowAiRecommendation": false,
+  "allowAiTraining": false,
+  "allowCommercialUse": true,
+  "rightsHolder": "玄矶工作室",
+  "usagePermission": "GRANTED",
+  "isAuthenticPhotograph": true
+}
+```
+
+Publication must resolve exactly one crystal reference. Instead of `crystalId`, a request may promote a human-completed crystal draft by supplying `"crystalDraftId": "draft-amethyst"` together with `"crystalDraftPromotionConfirmed": true`; both references, neither reference, or an unconfirmed promotion are `400`. `crystalNameConfirmedByOperator` must be `true`; `textureAssetKey` (and the optional `modelAssetKey`) must be approved public keys; `usagePermission` allows only `OWNED` or `GRANTED`. `allowPublicDisplay` and `allowCommercialUse` are affirmative-only grants and must be literal `true` — a publish request carrying `false` for either is `400`, because otherwise a product could be published while its approved image is contractually forbidden from public or commercial delivery. `allowAiTraining` and `allowAiRecommendation` are mandatory booleans that may deny consent (`false` is a valid decision; `allowAiRecommendation` is the AI-recommendation availability decision, separate from `allowAiTraining` consent). `isAuthenticPhotograph` is mandatory. Example response (also served by `GET /groups/:groupId/publish-result`):
+
+```json
+{
+  "groupId": "group-1",
+  "state": "PUBLISHED",
+  "materialProductId": "product-1",
+  "crystalId": "crystal-amethyst",
+  "inventorySnapshotId": "inventory-1",
+  "publishedAt": "2026-09-01T09:30:00+08:00",
+  "publishedAssetKeys": ["approved:a3f5…(64 hex)"]
+}
+```
+
+Session list example (`GET /api/admin/bead-import/sessions?state=NEEDS_REVIEW&limit=20`):
+
+```json
+{
+  "sessions": [
+    {
+      "sessionId": "session-1",
+      "state": "NEEDS_REVIEW",
+      "lastVerifiedCheckpoint": "GROUPED",
+      "declaredFileCount": 127,
+      "archivedFileCount": 127,
+      "failedFileCount": 0,
+      "groupCount": 64,
+      "createdAt": "2026-09-01T09:00:00+08:00",
+      "updatedAt": "2026-09-01T09:20:00+08:00"
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+Cancel example (`POST /sessions/:sessionId/cancel`) and response:
+
+```json
+{ "idempotencyKey": "cancel-session-1" }
+```
+
+```json
+{ "sessionId": "session-1", "state": "CANCELLED", "cancelledAt": "2026-09-01T09:25:00+08:00" }
+```
+
+Grouping/processing start responses (`POST /sessions/:sessionId/grouping/start` or `/processing/start`):
+
+```json
+{ "idempotencyKey": "grouping-session-1" }
+```
+
+```json
+{ "sessionId": "session-1", "state": "PROCESSING", "queuedJobCount": 4, "startedAt": "2026-09-01T09:10:00+08:00" }
+```
+
+Processed-version selection (`POST /groups/:groupId/processed-version`) and response:
+
+```json
+{ "expectedGroupRevision": 4, "processingVersion": 2 }
+```
+
+```json
+{ "groupId": "group-1", "state": "PROCESSED", "selectedProcessingVersion": 2, "updatedAt": "2026-09-01T09:15:00+08:00" }
+```
+
+Draft save example (`POST /groups/:groupId/draft`; any non-empty subset of product fields):
+
+```json
+{ "expectedGroupRevision": 2, "crystalName": "紫水晶", "usagePermission": "UNKNOWN" }
+```
+
+```json
+{ "groupId": "group-1", "state": "NAMED", "revision": 3, "draftSavedAt": "2026-09-01T09:12:00+08:00" }
+```
+
+Draft completeness example (`GET /groups/:groupId/draft-completeness`):
+
+```json
+{
+  "groupId": "group-1",
+  "state": "NAMED",
+  "complete": false,
+  "missingFields": ["QUALITY_STATEMENT", "TEXTURE_ASSET_KEY", "AI_TRAINING_DECISION"],
+  "checkedAt": "2026-09-01T09:16:00+08:00"
+}
+```
+
+Manifest registration example:
+
+```json
+{
+  "idempotencyKey": "manifest-batch-1",
+  "files": [
+    { "clientFileId": "file-001", "relativePath": "01/DSC0001.JPG", "byteSize": 1048576, "lastModifiedMs": 1756600000000, "kind": "JPEG" },
+    { "clientFileId": "file-002", "relativePath": "01/DSC0001.ARW", "byteSize": 25165824, "lastModifiedMs": 1756600000000, "kind": "ARW" }
+  ]
+}
+```
+
+Binary upload response example (`ARCHIVED` requires verified `sha256`, server `archiveKey`, and `archivedAt`):
+
+```json
+{
+  "fileId": "file-1",
+  "uploadStatus": "ARCHIVED",
+  "byteSize": 1048576,
+  "sha256": "a3f5…(64 hex)",
+  "archiveKey": "imports/session-1/raw/a3f5.webp",
+  "archivedAt": "2026-09-01T09:00:00+08:00"
+}
+```
+
+Approved asset delivery (`GET /api/assets/:assetKey`) resolves only approved, active, `allowPublicDisplay=true` bindings. Approved keys are stable and content-addressed (`approved:<sha256>`, `ApprovedAssetKeySchema`) and are deliberately unlike private archive keys (`imports/...`), which never parse as approved keys and never appear in public responses. Draft, retired, unpublished, or private assets resolve to `404`.
+
+The successful HTTP response is **binary image bytes** — it is consumed by `<img src>` and is never a JSON body. Exactly four response headers are validated by `ApprovedAssetDeliveryHeadersSchema`:
+
+| Header | Contract |
+| --- | --- |
+| `Content-Type` | `image/webp`, `image/png`, or `image/jpeg` (`ApprovedAssetContentTypeSchema`). |
+| `Content-Length` | Positive decimal byte-count string, equal to the delivered byte size. |
+| `ETag` | Strong ETag quoting the exact SHA-256 of the delivered bytes: `"<sha256>"`. Weak or unquoted ETags are contract violations. |
+| `Cache-Control` | Exactly `public, max-age=31536000, immutable` (`APPROVED_ASSET_CACHE_CONTROL`). |
+
+Example response headers:
+
+```http
+HTTP/1.1 200 OK
+Content-Type: image/webp
+Content-Length: 65536
+ETag: "a3f5b9…(64 hex)"
+Cache-Control: public, max-age=31536000, immutable
+
+<binary image bytes>
+```
+
+Content-addressed invariants are enforced by `ApprovedAssetDeliveryMetadataSchema`: `assetKey === approved:<sha256>` (the key digest must equal the delivered bytes' digest), the ETag is the strong quoted form of the same digest, and `cacheControl` is the exact immutable directive — any mismatch is a contract violation. That schema is the **internal resolver/service result only**; it is never serialized as the HTTP response body, so the Frontend Resolver task must use the delivery route URL directly as the image source and never treat a JSON document as an image.
+
+### Typed error contract
+
+Asset-import errors use five distinct layers, and the two code layers are strictly separated:
+
+1. **HTTP status** — the numeric response status (`ASSET_IMPORT_TRANSPORT_STATUS_BY_CODE`).
+2. **Shared transport code** (`error.code`) — the shared HTTP/transport vocabulary only (`AssetImportTransportErrorCodeSchema`): `UNAUTHORIZED`, `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE`, `UNPROCESSABLE_ENTITY`, `INTERNAL_ERROR`. Business codes never appear here.
+3. **Asset-specific code** (`error.assetCode`) — the bead-import business code (`AssetImportErrorCodeSchema`) covering the spec §11 failure categories. Present only in the business variant below.
+4. **`retryable`** — bound to the `assetCode` catalog, never to the transport code. Present only in the business variant.
+5. **`recoveryAction`** — the safe recovery step, also bound to the `assetCode` catalog. Present only in the business variant.
+
+Envelope shape (`AssetImportErrorEnvelopeSchema`) is a union of **exactly two strict variants**, keeping the repository's shared `{ "error": { code, message, requestId } }` outer structure:
+
+1. **Pure transport error** (`AssetTransportErrorEnvelopeSchema`): `code`, `message`, optional `fieldErrors`, `requestId`. `assetCode`/`retryable`/`recoveryAction` are forbidden — shape violations (`400 VALIDATION_ERROR`), unknown ids (`404 NOT_FOUND`) and oversized uploads (`413 PAYLOAD_TOO_LARGE`) carry no business code.
+2. **Asset business error** (`AssetBusinessErrorEnvelopeSchema`): the same fields plus mandatory `assetCode`, `retryable`, and `recoveryAction`, validated against the stable catalog and the fixed transport pairing below.
+
+Partial business detail is rejected by both arms: the transport variant refuses the extra keys and the business variant refuses the missing ones (only `assetCode`, only `retryable`, a missing `recoveryAction`, or a missing `retryable` all fail).
+
+Pure transport example:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "files.0.kind: 扩展名与声明类型不符",
+    "fieldErrors": [{ "fieldPath": "files.0.kind", "message": "扩展名与声明类型不符" }],
+    "requestId": "req-2"
+  }
+}
+```
+
+Asset business example:
+
+```json
+{
+  "error": {
+    "code": "INTERNAL_ERROR",
+    "message": "档案根目录剩余空间不足，归档已暂停",
+    "assetCode": "STORAGE_FULL",
+    "retryable": true,
+    "recoveryAction": "RESUME_FROM_CHECKPOINT",
+    "requestId": "req-1"
+  }
+}
+```
+
+**Backend compatibility note (honest):** the pure transport variant is field-for-field identical to the current canonical backend envelope (`apps/backend/src/contracts/api-error.ts`), but that strict `ApiErrorCodeSchema` does not include `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE`, or `UNPROCESSABLE_ENTITY`, and the backend envelope rejects the business variant's extra `assetCode`/`retryable`/`recoveryAction` fields. It does **not** accept the full asset-import contract today. TASK-ASSET-BE-001 must extend or adapt that serializer for the asset-import routes (adding the three transport classes and the asset detail variant) instead of claiming the existing schema is already compatible.
+
+Stable asset codes and their fixed `retryable`/`recoveryAction` guidance (`ASSET_IMPORT_ERROR_CATALOG`), plus the transport code each one is bound to (`ASSET_IMPORT_ERROR_TRANSPORT_CODES`); the envelope rejects any other pairing:
+
+| assetCode | Spec §11 category | transport code (`error.code`) | HTTP status | retryable | recoveryAction |
+| --- | --- | --- | --- | --- | --- |
+| `UNSUPPORTED_FILE_KIND` | unsupported / corrupt files | `UNSUPPORTED_MEDIA_TYPE` | 415 | false | `REUPLOAD_FILE` |
+| `CORRUPT_FILE_CONTENT` | unsupported / corrupt files | `UNPROCESSABLE_ENTITY` | 422 | false | `REUPLOAD_FILE` |
+| `STORAGE_FULL` | storage exhaustion / verification failure | `INTERNAL_ERROR` | 500 | true | `RESUME_FROM_CHECKPOINT` |
+| `ARCHIVE_VERIFICATION_FAILED` | storage exhaustion / verification failure | `CONFLICT` | 409 | true | `REUPLOAD_FILE` |
+| `ARCHIVE_CONFLICT` | archive / job lease conflicts | `CONFLICT` | 409 | true | `RESUME_FROM_CHECKPOINT` |
+| `JOB_LEASE_CONFLICT` | archive / job lease conflicts | `CONFLICT` | 409 | true | `RESUME_FROM_CHECKPOINT` |
+| `SEGMENTATION_FAILED` | segmentation failure / insufficient quality | `INTERNAL_ERROR` | 500 | true | `REPROCESS_GROUP` |
+| `QUALITY_INSUFFICIENT` | segmentation failure / insufficient quality | `UNPROCESSABLE_ENTITY` | 422 | false | `REPROCESS_GROUP` |
+| `ADMIN_PERMISSION_EXPIRED` | expired admin permission | `UNAUTHORIZED` | 401 | true | `RENEW_ADMIN_PERMISSION` |
+| `DRAFT_INCOMPLETE` | incomplete draft fields / missing references | `UNPROCESSABLE_ENTITY` | 422 | false | `COMPLETE_DRAFT_FIELDS` |
+| `MISSING_REFERENCE` | incomplete draft fields / missing references | `UNPROCESSABLE_ENTITY` | 422 | false | `COMPLETE_DRAFT_FIELDS` |
+| `SKU_CONFLICT` | publication conflicts | `CONFLICT` | 409 | false | `RESOLVE_SKU_CONFLICT` |
+| `INVENTORY_VERSION_CONFLICT` | publication conflicts | `CONFLICT` | 409 | true | `RETRY_WITH_FRESH_INVENTORY` |
+| `PUBLISH_TRANSACTION_FAILED` | publication transaction failure | `INTERNAL_ERROR` | 500 | true | `RETRY_REQUEST` |
+
+HTTP mapping by transport code:
+
+| Status | Code | When |
+| --- | --- | --- |
+| `400` | `VALIDATION_ERROR` | Strict-shape violations, unknown keys, hostile paths (absolute, `..`, backslash, drive letter), extension↔kind mismatch, non-positive sizes or revisions, and publish-shape violations: permission outside `OWNED`/`GRANTED`, missing/duplicated crystal reference, unconfirmed draft promotion, missing consent decisions, `allowPublicDisplay` or `allowCommercialUse` not literal `true`, non-approved asset keys. |
+| `401` | `UNAUTHORIZED` | Missing or invalid `ASSET_ADMIN_API_KEY`. The key is never echoed or logged. |
+| `404` | `NOT_FOUND` | Unknown `sessionId`, `fileId`, `groupId`, job, or approved asset. Draft/retired/private assets requested through the public asset route also resolve to `404`. |
+| `409` | `CONFLICT` | Illegal session transition (including cancelling a terminal session), stale `expectedGroupRevision`, duplicate idempotency key with a different payload, SHA-256 conflict against an archived file, conflicting duplicate publish. |
+| `413` | `PAYLOAD_TOO_LARGE` | Declared or streamed bytes exceed the per-file or session limit. |
+| `415` | `UNSUPPORTED_MEDIA_TYPE` | Declared kind or detected magic bytes outside ARW/JPEG/PNG/WEBP. |
+| `422` | `UNPROCESSABLE_ENTITY` | Well-formed but business-invalid requests: publish of a QC-failed or unapproved group, publish of an incomplete draft (`DRAFT_INCOMPLETE`/`MISSING_REFERENCE`), processing requested before archive verification. |
+| `500` | `INTERNAL_ERROR` | Unexpected failure. Safe to retry with the same idempotency key; no second session, archive copy, processing version, or SKU is created by the retry. |
+
+### Idempotency and repeated operations
+
+- **Session creation:** one `idempotencyKey` maps to one session; an exact retry returns the existing session instead of creating another.
+- **Manifest registration:** same key and identical file list returns the existing stable `fileId`s; the same key with different files is `409`. Re-registering never duplicates file records — `(sessionId, clientFileId)` is unique.
+- **File upload (incl. failure retry):** re-PUTting a `PENDING`/`FAILED` `fileId` resumes that file; retry is the failure-recovery path and never archives a second original. Re-uploading an `ARCHIVED` file with a matching SHA-256 succeeds without side effects; different content for the same `fileId` is `409`.
+- **Session status / list / completeness / publish result:** read-only and safe to poll or re-read.
+- **Cancellation:** one `idempotencyKey` cancels once; an exact retry returns the existing `CANCELLED` state. Cancelling a session that already reached any terminal state is `409`. Cancellation never deletes source files, archive copies, or drafts.
+- **Grouping/processing starts:** one `idempotencyKey` yields one start; an exact retry returns the current queued state instead of enqueueing duplicate jobs.
+- **Group edits:** optimistic concurrency via `expectedGroupRevision`; an accepted action increments the revision, so a stale retry is `409` and the client re-reads the group. Accepted edits never lose member files or the human primary-image choice. `SET_PRIMARY` membership is validated server-side, never from client-supplied lists.
+- **Draft save:** guarded by `expectedGroupRevision`; partial fields merge into the existing draft and the revision increments, so a stale retry is `409`. Drafts with `UNKNOWN`/`PROHIBITED` permissions stay local.
+- **Processed-version selection:** guarded by `expectedGroupRevision`; selecting an existing version again is an update, not a new version.
+- **Reprocess:** one `idempotencyKey` yields one job and one new processing version; an exact retry returns the existing `jobId`/`processingVersion`. Retries never silently create extra versions.
+- **Publish:** one `idempotencyKey` publishes once. An exact retry returns the existing publication result (same `materialProductId`, inventory snapshot, and asset bindings); the same key with a different payload is `409`. Publication creates/approves the crystal, activates the product, appends the inventory snapshot, and binds approved assets in one transaction — any failure rolls everything back and the group remains a draft.
+
+
 ## Design Save API
 
 POST /api/design/save
