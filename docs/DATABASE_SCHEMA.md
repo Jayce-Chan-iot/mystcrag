@@ -1,6 +1,6 @@
 # Database Schema
 
-The executable source is `packages/database/prisma/schema.prisma`; the reviewed baseline is `20260721140000_init_mystcrag_persistence_v1`. Additive migrations then introduce order idempotency, Tarot sessions, Product V2 visual profiles, knowledge storage and pgvector embeddings, design decision traces, knowledge usage events, Source Registry v2, knowledge-rule claim types, collection runs, backorder fulfillment, and external identities through `20260825100000_add_external_identities`. Existing migrations are immutable. PostgreSQL tables use snake_case and Prisma fields use camelCase.
+The executable source is `packages/database/prisma/schema.prisma`; the reviewed baseline is `20260721140000_init_mystcrag_persistence_v1`. Additive migrations then introduce order idempotency, Tarot sessions, Product V2 visual profiles, knowledge storage and pgvector embeddings, design decision traces, knowledge usage events, Source Registry v2, knowledge-rule claim types, collection runs, backorder fulfillment, external identities, and bead asset import persistence through `20260831_add_bead_asset_import`. Existing migrations are immutable. PostgreSQL tables use snake_case and Prisma fields use camelCase.
 
 ## Transactional model
 
@@ -62,6 +62,58 @@ Rollback procedure for `20260825100000_add_external_identities`:
 3. `DROP TABLE IF EXISTS "external_identities";` — safe order because nothing else references it; `users` is the referenced parent and is untouched.
 4. Remove the migration record so `prisma migrate deploy` state stays consistent: `DELETE FROM "_prisma_migrations" WHERE migration_name = '20260825100000_add_external_identities';` (only on databases where step 3 ran).
 5. This procedure cannot losslessly drop the table while valid mappings exist — the mappings themselves are the data being destroyed (step 1 is the explicit acceptance gate).
+
+## Bead asset import persistence (TASK-ASSET-DB-001)
+
+Migration `20260831_add_bead_asset_import` is strictly additive: it creates nine tables (`asset_import_sessions`, `asset_source_files`, `bead_image_groups`, `crystal_drafts`, `material_product_drafts`, `processed_assets`, `asset_processing_jobs`, `product_asset_bindings`, `bead_group_publications`) and ten enums. No existing table, column, index, or datum is dropped, renamed, truncated, or rewritten; the migration contains only `CREATE TYPE`/`CREATE TABLE`/`CREATE INDEX` plus new foreign keys, and a destructive-statement scan of the SQL confirms zero `DROP`/`TRUNCATE`/`DELETE` operations. Every foreign key — including the `AssetSourceFile` duplicate self-relation — explicitly declares `Restrict` on delete and update, so an imported group, its source files, processed versions, bindings, and publication evidence can never be removed by deleting a referenced session, crystal, product, or snapshot. The controlling state machine and DTO shapes live in the accepted design contract (`packages/design-contract/src/schemas/bead-asset-import-api.schema.ts`); the database layer defines no second state machine.
+
+Relationship graph:
+
+- `AssetImportSession` 1→N `AssetSourceFile` (manifest files), 1→N `BeadImageGroup` (image groups), 1→N `AssetProcessingJob` (pipeline work).
+- `AssetSourceFile` 0..1→N `ProcessedAsset`; a nullable self-relation `duplicateOfId` marks exact SHA-256 duplicates instead of storing a second archive copy.
+- `BeadImageGroup` 1→1 `MaterialProductDraft` (unique `groupId`), 0..1 `CrystalDraft`, 0..1 `Crystal` (resolved at publish), 1→N `ProcessedAsset`, 1→N `AssetProcessingJob`, 1→1 `BeadGroupPublication` (unique `groupId`).
+- `ProcessedAsset` 1→N `ProductAssetBinding`; `ProductAssetBinding` N→1 `MaterialProduct`; `BeadGroupPublication` references the published product, crystal, and inventory snapshot.
+- `Crystal`, `MaterialProduct`, `InventorySnapshot`, `User`, and all pre-existing tables keep their existing semantics untouched.
+
+Enums and state transitions (names follow the accepted contract, not earlier design-draft names):
+
+- `AssetImportSessionState`: CREATED → UPLOADING → ARCHIVING → PROCESSING → NEEDS_REVIEW → READY_TO_PUBLISH → PUBLISHING → PUBLISHED, with PARTIALLY_FAILED/FAILED/CANCELLED exits and CANCELLED available from every non-terminal state; PUBLISHED, FAILED, and CANCELLED are terminal. The legal graph is `canTransitionAssetImportSession` from the contract; the repository rejects illegal transitions with `CONFLICT` and never stores an undocumented state.
+- `AssetImportCheckpoint` (ARCHIVED, GROUPED, LABED→LABELED, PROCESSED, REVIEWED, PUBLISHED) is the interruption-recovery marker on the session (`lastVerifiedCheckpoint`), advanced monotonically by `advanceCheckpoint` — a checkpoint is a resume point, not a state.
+- `AssetSourceFileState`: PENDING → UPLOADING → ARCHIVED, with FAILED (retryable to UPLOADING) and terminal SKIPPED_DUPLICATE for exact duplicates.
+- `BeadImageGroupState`: SUGGESTED → CONFIRMED → NAMED → PROCESSED → READY → PUBLISHED, with QC_FAILED as the quality-control exit. `revision` is an integer optimistic-concurrency counter: `saveGroupDraft` requires `expectedGroupRevision` to match and bumps the revision atomically; a reviewed READY group stays READY while its draft is edited instead of regressing to NAMED.
+- `ProcessedAssetState`: DRAFT → QC_PENDING → (QC_FAILED | APPROVED) with RETIRED as the retirement exit; `AssetProcessingJobState`: QUEUED → RUNNING → COMPLETED/FAILED; `ProductAssetBindingStatus`: DRAFT → APPROVED → RETIRED.
+- `AssetUsagePermission` (UNKNOWN, OWNED, GRANTED, PROHIBITED) plus `isAuthenticPhotograph`, `allowCommercialUse`, and `allowPublicDisplay` flags record the per-asset rights basis; publication requires OWNED or GRANTED, authentic photograph, and both allow-flags true.
+
+Unique constraints and indexes:
+
+- `asset_import_sessions.idempotency_key` unique — one session per client idempotency key; concurrent createSession races collapse onto the winner.
+- `asset_source_files (session_id, client_file_id)` unique — manifest registration is idempotent per client file.
+- `asset_source_files (session_id, sha256) WHERE state = 'ARCHIVED'` partial unique — exact byte-identical deduplication inside one session; the duplicate row becomes SKIPPED_DUPLICATE pointing at the original.
+- `processed_assets (group_id, purpose, processing_version)` unique and `processed_assets (group_id, purpose) WHERE is_current_version` partial unique — one current version per purpose per group, versioned history otherwise.
+- `processed_assets.asset_key` unique — an approved content-addressed key names exactly one asset row.
+- `material_products.sku` (pre-existing) protects SKU conflicts; publication reuses it so a duplicate SKU fails the transaction.
+- `product_asset_bindings (material_product_id, purpose) WHERE binding_status = 'APPROVED'` partial unique — one active binding per purpose per product, so a product can hold one approved texture and one approved model binding but never two approved textures.
+- `bead_group_publications.group_id` and `.idempotency_key` unique — exactly one publication per group and one per publish idempotency key.
+- Query indexes: `(state, updated_at)` on sessions and groups (review queues), `(session_id, state)` on files and groups, `(state, next_attempt_at, created_at)` and `(state, lease_until)` on jobs (claimable and expiring work), `asset_key` on processed assets and bindings, `(material_product_id, binding_status)`, and `published_at` on publications. The three partial uniques cannot be expressed in Prisma and are hand-written in the migration SQL; the PostgreSQL integration test reads `pg_index.indpred` to prove they exist as partial indexes.
+
+Storage key boundaries: only `storageProvider`, `storageKey`, and `archiveKey` are persisted. Keys are validated contract strings (no absolute paths, no `..` traversal, no drive letters) before any database access; the unit tests assert that `/absolute/path.jpg` and `../traversal.jpg` are rejected with `VALIDATION_ERROR` before the repository touches the database. Processed `assetKey` is content-addressed (`approved:<sha256-of-output>`); the public lookup re-verifies on read that `assetKey === approved:<outputSha256>` and raises `DATA_INTEGRITY_ERROR` on divergence.
+
+Job lease and expiry recovery: `claimNextJob` is one atomic `UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED LIMIT 1)` — a job is claimable when it is QUEUED with its retry backoff elapsed (`next_attempt_at` null or past) or RUNNING with an expired lease, so a crashed worker can never strand a job and two concurrent workers can never observe the same row (proven by a two-worker race in the integration test). Each claim mints a fresh `lease_token`; `heartbeatJob`, `completeJob`, and `failJob` compare-and-set on worker id plus lease token plus unexpired `lease_until`, so a stale worker cannot heartbeat, complete, or fail a job after its lease expired or after another worker reclaimed it. `failJob` increments `retryCount`, schedules `next_attempt_at`, and moves to terminal FAILED once retries exceed `maxRetries`. Because `TIMESTAMP(3)` columns are timezone-naive while the pg adapter serialises bound dates as UTC, every timestamp in the claim statement is a bound parameter — server-side `now()` would render in the session `TimeZone` and skew lease and retry comparisons by the UTC offset.
+
+Draft isolation: `MaterialProductDraft` and `CrystalDraft` are separate tables from the production `MaterialProduct`/`Crystal`. Nothing in the draft tables is reachable from catalog or public-asset queries; a draft only affects production when the single `publishGroup` transaction promotes it. `saveGroupDraft` refuses a PUBLISHED group (`CONFLICT`) and requires the revision guard; `publishGroup` requires the group to be READY with a complete draft.
+
+Publication transaction: `publishGroup(groupId, input)` runs one Prisma interactive transaction that (1) verifies `expectedGroupRevision` against the group, (2) verifies group state and draft completeness, (3) resolves the existing `Crystal` or promotes the `CrystalDraft` after explicit operator confirmation, (4) creates and activates the `MaterialProduct` with the SKU/material key from the request, (5) appends the `InventorySnapshot` with `sourceVersion = asset-import:<groupId>`, (6) creates APPROVED `ProductAssetBinding` rows for the approved texture (and optional model) asset, (7) re-verifies the chosen assets — QC passed, `usagePermission` OWNED or GRANTED, `allowPublicDisplay` and `allowCommercialUse` true, content-addressed approved `assetKey`, (8) marks the group PUBLISHED and advances the session to PUBLISHING/PUBLISHED with the REVIEWED/PUBLISHED checkpoint, and (9) inserts the `BeadGroupPublication` row. Any failure at any step rolls the whole transaction back — the integration test forces an inventory-append violation and proves no product, binding, snapshot, or publication row survives.
+
+Idempotency and conflict fingerprints: retries must never create a second file, processed version, SKU, asset binding, or inventory snapshot. `createSession` returns the existing session for a repeated `idempotencyKey`. `registerManifest` stores `manifestPayloadFingerprint` — a canonical SHA-256 over the files sorted by `clientFileId` — and replays the original `fileId`s for an identical retry while a different manifest under the same key is `CONFLICT`; `recordUploadedFile` conflicts when the same file id arrives with a different SHA-256. `publishGroup` stores `payloadFingerprint` (canonical SHA-256 with `idempotencyKey` and `expectedGroupRevision` stripped): an identical retry replays the original publication result, and the same key with a different payload is `CONFLICT`.
+
+Approved-only public lookup: `findApprovedPublicAsset(assetKey)` resolves a key only when the processed asset is APPROVED, `allowPublicDisplay`, and `isCurrentVersion`, and an APPROVED binding exists. Draft, QC-pending, retired, non-current, private, or unbound assets always return null — the integration test materialises each variant in PostgreSQL and asserts null for every one.
+
+Rollback procedure for `20260831_add_bead_asset_import`:
+
+1. Precondition: confirm no bead asset import sessions are in flight — `SELECT count(*) FROM asset_import_sessions WHERE state NOT IN ('PUBLISHED', 'FAILED', 'CANCELLED');`. Published groups have already created production products and snapshots; dropping the tables does not undo those (they remain valid catalog rows), but their binding rows would disappear, so the public asset lookup stops resolving for those products.
+2. Deploy the Prisma schema and client without the nine models first so no code path references the tables.
+3. Drop in dependency order: `DROP TABLE IF EXISTS "bead_group_publications", "product_asset_bindings", "asset_processing_jobs", "processed_assets", "material_product_drafts", "crystal_drafts", "bead_image_groups", "asset_source_files", "asset_import_sessions";` then drop the ten enums. Pre-existing tables are never touched.
+4. Remove the migration record: `DELETE FROM "_prisma_migrations" WHERE migration_name = '20260831_add_bead_asset_import';` (only on databases where step 3 ran).
 
 ## Tarot lifecycle persistence
 
