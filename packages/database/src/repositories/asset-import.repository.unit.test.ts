@@ -252,6 +252,12 @@ class PrismaDouble {
       throw error;
     }
   }
+
+  // Row-lock statements (`SELECT ... FOR UPDATE`) are concurrency primitives;
+  // the in-memory double is single-threaded, so they resolve to a no-op.
+  async $queryRaw(): Promise<Array<Record<string, unknown>>> {
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -950,13 +956,19 @@ test("heartbeatJob extends only the matching unexpired lease", async () => {
   const repository = new AssetImportRepository(prisma as never);
   const jobId = await seedRunningJob(prisma, { workerId: "worker-1" });
   const nextLease = new Date(Date.now() + 120_000);
-  assert.equal(await repository.heartbeatJob(jobId, "worker-1", nextLease), true);
+  assert.equal(
+    await repository.heartbeatJob(jobId, { workerId: "worker-1", leaseToken: "lease-token-1" }, nextLease),
+    true
+  );
   const row = await prisma.assetProcessingJob.findUnique({ where: { id: jobId } });
   assert.equal((row?.leaseUntil as Date).getTime(), nextLease.getTime());
 
-  assert.equal(await repository.heartbeatJob(jobId, "worker-2", nextLease), false);
   assert.equal(
-    await repository.heartbeatJob(jobId, "worker-1", new Date(Date.now() - 1_000)),
+    await repository.heartbeatJob(jobId, { workerId: "worker-2", leaseToken: "lease-token-1" }, nextLease),
+    false
+  );
+  assert.equal(
+    await repository.heartbeatJob(jobId, { workerId: "worker-1", leaseToken: "lease-token-1" }, new Date(Date.now() - 1_000)),
     false
   );
 });
@@ -968,7 +980,7 @@ test("heartbeatJob rejects an expired lease", async () => {
     leaseUntil: new Date(Date.now() - 1_000)
   });
   assert.equal(
-    await repository.heartbeatJob(jobId, "worker-1", new Date(Date.now() + 60_000)),
+    await repository.heartbeatJob(jobId, { workerId: "worker-1", leaseToken: "lease-token-1" }, new Date(Date.now() + 60_000)),
     false
   );
 });
@@ -1533,8 +1545,12 @@ test("publishGroup promotes a confirmed crystal draft into a real Crystal", asyn
     data: {
       nameCn: "新水晶",
       nameEn: "New Crystal",
-      mineralName: "UNSPECIFIED",
-      complianceNote: "Pending manual curation."
+      mineralName: "Beryl",
+      colorTags: ["blue"],
+      visualTags: ["translucent"],
+      styleTags: ["minimal"],
+      priceLevel: 3,
+      complianceNote: "合规说明：天然矿物，无处理。"
     }
   });
   await prisma.beadImageGroup.update({
@@ -1572,8 +1588,12 @@ test("publishGroup rejects a draft promotion missing the operator-confirmed Engl
     data: {
       nameCn: "新水晶",
       nameEn: null,
-      mineralName: "UNSPECIFIED",
-      complianceNote: "Pending manual curation."
+      mineralName: "Beryl",
+      colorTags: ["blue"],
+      visualTags: ["translucent"],
+      styleTags: ["minimal"],
+      priceLevel: 3,
+      complianceNote: "合规说明：天然矿物，无处理。"
     }
   });
   await prisma.beadImageGroup.update({
@@ -1596,7 +1616,7 @@ test("publishGroup rejects a draft promotion missing the operator-confirmed Engl
           sku: "SKU-NEW-2"
         })
       ),
-    (error: unknown) => error instanceof PersistenceError && error.code === "DATA_INTEGRITY_ERROR"
+    (error: unknown) => error instanceof PersistenceError && error.code === "COMPLIANCE_BLOCKED"
   );
   assert.equal(await prisma.crystal.findMany({}).then((rows) => rows.length), 0);
   const draftRow = await prisma.crystalDraft.findUnique({ where: { id: draft.id as string } });
@@ -1676,4 +1696,360 @@ test("findApprovedPublicAsset returns null for drafts, retired and private asset
 test("findApprovedPublicAsset rejects malformed keys before database access", async () => {
   const repository = new AssetImportRepository(untouchableClient);
   await expectValidationError(() => repository.findApprovedPublicAsset("not-a-key"), "assetKey");
+});
+
+// ---------------------------------------------------------------------------
+// 10. SOL review fix round regressions (TASK-ASSET-DB-001)
+// ---------------------------------------------------------------------------
+
+test("heartbeatJob extends only a lease carrying the current lease token", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const job = await prisma.assetProcessingJob.create({
+    data: {
+      sessionId: "session-x",
+      jobType: "ARCHIVE_FILE",
+      state: "RUNNING",
+      payload: {},
+      retryCount: 0,
+      maxRetries: 3,
+      workerId: "worker-1",
+      leaseToken: "lease-token-current",
+      leaseUntil: new Date(Date.now() + 60_000)
+    }
+  });
+  const nextLease = new Date(Date.now() + 120_000);
+  assert.equal(
+    await repository.heartbeatJob(job.id as string, { workerId: "worker-1", leaseToken: "lease-token-stale" }, nextLease),
+    false,
+    "a heartbeat with the same workerId but a stale lease token must be rejected"
+  );
+  assert.equal(
+    await repository.heartbeatJob(job.id as string, { workerId: "worker-2", leaseToken: "lease-token-current" }, nextLease),
+    false
+  );
+  assert.equal(
+    await repository.heartbeatJob(job.id as string, { workerId: "worker-1", leaseToken: "lease-token-current" }, nextLease),
+    true
+  );
+  const jobRow = await prisma.assetProcessingJob.findUnique({ where: { id: job.id as string } });
+  assert.equal((jobRow?.leaseUntil as Date | undefined)?.getTime(), nextLease.getTime());
+});
+
+test("registerManifest persists the manifest-declared lastModifiedMs", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const session = await repository.createSession({ idempotencyKey: "session-lmm-1" });
+  await repository.registerManifest(session.sessionId, {
+    idempotencyKey: "manifest-lmm-1",
+    files: [
+      {
+        clientFileId: "cf-lmm-1",
+        relativePath: "folder/cf-lmm-1.jpg",
+        byteSize: 2048,
+        lastModifiedMs: 1_750_000_123_456,
+        kind: "JPEG" as const
+      }
+    ]
+  });
+  const file = await prisma.assetSourceFile.findFirst({ where: { sessionId: session.sessionId } });
+  assert.equal(file?.lastModifiedMs, 1_750_000_123_456n);
+});
+
+test("recording a duplicate upload counts a skipped file instead of a failed file", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const { sessionId, fileIds } = await createSessionWithFiles(prisma, { clientFileIds: ["cf-dup-1", "cf-dup-2"] });
+  await repository.recordUploadedFile(fileIds[0]!, VALID_SHA, "imports/s/raw/dup-1.jpg");
+  const duplicate = await repository.recordUploadedFile(fileIds[1]!, VALID_SHA, "imports/s/raw/dup-2.jpg");
+  assert.equal(duplicate.uploadStatus, "SKIPPED_DUPLICATE");
+  const session = await prisma.assetImportSession.findUnique({ where: { id: sessionId } });
+  assert.equal(session?.skippedFileCount, 1);
+  assert.equal(session?.failedFileCount, 0);
+  assert.equal(session?.archivedFileCount, 1);
+});
+
+async function seedDraftPublishableGroup(
+  prisma: PrismaDouble,
+  draftData: Record<string, unknown>
+): Promise<{ groupId: string; draftId: string }> {
+  const { sessionId, groupId } = await createGroupFixture(prisma);
+  await seedApprovedCurrentAsset(prisma, groupId);
+  const draft = await prisma.crystalDraft.create({ data: draftData });
+  await prisma.beadImageGroup.update({
+    where: { id: groupId },
+    data: { state: "READY", crystalDraftId: draft.id as string }
+  });
+  await prisma.assetImportSession.update({
+    where: { id: sessionId },
+    data: { state: "READY_TO_PUBLISH" }
+  });
+  return { groupId, draftId: draft.id as string };
+}
+
+const COMPLETE_DRAFT = {
+  nameCn: "新水晶",
+  nameEn: "New Crystal",
+  mineralName: "Beryl",
+  colorTags: ["blue"],
+  visualTags: ["translucent"],
+  styleTags: ["minimal"],
+  priceLevel: 3,
+  complianceNote: "合规说明：天然矿物，无处理。"
+};
+
+test("publishGroup promotes a fully curated crystal draft with its manual fields", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const { groupId, draftId } = await seedDraftPublishableGroup(prisma, { ...COMPLETE_DRAFT });
+  const published = await repository.publishGroup(
+    groupId,
+    publishInput({
+      crystalId: undefined,
+      crystalDraftId: draftId,
+      crystalDraftPromotionConfirmed: true,
+      crystalName: "新水晶",
+      sku: "SKU-CURATED-1"
+    })
+  );
+  const crystal = await prisma.crystal.findUnique({ where: { id: published.crystalId } });
+  assert.equal(crystal?.nameCn, "新水晶");
+  assert.equal(crystal?.nameEn, "New Crystal");
+  assert.equal(crystal?.mineralName, "Beryl");
+  assert.deepEqual(crystal?.colorTags, ["blue"]);
+  assert.deepEqual(crystal?.visualTags, ["translucent"]);
+  assert.deepEqual(crystal?.styleTags, ["minimal"]);
+  assert.equal(crystal?.priceLevel, 3);
+  assert.equal(crystal?.complianceNote, "合规说明：天然矿物，无处理。");
+  const draftRow = await prisma.crystalDraft.findUnique({ where: { id: draftId } });
+  assert.equal(draftRow?.promotedCrystalId, published.crystalId);
+});
+
+test("publishGroup refuses to promote a crystal draft that misses any manual curation field", async () => {
+  const missingVariants: Array<{ field: string; data: Record<string, unknown> }> = [
+    { field: "nameCn", data: { ...COMPLETE_DRAFT, nameCn: " " } },
+    { field: "nameEn", data: { ...COMPLETE_DRAFT, nameEn: null } },
+    { field: "mineralName", data: { ...COMPLETE_DRAFT, mineralName: "UNSPECIFIED" } },
+    { field: "colorTags", data: { ...COMPLETE_DRAFT, colorTags: [] } },
+    { field: "visualTags", data: { ...COMPLETE_DRAFT, visualTags: [] } },
+    { field: "styleTags", data: { ...COMPLETE_DRAFT, styleTags: [] } },
+    { field: "priceLevel", data: { ...COMPLETE_DRAFT, priceLevel: null } },
+    { field: "complianceNote", data: { ...COMPLETE_DRAFT, complianceNote: " " } }
+  ];
+  for (const variant of missingVariants) {
+    const prisma = newDouble();
+    const repository = new AssetImportRepository(prisma as never);
+    const { groupId, draftId } = await seedDraftPublishableGroup(prisma, variant.data);
+    await assert.rejects(
+      () =>
+        repository.publishGroup(
+          groupId,
+          publishInput({
+            crystalId: undefined,
+            crystalDraftId: draftId,
+            crystalDraftPromotionConfirmed: true,
+            crystalName: "新水晶",
+            sku: `SKU-GATE-${variant.field}`
+          })
+        ),
+      (error: unknown) =>
+        error instanceof PersistenceError && error.code === "COMPLIANCE_BLOCKED",
+      `promotion must fail closed when ${variant.field} is missing`
+    );
+    assert.equal(await prisma.crystal.findMany({}).then((rows) => rows.length), 0);
+    const draftRow = await prisma.crystalDraft.findUnique({ where: { id: draftId } });
+    assert.ok(!draftRow?.promotedCrystalId);
+  }
+});
+
+const PREVIEW_SHA = "c".repeat(64);
+
+test("publishGroup ignores an unrelated private preview asset and publishes only the selected keys", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const { groupId } = await seedPublishableGroup(prisma);
+  const file = await prisma.assetSourceFile.findFirst({ where: { groupId } });
+  await prisma.processedAsset.create({
+    data: {
+      sourceFileId: file?.id ?? "file-x",
+      groupId,
+      purpose: "PREVIEW",
+      processingVersion: 1,
+      state: "APPROVED",
+      storageProvider: "local-fs",
+      storageKey: "imports/s/processed/g/v1/bead-preview.webp",
+      assetKey: `approved:${PREVIEW_SHA}`,
+      outputSha256: PREVIEW_SHA,
+      outputBytes: 1024n,
+      outputContentType: "image/webp",
+      qcResult: { passed: true, checks: [] },
+      qcPassedAt: new Date("2026-08-31T00:00:00.000Z"),
+      approvedAt: new Date("2026-08-31T00:00:00.000Z"),
+      usagePermission: "OWNED",
+      isAuthenticPhotograph: true,
+      allowCommercialUse: true,
+      allowPublicDisplay: false,
+      isCurrentVersion: true
+    }
+  });
+  const published = await repository.publishGroup(groupId, publishInput());
+  assert.equal(published.state, "PUBLISHED");
+  assert.deepEqual(published.publishedAssetKeys, [`approved:${VALID_SHA}`]);
+  const bindings = await prisma.productAssetBinding.findMany({});
+  assert.equal(bindings.length, 1);
+  assert.notEqual(bindings[0]?.assetKey, `approved:${PREVIEW_SHA}`);
+});
+
+test("publishGroup snapshots the operator approval decisions on the publication record", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const { groupId } = await seedPublishableGroup(prisma);
+  await repository.publishGroup(
+    groupId,
+    publishInput({ allowAiTraining: false, allowAiRecommendation: true })
+  );
+  const publication = await prisma.beadGroupPublication.findFirst({ where: { groupId } });
+  assert.equal(publication?.qualityStatement, "品相完整，无裂痕");
+  assert.equal(publication?.qualitySource, "供应商证书");
+  assert.equal(publication?.rightsHolder, "Mystcrag Studio");
+  assert.equal(publication?.usagePermission, "OWNED");
+  assert.equal(publication?.isAuthenticPhotograph, true);
+  assert.equal(publication?.allowAiTraining, false);
+  assert.equal(publication?.allowAiRecommendation, true);
+});
+
+async function seedLookupFixture(prisma: PrismaDouble): Promise<{ groupId: string; assetId: string }> {
+  const { groupId } = await createGroupFixture(prisma);
+  await seedApprovedCurrentAsset(prisma, groupId);
+  const asset = await prisma.processedAsset.findFirst({ where: { groupId } });
+  return { groupId, assetId: asset!.id as string };
+}
+
+async function seedProduct(
+  prisma: PrismaDouble,
+  options: { sku: string; active?: boolean } = { sku: "SKU-LOOKUP", active: true }
+): Promise<string> {
+  const product = await prisma.materialProduct.create({
+    data: {
+      sku: options.sku,
+      crystalId: "crystal-aquamarine",
+      name: "lookup product",
+      shape: "ROUND",
+      diameterMm: 8,
+      materialKey: "lookup-material",
+      currency: "CNY",
+      unitPriceMinor: 1n,
+      unitCostMinor: 1n,
+      active: options.active ?? true
+    }
+  });
+  return product.id as string;
+}
+
+test("findApprovedPublicAsset ignores a binding that points at a different processed asset", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const { groupId, assetId } = await seedLookupFixture(prisma);
+  const decoy = await prisma.processedAsset.create({
+    data: {
+      sourceFileId: "file-decoy",
+      groupId,
+      purpose: "MODEL",
+      processingVersion: 1,
+      state: "APPROVED",
+      storageProvider: "local-fs",
+      storageKey: "imports/s/processed/g/v1/decoy.glb",
+      assetKey: `approved:${OTHER_SHA}`,
+      outputSha256: OTHER_SHA,
+      outputBytes: 2048n,
+      outputContentType: "image/webp",
+      qcResult: { passed: true, checks: [] },
+      qcPassedAt: new Date("2026-08-31T00:00:00.000Z"),
+      approvedAt: new Date("2026-08-31T00:00:00.000Z"),
+      usagePermission: "OWNED",
+      isAuthenticPhotograph: true,
+      allowCommercialUse: true,
+      allowPublicDisplay: true,
+      isCurrentVersion: true
+    }
+  });
+  const productId = await seedProduct(prisma, { sku: "SKU-LOOKUP-DECOY" });
+  await prisma.productAssetBinding.create({
+    data: {
+      materialProductId: productId,
+      processedAssetId: decoy.id as string,
+      assetKey: `approved:${VALID_SHA}`,
+      purpose: "TEXTURE",
+      bindingStatus: "APPROVED",
+      allowPublicDisplay: true,
+      allowCommercialUse: true,
+      approvedAt: new Date()
+    }
+  });
+  assert.notEqual(decoy.id, assetId);
+  assert.equal(await repository.findApprovedPublicAsset(`approved:${VALID_SHA}`), null);
+});
+
+test("findApprovedPublicAsset rejects private bindings and inactive products", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const { assetId } = await seedLookupFixture(prisma);
+  const privateProductId = await seedProduct(prisma, { sku: "SKU-LOOKUP-PRIVATE" });
+  await prisma.productAssetBinding.create({
+    data: {
+      materialProductId: privateProductId,
+      processedAssetId: assetId,
+      assetKey: `approved:${VALID_SHA}`,
+      purpose: "TEXTURE",
+      bindingStatus: "APPROVED",
+      allowPublicDisplay: false,
+      allowCommercialUse: true,
+      approvedAt: new Date()
+    }
+  });
+  assert.equal(await repository.findApprovedPublicAsset(`approved:${VALID_SHA}`), null);
+
+  const prismaInactive = newDouble();
+  const repositoryInactive = new AssetImportRepository(prismaInactive as never);
+  const { assetId: inactiveAssetId } = await seedLookupFixture(prismaInactive);
+  const inactiveProductId = await seedProduct(prismaInactive, {
+    sku: "SKU-LOOKUP-INACTIVE",
+    active: false
+  });
+  await prismaInactive.productAssetBinding.create({
+    data: {
+      materialProductId: inactiveProductId,
+      processedAssetId: inactiveAssetId,
+      assetKey: `approved:${VALID_SHA}`,
+      purpose: "TEXTURE",
+      bindingStatus: "APPROVED",
+      allowPublicDisplay: true,
+      allowCommercialUse: true,
+      approvedAt: new Date()
+    }
+  });
+  assert.equal(await repositoryInactive.findApprovedPublicAsset(`approved:${VALID_SHA}`), null);
+});
+
+test("findApprovedPublicAsset resolves an asset bound to an active public product", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const { assetId } = await seedLookupFixture(prisma);
+  const productId = await seedProduct(prisma);
+  await prisma.productAssetBinding.create({
+    data: {
+      materialProductId: productId,
+      processedAssetId: assetId,
+      assetKey: `approved:${VALID_SHA}`,
+      purpose: "TEXTURE",
+      bindingStatus: "APPROVED",
+      allowPublicDisplay: true,
+      allowCommercialUse: true,
+      approvedAt: new Date()
+    }
+  });
+  const resolved = await repository.findApprovedPublicAsset(`approved:${VALID_SHA}`);
+  assert.ok(resolved);
+  assert.equal(resolved.assetKey, `approved:${VALID_SHA}`);
+  assert.equal(resolved.outputSha256, VALID_SHA);
 });

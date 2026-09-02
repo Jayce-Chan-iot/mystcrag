@@ -26,9 +26,10 @@ import { toPrismaJson } from "../mappers/snapshot.mapper.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+const CONTROL_CHARACTERS = /[\u0000-\u001f]/;
 const MAX_IDENTIFIER_LENGTH = 160;
 const DEFAULT_RETRY_DELAY_MS = 60_000;
+const PENDING_CURATION_COMPLIANCE_NOTE = "Pending manual curation.";
 
 const UploadedFileHashSchema = z.strictObject({ sha256: Sha256Schema });
 
@@ -303,6 +304,7 @@ type SessionRow = {
   declaredFileCount: number;
   archivedFileCount: number;
   failedFileCount: number;
+  skippedFileCount: number;
   declaredBytes: bigint;
   uploadedBytes: bigint;
   manifestIdempotencyKey: string | null;
@@ -315,6 +317,7 @@ type SourceFileRow = {
   clientFileId: string;
   relativePath: string;
   byteSize: bigint;
+  lastModifiedMs: bigint | null;
   kind: string;
   state: string;
   sha256: string | null;
@@ -375,6 +378,15 @@ type PublicationRow = {
   materialProductId: string;
   crystalId: string;
   inventorySnapshotId: string;
+  qualityStatement: string;
+  qualitySource: string;
+  rightsHolder: string;
+  usagePermission: string;
+  isAuthenticPhotograph: boolean;
+  allowAiTraining: boolean;
+  allowAiRecommendation: boolean;
+  allowCommercialUse: boolean;
+  allowPublicDisplay: boolean;
   publishedAssetKeys: string[];
   publishedAt: Date;
 };
@@ -412,6 +424,10 @@ type CrystalDraftRow = {
   nameCn: string;
   nameEn: string | null;
   mineralName: string;
+  colorTags: string[];
+  visualTags: string[];
+  styleTags: string[];
+  priceLevel: number | null;
   gemologicalInfo: unknown;
   complianceNote: string;
   promotedCrystalId: string | null;
@@ -537,7 +553,16 @@ export class AssetImportRepository {
     validateIdentifierParam(request.idempotencyKey, "idempotencyKey");
     try {
       const row = await this.prisma.assetImportSession.create({
-        data: { idempotencyKey: request.idempotencyKey, state: "CREATED" }
+        data: {
+          idempotencyKey: request.idempotencyKey,
+          state: "CREATED",
+          declaredFileCount: 0,
+          archivedFileCount: 0,
+          failedFileCount: 0,
+          skippedFileCount: 0,
+          declaredBytes: 0n,
+          uploadedBytes: 0n
+        }
       });
       return {
         sessionId: row.id,
@@ -622,6 +647,7 @@ export class AssetImportRepository {
             const consistent =
               existing.relativePath === entry.relativePath &&
               existing.byteSize === BigInt(entry.byteSize) &&
+              existing.lastModifiedMs === BigInt(entry.lastModifiedMs) &&
               existing.kind === entry.kind;
             if (!consistent) {
               throw new PersistenceError(
@@ -638,6 +664,7 @@ export class AssetImportRepository {
               clientFileId: entry.clientFileId,
               relativePath: entry.relativePath,
               byteSize: BigInt(entry.byteSize),
+              lastModifiedMs: BigInt(entry.lastModifiedMs),
               kind: entry.kind,
               state: "PENDING"
             }
@@ -724,7 +751,7 @@ export class AssetImportRepository {
           await tx.assetImportSession.update({
             where: { id: file.sessionId },
             data: {
-              failedFileCount: (session.failedFileCount ?? 0) + 1,
+              skippedFileCount: (session.skippedFileCount ?? 0) + 1,
               lastVerifiedCheckpoint: advanceCheckpoint(session.lastVerifiedCheckpoint, "ARCHIVED")
             }
           });
@@ -836,10 +863,17 @@ export class AssetImportRepository {
     }
   }
 
-  /** Extends the lease only when the caller still owns an unexpired lease. */
-  async heartbeatJob(jobId: string, workerId: string, leaseUntil: Date): Promise<boolean> {
+  /**
+   * Extends the lease only when the caller still owns it: a single
+   * conditional UPDATE matches jobId + RUNNING + workerId + leaseToken +
+   * unexpired leaseUntil. A restarted process reusing the same workerId but
+   * holding a stale lease token (its lease expired and was reclaimed) is
+   * rejected exactly like a foreign worker.
+   */
+  async heartbeatJob(jobId: string, lease: AssetJobLease, leaseUntil: Date): Promise<boolean> {
     validateIdentifierParam(jobId, "jobId");
-    validateWorkerId(workerId);
+    validateWorkerId(lease.workerId);
+    validateIdentifierParam(lease.leaseToken, "leaseToken");
     if (!(leaseUntil instanceof Date) || Number.isNaN(leaseUntil.getTime()) || leaseUntil.getTime() <= Date.now()) {
       return false;
     }
@@ -847,8 +881,9 @@ export class AssetImportRepository {
       const result = await this.prisma.assetProcessingJob.updateMany({
         where: {
           id: jobId,
-          workerId,
           state: "RUNNING",
+          workerId: lease.workerId,
+          leaseToken: lease.leaseToken,
           leaseUntil: { gt: new Date() }
         },
         data: { leaseUntil }
@@ -859,6 +894,15 @@ export class AssetImportRepository {
     }
   }
 
+  /**
+   * Completes a leased job with an atomic compare-and-set: the first
+   * statement inside the transaction is a single conditional UPDATE matching
+   * jobId + RUNNING + workerId + leaseToken + unexpired leaseUntil. Only the
+   * current lease holder can flip the job to COMPLETED, and the row lock the
+   * UPDATE takes protects every later write in the transaction — a stale
+   * worker whose lease expired and was reclaimed sees zero affected rows and
+   * the whole attempt rolls back, leaving the reclaimer's state untouched.
+   */
   async completeJob(
     jobId: string,
     result: CompleteAssetJobResult,
@@ -871,26 +915,15 @@ export class AssetImportRepository {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const job = await tx.assetProcessingJob.findUnique({ where: { id: jobId } });
-        if (!job) {
-          throw new PersistenceError("NOT_FOUND", `Asset processing job ${jobId} was not found`);
-        }
-        const jobType = assertJobType(job.jobType);
-        const jobState = assertJobState(job.state);
-        assertJobLease(job, lease, jobId);
-
-        if (request.kind === "PROCESS_GROUP") {
-          await this.applyProcessGroupResult(tx, job, request);
-        } else if (request.kind !== jobType) {
-          throw new PersistenceError(
-            "CONFLICT",
-            `Asset processing job ${jobId} is of type ${jobType}, not ${request.kind}`
-          );
-        }
-
         const completedAt = new Date();
-        await tx.assetProcessingJob.update({
-          where: { id: jobId },
+        const cas = await tx.assetProcessingJob.updateMany({
+          where: {
+            id: jobId,
+            state: "RUNNING",
+            workerId: lease.workerId,
+            leaseToken: lease.leaseToken,
+            leaseUntil: { gt: new Date() }
+          },
           data: {
             state: "COMPLETED",
             result: toPrismaJson(request),
@@ -901,6 +934,23 @@ export class AssetImportRepository {
             nextAttemptAt: null
           }
         });
+        if (cas.count !== 1) {
+          throw await this.jobLeaseNotHeld(tx, jobId);
+        }
+
+        const job = await tx.assetProcessingJob.findUnique({ where: { id: jobId } });
+        if (!job) {
+          throw new PersistenceError("DATA_INTEGRITY_ERROR", `Asset processing job ${jobId} vanished mid-transaction`);
+        }
+        const jobType = assertJobType(job.jobType);
+        if (request.kind === "PROCESS_GROUP") {
+          await this.applyProcessGroupResult(tx, job, request);
+        } else if (request.kind !== jobType) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Asset processing job ${jobId} is of type ${jobType}, not ${request.kind}`
+          );
+        }
         return { jobId, state: "COMPLETED", completedAt };
       });
     } catch (error) {
@@ -908,6 +958,13 @@ export class AssetImportRepository {
     }
   }
 
+  /**
+   * Fails a leased job with the same atomic lease compare-and-set as
+   * completeJob. The retry counters are read only to compute the outcome;
+   * ownership is decided exclusively by the conditional UPDATE, so a stale
+   * worker can neither enqueue a bogus retry nor terminally fail a job that
+   * another worker already reclaimed.
+   */
   async failJob(
     jobId: string,
     error: AssetJobFailure,
@@ -926,7 +983,6 @@ export class AssetImportRepository {
           throw new PersistenceError("NOT_FOUND", `Asset processing job ${jobId} was not found`);
         }
         assertJobState(job.state);
-        assertJobLease(job, lease, jobId);
 
         const retryCount = job.retryCount + 1;
         const terminal = retryCount > job.maxRetries;
@@ -934,8 +990,14 @@ export class AssetImportRepository {
           ? null
           : (retryAt ?? new Date(Date.now() + DEFAULT_RETRY_DELAY_MS));
 
-        await tx.assetProcessingJob.update({
-          where: { id: jobId },
+        const cas = await tx.assetProcessingJob.updateMany({
+          where: {
+            id: jobId,
+            state: "RUNNING",
+            workerId: lease.workerId,
+            leaseToken: lease.leaseToken,
+            leaseUntil: { gt: new Date() }
+          },
           data: {
             state: terminal ? "FAILED" : "QUEUED",
             retryCount,
@@ -948,6 +1010,9 @@ export class AssetImportRepository {
             failedAt: terminal ? new Date() : job.failedAt
           }
         });
+        if (cas.count !== 1) {
+          throw await this.jobLeaseNotHeld(tx, jobId);
+        }
         return {
           jobId,
           state: terminal ? "FAILED" : "QUEUED",
@@ -961,27 +1026,44 @@ export class AssetImportRepository {
     }
   }
 
+  /**
+   * Draft save guarded by a real revision compare-and-set: the first write
+   * inside the transaction is a single conditional UPDATE that only matches
+   * the group while `revision` still equals `expectedGroupRevision`. Two
+   * concurrent saves against the same revision cannot both succeed — the
+   * second transaction's UPDATE re-evaluates after the first commits and
+   * finds zero rows, so it conflicts and rolls back instead of silently
+   * overwriting the winner's draft.
+   */
   async saveGroupDraft(groupId: string, input: SaveGroupDraftInput): Promise<SaveGroupDraftResult> {
     validateIdentifierParam(groupId, "groupId");
     const request = parseContract(SaveBeadProductDraftRequestSchema, input, "bead product draft request");
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        const cas = await tx.beadImageGroup.updateMany({
+          where: { id: groupId, revision: request.expectedGroupRevision },
+          data: { revision: request.expectedGroupRevision + 1 }
+        });
+        if (cas.count !== 1) {
+          const current = await tx.beadImageGroup.findUnique({ where: { id: groupId } });
+          if (!current) {
+            throw new PersistenceError("NOT_FOUND", `Bead image group ${groupId} was not found`);
+          }
+          throw new PersistenceError(
+            "CONFLICT",
+            `Group revision ${current.revision} does not match the expected revision ${request.expectedGroupRevision}`
+          );
+        }
         const group = await tx.beadImageGroup.findUnique({ where: { id: groupId } });
         if (!group) {
-          throw new PersistenceError("NOT_FOUND", `Bead image group ${groupId} was not found`);
+          throw new PersistenceError("DATA_INTEGRITY_ERROR", `Bead image group ${groupId} vanished mid-transaction`);
         }
         const groupState = assertGroupState(group.state);
         if (groupState === "PUBLISHED") {
           throw new PersistenceError(
             "CONFLICT",
             `Bead image group ${groupId} is already published and cannot be redrafted`
-          );
-        }
-        if (group.revision !== request.expectedGroupRevision) {
-          throw new PersistenceError(
-            "CONFLICT",
-            `Group revision ${group.revision} does not match the expected revision ${request.expectedGroupRevision}`
           );
         }
 
@@ -1009,7 +1091,7 @@ export class AssetImportRepository {
             data: {
               nameCn: request.crystalName,
               mineralName: "UNSPECIFIED",
-              complianceNote: "Pending manual curation."
+              complianceNote: PENDING_CURATION_COMPLIANCE_NOTE
             }
           });
           crystalDraftId = createdDraft.id;
@@ -1059,13 +1141,13 @@ export class AssetImportRepository {
         }
 
         // A reviewed group stays reviewable while its draft is edited; only
-        // unreviewed groups move forward to NAMED.
+        // unreviewed groups move forward to NAMED. The revision was already
+        // advanced by the compare-and-set that opened this transaction.
         const savedState = groupState === "READY" ? "READY" : "NAMED";
         await tx.beadImageGroup.update({
           where: { id: groupId },
           data: {
             state: savedState,
-            revision: group.revision + 1,
             crystalName: request.crystalName ?? group.crystalName,
             crystalId,
             crystalDraftId
@@ -1074,7 +1156,7 @@ export class AssetImportRepository {
         return {
           groupId,
           state: savedState,
-          revision: group.revision + 1,
+          revision: request.expectedGroupRevision + 1,
           draftSavedAt
         };
       });
@@ -1141,16 +1223,24 @@ export class AssetImportRepository {
             "textureAssetKey does not match an approved current asset version of the group"
           );
         }
-        if (
-          request.modelAssetKey !== undefined &&
-          !currentAssets.some((asset) => asset.assetKey === request.modelAssetKey)
-        ) {
-          throw new PersistenceError(
-            "COMPLIANCE_BLOCKED",
-            "modelAssetKey does not match an approved current asset version of the group"
-          );
+        // Only the assets this request explicitly selects are validated and
+        // published. Unrelated current assets of the group — e.g. a private
+        // PREVIEW kept for internal review — never block the publication and
+        // never appear in the published key set.
+        const selectedAssets: ProcessedAssetRow[] = [textureAsset];
+        if (request.modelAssetKey !== undefined) {
+          const modelAsset = currentAssets.find((asset) => asset.assetKey === request.modelAssetKey);
+          if (!modelAsset) {
+            throw new PersistenceError(
+              "COMPLIANCE_BLOCKED",
+              "modelAssetKey does not match an approved current asset version of the group"
+            );
+          }
+          if (modelAsset.id !== textureAsset.id) {
+            selectedAssets.push(modelAsset);
+          }
         }
-        for (const asset of currentAssets) {
+        for (const asset of selectedAssets) {
           const permission = assertUsagePermission(asset.usagePermission);
           if (permission !== "OWNED" && permission !== "GRANTED") {
             throw new PersistenceError(
@@ -1262,10 +1352,9 @@ export class AssetImportRepository {
               }
         });
 
-        const publishedAssetKeys = currentAssets
-          .map((asset) => asset.assetKey)
-          .filter((key): key is string => key !== null)
-          .sort();
+        // Only the assets that actually received an APPROVED binding here are
+        // part of the published set; unrelated group assets stay out.
+        const publishedAssetKeys = [...new Set(bindings.map((binding) => binding.assetKey))].sort();
         await tx.beadGroupPublication.create({
           data: {
             groupId,
@@ -1274,6 +1363,15 @@ export class AssetImportRepository {
             materialProductId: product.id,
             crystalId,
             inventorySnapshotId: snapshot.id,
+            qualityStatement: request.qualityStatement,
+            qualitySource: request.qualitySource,
+            rightsHolder: request.rightsHolder,
+            usagePermission: request.usagePermission,
+            isAuthenticPhotograph: request.isAuthenticPhotograph,
+            allowAiTraining: request.allowAiTraining,
+            allowAiRecommendation: request.allowAiRecommendation,
+            allowCommercialUse: request.allowCommercialUse,
+            allowPublicDisplay: request.allowPublicDisplay,
             publishedAssetKeys,
             publishedAt: now
           }
@@ -1296,8 +1394,12 @@ export class AssetImportRepository {
 
   /**
    * Approved-only public asset lookup: a key resolves only when the processed
-   * asset is APPROVED, public, current, and carries an APPROVED product
-   * binding. Drafts, retired and private assets never resolve.
+   * asset is APPROVED, public, current, and the product binding that links to
+   * THIS processed asset row — carrying the same assetKey — is APPROVED,
+   * public and commercial, and its MaterialProduct is still active. Bindings
+   * whose processedAssetId and assetKey disagree, private bindings, and
+   * inactive products never resolve; drafts, retired and private assets never
+   * resolve.
    */
   async findApprovedPublicAsset(assetKey: string): Promise<ApprovedPublicAsset | null> {
     const keyRequest = parseContract(
@@ -1319,10 +1421,24 @@ export class AssetImportRepository {
       }
     });
     if (!asset) return null;
+    // The binding must point at the very processed asset row that was found
+    // AND carry the same key: a binding that reuses this key for a different
+    // processed asset, or points at this asset under a different key, is
+    // inconsistent evidence and resolves nothing.
     const binding = await this.prisma.productAssetBinding.findFirst({
-      where: { assetKey: keyRequest.assetKey, bindingStatus: "APPROVED" }
+      where: {
+        processedAssetId: asset.id,
+        assetKey: keyRequest.assetKey,
+        bindingStatus: "APPROVED",
+        allowPublicDisplay: true,
+        allowCommercialUse: true
+      }
     });
     if (!binding) return null;
+    const product = await this.prisma.materialProduct.findUnique({
+      where: { id: binding.materialProductId }
+    });
+    if (!product || product.active !== true) return null;
     assertAssetState(asset.state);
     assertBindingStatus(binding.bindingStatus);
     if (asset.assetKey !== `approved:${asset.outputSha256}`) {
@@ -1346,6 +1462,25 @@ export class AssetImportRepository {
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
+
+  /**
+   * Explains why a lease compare-and-set matched zero rows. Called only after
+   * the CAS failed, so the job either vanished (NOT_FOUND) or is leased by
+   * someone else / no longer RUNNING / its lease expired (CONFLICT).
+   */
+  private async jobLeaseNotHeld(tx: Db, jobId: string): Promise<PersistenceError> {
+    const job = await tx.assetProcessingJob.findUnique({ where: { id: jobId } });
+    if (!job) {
+      return new PersistenceError("NOT_FOUND", `Asset processing job ${jobId} was not found`);
+    }
+    const state = assertJobState(job.state);
+    return new PersistenceError(
+      "CONFLICT",
+      state === "RUNNING"
+        ? `Asset processing job ${jobId} is leased by another worker or the lease expired`
+        : `Asset processing job ${jobId} is ${state}, not RUNNING`
+    );
+  }
 
   private async replayPublication(
     groupId: string,
@@ -1404,10 +1539,29 @@ export class AssetImportRepository {
       throw new PersistenceError("NOT_FOUND", `Crystal draft ${draftId} was not found`);
     }
     if (draft.promotedCrystalId) return draft.promotedCrystalId;
-    if (draft.nameEn === null || draft.nameEn.trim() === "") {
+
+    // Fail closed: a formal Crystal is only created from a draft a human has
+    // fully curated. The accepted Contract cannot yet transmit these fields,
+    // so drafts created through the current API stay unpromotable until a
+    // Contract revision lands; no placeholder Crystal is ever produced.
+    const missingFields: string[] = [];
+    if (draft.nameCn.trim() === "") missingFields.push("nameCn");
+    if (draft.nameEn === null || draft.nameEn.trim() === "") missingFields.push("nameEn");
+    if (draft.mineralName.trim() === "" || draft.mineralName === "UNSPECIFIED") {
+      missingFields.push("mineralName");
+    }
+    if (draft.colorTags.length === 0) missingFields.push("colorTags");
+    if (draft.visualTags.length === 0) missingFields.push("visualTags");
+    if (draft.styleTags.length === 0) missingFields.push("styleTags");
+    if (draft.priceLevel === null || draft.priceLevel === undefined) missingFields.push("priceLevel");
+    if (draft.complianceNote.trim() === "" || draft.complianceNote === PENDING_CURATION_COMPLIANCE_NOTE) {
+      missingFields.push("complianceNote");
+    }
+    if (missingFields.length > 0) {
       throw new PersistenceError(
-        "DATA_INTEGRITY_ERROR",
-        `Crystal draft ${draftId} is missing the operator-confirmed English name required for promotion`
+        "COMPLIANCE_BLOCKED",
+        `Crystal draft ${draftId} cannot be promoted: manual curation fields are missing (${missingFields.join(", ")}). ` +
+          "The accepted design contract cannot transmit these fields yet; promotion fails closed until a contract revision delivers them."
       );
     }
 
@@ -1415,15 +1569,15 @@ export class AssetImportRepository {
       data: {
         id: randomUUID(),
         nameCn: draft.nameCn,
-        nameEn: draft.nameEn,
+        nameEn: draft.nameEn!,
         mineralName: draft.mineralName,
         gemologicalInfo: toPrismaJson(draft.gemologicalInfo ?? {}),
-        colorTags: [],
-        visualTags: [],
-        styleTags: [],
+        colorTags: [...draft.colorTags],
+        visualTags: [...draft.visualTags],
+        styleTags: [...draft.styleTags],
         emotionTags: [],
         cultureTags: [],
-        priceLevel: 1,
+        priceLevel: draft.priceLevel!,
         complianceNote: draft.complianceNote
       }
     });
@@ -1550,23 +1704,4 @@ function toPublishResult(row: PublicationRow): PublishAssetGroupResult {
     publishedAt: row.publishedAt,
     publishedAssetKeys: [...row.publishedAssetKeys]
   };
-}
-
-function assertJobLease(job: JobRow, lease: AssetJobLease, jobId: string): void {
-  const jobState = assertJobState(job.state);
-  if (jobState !== "RUNNING") {
-    throw new PersistenceError(
-      "CONFLICT",
-      `Asset processing job ${jobId} is ${jobState}, not RUNNING`
-    );
-  }
-  if (job.workerId !== lease.workerId || job.leaseToken !== lease.leaseToken) {
-    throw new PersistenceError(
-      "CONFLICT",
-      `Asset processing job ${jobId} is leased by another worker`
-    );
-  }
-  if (!job.leaseUntil || job.leaseUntil.getTime() <= Date.now()) {
-    throw new PersistenceError("CONFLICT", `Asset processing job ${jobId} lease has expired`);
-  }
 }

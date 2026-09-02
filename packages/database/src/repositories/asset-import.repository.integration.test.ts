@@ -188,6 +188,7 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       );
       const names = migrations.map(({ migration_name }) => migration_name);
       assert.ok(names.includes("20260831_add_bead_asset_import"));
+      assert.ok(names.includes("20260902_harden_asset_import_persistence"));
       assert.ok(names.includes("20260721140000_init_mystcrag_persistence_v1"));
       assert.equal(migrations.every(({ finished_at }) => finished_at !== null), true);
       assert.equal(migrations.every(({ rolled_back_at }) => rolled_back_at === null), true);
@@ -246,6 +247,50 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         "product_asset_bindings_active_product_asset_key"
       ]) {
         assert.equal(indexByName.get(partial), true, `index ${partial} must stay a partial unique index`);
+      }
+
+      const columns = await prisma.$queryRawUnsafe<
+        Array<{ table_name: string; column_name: string; is_nullable: string }>
+      >(
+        `SELECT table_name, column_name, is_nullable FROM information_schema.columns
+         WHERE table_schema = 'public' AND (
+           (table_name = 'asset_source_files' AND column_name = 'last_modified_ms')
+           OR (table_name = 'asset_import_sessions' AND column_name = 'skipped_file_count')
+           OR (table_name = 'crystal_drafts' AND column_name IN ('color_tags', 'visual_tags', 'style_tags', 'price_level'))
+           OR (table_name = 'bead_group_publications' AND column_name IN (
+             'quality_statement', 'quality_source', 'rights_holder', 'usage_permission',
+             'is_authentic_photograph', 'allow_ai_training', 'allow_ai_recommendation',
+             'allow_commercial_use', 'allow_public_display'
+           ))
+         )`
+      );
+      const columnKey = (table: string, column: string) => `${table}.${column}`;
+      const presentColumns = new Set(columns.map((row) => columnKey(row.table_name, row.column_name)));
+      for (const required of [
+        "asset_source_files.last_modified_ms",
+        "asset_import_sessions.skipped_file_count",
+        "crystal_drafts.color_tags",
+        "crystal_drafts.visual_tags",
+        "crystal_drafts.style_tags",
+        "crystal_drafts.price_level",
+        "bead_group_publications.quality_statement",
+        "bead_group_publications.quality_source",
+        "bead_group_publications.rights_holder",
+        "bead_group_publications.usage_permission",
+        "bead_group_publications.is_authentic_photograph",
+        "bead_group_publications.allow_ai_training",
+        "bead_group_publications.allow_ai_recommendation",
+        "bead_group_publications.allow_commercial_use",
+        "bead_group_publications.allow_public_display"
+      ]) {
+        assert.ok(presentColumns.has(required), `required column ${required} must exist`);
+      }
+      for (const decision of columns.filter((row) => row.table_name === "bead_group_publications")) {
+        assert.equal(
+          decision.is_nullable,
+          "NO",
+          `publication decision column ${decision.column_name} must be NOT NULL so approval evidence is always recorded`
+        );
       }
       console.log(
         `ASSET_IMPORT_VERIFICATION_ENV migrations=${names.length} tables=${tableNames.size} indexes=${indexByName.size}`
@@ -404,7 +449,8 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         where: { id: session.sessionId }
       });
       assert.equal(sessionRow.archivedFileCount, 1);
-      assert.equal(sessionRow.failedFileCount, 1);
+      assert.equal(sessionRow.failedFileCount, 0, "an exact duplicate is skipped, not failed");
+      assert.equal(sessionRow.skippedFileCount, 1);
       assert.equal(sessionRow.uploadedBytes, 1024n);
       assert.equal(sessionRow.lastVerifiedCheckpoint, "ARCHIVED");
 
@@ -452,13 +498,20 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       assert.ok(jobRow.workerId === "worker-lease-a" || jobRow.workerId === "worker-lease-b");
       assert.equal(jobRow.leaseToken, winner.lease.leaseToken);
 
-      assert.equal(await repository.heartbeatJob(job.id, "worker-lease-other", new Date(Date.now() + 60_000)), false);
       assert.equal(
-        await repository.heartbeatJob(job.id, winner.lease.workerId, new Date(Date.now() - 1_000)),
+        await repository.heartbeatJob(
+          job.id,
+          { workerId: "worker-lease-other", leaseToken: winner.lease.leaseToken },
+          new Date(Date.now() + 60_000)
+        ),
         false
       );
       assert.equal(
-        await repository.heartbeatJob(job.id, winner.lease.workerId, new Date(Date.now() + 120_000)),
+        await repository.heartbeatJob(job.id, winner.lease, new Date(Date.now() - 1_000)),
+        false
+      );
+      assert.equal(
+        await repository.heartbeatJob(job.id, winner.lease, new Date(Date.now() + 120_000)),
         true
       );
     });
@@ -503,8 +556,9 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       assert.notEqual(reclaimed.lease.leaseToken, staleLease.lease.leaseToken);
 
       assert.equal(
-        await repository.heartbeatJob(job.id, staleLease.lease.workerId, new Date(Date.now() + 60_000)),
-        false
+        await repository.heartbeatJob(job.id, staleLease.lease, new Date(Date.now() + 60_000)),
+        false,
+        "a restarted process reusing the same workerId but the stale lease token must be rejected"
       );
       await assert.rejects(
         () =>
@@ -1066,7 +1120,562 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       await assert.rejects(() =>
         prisma.crystal.delete({ where: { id: publication.crystalId } })
       );
+      await assert.rejects(() =>
+        prisma.inventorySnapshot.delete({ where: { id: publication.inventorySnapshotId } })
+      );
     });
+
+    await t.test(
+      "15. a stale worker cannot overwrite the reclaimer after a lease takeover",
+      async () => {
+        const scenario = "stalewrite";
+        const session = await repository.createSession({ idempotencyKey: keyOf(`session-${scenario}`) });
+        const job = await prisma.assetProcessingJob.create({
+          data: {
+            sessionId: session.sessionId,
+            jobType: "ARCHIVE_FILE",
+            state: "QUEUED",
+            payload: {},
+            maxRetries: 3
+          }
+        });
+        const staleLease = await repository.claimNextJob("worker-stale-write", new Date(Date.now() + 60_000));
+        assert.ok(staleLease);
+        const staleResult: CompleteAssetJobResult = {
+          kind: "ARCHIVE_FILE",
+          sha256: shaOf(`${scenario}-stale`),
+          archiveKey: `imports/${prefix}/raw/${scenario}-stale.jpg`,
+          storageProvider: "local-fs"
+        };
+
+        // Emulate the pre-fix read-then-write pattern in one transaction: the
+        // stale worker reads a still-valid lease, the lease then expires and
+        // another worker reclaims the job, and only afterwards does the stale
+        // worker write by bare id. The transaction rolls back at the end so
+        // the demonstration leaves no residue behind.
+        let oldPatternOverwrote = 0;
+        let reclaimerLease: ClaimedAssetJob | null = null;
+        await assert.rejects(() =>
+          prisma.$transaction(
+            async (tx) => {
+              const read = await tx.$queryRawUnsafe<
+                Array<{ id: string; worker_id: string | null; lease_until: Date }>
+              >('SELECT id, worker_id, lease_until FROM "asset_processing_jobs" WHERE id = $1', job.id);
+              assert.equal(read[0]!.worker_id, "worker-stale-write");
+
+              await prisma.$executeRawUnsafe(
+                'UPDATE "asset_processing_jobs" SET "lease_until" = $1 WHERE "id" = $2',
+                new Date(Date.now() - 5_000),
+                job.id
+              );
+              const reclaimed = await repository.claimNextJob(
+                "worker-reclaimer",
+                new Date(Date.now() + 60_000)
+              );
+              assert.ok(reclaimed, "the expired lease must be reclaimable mid-race");
+              assert.equal(reclaimed.jobId, job.id);
+              reclaimerLease = reclaimed;
+
+              oldPatternOverwrote = await tx.$executeRawUnsafe(
+                `UPDATE "asset_processing_jobs"
+                 SET "state" = 'COMPLETED', "result" = $1::jsonb, "completed_at" = now(),
+                     "worker_id" = NULL, "lease_token" = NULL, "lease_until" = NULL
+                 WHERE "id" = $2`,
+                JSON.stringify(staleResult),
+                job.id
+              );
+              throw new Error("roll back the emulated pre-fix write");
+            },
+            { timeout: 30_000 }
+          )
+        );
+        assert.equal(
+          oldPatternOverwrote,
+          1,
+          "the pre-fix unconditional write-by-id would have clobbered the reclaimer"
+        );
+
+        let jobRow = await prisma.assetProcessingJob.findUniqueOrThrow({ where: { id: job.id } });
+        assert.equal(jobRow.state, "RUNNING", "the rollback restores the reclaimer's lease");
+        assert.equal(jobRow.workerId, "worker-reclaimer");
+        assert.equal(jobRow.result, null);
+        assert.equal(jobRow.completedAt, null);
+
+        // The fixed repository path: the stale worker's compare-and-set must
+        // reject without touching the reclaimer's state.
+        await assert.rejects(
+          () => repository.completeJob(job.id, staleResult, staleLease.lease),
+          expectCode("CONFLICT")
+        );
+        jobRow = await prisma.assetProcessingJob.findUniqueOrThrow({ where: { id: job.id } });
+        assert.equal(jobRow.state, "RUNNING");
+        assert.equal(jobRow.workerId, "worker-reclaimer");
+        assert.equal(jobRow.result, null);
+        assert.equal(jobRow.completedAt, null);
+
+        const completed = await repository.completeJob(
+          job.id,
+          {
+            kind: "ARCHIVE_FILE",
+            sha256: shaOf(`${scenario}-reclaimer`),
+            archiveKey: `imports/${prefix}/raw/${scenario}-reclaimer.jpg`,
+            storageProvider: "local-fs"
+          },
+          reclaimerLease!.lease
+        );
+        assert.equal(completed.state, "COMPLETED");
+
+        // True concurrent race: the lease is already expired and the stale
+        // completion races a parallel reclaim — the stale writer must lose
+        // regardless of the interleaving.
+        const raceSession = await repository.createSession({ idempotencyKey: keyOf("session-race-stale") });
+        const raceJob = await prisma.assetProcessingJob.create({
+          data: {
+            sessionId: raceSession.sessionId,
+            jobType: "ARCHIVE_FILE",
+            state: "QUEUED",
+            payload: {},
+            maxRetries: 3
+          }
+        });
+        const raceStale = await repository.claimNextJob("worker-race-stale", new Date(Date.now() + 60_000));
+        assert.ok(raceStale);
+        await prisma.$executeRawUnsafe(
+          'UPDATE "asset_processing_jobs" SET "lease_until" = $1 WHERE "id" = $2',
+          new Date(Date.now() - 5_000),
+          raceJob.id
+        );
+        const [, staleOutcome] = await Promise.allSettled([
+          repository.claimNextJob("worker-race-fresh", new Date(Date.now() + 60_000)),
+          repository.completeJob(
+            raceJob.id,
+            {
+              kind: "ARCHIVE_FILE",
+              sha256: shaOf(`${scenario}-race-stale`),
+              archiveKey: `imports/${prefix}/raw/${scenario}-race-stale.jpg`,
+              storageProvider: "local-fs"
+            },
+            raceStale.lease
+          )
+        ]);
+        assert.equal(staleOutcome.status, "rejected", "the stale completion must never win the race");
+        const raceRow = await prisma.assetProcessingJob.findUniqueOrThrow({
+          where: { id: raceJob.id }
+        });
+        assert.equal(raceRow.state, "RUNNING");
+        assert.equal(raceRow.workerId, "worker-race-fresh");
+        assert.equal(raceRow.result, null);
+      }
+    );
+
+    await t.test("16. concurrent draft saves on one revision admit exactly one writer", async () => {
+      const scenario = "draftcas";
+      const fixture = await driveGroupToReady(scenario);
+
+      // The pre-fix pattern read the revision, then wrote it back
+      // unconditionally; a concurrent winner between read and write was
+      // silently clobbered. Emulate that pattern, then roll back.
+      let oldPatternOverwrote = 0;
+      await assert.rejects(() =>
+        prisma.$transaction(
+          async (tx) => {
+            const read = await tx.$queryRawUnsafe<Array<{ revision: number }>>(
+              'SELECT revision FROM "bead_image_groups" WHERE id = $1',
+              fixture.groupId
+            );
+            assert.equal(read[0]!.revision, 1);
+
+            const winner = await repository.saveGroupDraft(fixture.groupId, {
+              expectedGroupRevision: 1,
+              displayName: `CAS winner ${scenario}`
+            });
+            assert.equal(winner.revision, 2);
+
+            oldPatternOverwrote = await tx.$executeRawUnsafe(
+              'UPDATE "bead_image_groups" SET "revision" = 2 WHERE "id" = $1',
+              fixture.groupId
+            );
+            throw new Error("roll back the emulated pre-fix write");
+          },
+          { timeout: 30_000 }
+        )
+      );
+      assert.equal(
+        oldPatternOverwrote,
+        1,
+        "the pre-fix unconditional revision write would have clobbered the winner"
+      );
+      const groupRow = await prisma.beadImageGroup.findUniqueOrThrow({
+        where: { id: fixture.groupId }
+      });
+      assert.equal(groupRow.revision, 2, "the rollback restores the winner's revision");
+
+      // Two genuinely concurrent saves against the same revision: the
+      // compare-and-set serialises them on the row lock, so exactly one
+      // transaction commits and the other conflicts and rolls back.
+      const raceGroup = await prisma.beadImageGroup.create({
+        data: { sessionId: fixture.sessionId, state: "NAMED", revision: 1 }
+      });
+      const attempts = await Promise.allSettled([
+        repository.saveGroupDraft(raceGroup.id, {
+          expectedGroupRevision: 1,
+          displayName: `race writer A ${scenario}`
+        }),
+        repository.saveGroupDraft(raceGroup.id, {
+          expectedGroupRevision: 1,
+          displayName: `race writer B ${scenario}`
+        })
+      ]);
+      const fulfilled = attempts.filter((attempt) => attempt.status === "fulfilled");
+      const rejected = attempts.filter((attempt) => attempt.status === "rejected");
+      assert.equal(fulfilled.length, 1, "exactly one concurrent draft save may win the revision");
+      assert.equal(rejected.length, 1);
+      const rejectedError = (rejected[0] as PromiseRejectedResult).reason;
+      assert.ok(
+        rejectedError instanceof PersistenceError && rejectedError.code === "CONFLICT",
+        `the loser must conflict, got ${String(rejectedError)}`
+      );
+      const raceRow = await prisma.beadImageGroup.findUniqueOrThrow({ where: { id: raceGroup.id } });
+      assert.equal(raceRow.revision, 2);
+      assert.equal(await prisma.materialProductDraft.count({ where: { groupId: raceGroup.id } }), 1);
+
+      await assert.rejects(
+        () =>
+          repository.saveGroupDraft(raceGroup.id, {
+            expectedGroupRevision: 1,
+            displayName: `stale writer ${scenario}`
+          }),
+        expectCode("CONFLICT")
+      );
+    });
+
+    await t.test("17. crystal draft promotion fails closed until a human curates every field", async () => {
+      const scenario = "promotion";
+      const fixture = await driveGroupToReady(scenario);
+      const draft = await prisma.crystalDraft.create({
+        data: {
+          nameCn: "晋升水晶",
+          nameEn: null,
+          mineralName: "UNSPECIFIED",
+          complianceNote: "Pending manual curation."
+        }
+      });
+      await prisma.beadImageGroup.update({
+        where: { id: fixture.groupId },
+        data: { state: "READY", crystalDraftId: draft.id }
+      });
+      await prisma.assetImportSession.update({
+        where: { id: fixture.sessionId },
+        data: { state: "READY_TO_PUBLISH" }
+      });
+
+      await assert.rejects(
+        () =>
+          repository.publishGroup(
+            fixture.groupId,
+            publishInput(scenario, "unused-crystal-id", fixture.assetKey, {
+              crystalId: undefined,
+              crystalDraftId: draft.id,
+              crystalDraftPromotionConfirmed: true,
+              crystalName: "晋升水晶"
+            })
+          ),
+        expectCode("COMPLIANCE_BLOCKED")
+      );
+      assert.equal(await prisma.crystal.count({ where: { nameCn: "晋升水晶" } }), 0);
+      const draftRow = await prisma.crystalDraft.findUniqueOrThrow({ where: { id: draft.id } });
+      assert.equal(draftRow.promotedCrystalId, null);
+      assert.equal(await prisma.beadGroupPublication.count({ where: { groupId: fixture.groupId } }), 0);
+      const groupAfterBlock = await prisma.beadImageGroup.findUniqueOrThrow({
+        where: { id: fixture.groupId }
+      });
+      assert.equal(groupAfterBlock.state, "READY", "the failed promotion must roll the group back to READY");
+
+      // A human curates every required field; only then may the draft promote,
+      // carrying the manual fields onto the formal Crystal.
+      await prisma.crystalDraft.update({
+        where: { id: draft.id },
+        data: {
+          nameEn: "Promotion Crystal",
+          mineralName: "Beryl",
+          colorTags: ["blue"],
+          visualTags: ["translucent"],
+          styleTags: ["minimal"],
+          priceLevel: 3,
+          complianceNote: "合规说明：天然矿物，无处理。"
+        }
+      });
+      const published = await repository.publishGroup(
+        fixture.groupId,
+        publishInput(scenario, "unused-crystal-id", fixture.assetKey, {
+          crystalId: undefined,
+          crystalDraftId: draft.id,
+          crystalDraftPromotionConfirmed: true,
+          crystalName: "晋升水晶"
+        })
+      );
+      const crystal = await prisma.crystal.findUniqueOrThrow({ where: { id: published.crystalId } });
+      assert.equal(crystal.nameCn, "晋升水晶");
+      assert.equal(crystal.nameEn, "Promotion Crystal");
+      assert.equal(crystal.mineralName, "Beryl");
+      assert.deepEqual(crystal.colorTags, ["blue"]);
+      assert.deepEqual(crystal.visualTags, ["translucent"]);
+      assert.deepEqual(crystal.styleTags, ["minimal"]);
+      assert.equal(crystal.priceLevel, 3);
+      assert.equal(crystal.complianceNote, "合规说明：天然矿物，无处理。");
+      const promotedDraft = await prisma.crystalDraft.findUniqueOrThrow({ where: { id: draft.id } });
+      assert.equal(promotedDraft.promotedCrystalId, published.crystalId);
+    });
+
+    await t.test(
+      "18. approved-only lookup joins through processedAssetId onto live public products",
+      async () => {
+        const scenario = "bindinglookup";
+        const crystalId = await createCrystal(`${scenario}-product`);
+        const lookupSession = await repository.createSession({ idempotencyKey: keyOf(`session-${scenario}`) });
+        const lookupRegistered = await repository.registerManifest(lookupSession.sessionId, {
+          idempotencyKey: keyOf(`manifest-${scenario}`),
+          files: [
+            {
+              clientFileId: `${prefix}-lcf-1`,
+              relativePath: `imports/${scenario}/lcf-1.jpg`,
+              byteSize: 256,
+              lastModifiedMs: 1_750_000_000_000,
+              kind: "JPEG" as const
+            }
+          ]
+        });
+        const lookupFileId = lookupRegistered.files[0]!.fileId;
+
+        async function seedLookupAsset(label: string): Promise<string> {
+          const sha = shaOf(`${scenario}-${label}`);
+          const group = await prisma.beadImageGroup.create({
+            data: { sessionId: lookupSession.sessionId, state: "NAMED", revision: 1 }
+          });
+          const asset = await prisma.processedAsset.create({
+            data: {
+              sourceFileId: lookupFileId,
+              groupId: group.id,
+              purpose: "MAIN",
+              processingVersion: 1,
+              processorVersion: "sharp-test-1.0.0",
+              state: "APPROVED",
+              storageProvider: "local-fs",
+              storageKey: `imports/${prefix}/processed/${scenario}/${label}.webp`,
+              assetKey: `approved:${sha}`,
+              outputSha256: sha,
+              outputBytes: 256n,
+              outputContentType: "image/webp",
+              qcResult: { passed: true, checks: [] },
+              qcPassedAt: new Date(),
+              approvedAt: new Date(),
+              usagePermission: "OWNED",
+              isAuthenticPhotograph: true,
+              allowCommercialUse: true,
+              allowPublicDisplay: true,
+              isCurrentVersion: true
+            }
+          });
+          return asset.id;
+        }
+
+        async function seedLookupProduct(label: string, active: boolean): Promise<string> {
+          const product = await prisma.materialProduct.create({
+            data: {
+              id: keyOf(`product-${scenario}-${label}`),
+              sku: keyOf(`sku-${scenario}-${label}`),
+              crystalId,
+              name: `${scenario} ${label}`,
+              shape: "ROUND",
+              diameterMm: 8,
+              materialKey: keyOf(`material-${scenario}-${label}`),
+              currency: "CNY",
+              unitPriceMinor: 100n,
+              unitCostMinor: 50n,
+              active
+            }
+          });
+          return product.id;
+        }
+
+        // A binding that reuses another asset's key but points at a different
+        // processed asset must not make that key resolvable.
+        const targetAssetId = await seedLookupAsset("decoy-target");
+        const targetSha = shaOf(`${scenario}-decoy-target`);
+        const pointerAssetId = await seedLookupAsset("decoy-pointer");
+        const pointerSha = shaOf(`${scenario}-decoy-pointer`);
+        const decoyProductId = await seedLookupProduct("decoy", true);
+        await prisma.productAssetBinding.create({
+          data: {
+            materialProductId: decoyProductId,
+            processedAssetId: pointerAssetId,
+            assetKey: `approved:${targetSha}`,
+            purpose: "MAIN",
+            bindingStatus: "APPROVED",
+            allowPublicDisplay: true,
+            allowCommercialUse: true,
+            approvedAt: new Date()
+          }
+        });
+        assert.notEqual(pointerAssetId, targetAssetId);
+        assert.equal(
+          await repository.findApprovedPublicAsset(`approved:${targetSha}`),
+          null,
+          "a key is only resolvable through a binding that points at the matching processed asset"
+        );
+        assert.equal(await repository.findApprovedPublicAsset(`approved:${pointerSha}`), null);
+
+        // A private binding never exposes the asset.
+        const privateAssetId = await seedLookupAsset("private");
+        const privateSha = shaOf(`${scenario}-private`);
+        const privateProductId = await seedLookupProduct("private", true);
+        await prisma.productAssetBinding.create({
+          data: {
+            materialProductId: privateProductId,
+            processedAssetId: privateAssetId,
+            assetKey: `approved:${privateSha}`,
+            purpose: "MAIN",
+            bindingStatus: "APPROVED",
+            allowPublicDisplay: false,
+            allowCommercialUse: true,
+            approvedAt: new Date()
+          }
+        });
+        assert.equal(await repository.findApprovedPublicAsset(`approved:${privateSha}`), null);
+
+        // A non-commercial binding never exposes the asset.
+        const nonCommercialAssetId = await seedLookupAsset("noncommercial");
+        const nonCommercialSha = shaOf(`${scenario}-noncommercial`);
+        const nonCommercialProductId = await seedLookupProduct("noncommercial", true);
+        await prisma.productAssetBinding.create({
+          data: {
+            materialProductId: nonCommercialProductId,
+            processedAssetId: nonCommercialAssetId,
+            assetKey: `approved:${nonCommercialSha}`,
+            purpose: "MAIN",
+            bindingStatus: "APPROVED",
+            allowPublicDisplay: true,
+            allowCommercialUse: false,
+            approvedAt: new Date()
+          }
+        });
+        assert.equal(await repository.findApprovedPublicAsset(`approved:${nonCommercialSha}`), null);
+
+        // A binding onto an inactive product never exposes the asset.
+        const inactiveAssetId = await seedLookupAsset("inactive");
+        const inactiveSha = shaOf(`${scenario}-inactive`);
+        const inactiveProductId = await seedLookupProduct("inactive", false);
+        await prisma.productAssetBinding.create({
+          data: {
+            materialProductId: inactiveProductId,
+            processedAssetId: inactiveAssetId,
+            assetKey: `approved:${inactiveSha}`,
+            purpose: "MAIN",
+            bindingStatus: "APPROVED",
+            allowPublicDisplay: true,
+            allowCommercialUse: true,
+            approvedAt: new Date()
+          }
+        });
+        assert.equal(await repository.findApprovedPublicAsset(`approved:${inactiveSha}`), null);
+
+        // The healthy path: matching processed asset, approved public
+        // commercial binding, active product.
+        const healthyAssetId = await seedLookupAsset("healthy");
+        const healthySha = shaOf(`${scenario}-healthy`);
+        const healthyProductId = await seedLookupProduct("healthy", true);
+        await prisma.productAssetBinding.create({
+          data: {
+            materialProductId: healthyProductId,
+            processedAssetId: healthyAssetId,
+            assetKey: `approved:${healthySha}`,
+            purpose: "MAIN",
+            bindingStatus: "APPROVED",
+            allowPublicDisplay: true,
+            allowCommercialUse: true,
+            approvedAt: new Date()
+          }
+        });
+        const resolved = await repository.findApprovedPublicAsset(`approved:${healthySha}`);
+        assert.ok(resolved, "the healthy binding must resolve");
+        assert.equal(resolved.assetKey, `approved:${healthySha}`);
+        assert.equal(resolved.storageProvider, "local-fs");
+        assert.equal(resolved.outputBytes, 256n);
+      }
+    );
+
+    await t.test(
+      "19. publishing binds exactly the selected assets and snapshots the approval decisions",
+      async () => {
+        const scenario = "selective";
+        const fixture = await driveGroupToReady(scenario);
+        const previewSha = shaOf(`${scenario}-preview`);
+        await prisma.processedAsset.create({
+          data: {
+            sourceFileId: fixture.sourceFileId,
+            groupId: fixture.groupId,
+            purpose: "PREVIEW",
+            processingVersion: 1,
+            processorVersion: "sharp-test-1.0.0",
+            state: "APPROVED",
+            storageProvider: "local-fs",
+            storageKey: `imports/${prefix}/processed/${scenario}/v1/bead-preview.webp`,
+            assetKey: `approved:${previewSha}`,
+            outputSha256: previewSha,
+            outputBytes: 1024n,
+            outputContentType: "image/webp",
+            qcResult: { passed: true, checks: [] },
+            qcPassedAt: new Date(),
+            approvedAt: new Date(),
+            usagePermission: "OWNED",
+            isAuthenticPhotograph: true,
+            allowCommercialUse: true,
+            allowPublicDisplay: false,
+            isCurrentVersion: true
+          }
+        });
+        const crystalId = await createCrystal(scenario);
+        const published = await repository.publishGroup(
+          fixture.groupId,
+          publishInput(scenario, crystalId, fixture.assetKey, {
+            allowAiTraining: false,
+            allowAiRecommendation: true
+          })
+        );
+        assert.equal(
+          published.state,
+          "PUBLISHED",
+          "an unrelated private PREVIEW asset must never block publication"
+        );
+        assert.deepEqual(published.publishedAssetKeys, [fixture.assetKey]);
+
+        const bindings = await prisma.productAssetBinding.findMany({
+          where: { materialProductId: published.materialProductId }
+        });
+        assert.equal(bindings.length, 1, "only the selected texture asset is bound");
+        assert.equal(bindings[0]!.assetKey, fixture.assetKey);
+        assert.equal(bindings[0]!.bindingStatus, "APPROVED");
+        assert.equal(
+          await prisma.productAssetBinding.count({ where: { assetKey: `approved:${previewSha}` } }),
+          0,
+          "the private preview must never receive a binding"
+        );
+
+        const publication = await prisma.beadGroupPublication.findUniqueOrThrow({
+          where: { groupId: fixture.groupId }
+        });
+        assert.deepEqual(publication.publishedAssetKeys, [fixture.assetKey]);
+        assert.equal(publication.qualityStatement, "品相完整，无裂痕");
+        assert.equal(publication.qualitySource, "供应商证书");
+        assert.equal(publication.rightsHolder, "Mystcrag Studio");
+        assert.equal(publication.usagePermission, "OWNED");
+        assert.equal(publication.isAuthenticPhotograph, true);
+        assert.equal(publication.allowAiTraining, false);
+        assert.equal(publication.allowAiRecommendation, true);
+        assert.equal(publication.allowCommercialUse, true);
+        assert.equal(publication.allowPublicDisplay, true);
+      }
+    );
   } finally {
     await prisma.$disconnect();
   }
