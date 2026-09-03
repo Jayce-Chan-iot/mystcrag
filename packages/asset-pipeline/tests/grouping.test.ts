@@ -1,0 +1,249 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import sharp from "sharp";
+
+import {
+  computeColorHistogram,
+  computeDHash,
+  hammingDistance,
+  histogramDistance,
+  suggestGroups,
+  type GroupingCandidate
+} from "../src/grouping.js";
+
+async function renderSvg(svg: string): Promise<Buffer> {
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+function beadSvg(color: string, cx: number, cy: number, r: number, background = "#f0f0f0"): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">
+    <rect width="96" height="96" fill="${background}"/>
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}"/>
+  </svg>`;
+}
+
+test("dHash of identical bytes is identical and stable", async () => {
+  const image = await renderSvg(beadSvg("#c0392b", 48, 48, 30));
+  const first = await computeDHash(image);
+  const second = await computeDHash(image);
+
+  assert.match(first, /^[0-9a-f]{16}$/);
+  assert.equal(first, second);
+  assert.equal(hammingDistance(first, second), 0);
+});
+
+test("dHash stays small for small subject shifts and large for different subjects", async () => {
+  const center = await computeDHash(await renderSvg(beadSvg("#c0392b", 48, 48, 30)));
+  const shifted = await computeDHash(await renderSvg(beadSvg("#c0392b", 49, 48, 30)));
+  const different = await computeDHash(await renderSvg(beadSvg("#2980b9", 20, 24, 12, "#111111")));
+
+  assert.ok(hammingDistance(center, shifted) <= 12, `expected small distance, got ${hammingDistance(center, shifted)}`);
+  assert.ok(hammingDistance(center, different) >= 20, `expected large distance, got ${hammingDistance(center, different)}`);
+  assert.ok(
+    hammingDistance(center, different) > hammingDistance(center, shifted),
+    "a different subject must be farther than a small subject shift"
+  );
+});
+
+test("color histogram separates dominant hues and is deterministic", async () => {
+  const red = await computeColorHistogram(await renderSvg(beadSvg("#c0392b", 48, 48, 30)));
+  const redAgain = await computeColorHistogram(await renderSvg(beadSvg("#c0392b", 48, 48, 30)));
+  const blue = await computeColorHistogram(await renderSvg(beadSvg("#2980b9", 48, 48, 30)));
+
+  assert.equal(red.length, 64);
+  assert.deepEqual(red, redAgain);
+  assert.equal(histogramDistance(red, redAgain), 0);
+  assert.ok(histogramDistance(red, blue) > 0.5, `expected distant histograms, got ${histogramDistance(red, blue)}`);
+});
+
+function candidate(
+  clientFileId: string,
+  relativePath: string,
+  sha256: string,
+  features: { dHash?: string | null; histogram?: number[] | null; capturedAtMs?: number | null }
+): GroupingCandidate {
+  return {
+    clientFileId,
+    relativePath,
+    sha256,
+    dHash: features.dHash ?? null,
+    histogram: features.histogram ?? null,
+    capturedAtMs: features.capturedAtMs ?? null
+  };
+}
+
+const HASH_A = "a".repeat(64);
+const HASH_B = "b".repeat(64);
+const HASH_C = "c".repeat(64);
+const HASH_D = "d".repeat(64);
+
+test("exact SHA-256 duplicates collapse into one suggestion with duplicate evidence", () => {
+  const outcome = suggestGroups([
+    candidate("f1", "dir/one.JPG", HASH_A, {}),
+    candidate("f2", "dir/one-copy.JPG", HASH_A, {})
+  ]);
+
+  assert.equal(outcome.suggestions.length, 1);
+  const suggestion = outcome.suggestions[0]!;
+  assert.deepEqual(suggestion.memberFileIds, ["f1", "f2"]);
+  assert.equal(suggestion.confidence, "high");
+  const duplicateEvidence = suggestion.evidence.find((item) => item.exactDuplicateOf !== undefined);
+  assert.ok(duplicateEvidence, "expected duplicate evidence");
+  assert.equal(duplicateEvidence!.exactDuplicateOf, "f1");
+});
+
+test("same-stem RAW/JPEG files group with stem evidence", () => {
+  const outcome = suggestGroups([
+    candidate("jpg", "dir/ZDX01535.JPG", HASH_A, {}),
+    candidate("raw", "other/ZDX01535.ARW", HASH_B, {})
+  ]);
+
+  assert.equal(outcome.suggestions.length, 1);
+  const suggestion = outcome.suggestions[0]!;
+  assert.deepEqual(suggestion.memberFileIds, ["jpg", "raw"]);
+  assert.equal(suggestion.confidence, "high");
+  const stemEvidence = suggestion.evidence.find((item) => item.stemPairedWith !== null);
+  assert.ok(stemEvidence, "expected stem evidence");
+  assert.equal(stemEvidence!.stemPairedWith, "jpg");
+});
+
+test("visually similar burst shots within the capture window merge with high confidence", () => {
+  const dHash = "0".repeat(16);
+  const nearDHash = "0".repeat(15) + "1";
+  const histogram = new Array<number>(64).fill(1 / 64);
+  const nearHistogram = histogram.map((value, index) => (index === 0 ? value + 0.01 : value));
+
+  const outcome = suggestGroups([
+    candidate("shot1", "dir/DSC0001.JPG", HASH_A, { dHash, histogram, capturedAtMs: 1_000_000 }),
+    candidate("shot2", "dir/DSC0002.JPG", HASH_B, {
+      dHash: nearDHash,
+      histogram: nearHistogram,
+      capturedAtMs: 1_020_000
+    })
+  ]);
+
+  assert.equal(outcome.suggestions.length, 1);
+  assert.deepEqual(outcome.suggestions[0]!.memberFileIds, ["shot1", "shot2"]);
+  assert.equal(outcome.suggestions[0]!.confidence, "high");
+  const evidence = outcome.suggestions[0]!.evidence[0]!;
+  assert.equal(evidence.dHashDistance, 1);
+  assert.ok(evidence.captureGapMs !== null && evidence.captureGapMs <= 60_000);
+});
+
+test("visually similar files with a distant capture gap stay separate review groups", () => {
+  const dHash = "0".repeat(16);
+  const nearDHash = "0".repeat(15) + "1";
+  const histogram = new Array<number>(64).fill(1 / 64);
+  const nearHistogram = histogram.map((value, index) => (index === 0 ? value + 0.01 : value));
+
+  const outcome = suggestGroups([
+    candidate("shot1", "dir/DSC0001.JPG", HASH_A, { dHash, histogram, capturedAtMs: 1_000_000 }),
+    candidate("shot2", "dir/DSC0002.JPG", HASH_B, {
+      dHash: nearDHash,
+      histogram: nearHistogram,
+      capturedAtMs: 9_000_000
+    })
+  ]);
+
+  const merged = outcome.suggestions.filter((item) => item.memberFileIds.length > 1);
+  assert.deepEqual(merged, [], "must not auto-merge across a distant capture gap");
+  const review = outcome.reviewSuggestions.find(
+    (item) => item.memberFileIds.length === 2
+  );
+  assert.ok(review, "expected a low-confidence review suggestion");
+  assert.equal(review!.confidence, "low");
+  assert.ok(review!.evidence[0]!.captureGapMs !== null && review!.evidence[0]!.captureGapMs > 60_000);
+});
+
+test("missing capture times prevent confident visual merges", () => {
+  const dHash = "0".repeat(16);
+  const nearDHash = "0".repeat(15) + "1";
+  const histogram = new Array<number>(64).fill(1 / 64);
+
+  const outcome = suggestGroups([
+    candidate("shot1", "dir/DSC0001.JPG", HASH_A, { dHash, histogram, capturedAtMs: null }),
+    candidate("shot2", "dir/DSC0002.JPG", HASH_B, { dHash: nearDHash, histogram, capturedAtMs: null })
+  ]);
+
+  const merged = outcome.suggestions.filter((item) => item.memberFileIds.length > 1);
+  assert.deepEqual(merged, [], "weak signals must agree before merging");
+  assert.ok(
+    outcome.reviewSuggestions.some((item) => item.memberFileIds.length === 2),
+    "expected a review suggestion instead"
+  );
+});
+
+test("dissimilar subjects never merge or produce review suggestions", () => {
+  const histogram = new Array<number>(64).fill(1 / 64);
+  const otherHistogram = histogram.map((value, index) => (index === 5 ? value + 0.02 : value));
+
+  const outcome = suggestGroups([
+    candidate("a", "dir/A.JPG", HASH_A, { dHash: "0".repeat(16), histogram, capturedAtMs: 1_000 }),
+    candidate("b", "dir/B.JPG", HASH_B, { dHash: "f".repeat(16), histogram: otherHistogram, capturedAtMs: 1_020 })
+  ]);
+
+  assert.equal(outcome.suggestions.length, 2);
+  assert.ok(outcome.suggestions.every((item) => item.memberFileIds.length === 1));
+  assert.deepEqual(outcome.reviewSuggestions, []);
+});
+
+test("groups members from an exact-duplicate chain deterministically", () => {
+  const shuffled = [
+    candidate("dup2", "dir/copy2.JPG", HASH_A, {}),
+    candidate("dup1", "dir/copy1.JPG", HASH_A, {}),
+    candidate("solo", "dir/other.JPG", HASH_C, {})
+  ];
+
+  const first = suggestGroups(shuffled);
+  const second = suggestGroups([...shuffled].reverse());
+
+  assert.deepEqual(first, second);
+  const duplicateGroup = first.suggestions.find((item) => item.memberFileIds.length === 2);
+  assert.ok(duplicateGroup);
+  assert.deepEqual(duplicateGroup!.memberFileIds, ["dup1", "dup2"]);
+});
+
+test("rejects invalid candidates", () => {
+  assert.throws(
+    () =>
+      suggestGroups([
+        candidate("f1", "dir/a.JPG", HASH_A, {}),
+        candidate("f1", "dir/b.JPG", HASH_B, {})
+      ]),
+    /unique/i
+  );
+  assert.throws(() => suggestGroups([candidate("f1", "dir/a.JPG", "zz", {})]), /sha-256/i);
+  assert.throws(() => suggestGroups([candidate("f1", "dir/a.JPG", HASH_A, { dHash: "short" })]), /dhash/i);
+  assert.throws(
+    () => suggestGroups([candidate("f1", "dir/a.JPG", HASH_A, { histogram: [1, 2, 3] })]),
+    /histogram/i
+  );
+  assert.throws(() => suggestGroups([]), /at least one/i);
+});
+
+test("a high-confidence group never leaks into review suggestions", () => {
+  const dHash = "0".repeat(16);
+  const nearDHash = "0".repeat(15) + "1";
+  const histogram = new Array<number>(64).fill(1 / 64);
+
+  const outcome = suggestGroups([
+    candidate("shot1", "dir/DSC0001.JPG", HASH_A, { dHash, histogram, capturedAtMs: 1_000_000 }),
+    candidate("shot2", "dir/DSC0002.JPG", HASH_B, {
+      dHash: nearDHash,
+      histogram,
+      capturedAtMs: 1_010_000
+    }),
+    candidate("unrelated", "dir/OTHER.JPG", HASH_C, { dHash: "f".repeat(16), histogram, capturedAtMs: 1_020_000 })
+  ]);
+
+  const confident = outcome.suggestions.find((item) => item.memberFileIds.length === 2);
+  assert.ok(confident);
+  assert.deepEqual(confident!.memberFileIds, ["shot1", "shot2"]);
+  for (const review of outcome.reviewSuggestions) {
+    assert.ok(
+      !review.memberFileIds.includes("shot1") && !review.memberFileIds.includes("shot2"),
+      "confident group members must not appear in review suggestions"
+    );
+  }
+});
