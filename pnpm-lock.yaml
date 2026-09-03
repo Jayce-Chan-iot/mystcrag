@@ -21,6 +21,34 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  apps/asset-worker:
+    dependencies:
+      '@mystcrag/asset-pipeline':
+        specifier: workspace:*
+        version: link:../../packages/asset-pipeline
+      '@mystcrag/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@mystcrag/design-contract':
+        specifier: workspace:*
+        version: link:../../packages/design-contract
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.18.0
+        version: 22.20.1
+      sharp:
+        specifier: ^0.35.4
+        version: 0.35.4(@types/node@22.20.1)
+      tsx:
+        specifier: ^4.23.1
+        version: 4.23.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   apps/backend:
     dependencies:
       '@mystcrag/ai-agent':

@@ -370,3 +370,68 @@ test("fromEnvironment fails closed without MYSTCRAG_ASSET_ARCHIVE_ROOT", async (
     (error: unknown) => error instanceof ArchiveStoreError && error.code === "ARCHIVE_ROOT_MISSING"
   );
 });
+
+test("putStaging lands uploads under a fresh UUID key inside the session", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const bytes = Buffer.from("uploaded staging payload");
+    const sha256 = sha256OfBytes(bytes);
+
+    const first = await archive.putStaging({ sessionId: "sess-1", bytes });
+    const second = await archive.putStaging({ sessionId: "sess-1", bytes });
+
+    assert.match(first.archiveKey, /^imports\/sess-1\/staging\/[0-9a-f-]{36}$/);
+    assert.notEqual(second.archiveKey, first.archiveKey, "every upload gets a fresh staging key");
+    assert.equal(first.sha256, sha256);
+    assert.deepEqual(Buffer.from(await archive.read(first.archiveKey)), bytes);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("removeStaging consumes staging entries idempotently but refuses raw and processed keys", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const bytes = Buffer.from("staged content");
+    const { archiveKey } = await archive.putStaging({ sessionId: "sess-1", bytes });
+
+    await archive.removeStaging(archiveKey);
+    await assert.rejects(archive.read(archiveKey));
+    // Removing an already-consumed staging key is a no-op, not an error.
+    await archive.removeStaging(archiveKey);
+
+    const rawKey = (
+      await archive.putOriginal({
+        sessionId: "sess-1",
+        bytes: Buffer.from("raw"),
+        sha256: sha256OfBytes(Buffer.from("raw")),
+        extension: "jpg"
+      })
+    ).archiveKey;
+    const processedKey = (
+      await archive.putProcessed({
+        sessionId: "sess-1",
+        groupId: "group-1",
+        processingVersion: 1,
+        fileName: "bead-512.webp",
+        bytes: Buffer.from("webp")
+      })
+    ).archiveKey;
+
+    for (const immutableKey of [rawKey, processedKey, "imports/sess-1/raw", "../outside"]) {
+      await assert.rejects(
+        archive.removeStaging(immutableKey),
+        (error: unknown) => error instanceof ArchiveStoreError && error.code === "KEY_INVALID"
+      );
+    }
+    // The refused removals never deleted the immutable entries.
+    await archive.read(rawKey);
+    await archive.read(processedKey);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});

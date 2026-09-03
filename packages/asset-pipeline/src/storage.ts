@@ -165,6 +165,47 @@ export class ArchiveStore {
     }
   }
 
+  /**
+   * Lands an uploaded payload in the session staging area under a fresh
+   * server-generated UUID key. Staging is the only mutable area of the
+   * archive: entries exist between upload and archival and are removed by the
+   * ARCHIVE_FILE stage once the verified original is linked into raw/.
+   */
+  async putStaging(input: { sessionId: string; bytes: Uint8Array }): Promise<ArchivePutResult> {
+    assertIdentifier(input.sessionId, "session id");
+    const sha256 = sha256OfBytes(input.bytes);
+    const archiveKey = `imports/${input.sessionId}/staging/${randomUUID()}`;
+    return this.verifiedPut(archiveKey, input.bytes, sha256);
+  }
+
+  /**
+   * Removes a staging entry. Idempotent: a missing entry (already consumed by
+   * an earlier attempt) is a no-op. Only staging keys are removable — raw and
+   * processed keys are immutable by construction.
+   */
+  async removeStaging(archiveKey: string): Promise<void> {
+    const segments = archiveKey.split("/");
+    if (
+      segments.length !== 4 ||
+      segments[0] !== KEY_PREFIX ||
+      segments[1] === undefined ||
+      segments[1].length === 0 ||
+      segments[2] !== "staging" ||
+      segments[3] === undefined ||
+      segments[3].length === 0
+    ) {
+      throw new ArchiveStoreError(
+        "KEY_INVALID",
+        "Only staging keys of the form imports/<session>/staging/<uuid> can be removed"
+      );
+    }
+    const target = await this.joinUnderRoot(archiveKey);
+    const info = await lstat(target).catch(() => null);
+    if (info?.isFile()) {
+      await unlink(target);
+    }
+  }
+
   async verifiedRead(archiveKey: string, expectedSha256: string): Promise<Uint8Array> {
     assertSha256(expectedSha256);
     const bytes = await this.read(archiveKey);

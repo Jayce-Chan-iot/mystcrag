@@ -17,6 +17,21 @@
       "cache": false,
       "persistent": true
     },
+    "@mystcrag/asset-worker#dev": {
+      "cache": false,
+      "persistent": true,
+      "passThroughEnv": [
+        "DATABASE_URL",
+        "MYSTCRAG_ASSET_ARCHIVE_ROOT",
+        "MYSTCRAG_ASSET_WORKER_ID",
+        "MYSTCRAG_ASSET_WORKER_LEASE_MS",
+        "MYSTCRAG_ASSET_WORKER_HEARTBEAT_MS",
+        "MYSTCRAG_ASSET_WORKER_POLL_MS",
+        "MYSTCRAG_ASSET_WORKER_SHUTDOWN_GRACE_MS",
+        "MYSTCRAG_ASSET_WORKER_TRANSIENT_RETRY_DELAY_MS",
+        "NODE_ENV"
+      ]
+    },
     "@mystcrag/backend#dev": {
       "cache": false,
       "persistent": true,
