@@ -1,4 +1,5 @@
 import sharp from "sharp";
+import type { Metadata } from "sharp";
 
 import { detectAssetSourceKind } from "./content-type.js";
 import { sha256OfBytes } from "./hash.js";

@@ -211,7 +211,7 @@ async function scanVariant(variant: QcVariantInput): Promise<VariantScan> {
     haloFraction: 0,
     hardEdgeFraction: 0
   };
-  let metadata: sharp.Metadata;
+  let metadata: Metadata;
   try {
     metadata = await sharp(variant.bytes).metadata();
   } catch {
