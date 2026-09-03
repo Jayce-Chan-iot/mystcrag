@@ -211,11 +211,13 @@ export function suggestGroups(
 
   const find = (index: number): number => {
     let current = index;
-    while (parent[current] !== current) {
-      parent[current] = parent[parent[current]]!;
-      current = parent[current]!;
+    for (;;) {
+      const value = parent[current] ?? current;
+      if (value === current) return current;
+      const grandparent = parent[value] ?? value;
+      parent[current] = grandparent;
+      current = grandparent;
     }
-    return current;
   };
 
   const evidenceByFileId = new Map<string, GroupSimilarityEvidence[]>();

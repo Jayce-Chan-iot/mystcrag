@@ -141,7 +141,7 @@ export class ArchiveStore {
     sessionId: string;
     groupId: string;
     processingVersion: number;
-    fileName: ProcessedArchiveFileName;
+    fileName: string;
     bytes: Uint8Array;
   }): Promise<ArchivePutResult> {
     assertIdentifier(input.sessionId, "session id");
