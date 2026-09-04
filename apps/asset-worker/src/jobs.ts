@@ -156,31 +156,77 @@ function sessionOfArchiveKey(archiveKey: string): string {
   return sessionId;
 }
 
-export function parseArchiveFilePayload(job: ClaimedAssetJob): ArchiveFileJobPayload {
-  const payload = parsePayload(ArchiveFileJobPayloadSchema, job.payload, "ARCHIVE_FILE");
-  if (sessionOfArchiveKey(payload.stagingKey) !== job.sessionId) {
+// Server-generated key grammar. Staging keys are minted by ArchiveStore
+// .putStaging and raw keys by .putOriginal; anything else in a payload is a
+// forged or cross-session reference and is rejected before any file is read.
+const STAGING_KEY_PATTERN =
+  /^imports\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})\/staging\/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
+const RAW_KEY_PATTERN =
+  /^imports\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})\/raw\/([0-9a-f]{64})\.(arw|jpeg|jpg|png|webp)$/;
+
+function requireStagingKeyForSession(stagingKey: string, sessionId: string): void {
+  const match = STAGING_KEY_PATTERN.exec(stagingKey);
+  if (match === null) {
+    throw new JobExecutionError(
+      "PAYLOAD_INVALID",
+      "ARCHIVE_FILE staging key must have the exact form imports/<sessionId>/staging/<uuid>",
+      false
+    );
+  }
+  if (match[1] !== sessionId) {
     throw new JobExecutionError(
       "PAYLOAD_INVALID",
       "ARCHIVE_FILE staging key belongs to a different session than the job",
       false
     );
   }
+}
+
+function requireRawKeyForSession(archiveKey: string, sessionId: string, context: string): void {
+  const match = RAW_KEY_PATTERN.exec(archiveKey);
+  if (match === null) {
+    throw new JobExecutionError(
+      "PAYLOAD_INVALID",
+      `${context} archive key must have the exact form imports/<sessionId>/raw/<sha256>.<ext>`,
+      false
+    );
+  }
+  if (match[1] !== sessionId) {
+    throw new JobExecutionError(
+      "PAYLOAD_INVALID",
+      `${context} archive key belongs to a different session than the job`,
+      false
+    );
+  }
+}
+
+export function parseArchiveFilePayload(job: ClaimedAssetJob): ArchiveFileJobPayload {
+  const payload = parsePayload(ArchiveFileJobPayloadSchema, job.payload, "ARCHIVE_FILE");
+  requireStagingKeyForSession(payload.stagingKey, job.sessionId);
   return payload;
 }
 
 export function parseGroupSessionPayload(job: ClaimedAssetJob): GroupSessionJobPayload {
-  return parsePayload(GroupSessionJobPayloadSchema, job.payload, "GROUP_SESSION");
+  const payload = parsePayload(GroupSessionJobPayloadSchema, job.payload, "GROUP_SESSION");
+  for (const file of payload.files) {
+    requireRawKeyForSession(file.archiveKey, job.sessionId, `GROUP_SESSION file ${file.fileId}`);
+  }
+  return payload;
 }
 
 export function parseProcessGroupPayload(job: ClaimedAssetJob): ProcessGroupJobPayload {
   const payload = parsePayload(ProcessGroupJobPayloadSchema, job.payload, "PROCESS_GROUP");
-  const sourceKey = payload.files[0]?.archiveKey ?? "";
-  if (sessionOfArchiveKey(sourceKey) !== job.sessionId) {
+  if (payload.groupId !== job.groupId) {
     throw new JobExecutionError(
       "PAYLOAD_INVALID",
-      "PROCESS_GROUP source archive key belongs to a different session than the job",
+      `PROCESS_GROUP payload group ${payload.groupId} does not match the job's group ${
+        job.groupId ?? "(none)"
+      }`,
       false
     );
+  }
+  for (const entry of payload.files) {
+    requireRawKeyForSession(entry.archiveKey, job.sessionId, `PROCESS_GROUP file ${entry.fileId}`);
   }
   return payload;
 }
@@ -198,9 +244,9 @@ const ORIGINAL_EXTENSIONS: Record<string, string> = {
 
 export type ArchiveFileHooks = {
   /**
-   * Runs after the verified original is linked into raw/ but before the
-   * staging entry is consumed, so a failed business write (e.g. the
-   * recordUploadedFile transaction) leaves staging in place for the retry.
+   * Runs after the verified original is linked into raw/. A failure here
+   * (e.g. the recordUploadedFile transaction) rejects the handler while the
+   * staging entry stays in place for the retry.
    */
   onArchived?: (archived: { sha256: string; archiveKey: string }) => Promise<void>;
 };
@@ -259,12 +305,10 @@ export async function handleArchiveFile(
 
   await hooks.onArchived?.({ sha256: actual, archiveKey: put.archiveKey });
 
-  try {
-    await store.removeStaging(payload.stagingKey);
-  } catch (error) {
-    throw wrapArchiveError(error, "STAGING_REMOVE_FAILED");
-  }
-
+  // The staging entry is deliberately NOT removed here. It is the recovery
+  // input for a retry: if the worker dies (or loses its lease) before
+  // completeJob commits, the reclaimed job re-reads staging and completes.
+  // Removing it is the runtime's job, strictly after the committed result.
   return { kind: "ARCHIVE_FILE", sha256: actual, archiveKey: put.archiveKey, storageProvider: STORAGE_PROVIDER };
 }
 
@@ -301,6 +345,7 @@ export async function handleGroupSession(
       clientFileId: file.clientFileId,
       relativePath: file.relativePath,
       sha256: file.sha256,
+      kind: file.kind,
       dHash,
       histogram,
       capturedAtMs: file.lastModifiedMs
@@ -443,7 +488,19 @@ export type AssetBusinessRepository = {
   ): Promise<unknown>;
 };
 
-export type JobHandler = (job: ClaimedAssetJob) => Promise<JobHandlerResult>;
+/**
+ * A handler's product: the job result plus an optional post-commit cleanup.
+ * The cleanup (e.g. removing an ARCHIVE_FILE staging entry) is executed by
+ * the runtime strictly AFTER completeJob commits. Skipping it on a lost lease
+ * and tolerating its failure are both intentional: a staging entry that
+ * survives is reclaimable, a lost one is not.
+ */
+export type JobHandlerOutcome = {
+  result: JobHandlerResult;
+  afterCommit?: () => Promise<void>;
+};
+
+export type JobHandler = (job: ClaimedAssetJob) => Promise<JobHandlerOutcome>;
 
 export type JobHandlers = {
   ARCHIVE_FILE: JobHandler;
@@ -459,15 +516,25 @@ export function createJobHandlers(deps: {
   return {
     ARCHIVE_FILE: async (job) => {
       const payload = parseArchiveFilePayload(job);
-      return handleArchiveFile(store, payload, {
+      const result = await handleArchiveFile(store, payload, {
         onArchived: async (archived) => {
           await repository.recordUploadedFile(payload.fileId, archived.sha256, archived.archiveKey, {
             storageProvider: STORAGE_PROVIDER
           });
         }
       });
+      return {
+        result,
+        afterCommit: async () => {
+          try {
+            await store.removeStaging(payload.stagingKey);
+          } catch (error) {
+            throw wrapArchiveError(error, "STAGING_REMOVE_FAILED");
+          }
+        }
+      };
     },
-    GROUP_SESSION: async (job) => handleGroupSession(store, parseGroupSessionPayload(job)),
-    PROCESS_GROUP: async (job) => handleProcessGroup(store, parseProcessGroupPayload(job))
+    GROUP_SESSION: async (job) => ({ result: await handleGroupSession(store, parseGroupSessionPayload(job)) }),
+    PROCESS_GROUP: async (job) => ({ result: await handleProcessGroup(store, parseProcessGroupPayload(job)) })
   };
 }

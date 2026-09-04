@@ -2,6 +2,8 @@ import sharp from "sharp";
 
 import { normalizeAssetRelativePath } from "@mystcrag/design-contract";
 
+import { type DetectedAssetSourceKind } from "./content-type.js";
+
 /**
  * Conservative grouping thresholds (spec §7). Merging requires BOTH visual
  * signals AND capture proximity to agree; anything visually near but without
@@ -24,11 +26,13 @@ export type GroupingThresholds = typeof GROUPING_THRESHOLDS;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const DHASH_PATTERN = /^[0-9a-f]{16}$/;
 const HISTOGRAM_BINS = 64;
+const KINDS: readonly string[] = ["ARW", "JPEG", "PNG", "WEBP"];
 
 export type GroupingCandidate = {
   clientFileId: string;
   relativePath: string;
   sha256: string;
+  kind: DetectedAssetSourceKind;
   dHash: string | null;
   histogram: number[] | null;
   capturedAtMs: number | null;
@@ -192,6 +196,9 @@ export function suggestGroups(
     }
     seen.add(candidate.clientFileId);
     assertSha256(candidate.sha256);
+    if (!KINDS.includes(candidate.kind)) {
+      throw new Error(`Grouping candidate ${candidate.clientFileId} has an invalid kind: ${String(candidate.kind)}`);
+    }
     if (candidate.dHash !== null) assertDHash(candidate.dHash);
     if (candidate.histogram !== null) assertHistogram(candidate.histogram);
     if (candidate.capturedAtMs !== null && (!Number.isFinite(candidate.capturedAtMs) || candidate.capturedAtMs < 0)) {
@@ -257,12 +264,19 @@ export function suggestGroups(
     }
   }
 
-  // 2. Same-stem RAW/JPEG pairs group (different digests only).
+  // 2. Same-stem RAW/JPEG pairs group (different digests only). A Sony burst
+  // stores the ARW and its in-camera JPEG under one stem, so this exact
+  // complementary pair may merge on the file name. Any other same-stem
+  // combination (two JPEGs, PNG+WebP, …) carries no such guarantee and must
+  // prove itself through the visual thresholds below.
+  const complementaryRawJpeg = (a: GroupingCandidate, b: GroupingCandidate): boolean =>
+    (a.kind === "ARW" && b.kind === "JPEG") || (a.kind === "JPEG" && b.kind === "ARW");
   for (let left = 0; left < sorted.length; left += 1) {
     for (let right = left + 1; right < sorted.length; right += 1) {
       const a = sorted[left]!;
       const b = sorted[right]!;
       if (a.sha256 === b.sha256 || stemOf(a.relativePath) !== stemOf(b.relativePath)) continue;
+      if (!complementaryRawJpeg(a, b)) continue;
       if (find(left) === find(right)) continue;
       union(left, right, {
         fileId: b.clientFileId,

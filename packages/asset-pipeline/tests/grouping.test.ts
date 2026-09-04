@@ -61,12 +61,18 @@ function candidate(
   clientFileId: string,
   relativePath: string,
   sha256: string,
-  features: { dHash?: string | null; histogram?: number[] | null; capturedAtMs?: number | null }
+  features: {
+    kind?: "ARW" | "JPEG" | "PNG" | "WEBP";
+    dHash?: string | null;
+    histogram?: number[] | null;
+    capturedAtMs?: number | null;
+  }
 ): GroupingCandidate {
   return {
     clientFileId,
     relativePath,
     sha256,
+    kind: features.kind ?? "JPEG",
     dHash: features.dHash ?? null,
     histogram: features.histogram ?? null,
     capturedAtMs: features.capturedAtMs ?? null
@@ -95,8 +101,8 @@ test("exact SHA-256 duplicates collapse into one suggestion with duplicate evide
 
 test("same-stem RAW/JPEG files group with stem evidence", () => {
   const outcome = suggestGroups([
-    candidate("jpg", "dir/ZDX01535.JPG", HASH_A, {}),
-    candidate("raw", "other/ZDX01535.ARW", HASH_B, {})
+    candidate("jpg", "dir/ZDX01535.JPG", HASH_A, { kind: "JPEG" }),
+    candidate("raw", "other/ZDX01535.ARW", HASH_B, { kind: "ARW" })
   ]);
 
   assert.equal(outcome.suggestions.length, 1);
@@ -106,6 +112,28 @@ test("same-stem RAW/JPEG files group with stem evidence", () => {
   const stemEvidence = suggestion.evidence.find((item) => item.stemPairedWith !== null);
   assert.ok(stemEvidence, "expected stem evidence");
   assert.equal(stemEvidence!.stemPairedWith, "jpg");
+});
+
+test("same-stem JPEGs with different content never merge on the stem alone", () => {
+  const outcome = suggestGroups([
+    candidate("jpg1", "dir-one/bead.JPG", HASH_A, { kind: "JPEG" }),
+    candidate("jpg2", "dir-two/bead.JPG", HASH_B, { kind: "JPEG" })
+  ]);
+
+  const merged = outcome.suggestions.filter((item) => item.memberFileIds.length > 1);
+  assert.deepEqual(merged, [], "two JPEGs must not high-confidence merge on file name alone");
+  assert.equal(outcome.suggestions.length, 2);
+});
+
+test("cross-directory same-stem PNG and WebP files stay separate without visual agreement", () => {
+  const outcome = suggestGroups([
+    candidate("png", "dir-one/bead.png", HASH_A, { kind: "PNG" }),
+    candidate("webp", "dir-two/bead.png", HASH_B, { kind: "WEBP" })
+  ]);
+
+  const merged = outcome.suggestions.filter((item) => item.memberFileIds.length > 1);
+  assert.deepEqual(merged, [], "same-stem non-complementary kinds must not merge");
+  assert.equal(outcome.suggestions.length, 2);
 });
 
 test("visually similar burst shots within the capture window merge with high confidence", () => {
@@ -218,6 +246,37 @@ test("rejects invalid candidates", () => {
   assert.throws(
     () => suggestGroups([candidate("f1", "dir/a.JPG", HASH_A, { histogram: [1, 2, 3] })]),
     /histogram/i
+  );
+  assert.throws(
+    () =>
+      suggestGroups([
+        {
+          clientFileId: "f1",
+          relativePath: "dir/a.JPG",
+          sha256: HASH_A,
+          dHash: null,
+          histogram: null,
+          capturedAtMs: null
+        } as unknown as GroupingCandidate
+      ]),
+    /kind/i,
+    "a candidate without a kind is rejected"
+  );
+  assert.throws(
+    () =>
+      suggestGroups([
+        {
+          clientFileId: "f1",
+          relativePath: "dir/a.JPG",
+          sha256: HASH_A,
+          kind: "GIF",
+          dHash: null,
+          histogram: null,
+          capturedAtMs: null
+        } as unknown as GroupingCandidate
+      ]),
+    /kind/i,
+    "an unknown kind value is rejected"
   );
   assert.throws(() => suggestGroups([]), /at least one/i);
 });

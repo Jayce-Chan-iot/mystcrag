@@ -16,7 +16,7 @@ import {
 } from "@mystcrag/database";
 
 import { createJobHandlers } from "../src/jobs.js";
-import { AssetWorker } from "../src/runtime.js";
+import { AssetWorker, type WorkerRepository } from "../src/runtime.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 const archiveRoot = process.env.MYSTCRAG_ASSET_ARCHIVE_ROOT;
@@ -77,6 +77,52 @@ test(
         shutdownGraceMs: 5_000,
         transientRetryDelayMs: 60_000
       });
+    }
+
+    async function seedArchiveFileJob(
+      label: string,
+      color: string
+    ): Promise<{
+      sessionId: string;
+      fileId: string;
+      sha256: string;
+      stagingKey: string;
+      bytes: Uint8Array;
+      jobId: string;
+      rawArchiveKey: string;
+    }> {
+      const { sessionId, fileIds } = await seedSessionWithFiles(label, 1);
+      const bytes = await pngBytes(color);
+      const sha256 = sha256OfBytes(bytes);
+      const staging = await store.putStaging({ sessionId, bytes });
+      const job = await prisma.assetProcessingJob.create({
+        data: {
+          sessionId,
+          jobType: "ARCHIVE_FILE",
+          state: "QUEUED",
+          payload: { fileId: fileIds[0]!, stagingKey: staging.archiveKey, sha256 },
+          maxRetries: 3
+        }
+      });
+      return {
+        sessionId,
+        fileId: fileIds[0]!,
+        sha256,
+        stagingKey: staging.archiveKey,
+        bytes,
+        jobId: job.id,
+        rawArchiveKey: `imports/${sessionId}/raw/${sha256}.png`
+      };
+    }
+
+    class CleanupFailingStore extends ArchiveStore {
+      override async removeStaging(): Promise<void> {
+        throw new Error("removeStaging failed: disk full");
+      }
+    }
+
+    function withFailingRemoveStaging(inner: ArchiveStore): ArchiveStore {
+      return new CleanupFailingStore({ root: inner.root, repositoryRoots: [] });
     }
 
     await prisma.$connect();
@@ -440,6 +486,192 @@ test(
         assert.equal(current.length, 1, "exactly one current version remains after recovery");
         const row = await prisma.assetProcessingJob.findUniqueOrThrow({ where: { id: job.id } });
         assert.equal(row.state, "COMPLETED");
+      });
+
+      await t.test("ARCHIVE_FILE crash window: staging survives the crash and recovery completes without duplicates", async () => {
+        const seeded = await seedArchiveFileJob("crashwindow", "#5f9ea0");
+
+        // The worker archives the original and records the file, then dies
+        // before the completion is submitted.
+        const crashedLease = await repository.claimNextJob(
+          `${prefix}-cw-crashed`,
+          new Date(Date.now() + 60_000)
+        );
+        assert.ok(crashedLease);
+        assert.equal(crashedLease!.jobId, seeded.jobId);
+        const crashedWorker = makeWorker(`${prefix}-cw-crashed`);
+        assert.equal(await crashedWorker.processClaimedJobForTest(crashedLease!), "completed");
+
+        // The recovery input must still exist: staging is only removed after
+        // the completion commits.
+        await store.verifiedRead(seeded.stagingKey, seeded.sha256);
+        const fileRow = await prisma.assetSourceFile.findUniqueOrThrow({ where: { id: seeded.fileId } });
+        assert.equal(fileRow.state, "ARCHIVED");
+        let sessionRow = await prisma.assetImportSession.findUniqueOrThrow({
+          where: { id: seeded.sessionId }
+        });
+        assert.equal(sessionRow.archivedFileCount, 1);
+
+        // The crash strands the job; the expired lease lets another worker
+        // reclaim and finish it.
+        await prisma.assetProcessingJob.update({
+          where: { id: seeded.jobId },
+          data: { leaseUntil: new Date(Date.now() - 1_000) }
+        });
+        assert.equal(await makeWorker(`${prefix}-cw-recovering`).runOnce(), "completed");
+
+        const jobRow = await prisma.assetProcessingJob.findUniqueOrThrow({ where: { id: seeded.jobId } });
+        assert.equal(jobRow.state, "COMPLETED");
+        sessionRow = await prisma.assetImportSession.findUniqueOrThrow({
+          where: { id: seeded.sessionId }
+        });
+        assert.equal(sessionRow.archivedFileCount, 1);
+        assert.equal(sessionRow.skippedFileCount, 0);
+        assert.equal(
+          await prisma.assetSourceFile.count({ where: { archiveKey: seeded.rawArchiveKey } }),
+          1,
+          "the raw original is recorded exactly once"
+        );
+        const rawKeys = (await store.listSessionFiles(seeded.sessionId)).filter((key) =>
+          key.includes("/raw/")
+        );
+        assert.deepEqual(rawKeys, [seeded.rawArchiveKey]);
+        await assert.rejects(store.read(seeded.stagingKey));
+      });
+
+      await t.test("a rejected completion requeues the job and the retry completes from the surviving staging", async () => {
+        const seeded = await seedArchiveFileJob("reject", "#6a5acd");
+
+        let completions = 0;
+        const onceFailingCompletion: WorkerRepository = {
+          claimNextJob: (workerId, leaseUntil) => repository.claimNextJob(workerId, leaseUntil),
+          heartbeatJob: (jobId, lease, leaseUntil) => repository.heartbeatJob(jobId, lease, leaseUntil),
+          failJob: (jobId, error, retryAt, lease) => repository.failJob(jobId, error, retryAt, lease),
+          completeJob: async (jobId, result, lease) => {
+            completions += 1;
+            if (completions === 1) {
+              throw new Error("connection reset during commit");
+            }
+            return repository.completeJob(jobId, result, lease);
+          }
+        };
+        const worker = new AssetWorker({
+          repository: onceFailingCompletion,
+          handlers: createJobHandlers({ store, repository }),
+          workerId: `${prefix}-reject`,
+          leaseMs: 60_000,
+          heartbeatMs: 25,
+          pollMs: 5,
+          shutdownGraceMs: 5_000,
+          transientRetryDelayMs: 60_000
+        });
+
+        assert.equal(await worker.runOnce(), "failed");
+        let jobRow = await prisma.assetProcessingJob.findUniqueOrThrow({ where: { id: seeded.jobId } });
+        assert.equal(jobRow.state, "QUEUED");
+        assert.equal(jobRow.retryCount, 1);
+        assert.equal(jobRow.errorCode, "COMPLETION_REJECTED");
+        // The rejected completion never removed the recovery input.
+        await store.verifiedRead(seeded.stagingKey, seeded.sha256);
+
+        await prisma.assetProcessingJob.update({
+          where: { id: seeded.jobId },
+          data: { nextAttemptAt: new Date(Date.now() - 1_000) }
+        });
+        assert.equal(await makeWorker(`${prefix}-reject-retry`).runOnce(), "completed");
+
+        jobRow = await prisma.assetProcessingJob.findUniqueOrThrow({ where: { id: seeded.jobId } });
+        assert.equal(jobRow.state, "COMPLETED");
+        const sessionRow = await prisma.assetImportSession.findUniqueOrThrow({
+          where: { id: seeded.sessionId }
+        });
+        assert.equal(sessionRow.archivedFileCount, 1);
+        await assert.rejects(store.read(seeded.stagingKey));
+      });
+
+      await t.test("lease takeover: the stale worker cannot complete or delete the new holder's staging", async () => {
+        const seeded = await seedArchiveFileJob("takeover", "#2e8b57");
+
+        const staleWorkerId = `${prefix}-tk-stale`;
+        const staleLease = await repository.claimNextJob(staleWorkerId, new Date(Date.now() + 60_000));
+        assert.ok(staleLease);
+        const staleWorker = makeWorker(staleWorkerId);
+        assert.equal(await staleWorker.processClaimedJobForTest(staleLease!), "completed");
+
+        // The stale worker dies; its expired lease is taken over with a fresh
+        // token.
+        await prisma.assetProcessingJob.update({
+          where: { id: seeded.jobId },
+          data: { leaseUntil: new Date(Date.now() - 1_000) }
+        });
+        const freshWorkerId = `${prefix}-tk-fresh`;
+        const freshLease = await repository.claimNextJob(freshWorkerId, new Date(Date.now() + 60_000));
+        assert.ok(freshLease);
+        assert.equal(freshLease!.jobId, seeded.jobId);
+        assert.notEqual(freshLease!.lease.leaseToken, staleLease!.lease.leaseToken);
+
+        // The stale holder wakes up: its completion is rejected, and it must
+        // not have removed the staging entry the new holder still needs.
+        await assert.rejects(
+          repository.completeJob(
+            seeded.jobId,
+            {
+              kind: "ARCHIVE_FILE",
+              sha256: seeded.sha256,
+              archiveKey: seeded.rawArchiveKey,
+              storageProvider: "local-fs"
+            } satisfies CompleteAssetJobResult,
+            staleLease!.lease
+          ),
+          (error: unknown) => {
+            assert.ok(error instanceof PersistenceError);
+            assert.equal(error.code, "CONFLICT");
+            return true;
+          }
+        );
+        await store.verifiedRead(seeded.stagingKey, seeded.sha256);
+
+        // The new holder processes and commits with its own lease.
+        const freshWorker = makeWorker(freshWorkerId);
+        assert.equal(await freshWorker.processClaimedJobForTest(freshLease!, { submit: true }), "completed");
+
+        const jobRow = await prisma.assetProcessingJob.findUniqueOrThrow({ where: { id: seeded.jobId } });
+        assert.equal(jobRow.state, "COMPLETED");
+        const sessionRow = await prisma.assetImportSession.findUniqueOrThrow({
+          where: { id: seeded.sessionId }
+        });
+        assert.equal(sessionRow.archivedFileCount, 1);
+        await assert.rejects(store.read(seeded.stagingKey));
+      });
+
+      await t.test("a failing staging cleanup leaves the committed job COMPLETED with a reclaimable staging entry", async () => {
+        const seeded = await seedArchiveFileJob("cleanupfail", "#b22222");
+
+        const worker = new AssetWorker({
+          repository,
+          handlers: createJobHandlers({ store: withFailingRemoveStaging(store), repository }),
+          workerId: `${prefix}-cf`,
+          leaseMs: 60_000,
+          heartbeatMs: 25,
+          pollMs: 5,
+          shutdownGraceMs: 5_000,
+          transientRetryDelayMs: 60_000
+        });
+
+        assert.equal(await worker.runOnce(), "completed");
+
+        const jobRow = await prisma.assetProcessingJob.findUniqueOrThrow({ where: { id: seeded.jobId } });
+        assert.equal(jobRow.state, "COMPLETED");
+        assert.equal(jobRow.errorCode, null);
+        const fileRow = await prisma.assetSourceFile.findUniqueOrThrow({ where: { id: seeded.fileId } });
+        assert.equal(fileRow.state, "ARCHIVED");
+        const sessionRow = await prisma.assetImportSession.findUniqueOrThrow({
+          where: { id: seeded.sessionId }
+        });
+        assert.equal(sessionRow.archivedFileCount, 1);
+        // The cleanup failure leaks the staging entry instead of corrupting
+        // the committed outcome; the entry stays reclaimable.
+        await store.verifiedRead(seeded.stagingKey, seeded.sha256);
       });
     } finally {
       await prisma.$disconnect().catch(() => undefined);

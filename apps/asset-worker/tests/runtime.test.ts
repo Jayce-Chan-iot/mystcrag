@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { PersistenceError, type ClaimedAssetJob } from "@mystcrag/database";
 
-import { JobExecutionError, type JobHandlerResult } from "../src/jobs.js";
+import { JobExecutionError, type JobHandlerOutcome, type JobHandlerResult } from "../src/jobs.js";
 import { AssetWorker, type WorkerRepository } from "../src/runtime.js";
 
 const SESSION = "session-runtime-test";
@@ -105,7 +105,7 @@ function makeWorker(
   repository: WorkerRepository,
   options: {
     jobs?: ClaimedAssetJob[];
-    handler?: (job: ClaimedAssetJob) => Promise<JobHandlerResult>;
+    handler?: (job: ClaimedAssetJob) => Promise<JobHandlerOutcome>;
     leaseMs?: number;
     transientRetryDelayMs?: number;
   } = {}
@@ -119,9 +119,9 @@ function makeWorker(
     shutdownGraceMs: 5_000,
     transientRetryDelayMs: options.transientRetryDelayMs ?? 45_000,
     handlers: {
-      ARCHIVE_FILE: options.handler ?? (async () => groupSessionResult as never),
-      GROUP_SESSION: options.handler ?? (async () => groupSessionResult),
-      PROCESS_GROUP: options.handler ?? (async () => groupSessionResult as never)
+      ARCHIVE_FILE: options.handler ?? (async () => ({ result: groupSessionResult })),
+      GROUP_SESSION: options.handler ?? (async () => ({ result: groupSessionResult })),
+      PROCESS_GROUP: options.handler ?? (async () => ({ result: groupSessionResult }))
     }
   });
 }
@@ -254,7 +254,7 @@ test("requestShutdown stops claiming new jobs and lets the in-flight job finish"
           gate.release = resolve;
         });
       }
-      return groupSessionResult;
+      return { result: groupSessionResult };
     }
   });
 
@@ -278,4 +278,82 @@ test("run() exits after shutdown even when the queue still holds jobs", async ()
   await worker.run();
 
   assert.equal(repository.callsOf("claimNextJob").length, 0);
+});
+
+test("post-commit cleanup runs only after the completion commits", async () => {
+  const events: string[] = [];
+  const repository = new FakeRepository({
+    jobs: [queuedJob()],
+    completeBehavior: () => {
+      events.push("completeJob");
+    }
+  });
+  const worker = makeWorker(repository, {
+    handler: async () => ({
+      result: groupSessionResult,
+      afterCommit: async () => {
+        events.push("afterCommit");
+      }
+    })
+  });
+
+  assert.equal(await worker.runOnce(), "completed");
+  assert.deepEqual(events, ["completeJob", "afterCommit"], "the cleanup strictly follows the committed result");
+});
+
+test("a lost lease at completion time skips the post-commit cleanup", async () => {
+  const cleanups: string[] = [];
+  const repository = new FakeRepository({
+    jobs: [queuedJob()],
+    completeBehavior: () => {
+      throw new PersistenceError("CONFLICT", "lease expired");
+    }
+  });
+  const worker = makeWorker(repository, {
+    handler: async () => ({
+      result: groupSessionResult,
+      afterCommit: async () => {
+        cleanups.push("ran");
+      }
+    })
+  });
+
+  assert.equal(await worker.runOnce(), "abandoned");
+  assert.deepEqual(cleanups, [], "a stale worker must not remove staging the new holder still needs");
+  assert.equal(repository.callsOf("failJob").length, 0);
+});
+
+test("a worker whose lease is lost mid-processing skips the handler cleanup", async () => {
+  const cleanups: string[] = [];
+  const repository = new FakeRepository({ jobs: [queuedJob()], heartbeatResult: () => false });
+  const worker = makeWorker(repository, {
+    handler: async () => ({
+      result: groupSessionResult,
+      afterCommit: async () => {
+        cleanups.push("ran");
+      }
+    })
+  });
+
+  assert.equal(await worker.runOnce(), "abandoned");
+  assert.deepEqual(cleanups, []);
+});
+
+test("a failing post-commit cleanup cannot turn the completed job into a failure", async () => {
+  const cleanups: string[] = [];
+  const repository = new FakeRepository({ jobs: [queuedJob()] });
+  const worker = makeWorker(repository, {
+    handler: async () => ({
+      result: groupSessionResult,
+      afterCommit: async () => {
+        cleanups.push("attempted");
+        throw new Error("staging directory is read-only");
+      }
+    })
+  });
+
+  assert.equal(await worker.runOnce(), "completed");
+  assert.deepEqual(cleanups, ["attempted"]);
+  assert.equal(repository.callsOf("completeJob").length, 1, "the completion stays committed");
+  assert.equal(repository.callsOf("failJob").length, 0, "a completed job is never flipped to failed");
 });

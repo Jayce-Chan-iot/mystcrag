@@ -238,10 +238,31 @@ test("flags subjects clipped at the source border but still produces the output"
   assert.ok(result.main.byteSize > 0, "QC failure must not delete the output");
 });
 
+/**
+ * Minimal little-endian Sony TIFF: IFD0 holds a single ASCII Make tag whose
+ * value is "SONY". This is the smallest payload content detection accepts as
+ * a genuine ARW; a bare `II*\0` header is a plain/corrupt TIFF and no longer
+ * qualifies.
+ */
+function syntheticSonyArw(): Uint8Array {
+  const buffer = Buffer.alloc(31);
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  buffer.write("II", 0, "latin1");
+  view.setUint16(2, 42, true);
+  view.setUint32(4, 8, true);
+  view.setUint16(8, 1, true); // IFD0 entry count
+  view.setUint16(10, 0x010f, true); // Make
+  view.setUint16(12, 2, true); // ASCII
+  view.setUint32(14, 5, true); // "SONY\0"
+  view.setUint32(18, 26, true); // value offset (count > 4 → external)
+  view.setUint32(22, 0, true); // no next IFD
+  buffer.write("SONY\0", 26, "latin1");
+  return new Uint8Array(buffer);
+}
+
 test("rejects ARW bytes: RAW is archived only, never the processing input", async () => {
-  const arwBytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
   await assert.rejects(
-    () => processBeadImage({ bytes: arwBytes }),
+    () => processBeadImage({ bytes: syntheticSonyArw() }),
     (error: unknown) => {
       assert.ok(error instanceof ImageProcessorError);
       assert.equal(error.code, "UNSUPPORTED_SOURCE_KIND");

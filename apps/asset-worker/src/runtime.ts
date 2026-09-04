@@ -7,7 +7,7 @@ import type {
   FailAssetJobOutcome
 } from "@mystcrag/database";
 
-import { classifyHandlerError, type ClassifiedJobError, type JobHandlers, type JobHandlerResult } from "./jobs.js";
+import { classifyHandlerError, type ClassifiedJobError, type JobHandlerOutcome, type JobHandlers } from "./jobs.js";
 
 export type WorkerRepository = {
   claimNextJob(workerId: string, leaseUntil: Date): Promise<ClaimedAssetJob | null>;
@@ -133,12 +133,17 @@ export class AssetWorker {
   }
 
   /**
-   * Executes a claimed job's handler with heartbeats but never submits the
-   * outcome — the crash-recovery test harness uses it to reproduce a worker
-   * dying right after its outputs landed.
+   * Executes a claimed job's handler with heartbeats. By default the outcome
+   * is never submitted — the crash-recovery test harness uses it to reproduce
+   * a worker dying right after its outputs landed; `{ submit: true }` runs the
+   * full path (completion plus post-commit cleanup) for a job that was claimed
+   * manually.
    */
-  async processClaimedJobForTest(job: ClaimedAssetJob): Promise<WorkerRunOutcome> {
-    return this.processClaimedJob(job, { submit: false });
+  async processClaimedJobForTest(
+    job: ClaimedAssetJob,
+    options: { submit: boolean } = { submit: false }
+  ): Promise<WorkerRunOutcome> {
+    return this.processClaimedJob(job, options);
   }
 
   private async processClaimedJob(
@@ -156,9 +161,9 @@ export class AssetWorker {
     });
 
     try {
-      let result: JobHandlerResult;
+      let outcome: JobHandlerOutcome;
       try {
-        result = await this.handlers[job.jobType](job);
+        outcome = await this.handlers[job.jobType](job);
       } catch (error) {
         heartbeat.stop();
         if (leaseLost) return "abandoned";
@@ -171,9 +176,10 @@ export class AssetWorker {
       if (!options.submit) return "completed";
 
       try {
-        await this.repository.completeJob(job.jobId, result, job.lease);
-        return "completed";
+        await this.repository.completeJob(job.jobId, outcome.result, job.lease);
       } catch (error) {
+        // A lost lease means another worker owns the job now: no cleanup may
+        // run, the new holder still needs the staging entries.
         if (isLeaseConflict(error)) return "abandoned";
         this.logger.error(`completing job ${job.jobId} was rejected`, error);
         // The result was rejected for a non-lease reason (e.g. a result
@@ -185,6 +191,16 @@ export class AssetWorker {
           retryable: true
         });
       }
+
+      // The result is durably committed; only now may mutable side inputs be
+      // cleaned. A failing cleanup leaks a staging entry (reclaimable) but can
+      // never turn the committed job back into a failure.
+      try {
+        await outcome.afterCommit?.();
+      } catch (error) {
+        this.logger.error(`post-commit cleanup for job ${job.jobId} failed; a staging entry may remain`, error);
+      }
+      return "completed";
     } finally {
       heartbeat.stop();
     }

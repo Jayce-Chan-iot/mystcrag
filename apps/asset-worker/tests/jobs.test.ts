@@ -7,12 +7,14 @@ import test from "node:test";
 import sharp from "sharp";
 
 import { ArchiveStore, sha256OfBytes } from "@mystcrag/asset-pipeline";
+import type { ClaimedAssetJob } from "@mystcrag/database";
 
 import {
   ArchiveFileJobPayloadSchema,
   GroupSessionJobPayloadSchema,
   ProcessGroupJobPayloadSchema,
   classifyHandlerError,
+  createJobHandlers,
   handleArchiveFile,
   handleGroupSession,
   handleProcessGroup,
@@ -112,10 +114,11 @@ test("handleArchiveFile verifies staging content, archives the original and repo
       `imports/${SESSION}/raw/${sha256}.png`
     );
     assert.equal(result.storageProvider, "local-fs");
-    // The staged upload is consumed: archived content reads back byte-identical,
-    // the staging file itself is gone.
+    // The archived original reads back byte-identical. The staging entry is
+    // NOT consumed here: it is the recovery input for a retry and may only be
+    // removed after the job result commits.
     assert.deepEqual(new Uint8Array(await store.verifiedRead(result.archiveKey, sha256)), bytes);
-    await assert.rejects(store.read(staging.archiveKey));
+    assert.equal(sha256OfBytes(await store.read(staging.archiveKey)), sha256);
   } finally {
     cleanup();
   }
@@ -139,6 +142,119 @@ test("handleArchiveFile rejects a staging hash mismatch without touching the arc
     );
     // Staging is preserved for investigation on a mismatch.
     assert.equal(sha256OfBytes(await store.read(staging.archiveKey)), sha256OfBytes(bytes));
+  } finally {
+    cleanup();
+  }
+});
+
+function archiveFileJob(payload: unknown): ClaimedAssetJob {
+  return {
+    jobId: "job-archive-1",
+    sessionId: SESSION,
+    groupId: null,
+    jobType: "ARCHIVE_FILE",
+    state: "RUNNING",
+    payload,
+    retryCount: 0,
+    maxRetries: 3,
+    lease: { workerId: "worker-jobs-test", leaseToken: "token-1" },
+    leaseUntil: new Date(Date.now() + 60_000)
+  };
+}
+
+test("ARCHIVE_FILE composition removes staging only after the job result commits", async () => {
+  const { store, cleanup } = makeStore();
+  const recorded: Array<{ fileId: string; sha256: string; archiveKey: string }> = [];
+  const repository = {
+    recordUploadedFile: async (fileId: string, sha256: string, archiveKey: string) => {
+      recorded.push({ fileId, sha256, archiveKey });
+      return { fileId };
+    }
+  };
+  try {
+    const bytes = await renderPng(beadSceneSvg("#20b2aa"));
+    const sha256 = sha256OfBytes(bytes);
+    const staging = await store.putStaging({ sessionId: SESSION, bytes });
+    const handlers = createJobHandlers({ store, repository });
+    const job = archiveFileJob({ fileId: "file-1", stagingKey: staging.archiveKey, sha256 });
+
+    const outcome = await handlers.ARCHIVE_FILE(job);
+
+    // The handler archived the original and recorded the file row, but the
+    // staging entry must survive until the runtime commits the result.
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0]!.archiveKey, `imports/${SESSION}/raw/${sha256}.png`);
+    assert.equal(sha256OfBytes(await store.read(staging.archiveKey)), sha256);
+
+    assert.ok(outcome.afterCommit, "the composition provides the post-commit cleanup");
+    await outcome.afterCommit!();
+    await assert.rejects(store.read(staging.archiveKey));
+  } finally {
+    cleanup();
+  }
+});
+
+test("a failed recordUploadedFile keeps the staging entry for the retry", async () => {
+  const { store, cleanup } = makeStore();
+  const repository = {
+    recordUploadedFile: async () => {
+      throw new Error("database unavailable");
+    }
+  };
+  try {
+    const bytes = await renderPng(beadSceneSvg("#9370db"));
+    const sha256 = sha256OfBytes(bytes);
+    const staging = await store.putStaging({ sessionId: SESSION, bytes });
+    const handlers = createJobHandlers({ store, repository });
+
+    await assert.rejects(handlers.ARCHIVE_FILE(archiveFileJob({
+      fileId: "file-1",
+      stagingKey: staging.archiveKey,
+      sha256
+    })), /database unavailable/);
+    // The business write failed before any commit, so the recovery input stays.
+    assert.equal(sha256OfBytes(await store.read(staging.archiveKey)), sha256);
+  } finally {
+    cleanup();
+  }
+});
+
+test("an ARCHIVE_FILE retry after a lost completion reuses the archived original", async () => {
+  const { store, cleanup } = makeStore();
+  const recorded: string[] = [];
+  const repository = {
+    recordUploadedFile: async (fileId: string) => {
+      recorded.push(fileId);
+      return { fileId };
+    }
+  };
+  try {
+    const bytes = await renderPng(beadSceneSvg("#ff7f50"));
+    const sha256 = sha256OfBytes(bytes);
+    const staging = await store.putStaging({ sessionId: SESSION, bytes });
+    const handlers = createJobHandlers({ store, repository });
+    const job = archiveFileJob({ fileId: "file-1", stagingKey: staging.archiveKey, sha256 });
+
+    // First attempt "crashes" after the handler: the result never commits,
+    // the cleanup never runs, the staging entry stays.
+    const first = await handlers.ARCHIVE_FILE(job);
+    // Second attempt (reclaimed job) re-runs the same payload.
+    const second = await handlers.ARCHIVE_FILE(job);
+
+    assert.ok(
+      first.result.kind === "ARCHIVE_FILE" && second.result.kind === "ARCHIVE_FILE",
+      "both attempts produce ARCHIVE_FILE results"
+    );
+    assert.equal(first.result.archiveKey, second.result.archiveKey);
+    assert.equal(first.result.sha256, second.result.sha256);
+    assert.deepEqual(recorded, ["file-1", "file-1"], "the file record is recorded per attempt");
+    // Still exactly one raw original, and staging is untouched until commit.
+    const sessionFiles = await store.listSessionFiles(SESSION);
+    const rawFiles = sessionFiles.filter((key) => key.includes("/raw/"));
+    assert.deepEqual(rawFiles, [`imports/${SESSION}/raw/${sha256}.png`]);
+    assert.equal(sha256OfBytes(await store.read(staging.archiveKey)), sha256);
+    await second.afterCommit?.();
+    await assert.rejects(store.read(staging.archiveKey));
   } finally {
     cleanup();
   }

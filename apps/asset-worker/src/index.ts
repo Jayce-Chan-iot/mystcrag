@@ -1,10 +1,11 @@
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 
 import { ArchiveStore } from "@mystcrag/asset-pipeline";
 import { AssetImportRepository, createPrismaClient } from "@mystcrag/database";
 
 import { createJobHandlers } from "./jobs.js";
+import { discoverRepositoryRoots } from "./repository-roots.js";
 import { AssetWorker } from "./runtime.js";
 
 function readEnvInt(name: string, fallback: number): number {
@@ -28,12 +29,13 @@ async function main(): Promise<void> {
   const workerId = process.env.MYSTCRAG_ASSET_WORKER_ID?.trim() || `asset-worker-${process.pid}`;
   const shutdownGraceMs = readEnvInt("MYSTCRAG_ASSET_WORKER_SHUTDOWN_GRACE_MS", 30_000);
 
-  // The archive root must live outside every Git worktree: the package
-  // directory (pnpm's script cwd) and the worktree root this module lives in.
-  const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-  const store = ArchiveStore.fromEnvironment({
-    repositoryRoots: [process.cwd(), moduleRoot]
-  });
+  // The archive root must live outside every Git worktree of this repository:
+  // the current linked worktree, the main checkout, and any sibling worktree
+  // registered in `git worktree list`. Discovery fails closed when neither the
+  // git CLI nor a filesystem walk can identify those trees.
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const repositoryRoots = await discoverRepositoryRoots({ startDir: moduleDir });
+  const store = ArchiveStore.fromEnvironment({ repositoryRoots });
 
   const prisma = createPrismaClient(databaseUrl);
   const repository = new AssetImportRepository(prisma);
