@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -32,71 +33,221 @@ async function runGitWorktreeList(args: string[], cwd: string): Promise<string> 
   return result.stdout;
 }
 
-function toRealDirectoryRoot(path: string): string | null {
-  try {
-    const real = realpathSync(path);
-    if (!statSync(real).isDirectory()) return null;
-    return real;
-  } catch {
-    return null;
-  }
-}
-
-function parseGitWorktreeList(output: string): string[] {
-  return output
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("worktree "))
-    .map((line) => line.slice("worktree ".length).trim())
-    .filter((path) => path.length > 0);
+function errnoCode(error: unknown): string | undefined {
+  return (error as NodeJS.ErrnoException).code;
 }
 
 /**
- * Derive the main checkout root from a linked worktree's `.git` file, whose
- * `gitdir:` pointer targets `<main>/.git/worktrees/<name>` (or, for a
- * submodule, `<main>/.git/modules/<name>`). Both shapes share the depth, so
- * three `dirname` calls land on the main checkout root.
+ * Resolves a worktree path to its realpath. Returns null only when the path
+ * verifiably does not exist (ENOENT); any other failure — permission errors,
+ * symlink loops, a non-directory — fails closed because the guard cannot
+ * prove the location is outside every repository.
  */
-function mainCheckoutRootFromGitFile(dotGitFile: string): string | null {
+function resolveWorktreeRoot(path: string, description: string): string | null {
+  try {
+    statSync(path);
+  } catch (error) {
+    if (errnoCode(error) === "ENOENT") return null;
+    throw new RepositoryRootsError(`Cannot inspect ${description} ${path}: ${(error as Error).message}`, {
+      cause: error
+    });
+  }
+
+  let real: string;
+  try {
+    real = realpathSync(path);
+  } catch (error) {
+    throw new RepositoryRootsError(`Cannot resolve ${description} ${path}: ${(error as Error).message}`, {
+      cause: error
+    });
+  }
+  if (!statSync(real).isDirectory()) {
+    throw new RepositoryRootsError(`${description} ${path} is not a directory`);
+  }
+  return real;
+}
+
+type PorcelainWorktree = {
+  path: string;
+  prunable: boolean;
+};
+
+function parseGitWorktreeList(output: string): PorcelainWorktree[] {
+  const entries: PorcelainWorktree[] = [];
+  let current: PorcelainWorktree | null = null;
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.trim();
+    if (line.length === 0) {
+      if (current !== null) entries.push(current);
+      current = null;
+      continue;
+    }
+    if (line.startsWith("worktree ")) {
+      if (current !== null) entries.push(current);
+      current = { path: line.slice("worktree ".length).trim(), prunable: false };
+      continue;
+    }
+    if (line.startsWith("prunable") && current !== null) {
+      current.prunable = true;
+    }
+    // HEAD/branch/bare/detached/locked lines carry no discovery signal.
+  }
+  if (current !== null) entries.push(current);
+  return entries.filter((entry) => entry.path.length > 0);
+}
+
+function readGitdirPointer(dotGitFile: string): string {
   let content: string;
   try {
     content = readFileSync(dotGitFile, "utf8");
-  } catch {
-    return null;
+  } catch (error) {
+    throw new RepositoryRootsError(`Cannot read the .git file at ${dotGitFile}: ${(error as Error).message}`, {
+      cause: error
+    });
   }
   const match = GITDIR_POINTER.exec(content.trim());
   if (match === null) {
-    throw new RepositoryRootsError(`The .git file at ${dotGitFile} has no gitdir pointer; cannot locate the main checkout`);
+    throw new RepositoryRootsError(
+      `The .git file at ${dotGitFile} has no gitdir pointer; cannot locate the repository`
+    );
   }
-  const gitdir = resolve(dirname(dotGitFile), match[1]!.trim());
-  const mainGitDir = dirname(dirname(gitdir));
-  if (basename(mainGitDir) !== ".git") return null;
-  return dirname(mainGitDir);
+  return resolve(dirname(dotGitFile), match[1]!.trim());
 }
 
+/**
+ * The shared git dir that holds `worktrees/`: for a linked worktree its
+ * location comes from the `commondir` file git writes; a commondir-less
+ * layout falls back to the `<main>/.git/worktrees/<name>` shape, and a
+ * submodule checkout uses its gitdir as the common dir directly.
+ */
+function commonGitDirOf(gitdirPath: string): string {
+  let commondir: string | null = null;
+  try {
+    commondir = readFileSync(join(gitdirPath, "commondir"), "utf8");
+  } catch (error) {
+    if (errnoCode(error) !== "ENOENT") {
+      throw new RepositoryRootsError(
+        `Cannot read the commondir file at ${join(gitdirPath, "commondir")}: ${(error as Error).message}`,
+        { cause: error }
+      );
+    }
+  }
+  if (commondir !== null) {
+    const trimmed = commondir.trim();
+    if (trimmed.length === 0) {
+      throw new RepositoryRootsError(
+        `The commondir file at ${join(gitdirPath, "commondir")} is empty; cannot enumerate worktrees`
+      );
+    }
+    return resolve(gitdirPath, trimmed);
+  }
+  const twoUp = dirname(dirname(gitdirPath));
+  if (basename(twoUp) === ".git") return twoUp;
+  return gitdirPath;
+}
+
+/**
+ * Filesystem fallback for environments without a usable git binary. Instead
+ * of trusting only the current worktree and the main checkout, it enumerates
+ * EVERY worktree registered in the shared git dir's `worktrees/<name>/gitdir`
+ * files, so sibling worktrees outside the main checkout stay protected.
+ *
+ * A registered worktree whose recorded path no longer exists is skipped —
+ * that is exactly the state git itself reports as prunable, and nothing can
+ * be archived inside a nonexistent directory. Any registration that exists
+ * but cannot be resolved fails closed, and an unreadable registry fails
+ * closed because enumeration completeness can no longer be proven.
+ */
 export function discoverRepositoryRootsFromFilesystem(startDir: string): string[] {
   let dir = resolve(startDir);
+  let currentRoot: string | null = null;
+  let dotGitPath: string | null = null;
   for (;;) {
-    const dotGit = join(dir, ".git");
-    if (existsSync(dotGit)) {
-      const candidates = [dir];
-      if (statSync(dotGit).isFile()) {
-        const mainRoot = mainCheckoutRootFromGitFile(dotGit);
-        if (mainRoot !== null) candidates.push(mainRoot);
+    const candidate = join(dir, ".git");
+    try {
+      statSync(candidate);
+      currentRoot = dir;
+      dotGitPath = candidate;
+      break;
+    } catch (error) {
+      if (errnoCode(error) !== "ENOENT") {
+        throw new RepositoryRootsError(`Cannot inspect ${candidate}: ${(error as Error).message}`, {
+          cause: error
+        });
       }
-      const roots = candidates
-        .map(toRealDirectoryRoot)
-        .filter((root): root is string => root !== null);
-      if (roots.length === 0) {
-        throw new RepositoryRootsError(`The Git worktree at ${dir} is no longer accessible`);
-      }
-      return [...new Set(roots)];
     }
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  throw new RepositoryRootsError(`No Git repository root found above ${startDir}`);
+  if (currentRoot === null || dotGitPath === null) {
+    throw new RepositoryRootsError(`No Git repository root found above ${startDir}`);
+  }
+
+  const currentReal = resolveWorktreeRoot(currentRoot, "the current worktree");
+  if (currentReal === null) {
+    throw new RepositoryRootsError(`The current worktree at ${currentRoot} is no longer accessible`);
+  }
+  const roots = new Set<string>([currentReal]);
+
+  let dotGitStats;
+  try {
+    dotGitStats = statSync(dotGitPath);
+  } catch (error) {
+    throw new RepositoryRootsError(`Cannot inspect ${dotGitPath}: ${(error as Error).message}`, {
+      cause: error
+    });
+  }
+  const commonDir = dotGitStats.isDirectory()
+    ? dotGitPath
+    : dotGitStats.isFile()
+      ? commonGitDirOf(readGitdirPointer(dotGitPath))
+      : null;
+  if (commonDir === null) {
+    throw new RepositoryRootsError(
+      `The .git entry at ${dotGitPath} is neither a directory nor a file; cannot enumerate worktrees`
+    );
+  }
+
+  if (basename(commonDir) === ".git") {
+    const mainRoot = resolveWorktreeRoot(dirname(commonDir), "the main checkout");
+    if (mainRoot !== null) roots.add(mainRoot);
+  }
+
+  const worktreesDir = join(commonDir, "worktrees");
+  let registered: Dirent[];
+  try {
+    registered = readdirSync(worktreesDir, { withFileTypes: true });
+  } catch (error) {
+    if (errnoCode(error) === "ENOENT") {
+      registered = []; // no linked worktrees registered at all
+    } else {
+      throw new RepositoryRootsError(
+        `Cannot enumerate the registered worktrees in ${worktreesDir}: ${(error as Error).message}`,
+        { cause: error }
+      );
+    }
+  }
+
+  for (const entry of registered) {
+    if (!entry.isDirectory()) continue;
+    const gitdirFile = join(worktreesDir, entry.name, "gitdir");
+    let content: string;
+    try {
+      content = readFileSync(gitdirFile, "utf8");
+    } catch (error) {
+      throw new RepositoryRootsError(
+        `Cannot read the gitdir file of registered worktree ${entry.name}: ${(error as Error).message}`,
+        { cause: error }
+      );
+    }
+    const recorded = resolve(dirname(gitdirFile), content.trim());
+    const root = resolveWorktreeRoot(dirname(recorded), `registered worktree ${entry.name}`);
+    if (root === null) continue; // prunable: the recorded worktree no longer exists
+    roots.add(root);
+  }
+
+  return [...roots];
 }
 
 /**
@@ -104,10 +255,13 @@ export function discoverRepositoryRootsFromFilesystem(startDir: string): string[
  * originals: the current linked worktree, the main checkout, and any sibling
  * worktrees registered for this repository.
  *
- * `git worktree list --porcelain` is authoritative when available; a missing
- * git binary or a failed command falls back to a filesystem walk that reads
- * the linked-worktree `.git` pointer. When neither can identify a repository
- * the discovery fails closed with {@link RepositoryRootsError}.
+ * `git worktree list --porcelain` is authoritative when available: only
+ * entries explicitly marked prunable may be ignored when their directory is
+ * gone, while a missing non-prunable worktree fails closed. A missing git
+ * binary or a failed command falls back to a filesystem walk that enumerates
+ * the shared git dir's `worktrees/<name>/gitdir` registry. When neither can
+ * identify a repository the discovery fails closed with
+ * {@link RepositoryRootsError}.
  */
 export async function discoverRepositoryRoots(options?: {
   startDir?: string;
@@ -116,17 +270,26 @@ export async function discoverRepositoryRoots(options?: {
   const startDir = options?.startDir ?? dirname(fileURLToPath(import.meta.url));
   const runGit = options?.runGit ?? runGitWorktreeList;
 
-  let listed: string[] = [];
+  let output: string | null = null;
   try {
-    listed = parseGitWorktreeList(await runGit(["worktree", "list", "--porcelain"], startDir));
+    output = await runGit(["worktree", "list", "--porcelain"], startDir);
   } catch {
-    listed = [];
+    output = null;
   }
 
-  if (listed.length > 0) {
-    const roots = listed
-      .map(toRealDirectoryRoot)
-      .filter((root): root is string => root !== null);
+  const entries = output === null ? [] : parseGitWorktreeList(output);
+  if (entries.length > 0) {
+    const roots: string[] = [];
+    for (const entry of entries) {
+      const real = resolveWorktreeRoot(entry.path, "git worktree");
+      if (real === null) {
+        if (entry.prunable) continue;
+        throw new RepositoryRootsError(
+          `Git worktree ${entry.path} is missing and not marked prunable; cannot prove the archive root is outside the repository`
+        );
+      }
+      roots.push(real);
+    }
     if (roots.length > 0) return [...new Set(roots)];
   }
 

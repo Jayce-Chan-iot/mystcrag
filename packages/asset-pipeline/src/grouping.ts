@@ -170,12 +170,13 @@ function assertSha256(value: string): void {
 
 /**
  * Deterministic, conservative grouping suggestions (spec §7): exact
- * duplicates collapse first, same-stem RAW/JPEG pairs group next, and
- * remaining neighbors merge only when visual thresholds and capture
- * proximity agree. Borderline pairs never auto-merge — they surface as
- * low-confidence review suggestions carrying their similarity evidence so
- * the UI can explain the proposal. Suggestions and their evidence are
- * fully deterministic and independent of input order.
+ * duplicates collapse first, an unambiguous same-stem ARW+JPEG pair groups
+ * next (exactly one distinct ARW and one distinct JPEG per stem — ambiguous
+ * stems never merge on the file name), and remaining neighbors merge only
+ * when visual thresholds and capture proximity agree. Borderline pairs never
+ * auto-merge — they surface as low-confidence review suggestions carrying
+ * their similarity evidence so the UI can explain the proposal. Suggestions
+ * and their evidence are fully deterministic and independent of input order.
  */
 export function suggestGroups(
   candidates: readonly GroupingCandidate[],
@@ -264,30 +265,50 @@ export function suggestGroups(
     }
   }
 
-  // 2. Same-stem RAW/JPEG pairs group (different digests only). A Sony burst
-  // stores the ARW and its in-camera JPEG under one stem, so this exact
-  // complementary pair may merge on the file name. Any other same-stem
-  // combination (two JPEGs, PNG+WebP, …) carries no such guarantee and must
-  // prove itself through the visual thresholds below.
-  const complementaryRawJpeg = (a: GroupingCandidate, b: GroupingCandidate): boolean =>
-    (a.kind === "ARW" && b.kind === "JPEG") || (a.kind === "JPEG" && b.kind === "ARW");
-  for (let left = 0; left < sorted.length; left += 1) {
-    for (let right = left + 1; right < sorted.length; right += 1) {
-      const a = sorted[left]!;
-      const b = sorted[right]!;
-      if (a.sha256 === b.sha256 || stemOf(a.relativePath) !== stemOf(b.relativePath)) continue;
-      if (!complementaryRawJpeg(a, b)) continue;
-      if (find(left) === find(right)) continue;
-      union(left, right, {
-        fileId: b.clientFileId,
-        relatedFileId: a.clientFileId,
+  // 2. Same-stem RAW/JPEG pairing (different digests only). A Sony burst
+  // stores the ARW and its in-camera JPEG under one stem, so a stem pairs
+  // ONLY when it holds exactly one ARW side and exactly one JPEG side after
+  // the exact-duplicate collapse — anything else (2 ARW + 1 JPEG, 1 + 2,
+  // 2 + 2, …) is ambiguous: repeated camera filenames must not fuse
+  // unrelated shots, so no stem-based merge happens and the members stay
+  // independent unless the visual thresholds below prove a merge. This is
+  // deliberately stricter than pairRawAndJpeg (pairing.ts), which resolves
+  // ambiguity by deterministically picking a winner: grouping must never
+  // silently choose, so the one-pairing rule is enforced here on its own.
+  const stemBuckets = new Map<string, { raws: number[]; jpegs: number[] }>();
+  for (let index = 0; index < sorted.length; index += 1) {
+    const candidateAt = sorted[index]!;
+    if (candidateAt.kind !== "ARW" && candidateAt.kind !== "JPEG") continue;
+    const stem = stemOf(candidateAt.relativePath);
+    const bucket = stemBuckets.get(stem) ?? { raws: [], jpegs: [] };
+    if (candidateAt.kind === "ARW") bucket.raws.push(index);
+    else bucket.jpegs.push(index);
+    stemBuckets.set(stem, bucket);
+  }
+  for (const { raws, jpegs } of stemBuckets.values()) {
+    if (raws.length === 0 || jpegs.length === 0) continue;
+    const rawRoots = new Set(raws.map((index) => find(index)));
+    const jpegRoots = new Set(jpegs.map((index) => find(index)));
+    // Exactly one distinct ARW and one distinct JPEG may pair; identical
+    // duplicates of the same shot already collapsed into one component.
+    if (rawRoots.size !== 1 || jpegRoots.size !== 1) continue;
+
+    const jpegRepIndex = jpegs[0]!;
+    const jpegRep = sorted[jpegRepIndex]!;
+    const jpegRoot = find(jpegRepIndex);
+    for (const rawIndex of raws) {
+      if (find(rawIndex) === jpegRoot) continue; // already linked by a duplicate chain
+      record({
+        fileId: sorted[rawIndex]!.clientFileId,
+        relatedFileId: jpegRep.clientFileId,
         exactDuplicateOf: null,
-        stemPairedWith: a.clientFileId,
+        stemPairedWith: jpegRep.clientFileId,
         dHashDistance: null,
         histogramDistance: null,
         captureGapMs: null,
-        sameDirectory: sameDirectory(a, b)
+        sameDirectory: sameDirectory(sorted[rawIndex]!, jpegRep)
       });
+      parent[find(rawIndex)] = jpegRoot;
     }
   }
 

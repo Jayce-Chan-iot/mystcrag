@@ -8,8 +8,18 @@ const TIFF_BIG_ENDIAN_MAGIC = [0x4d, 0x4d, 0x00, 0x2a] as const;
 const TIFF_MAGIC = 42;
 const TIFF_HEADER_SIZE = 8;
 const IFD_ENTRY_SIZE = 12;
+const TAG_COMPRESSION = 0x0103;
+const TAG_PHOTOMETRIC = 0x0106;
 const TAG_MAKE = 0x010f;
+const TAG_SUB_IFDS = 0x014a;
 const TAG_TYPE_ASCII = 2;
+const TAG_TYPE_SHORT = 3;
+const TAG_TYPE_LONG = 4;
+const TAG_TYPE_IFD = 13;
+// Sony's RAW compression code used by current ARW payloads.
+const SONY_RAW_COMPRESSION = 32767;
+// CFA photometric interpretation: the sensor mosaic layout only RAW files carry.
+const CFA_PHOTOMETRIC = 32803;
 
 function startsWith(bytes: Uint8Array, magic: readonly number[]): boolean {
   if (bytes.length < magic.length) return false;
@@ -34,12 +44,79 @@ function decodeAscii(bytes: Uint8Array): string {
 }
 
 /**
+ * Reads the first SHORT or LONG value of an IFD entry, honoring the entry's
+ * type, count, endianness and inline/external value placement. Returns null
+ * when the entry is malformed or points outside the buffer — a malformed
+ * entry simply provides no evidence.
+ */
+function readShortOrLongValue(
+  view: DataView,
+  entryAt: number,
+  type: number,
+  count: number,
+  littleEndian: boolean,
+  byteLength: number
+): number | null {
+  if (count < 1) return null;
+  const valueSize = type === TAG_TYPE_SHORT ? 2 : type === TAG_TYPE_LONG ? 4 : 0;
+  if (valueSize === 0) return null;
+  const total = valueSize * count;
+  let offset: number;
+  if (total <= 4) {
+    offset = entryAt + 8;
+  } else {
+    offset = view.getUint32(entryAt + 8, littleEndian);
+    if (offset + total > byteLength) return null;
+  }
+  if (offset + valueSize > byteLength) return null;
+  return type === TAG_TYPE_SHORT
+    ? view.getUint16(offset, littleEndian)
+    : view.getUint32(offset, littleEndian);
+}
+
+/**
+ * Real ARWs keep their sensor strips in SubIFD chains. Evidence requires at
+ * least one SubIFDs pointer whose target IFD header (entry count plus entry
+ * table plus next-IFD link) lies inside the buffer.
+ */
+function subIfdLayoutExists(
+  view: DataView,
+  entryAt: number,
+  type: number,
+  count: number,
+  littleEndian: boolean,
+  byteLength: number
+): boolean {
+  if (count < 1) return false;
+  if (type !== TAG_TYPE_LONG && type !== TAG_TYPE_IFD) return false;
+  const total = 4 * count;
+  let base: number;
+  if (total <= 4) {
+    base = entryAt + 8;
+  } else {
+    base = view.getUint32(entryAt + 8, littleEndian);
+    if (base + total > byteLength) return false;
+  }
+  for (let index = 0; index < count; index += 1) {
+    const pointer = view.getUint32(base + index * 4, littleEndian);
+    if (pointer < TIFF_HEADER_SIZE || pointer + 2 > byteLength) continue;
+    const subEntryCount = view.getUint16(pointer, littleEndian);
+    if (pointer + 2 + subEntryCount * IFD_ENTRY_SIZE + 4 <= byteLength) return true;
+  }
+  return false;
+}
+
+/**
  * Sony ARW is a TIFF container, so the byte order alone proves nothing: any
  * 4-byte `II*\0` header would also accept plain TIFFs and corrupt files. A
  * payload only counts as ARW when the TIFF structure is intact — magic 42,
- * an in-bounds IFD0 offset, an entry table that fits inside the buffer — and
- * IFD0 carries an ASCII Make tag identifying Sony. Both byte orders are
- * honored for real camera files.
+ * an in-bounds IFD0 offset, an entry table that fits inside the buffer —
+ * AND IFD0 carries BOTH an ASCII Make tag identifying Sony AND at least one
+ * RAW-specific evidence that plain Sony TIFFs never carry: a readable
+ * SubIFDs chain (sensor strips live there), the Sony RAW compression code
+ * 32767, or a CFA photometric interpretation (32803). A Make tag alone is
+ * not evidence — Sony also produces plain TIFFs — so a file that cannot be
+ * proven RAW is rejected rather than archived as ARW.
  */
 function isSonyArw(bytes: Uint8Array): boolean {
   const littleEndian = startsWith(bytes, TIFF_LITTLE_ENDIAN_MAGIC);
@@ -56,32 +133,57 @@ function isSonyArw(bytes: Uint8Array): boolean {
   const ifdEnd = ifdOffset + 2 + entryCount * IFD_ENTRY_SIZE + 4;
   if (ifdEnd > bytes.length) return false;
 
+  let makeIsSony = false;
+  let hasRawEvidence = false;
+
   for (let index = 0; index < entryCount; index += 1) {
     const entryAt = ifdOffset + 2 + index * IFD_ENTRY_SIZE;
-    if (view.getUint16(entryAt, littleEndian) !== TAG_MAKE) continue;
-    if (view.getUint16(entryAt + 2, littleEndian) !== TAG_TYPE_ASCII) return false;
+    const tag = view.getUint16(entryAt, littleEndian);
+    const type = view.getUint16(entryAt + 2, littleEndian);
     const count = view.getUint32(entryAt + 4, littleEndian);
-    if (count < 4 || count > bytes.length) return false;
 
-    let valueOffset: number;
-    if (count <= 4) {
-      valueOffset = entryAt + 8;
-    } else {
-      valueOffset = view.getUint32(entryAt + 8, littleEndian);
-      if (valueOffset + count > bytes.length) return false;
+    if (tag === TAG_MAKE) {
+      if (type !== TAG_TYPE_ASCII) return false;
+      if (count < 4 || count > bytes.length) return false;
+      let valueOffset: number;
+      if (count <= 4) {
+        valueOffset = entryAt + 8;
+      } else {
+        valueOffset = view.getUint32(entryAt + 8, littleEndian);
+        if (valueOffset + count > bytes.length) return false;
+      }
+      const make = decodeAscii(bytes.subarray(valueOffset, valueOffset + count));
+      makeIsSony = make === "SONY" || make.startsWith("SONY");
+      continue;
     }
-    const make = decodeAscii(bytes.subarray(valueOffset, valueOffset + count));
-    return make === "SONY" || make.startsWith("SONY");
+
+    if (tag === TAG_COMPRESSION) {
+      const value = readShortOrLongValue(view, entryAt, type, count, littleEndian, bytes.length);
+      if (value === SONY_RAW_COMPRESSION) hasRawEvidence = true;
+      continue;
+    }
+
+    if (tag === TAG_PHOTOMETRIC) {
+      const value = readShortOrLongValue(view, entryAt, type, count, littleEndian, bytes.length);
+      if (value === CFA_PHOTOMETRIC) hasRawEvidence = true;
+      continue;
+    }
+
+    if (tag === TAG_SUB_IFDS && subIfdLayoutExists(view, entryAt, type, count, littleEndian, bytes.length)) {
+      hasRawEvidence = true;
+    }
   }
-  return false;
+
+  return makeIsSony && hasRawEvidence;
 }
 
 /**
  * Sniffs the asset source kind from content only. File extensions and
  * client-declared kinds are never trusted: a mislabeled file is classified by
  * its actual content so archives never store a payload under a wrong kind.
- * ARW additionally requires a structurally valid Sony TIFF (see isSonyArw);
- * plain or truncated TIFFs are rejected.
+ * ARW requires a structurally valid Sony TIFF plus RAW-specific evidence
+ * (see isSonyArw); plain SONY TIFFs, truncated or corrupt TIFFs are
+ * rejected — when in doubt the result is null, never ARW.
  */
 export function detectAssetSourceKind(bytes: Uint8Array): DetectedAssetSourceKind | null {
   if (startsWith(bytes, JPEG_MAGIC)) return "JPEG";

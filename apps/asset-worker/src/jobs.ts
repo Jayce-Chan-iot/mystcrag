@@ -182,7 +182,21 @@ function requireStagingKeyForSession(stagingKey: string, sessionId: string): voi
   }
 }
 
-function requireRawKeyForSession(archiveKey: string, sessionId: string, context: string): void {
+/** Archive-key extensions that a raw key may legally carry per source kind. */
+const RAW_KEY_EXTENSIONS_BY_KIND: Record<string, readonly string[]> = {
+  ARW: ["arw"],
+  JPEG: ["jpeg", "jpg"],
+  PNG: ["png"],
+  WEBP: ["webp"]
+};
+
+export type ParsedRawKey = {
+  sessionId: string;
+  digest: string;
+  extension: string;
+};
+
+function parseRawKey(archiveKey: string, context: string): ParsedRawKey {
   const match = RAW_KEY_PATTERN.exec(archiveKey);
   if (match === null) {
     throw new JobExecutionError(
@@ -191,13 +205,19 @@ function requireRawKeyForSession(archiveKey: string, sessionId: string, context:
       false
     );
   }
-  if (match[1] !== sessionId) {
+  return { sessionId: match[1]!, digest: match[2]!, extension: match[3]! };
+}
+
+function requireRawKeyForSession(archiveKey: string, sessionId: string, context: string): ParsedRawKey {
+  const parsed = parseRawKey(archiveKey, context);
+  if (parsed.sessionId !== sessionId) {
     throw new JobExecutionError(
       "PAYLOAD_INVALID",
       `${context} archive key belongs to a different session than the job`,
       false
     );
   }
+  return parsed;
 }
 
 export function parseArchiveFilePayload(job: ClaimedAssetJob): ArchiveFileJobPayload {
@@ -209,7 +229,23 @@ export function parseArchiveFilePayload(job: ClaimedAssetJob): ArchiveFileJobPay
 export function parseGroupSessionPayload(job: ClaimedAssetJob): GroupSessionJobPayload {
   const payload = parsePayload(GroupSessionJobPayloadSchema, job.payload, "GROUP_SESSION");
   for (const file of payload.files) {
-    requireRawKeyForSession(file.archiveKey, job.sessionId, `GROUP_SESSION file ${file.fileId}`);
+    const context = `GROUP_SESSION file ${file.fileId}`;
+    const parsed = requireRawKeyForSession(file.archiveKey, job.sessionId, context);
+    if (parsed.digest !== file.sha256) {
+      throw new JobExecutionError(
+        "PAYLOAD_INVALID",
+        `${context} archive key digest does not match the file's SHA-256`,
+        false
+      );
+    }
+    const allowedExtensions = RAW_KEY_EXTENSIONS_BY_KIND[file.kind] ?? [];
+    if (!allowedExtensions.includes(parsed.extension)) {
+      throw new JobExecutionError(
+        "PAYLOAD_INVALID",
+        `${context} archive key extension .${parsed.extension} does not match the declared kind ${file.kind}`,
+        false
+      );
+    }
   }
   return payload;
 }
@@ -226,7 +262,15 @@ export function parseProcessGroupPayload(job: ClaimedAssetJob): ProcessGroupJobP
     );
   }
   for (const entry of payload.files) {
-    requireRawKeyForSession(entry.archiveKey, job.sessionId, `PROCESS_GROUP file ${entry.fileId}`);
+    const context = `PROCESS_GROUP file ${entry.fileId}`;
+    const parsed = requireRawKeyForSession(entry.archiveKey, job.sessionId, context);
+    if (parsed.digest !== entry.sha256) {
+      throw new JobExecutionError(
+        "PAYLOAD_INVALID",
+        `${context} archive key digest does not match the file's SHA-256`,
+        false
+      );
+    }
   }
   return payload;
 }

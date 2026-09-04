@@ -114,6 +114,79 @@ test("same-stem RAW/JPEG files group with stem evidence", () => {
   assert.equal(stemEvidence!.stemPairedWith, "jpg");
 });
 
+test("two ARWs and one JPEG of the same stem never auto-merge on the stem", () => {
+  const outcome = suggestGroups([
+    candidate("jpg", "dir/DSC01535.JPG", HASH_A, { kind: "JPEG" }),
+    candidate("raw1", "dir/DSC01535.ARW", HASH_B, { kind: "ARW" }),
+    candidate("raw2", "card-two/DSC01535.ARW", HASH_C, { kind: "ARW" })
+  ]);
+
+  assert.ok(
+    outcome.suggestions.every((item) => item.memberFileIds.length === 1),
+    "an ambiguous 2 ARW + 1 JPEG stem must not merge into one high-confidence group"
+  );
+  assert.ok(
+    outcome.suggestions.every((item) => item.evidence.every((entry) => entry.stemPairedWith === null)),
+    "ambiguous stems must not claim stem-pairing evidence"
+  );
+});
+
+test("one ARW and two JPEGs of the same stem never auto-merge on the stem", () => {
+  const outcome = suggestGroups([
+    candidate("jpg1", "dir/DSC01535.JPG", HASH_A, { kind: "JPEG" }),
+    candidate("jpg2", "card-two/DSC01535.JPG", HASH_C, { kind: "JPEG" }),
+    candidate("raw", "dir/DSC01535.ARW", HASH_B, { kind: "ARW" })
+  ]);
+
+  assert.ok(
+    outcome.suggestions.every((item) => item.memberFileIds.length === 1),
+    "an ambiguous 1 ARW + 2 JPEG stem must not merge into one high-confidence group"
+  );
+});
+
+test("two ARWs and two JPEGs of the same stem stay four independent suggestions", () => {
+  const outcome = suggestGroups([
+    candidate("jpg1", "dir-one/DSC01535.JPG", HASH_A, { kind: "JPEG" }),
+    candidate("jpg2", "dir-two/DSC01535.JPG", HASH_C, { kind: "JPEG" }),
+    candidate("raw1", "dir-one/DSC01535.ARW", HASH_B, { kind: "ARW" }),
+    candidate("raw2", "dir-two/DSC01535.ARW", HASH_D, { kind: "ARW" })
+  ]);
+
+  assert.equal(outcome.suggestions.length, 4);
+  assert.ok(
+    outcome.suggestions.every((item) => item.memberFileIds.length === 1),
+    "even per-directory-unambiguous 2+2 combinations must not auto-merge on the stem"
+  );
+});
+
+test("ambiguous same-stem sets group deterministically regardless of input order", () => {
+  const inputs = [
+    candidate("jpg", "dir/DSC01535.JPG", HASH_A, { kind: "JPEG" }),
+    candidate("raw1", "dir/DSC01535.ARW", HASH_B, { kind: "ARW" }),
+    candidate("raw2", "card-two/DSC01535.ARW", HASH_C, { kind: "ARW" })
+  ];
+
+  const first = suggestGroups(inputs);
+  const second = suggestGroups([...inputs].reverse());
+  const third = suggestGroups([inputs[1]!, inputs[2]!, inputs[0]!]);
+
+  assert.deepEqual(first, second);
+  assert.deepEqual(first, third);
+});
+
+test("exact-duplicate ARWs collapse before stem pairing, so one JPEG still pairs", () => {
+  const outcome = suggestGroups([
+    candidate("jpg", "dir/DSC01535.JPG", HASH_A, { kind: "JPEG" }),
+    candidate("raw1", "dir/DSC01535.ARW", HASH_B, { kind: "ARW" }),
+    candidate("raw2", "card-two/DSC01535.ARW", HASH_B, { kind: "ARW" })
+  ]);
+
+  const merged = outcome.suggestions.find((item) => item.memberFileIds.length === 3);
+  assert.ok(merged, "identical ARWs plus their JPEG form one group");
+  assert.deepEqual(merged!.memberFileIds, ["jpg", "raw1", "raw2"]);
+  assert.ok(merged!.evidence.some((entry) => entry.stemPairedWith === "jpg"));
+});
+
 test("same-stem JPEGs with different content never merge on the stem alone", () => {
   const outcome = suggestGroups([
     candidate("jpg1", "dir-one/bead.JPG", HASH_A, { kind: "JPEG" }),

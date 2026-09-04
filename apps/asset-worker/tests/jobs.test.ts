@@ -63,7 +63,9 @@ const GROUP_SESSION_FILE_BASE = {
   archiveKey: "",
   byteSize: 0,
   lastModifiedMs: 0,
-  kind: "JPEG" as const
+  // The tests archive PNG payloads under .png raw keys, so the declared kind
+  // must match the key extension the payload validation now cross-checks.
+  kind: "PNG" as const
 };
 
 test("job payload contracts reject malformed payloads", () => {

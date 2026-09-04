@@ -211,3 +211,110 @@ test("PROCESS_GROUP rejects later file entries from another session or a non-raw
     );
   }
 });
+
+function rawKeyFile(overrides: {
+  fileId?: string;
+  sha256?: string;
+  extension?: string;
+  kind?: "ARW" | "JPEG" | "PNG" | "WEBP";
+} = {}) {
+  const fileId = overrides.fileId ?? "file-1";
+  const sha256 = overrides.sha256 ?? SHA_A;
+  const extension = overrides.extension ?? "jpg";
+  const kind = overrides.kind ?? "JPEG";
+  return {
+    fileId,
+    clientFileId: `cf-${fileId}`,
+    relativePath: `dir/bead-${fileId}.${extension}`,
+    sha256,
+    archiveKey: `imports/${SESSION}/raw/${sha256}.${extension}`,
+    byteSize: 10,
+    lastModifiedMs: 1,
+    kind
+  };
+}
+
+test("GROUP_SESSION rejects an archive key whose digest contradicts the file's SHA-256", async () => {
+  const handlers = makeHandlers();
+  const file = rawKeyFile({ sha256: SHA_A, extension: "jpg" });
+  file.archiveKey = `imports/${SESSION}/raw/${SHA_B}.jpg`;
+
+  await assertRejectedBeforeStoreAccess(
+    () => handlers.GROUP_SESSION(job({ jobType: "GROUP_SESSION", payload: { files: [file] } })),
+    "GROUP_SESSION digest mismatch"
+  );
+});
+
+test("GROUP_SESSION rejects a .png archive key masquerading as an ARW original", async () => {
+  const handlers = makeHandlers();
+  await assertRejectedBeforeStoreAccess(
+    () =>
+      handlers.GROUP_SESSION(
+        job({
+          jobType: "GROUP_SESSION",
+          payload: { files: [rawKeyFile({ extension: "png", kind: "ARW" })] }
+        })
+      ),
+    "GROUP_SESSION .png key on an ARW kind"
+  );
+  await assertRejectedBeforeStoreAccess(
+    () =>
+      handlers.GROUP_SESSION(
+        job({
+          jobType: "GROUP_SESSION",
+          payload: { files: [rawKeyFile({ extension: "arw", kind: "JPEG" })] }
+        })
+      ),
+    "GROUP_SESSION .arw key on a JPEG kind"
+  );
+});
+
+test("GROUP_SESSION validates the digest of every file, not only the first", async () => {
+  const handlers = makeHandlers();
+  const files = [
+    rawKeyFile({ fileId: "file-1", extension: "jpg" }),
+    rawKeyFile({ fileId: "file-2", sha256: SHA_A, extension: "jpg" })
+  ];
+  // The second file claims SHA_A but its key embeds SHA_B.
+  files[1]!.archiveKey = `imports/${SESSION}/raw/${SHA_B}.jpg`;
+
+  await assertRejectedBeforeStoreAccess(
+    () => handlers.GROUP_SESSION(job({ jobType: "GROUP_SESSION", payload: { files } })),
+    "GROUP_SESSION second file digest mismatch"
+  );
+});
+
+test("PROCESS_GROUP rejects an archive key whose digest contradicts the entry's SHA-256", async () => {
+  const handlers = makeHandlers();
+  await assertRejectedBeforeStoreAccess(
+    () =>
+      handlers.PROCESS_GROUP(
+        job({
+          jobType: "PROCESS_GROUP",
+          groupId: "group-1",
+          payload: {
+            groupId: "group-1",
+            processingVersion: 1,
+            files: [{ fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_B}.jpg`, sha256: SHA_A }]
+          }
+        })
+      ),
+    "PROCESS_GROUP digest mismatch"
+  );
+});
+
+test("GROUP_SESSION accepts a consistent .jpeg key for a JPEG file and reaches the store", async () => {
+  const handlers = makeHandlers();
+  // Validation passing is proven by the refusal store being reached: the
+  // handler must call verifiedRead for a fully consistent payload.
+  await assert.rejects(
+    handlers.GROUP_SESSION(
+      job({
+        jobType: "GROUP_SESSION",
+        payload: { files: [rawKeyFile({ extension: "jpeg", kind: "JPEG" })] }
+      })
+    ),
+    /VERIFIED_READ_WAS_CALLED/,
+    "a consistent .jpeg key must pass validation and reach verifiedRead"
+  );
+});
