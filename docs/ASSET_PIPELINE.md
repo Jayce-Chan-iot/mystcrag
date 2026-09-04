@@ -240,7 +240,7 @@ SOL 验收提出 5 项问题,全部以"先补失败测试、再修复"处理;任
 | `pnpm validate` | 通过;turbo 17/17 任务成功(15 缓存命中,2 实际执行;本任务触及的 asset-pipeline/asset-worker build 因源码变更重执行) |
 | `git diff --check f17fa2e..HEAD` / `git status --short --branch` | 通过(提交后确认) |
 
-逐文件 diffstat(`f28db19` → 修复提交,含新增文件):
+逐文件 diffstat(`f28db19` → `1fbfcdc`,含新增文件):
 
 ```text
  apps/asset-worker/src/index.ts                     |  16 +-
