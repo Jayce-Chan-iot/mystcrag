@@ -14,7 +14,8 @@ TASK-ASSET-WORKER-001 的模块接口、存储布局、配置与交付记录。�
 | SOL 修复提交 | `1fbfcdc`(第 1 轮,§10.3) |
 | SOL 第 2 轮修复提交 | `ca480bf`(§10.4,基于 `9ea6fc4`) |
 | SOL 第 3 轮修复提交 | `f5b5d97`(§10.5,基于 `4414c3b`) |
-| 当前状态 | REVIEW:SOL 验收第 1 轮 5 项 + 第 2 轮 4 项 + 第 3 轮 4 项问题已修复(§10.3–§10.5) |
+| SOL 第 4 轮修复提交 | `9ca2a92`(§10.6,基于 `c091a9d`) |
+| 当前状态 | REVIEW:SOL 验收第 1 轮 5 项 + 第 2 轮 4 项 + 第 3 轮 4 项 + 第 4 轮 2 项问题已修复(§10.3–§10.6) |
 
 ## 2. 模块与接口
 
@@ -26,13 +27,13 @@ TASK-ASSET-WORKER-001 的模块接口、存储布局、配置与交付记录。�
 | `hash.ts` | `sha256OfBytes`, `sha256OfFile`, `FileDigest` |
 | `pairing.ts` | `pairRawAndJpeg(files): PairingOutcome`(跨目录同 stem RAW/JPG 配对) |
 | `storage.ts` | `ArchiveStore`(`putOriginal`/`putProcessed`/`putStaging`/`removeStaging`/`read`/`verifiedRead`/`listSessionFiles`,原子 link+unlink、防符号链接越界、同 key 不同内容拒绝;仅 staging 可删除,raw/processed 不可变) |
-| `grouping.ts` | `computeDHash`, `computeColorHistogram`, `hammingDistance`, `histogramDistance`, `suggestGroups`, `GROUPING_THRESHOLDS`。候选必须携带 `kind`;同 stem 强配对按**原始候选数量**计数:仅"恰好一个 ARW 候选 + 恰好一个 JPEG 候选"(1+1)直接高置信配对,精确重复折叠后的组件数不参与判定(两个完全相同的 ARW 折叠成一个组件后仍按 2 个 ARW 计,不得借 stem 边并入 JPEG),2 ARW+1 JPEG、1+2、2+2 等歧义组合不凭 stem 合并;两张 JPEG/PNG/WebP 同 stem 不得仅凭文件名高置信度合并。所有影响输出、成员、代表项与 evidence 顺序的排序使用 UTF-16 代码单元比较器(不依赖系统 locale,`é` 与 `e\u0301` 等在 localeCompare 下可能相等的 ID 顺序固定),建议与证据完全确定,与输入顺序无关 |
+| `grouping.ts` | `computeDHash`, `computeColorHistogram`, `hammingDistance`, `histogramDistance`, `suggestGroups`, `GROUPING_THRESHOLDS`。候选必须携带 `kind`;同 stem 强配对按**原始候选数量**计数:仅"exactly one original ARW candidate and one original JPEG candidate"(恰好一个原始 ARW 候选 + 恰好一个原始 JPEG 候选,1+1)直接高置信配对,精确重复折叠后的组件数不参与判定(两个完全相同的 ARW 折叠成一个组件后仍按 2 个 ARW 计,不得借 stem 边并入 JPEG),2 ARW+1 JPEG、1+2、2+2 等歧义组合不凭 stem 合并;歧义同 stem 的跨类型对同样不得经**视觉高置信阶段**合并——即使 dHash/histogram/capturedAtMs 完全相同,JPEG 也不得并入重复 RAW 组件(重复 ARW 保留自身 duplicate group,JPEG 保持独立或仅在双方均为独立单例时进入低置信度复核);不同 stem 的真实连拍仍按视觉+时间阈值正常合并。两张 JPEG/PNG/WebP 同 stem 不得仅凭文件名高置信度合并。所有影响输出、成员、代表项与 evidence 顺序的排序使用 UTF-16 代码单元比较器(不依赖系统 locale,`é` 与 `e\u0301` 等在 localeCompare 下可能相等的 ID 顺序固定),建议与证据完全确定,与输入顺序无关 |
 | `image-processor.ts` | `processBeadImage`(保真扣图,512/256 透明 WebP,`PROCESSOR_VERSION = "faithful-v1"`,不放大主体) |
 | `quality.ts` | `runQualityChecks`(11 项数值 QC,失败不静默通过) |
 
 ### 2.2 `apps/asset-worker`(本阶段交付)
 
-- `src/repository-roots.ts`:Git worktree 根发现。优先 `git worktree list --porcelain`(以模块目录为 cwd,5 s 超时),得到当前 worktree、主 checkout 与所有已注册兄弟 worktree;porcelain 路径仅忽略"明确标记 prunable **且未锁定**且目录缺失"的条目,locked 缺失、非 prunable 缺失、无法 realpath、非目录均 fail-closed。git 不可用或命令失败时回退文件系统走查:向上定位 `.git`(目录,或解析 linked-worktree `.git` 文件的 `gitdir:` 指针),再经 common git dir(`commondir` 文件推导)的 `worktrees/<name>/gitdir` 注册表**枚举全部已注册 worktree**。注册表条目必须是可验证的目录(文件、符号链接均抛错);gitdir 文件必须可读、非空且解析后指向该 worktree 的 `.git`;主 checkout 不可达抛错。fallback 无法证明 prunability:登记项目标缺失(ENOENT)一律 fail-closed 拒绝启动——locked 且目标缺失、目标缺失但无法证明可清理,均抛 `RepositoryRootsError`;仅 porcelain 明确标记 prunable 才允许忽略不存在路径。两条路径都无法识别仓库时同样抛 `RepositoryRootsError` 拒绝启动(无法证明档案根安全即不启动)。所有根经 realpath 归一。
+- `src/repository-roots.ts`:Git worktree 根发现。优先 `git worktree list --porcelain`(以模块目录为 cwd,5 s 超时),得到当前 worktree、主 checkout 与所有已注册兄弟 worktree;porcelain 路径仅忽略"明确标记 prunable **且未锁定**且目录缺失"的条目,locked 缺失、非 prunable 缺失、无法 realpath、非目录均 fail-closed。git 不可用或命令失败时回退文件系统走查:向上定位 `.git`(目录,或解析 linked-worktree `.git` 文件的 `gitdir:` 指针),再经 common git dir(`commondir` 文件推导)的 `worktrees/<name>/gitdir` 注册表**枚举全部已注册 worktree**。注册表条目必须是可验证的目录(文件、符号链接均抛错);gitdir 文件必须可读、非空且解析后指向该 worktree 的 `.git`;随后**双向验证登记关系**(`verifyWorktreeRegistration`):目标 worktree 的 `.git` 必须存在、必须是普通文件(目录、符号链接均抛错)、内容必须是可读的非空合法 `gitdir:` 指针,且规范化后的反向指针必须**精确等于**当前 `commonDir/worktrees/<name>` 登记目录——decoy 目录存在但 `.git` 缺失、`.git` 类型错误、内容格式错误、交叉指向另一登记项等任何不一致均抛 `RepositoryRootsError` fail-closed;主 checkout 不可达抛错。fallback 无法证明 prunability:登记项目标缺失(ENOENT)一律 fail-closed 拒绝启动——locked 且目标缺失、目标缺失但无法证明可清理,均抛 `RepositoryRootsError`;仅 porcelain 明确标记 prunable 才允许忽略不存在路径。两条路径都无法识别仓库时同样抛 `RepositoryRootsError` 拒绝启动(无法证明档案根安全即不启动)。所有根经 realpath 归一。
 - `src/index.ts`:运行入口。读取 `DATABASE_URL`、`MYSTCRAG_ASSET_ARCHIVE_ROOT`、`MYSTCRAG_ASSET_WORKER_ID`,用 `discoverRepositoryRoots` 得到保护根集合后装配 `createPrismaClient` + `AssetImportRepository` + `ArchiveStore.fromEnvironment`,启动 `AssetWorker`。档案根缺失、或经 realpath 后位于任一已发现 Git worktree 内部(含符号链接指向)时拒绝启动。
 - `src/jobs.ts`:内部 job payload 契约(Zod 严格校验 `ClaimedAssetJob.payload: unknown` 后消费)、跨会话/跨分组隔离校验(§5.4)与三类任务处理器。
 - `src/runtime.ts`:租约驱动主循环(领取、心跳续租、完成/失败提交、有限重试、SIGTERM 优雅退出);清理动作只作为 `afterCommit` 钩子在完成提交成功后执行。
@@ -136,7 +137,7 @@ staging 清理与恢复顺序(§6):删除只发生在完成提交成功之后;�
 | `histogramReview` | 0.35(L1) | 复核上限,超过即不视为相似 |
 | `captureGapConfidentMs` | 60 000 ms | 连拍窗口:同一珠子的连续拍摄通常在 1 分钟内 |
 
-高置信度合并要求视觉信号与拍摄时间**同时**满足;只有单项满足的进入低置信度复核建议。同 stem 强配对仅限精确重复折叠后恰好一个 ARW + 恰好一个 JPEG(原始+机内 JPEG 的 1+1);ARW/JPEG 任一侧出现多候选(如跨目录重复相机文件名的 2+1、1+2、2+2)即视为歧义,不凭 stem 自动合并——成员保持独立,或仅在视觉+时间阈值独立满足时合并,歧义对可进入低置信度复核证据,绝不静默择一。两张 JPEG/PNG/WebP 即使同名也不凭文件名合并,必须走上述视觉+时间阈值。
+高置信度合并要求视觉信号与拍摄时间**同时**满足;只有单项满足的进入低置信度复核建议。同 stem 强配对仅限**原始候选**恰好一个 ARW + 恰好一个 JPEG(exactly one original ARW candidate and one original JPEG candidate,原始+机内 JPEG 的 1+1;精确重复折叠后的组件数不参与判定);ARW/JPEG 任一侧出现多候选(如跨目录重复相机文件名的 2+1、1+2、2+2)即视为歧义,不凭 stem 自动合并,**也不得经视觉高置信阶段合并**——即使 dHash/histogram/拍摄时间完全相同,JPEG 也不得并入重复 RAW 组件(重复 ARW 保留自身 duplicate group,JPEG 保持独立,仅在双方均为独立单例时可进入低置信度复核证据),绝不静默择一。不同 stem 的真实连拍仍按上述视觉+时间阈值正常合并。两张 JPEG/PNG/WebP 即使同名也不凭文件名合并,必须走上述视觉+时间阈值。
 
 ### 8.2 QC 阈值(`QC_THRESHOLDS`,`quality.ts`)
 
@@ -334,6 +335,42 @@ SOL 第 3 轮验收提出 4 项问题(3×P1、1×P2),全部以"先补失败测�
 | `pnpm validate` / `git diff --check f17fa2e..HEAD` / `git status --short --branch` | 通过(提交后确认) |
 
 变更文件(相对 `4414c3b`,共 9 个):`apps/asset-worker/src/repository-roots.ts`、`packages/asset-pipeline/src/{content-type,grouping}.ts`、`apps/asset-worker/tests/archive-root-guard.test.ts`、`packages/asset-pipeline/tests/{content-type,grouping,image-processor}.test.ts`、本文件与 `docs/tasks/TASK_REGISTRY.md`。无数据库/Prisma/共享 Contract/后台/前端/知识库改动,无新增运行时依赖,变更集无任何图片/二进制文件(全部 fixture 为 SVG→sharp PNG 或 `buildTiff`/`syntheticSonyArw` 合成字节)。G5(§7)保持登记不变。
+
+### 2026-09-04 SOL 验收第 4 轮修复(基线 `c091a9d`,分支 `task/asset-worker-001-local-pipeline`,worktree `.worktrees/asset-worker-001`,修复提交 `9ca2a92`)
+
+SOL 第 4 轮验收提出 2 项问题,全部以"先补失败测试、再修复"处理;任务保持 REVIEW,未推送、未合并、未开始 Task 4、未处理 A7/Batch B。
+
+修复项与对应测试:
+
+| # | 问题 | 修复 | 测试 |
+| --- | --- | --- | --- |
+| 问题一 | filesystem fallback 登记关系验证不完整:仅检查 `basename(recorded) === ".git"` 并确认父目录存在,decoy 目录存在但其 `.git` 缺失、`.git` 为目录/符号链接、内容不可读或无 `gitdir:` 指针、反向指针未精确指向当前登记目录等损坏状态仍被接受 | 新增 `verifyWorktreeRegistration(name, dotGitFile, registryDir)`:对每个 `commonDir/worktrees/<name>/gitdir` 登记项,读取并解析目标 worktree 的 `<root>/.git`——必须存在(lstat)、必须是普通文件(目录、符号链接均抛 `RepositoryRootsError`)、内容必须可读且为非空合法 `gitdir:` 指针,规范化后的反向指针必须**精确等于**当前 `commonDir/worktrees/<name>`;任意缺失、不可读、错误类型、符号链接、格式错误或交叉接线均 fail-closed。不再只验证目标父目录存在;porcelain 明确标记 prunable 且未锁定的缺失项仍可跳过,filesystem fallback 继续严格 fail-closed | `archive-root-guard.test.ts` 新增 6 项:decoy 目录存在但 `.git` 不存在、`.git` 为目录、`.git` 为符号链接、`.git` 文件无 `gitdir:` 指针、`.git` 反向指向另一登记项(wt-a)、合法双向登记仍枚举出全部根(正向控制,自 worktree B 出发同时验证两侧指针) |
+| 问题二 | 歧义 2+1 集合经视觉阶段重新形成三成员组:两个相同 SHA-256 的 ARW(重复组件)+ 同 stem 不同 SHA-256 的 JPEG,三者 dHash/histogram/capturedAtMs 相同或足够接近时,视觉高置信阶段把 JPEG 并入重复 RAW 组件 | 新增 `ambiguousSameStemCrossKind(a, b)`:同 stem 且 stem bucket 中原始 ARW>1 或 JPEG>1 的跨类型(ARW×JPEG)对,在视觉高置信合并循环中直接跳过(与 stem 阶段共用同一原始候选计数);重复 ARW 保留自身 duplicate group,JPEG 保持独立(或仅在双方均为独立单例时进入低置信度复核建议,绝不跨入已形成的重复 RAW 组件);不同 stem 的真实连拍仍按现有视觉规则正常合并;1+1 严格配对不受影响;注释统一为 "exactly one original ARW candidate and one original JPEG candidate" | `grouping.test.ts` 新增"two identical ARWs and one same-stem JPEG with identical visual features and capture time never form a three-member high-confidence group":三者同 dHash/histogram/capturedAtMs,断言不存在三成员建议、raw1/raw2 形成两成员 duplicate group、JPEG 独立且不属于该重复组、全部 evidence 无 `stemPairedWith`、正反输入顺序结果 `deepEqual` |
+
+红灯证据(实际执行;`git checkout HEAD~1 --` 还原两个实现文件、仅保留新测试对旧实现运行后 `git checkout HEAD --` 恢复):
+
+- `pnpm --filter @mystcrag/asset-pipeline test`(旧实现 + 新测试):82 tests,pass 81,**fail 1**——新视觉歧义用例(`two identical ARWs and one same-stem JPEG with identical visual features and capture time …`)。
+- `pnpm exec tsx --test tests/archive-root-guard.test.ts`(asset-worker,旧实现 + 新测试):27 tests,pass 22,**fail 5**——decoy `.git` 缺失、`.git` 目录、`.git` 符号链接、无 `gitdir:` 指针、交叉反向指针;"合法双向登记仍枚举全部根"的正向控制用例在旧实现上本就通过。
+
+真库环境与测试库(真实创建,均全新空库,migrate 后执行;PostgreSQL 17.10,Homebrew,aarch64):
+
+- Worker 联调:`mystcrag_assetworker001_r4_test_20260904`
+- `pnpm db:test`:`mystcrag_assetworker001_r4_dbtest_20260904`
+
+本阶段真实执行记录(全部实际执行):
+
+| 检查 | 结果 |
+| --- | --- |
+| `pnpm --filter @mystcrag/asset-pipeline lint` / `typecheck` / `test` | 通过;测试 82/82(0 fail,0 skipped;第 3 轮后 81 + 新增 1) |
+| `pnpm --filter @mystcrag/asset-worker lint` / `typecheck` | 通过(`tsc --noEmit`) |
+| 无数据库 Worker 测试(`env -u DATABASE_URL -u MYSTCRAG_ASSET_ARCHIVE_ROOT`) | 63 tests:62 pass + 1 skipped(集成用例按设计跳过);`archive-root-guard` 单文件 27/27(第 3 轮后 21 + 新增 6) |
+| Worker 集成测试(真库 `mystcrag_assetworker001_r4_test_20260904`,先 `db:migrate`) | 74/74 通过,0 fail,0 skipped |
+| `pnpm db:test`(真库 `mystcrag_assetworker001_r4_dbtest_20260904`,全新空库) | 178/178 通过(0 fail,0 skipped) |
+| `pnpm validate` | 通过(lint+typecheck+test+build,17/17 任务成功) |
+| `git diff --check f17fa2e..HEAD` / `git status --short --branch` | 通过(提交后确认) |
+| 图片/二进制/网络/生成式图片依赖 | 变更集仅 4 个文本源文件,`git diff --numstat` 全部为文本行统计(无二进制);diff 中无任何 URL/`fetch`/`axios`/`undici`/`text_to_image` 等引用,fixture 全部为合成字节 |
+
+变更文件(相对 `c091a9d`,共 4 个 + 文档):`apps/asset-worker/src/repository-roots.ts`、`apps/asset-worker/tests/archive-root-guard.test.ts`、`packages/asset-pipeline/src/grouping.ts`、`packages/asset-pipeline/tests/grouping.test.ts`(提交 `9ca2a92`),以及本文件与 `docs/tasks/TASK_REGISTRY.md`(文档提交)。无数据库/Prisma/共享 Contract/后台/前端/知识库改动,无新增运行时依赖。G5(§7)保持登记不变。
 
 ## 11. 操作
 
