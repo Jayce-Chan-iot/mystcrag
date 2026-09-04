@@ -13,7 +13,8 @@ TASK-ASSET-WORKER-001 的模块接口、存储布局、配置与交付记录。�
 | 首轮交付 SHA | `f28db19e4919984d593ba2381eeb739dae43f089` |
 | SOL 修复提交 | `1fbfcdc`(第 1 轮,§10.3) |
 | SOL 第 2 轮修复提交 | `ca480bf`(§10.4,基于 `9ea6fc4`) |
-| 当前状态 | REVIEW:SOL 验收第 1 轮 5 项 + 第 2 轮 4 项问题已修复(§10.3–§10.4) |
+| SOL 第 3 轮修复提交 | 见 §10.5(基于 `4414c3b`) |
+| 当前状态 | REVIEW:SOL 验收第 1 轮 5 项 + 第 2 轮 4 项 + 第 3 轮 4 项问题已修复(§10.3–§10.5) |
 
 ## 2. 模块与接口
 
@@ -21,17 +22,17 @@ TASK-ASSET-WORKER-001 的模块接口、存储布局、配置与交付记录。�
 
 | 模块 | 关键导出 |
 | --- | --- |
-| `content-type.ts` | `detectAssetSourceKind(bytes): DetectedAssetSourceKind \| null`(魔数检测:ARW/JPEG/PNG/WEBP)。ARW 需完整 TIFF 结构(大小端魔数、IFD 偏移与条目边界)且 IFD0 同时携带 Make=SONY **与至少一项 RAW 专用证据**(指向缓冲区内合法 IFD 的 SubIFDs 指针链、Sony RAW 压缩码 32767、CFA 光度解释 32803);仅 Make=SONY 的普通 TIFF、无 Make、其他厂商、裸头、截断或损坏均判 `null`(fail-closed,不凭扩展名)。这是基于内容证据的判定,不是对全部 TIFF 变体的完备定义:无法证明即拒绝,宁可漏判不可误判 |
+| `content-type.ts` | `detectAssetSourceKind(bytes): DetectedAssetSourceKind \| null`(魔数检测:ARW/JPEG/PNG/WEBP)。ARW 需完整 TIFF 结构(大小端魔数、IFD 偏移与条目边界)且 IFD0 同时携带 Make=SONY **与至少一项 RAW 专用证据**:Sony RAW 压缩码 32767 或 CFA 光度解释 32803,证据可在 IFD0 本身或 SubIFDs 指针指向的 SubIFD 条目中(SubIFD 自身是通用 TIFF 结构,空 SubIFD、RGB SubIFD、仅 Make=SONY 的普通 TIFF、无 Make、其他厂商、裸头、截断或损坏均判 `null`,fail-closed,不凭扩展名)。这是基于内容证据的判定,不是对全部 TIFF 变体的完备定义:无法证明即拒绝,宁可漏判不可误判 |
 | `hash.ts` | `sha256OfBytes`, `sha256OfFile`, `FileDigest` |
 | `pairing.ts` | `pairRawAndJpeg(files): PairingOutcome`(跨目录同 stem RAW/JPG 配对) |
 | `storage.ts` | `ArchiveStore`(`putOriginal`/`putProcessed`/`putStaging`/`removeStaging`/`read`/`verifiedRead`/`listSessionFiles`,原子 link+unlink、防符号链接越界、同 key 不同内容拒绝;仅 staging 可删除,raw/processed 不可变) |
-| `grouping.ts` | `computeDHash`, `computeColorHistogram`, `hammingDistance`, `histogramDistance`, `suggestGroups`, `GROUPING_THRESHOLDS`。候选必须携带 `kind`;同 stem 强配对要求精确重复折叠后**恰好一个 ARW 组件 + 恰好一个 JPEG 组件**(1+1),2 ARW+1 JPEG、1+2、2+2 等歧义组合不凭 stem 合并(成员保持独立或进入低置信度复核);两张 JPEG/PNG/WebP 同 stem 不得仅凭文件名高置信度合并。建议与证据完全确定,与输入顺序无关 |
+| `grouping.ts` | `computeDHash`, `computeColorHistogram`, `hammingDistance`, `histogramDistance`, `suggestGroups`, `GROUPING_THRESHOLDS`。候选必须携带 `kind`;同 stem 强配对按**原始候选数量**计数:仅"恰好一个 ARW 候选 + 恰好一个 JPEG 候选"(1+1)直接高置信配对,精确重复折叠后的组件数不参与判定(两个完全相同的 ARW 折叠成一个组件后仍按 2 个 ARW 计,不得借 stem 边并入 JPEG),2 ARW+1 JPEG、1+2、2+2 等歧义组合不凭 stem 合并;两张 JPEG/PNG/WebP 同 stem 不得仅凭文件名高置信度合并。所有影响输出、成员、代表项与 evidence 顺序的排序使用 UTF-16 代码单元比较器(不依赖系统 locale,`é` 与 `e\u0301` 等在 localeCompare 下可能相等的 ID 顺序固定),建议与证据完全确定,与输入顺序无关 |
 | `image-processor.ts` | `processBeadImage`(保真扣图,512/256 透明 WebP,`PROCESSOR_VERSION = "faithful-v1"`,不放大主体) |
 | `quality.ts` | `runQualityChecks`(11 项数值 QC,失败不静默通过) |
 
 ### 2.2 `apps/asset-worker`(本阶段交付)
 
-- `src/repository-roots.ts`:Git worktree 根发现。优先 `git worktree list --porcelain`(以模块目录为 cwd,5 s 超时),得到当前 worktree、主 checkout 与所有已注册兄弟 worktree;git 不可用或命令失败时回退文件系统走查:向上定位 `.git`(目录,或解析 linked-worktree `.git` 文件的 `gitdir:` 指针),再经 common git dir(`commondir` 文件推导)的 `worktrees/<name>/gitdir` 注册表**枚举全部已注册 worktree**——含主 checkout 之外的兄弟 worktree,而非仅当前 worktree 与主 checkout。两条路径都无法识别仓库时抛 `RepositoryRootsError` 拒绝启动(无法证明档案根安全即不启动)。所有根经 realpath 归一;可忽略的只有"porcelain 明确标记 prunable 且目录缺失"或"注册表记录可验证不存在(ENOENT)"的条目,非 prunable 缺失、无法 realpath、非目录、注册表不可读均 fail-closed 抛 `RepositoryRootsError`。
+- `src/repository-roots.ts`:Git worktree 根发现。优先 `git worktree list --porcelain`(以模块目录为 cwd,5 s 超时),得到当前 worktree、主 checkout 与所有已注册兄弟 worktree;porcelain 路径仅忽略"明确标记 prunable **且未锁定**且目录缺失"的条目,locked 缺失、非 prunable 缺失、无法 realpath、非目录均 fail-closed。git 不可用或命令失败时回退文件系统走查:向上定位 `.git`(目录,或解析 linked-worktree `.git` 文件的 `gitdir:` 指针),再经 common git dir(`commondir` 文件推导)的 `worktrees/<name>/gitdir` 注册表**枚举全部已注册 worktree**。注册表条目必须是可验证的目录(文件、符号链接均抛错);gitdir 文件必须可读、非空且解析后指向该 worktree 的 `.git`;主 checkout 不可达抛错。fallback 无法证明 prunability:登记项目标缺失(ENOENT)一律 fail-closed 拒绝启动——locked 且目标缺失、目标缺失但无法证明可清理,均抛 `RepositoryRootsError`;仅 porcelain 明确标记 prunable 才允许忽略不存在路径。两条路径都无法识别仓库时同样抛 `RepositoryRootsError` 拒绝启动(无法证明档案根安全即不启动)。所有根经 realpath 归一。
 - `src/index.ts`:运行入口。读取 `DATABASE_URL`、`MYSTCRAG_ASSET_ARCHIVE_ROOT`、`MYSTCRAG_ASSET_WORKER_ID`,用 `discoverRepositoryRoots` 得到保护根集合后装配 `createPrismaClient` + `AssetImportRepository` + `ArchiveStore.fromEnvironment`,启动 `AssetWorker`。档案根缺失、或经 realpath 后位于任一已发现 Git worktree 内部(含符号链接指向)时拒绝启动。
 - `src/jobs.ts`:内部 job payload 契约(Zod 严格校验 `ClaimedAssetJob.payload: unknown` 后消费)、跨会话/跨分组隔离校验(§5.4)与三类任务处理器。
 - `src/runtime.ts`:租约驱动主循环(领取、心跳续租、完成/失败提交、有限重试、SIGTERM 优雅退出);清理动作只作为 `afterCommit` 钩子在完成提交成功后执行。
@@ -298,6 +299,41 @@ SOL 第 2 轮验收提出 4 项问题(3×P1、1×P2),全部以"先补失败测�
 | `git diff --check f17fa2e..HEAD` / `git status --short --branch` | 通过(提交后确认) |
 
 变更文件(相对 `9ea6fc4`,共 11 个):`apps/asset-worker/src/{jobs,repository-roots}.ts`、`packages/asset-pipeline/src/{content-type,grouping}.ts`、`apps/asset-worker/tests/{archive-root-guard,jobs,payload-isolation}.test.ts`、`packages/asset-pipeline/tests/{content-type,grouping,image-processor}.test.ts`、本文件。无数据库/Prisma/共享 Contract/后台/前端/知识库改动,无新增运行时依赖,变更集无任何图片/二进制文件(全部 fixture 为 SVG→sharp PNG 或 `buildTiff`/`syntheticSonyArw` 合成字节)。
+
+### 2026-09-04 SOL 验收第 3 轮修复(基线 `4414c3b`,分支 `task/asset-worker-001-local-pipeline`,worktree `.worktrees/asset-worker-001`)
+
+SOL 第 3 轮验收提出 4 项问题(3×P1、1×P2),全部以"先补失败测试、再修复"处理;任务保持 REVIEW,未推送、未合并、未开始 Task 4、未处理 A7/Batch B。
+
+修复项与对应测试:
+
+| # | 问题 | 修复 | 测试 |
+| --- | --- | --- | --- |
+| P1-10 | filesystem fallback 并非真正 fail-closed:common git dir 下非目录 registry entry 被直接跳过;空/畸形 gitdir 内容被当作路径继续解析;目标 ENOENT 一律被当成 prunable,即使 worktree 为 locked 或无法证明可清理 | 注册表枚举中每个 `worktrees/<name>` 登记项必须是可验证的目录(文件、符号链接均抛 `RepositoryRootsError`);gitdir 文件必须可读、非空(trim 后非空)且解析目标必须指向该 worktree 的 `.git`(basename 校验),否则抛错;主 checkout 不可达同样抛错。Git CLI 不可用时 fallback 无法证明 prunability:登记项目标缺失一律 fail-closed——locked(`worktrees/<name>/locked` 存在)且目标缺失、目标缺失但无法证明可清理,均抛 `RepositoryRootsError` 拒绝启动;仅 porcelain 明确标记 prunable(且未锁定)才允许忽略不存在路径 | `archive-root-guard.test.ts` 新增/重写 7 项:locked 且 porcelain 标记 prunable 仍拒绝(porcelain 路径)、fallback 中目标缺失无法证明 prunable 拒绝(原"跳过 prunable"用例反转)、locked 且目标缺失拒绝、空 gitdir 拒绝、gitdir 指向非 `.git` 路径拒绝、registry entry 为文件或符号链接拒绝、真仓库存在缺失登记项时 fallback fail-closed(原 parity 用例重写) |
+| P1-11 | SubIFDs 单独作为 ARW 证据:Make=SONY + 任意合法/空 SubIFD 即判 ARW,但 SubIFDs 是通用 TIFF 标签 | 删除"SubIFD 存在即为 RAW"逻辑;SubIFDs 指针仅在指向的 SubIFD 条目本身携带 RAW 标记时才算证据——解析每个指向的 SubIFD 的全部条目,发现 CFA 光度解释(32803)或 Sony RAW 压缩码(32767)才计;IFD0 中的 CFA/RAW compression 仍可直接作为证据。空 SubIFD、RGB SubIFD、普通 Sony TIFF 返回 `null` | `content-type.test.ts`:fixture 重构为 `ifdCompression`/`ifdCfa`/`subIfdCfa`/`subIfdCompression`/`subIfdRgb`/`subIfdEmpty`/`none` 七种证据形态,新增空 SubIFD、RGB SubIFD 两个反例(判 null),四种真实证据大小端各自成立;`image-processor.test.ts` 的 `syntheticSonyArw` 补真实 SubIFD 条目(Sony RAW compression 32767) |
+| P1-12 | 2+1 同 stem 经重复折叠绕过:stem 配对用 `rawRoots.size/jpegRoots.size`,两个完全相同的 ARW 折叠成一个 root 后与一个 JPEG 组成三文件高置信组 | stem 强配对改用**原始候选数量** `raws.length === 1 && jpegs.length === 1`;任何 2+1、1+2、2+2 均不建立 stem 合并边;精确重复仍可形成自己的 duplicate group,但不得借 stem 边传递合并 JPEG | `grouping.test.ts`:反转原"exact-duplicate ARWs collapse before stem pairing"错误用例为"two identical ARWs and one JPEG of the same stem never form a three-member group"——同摘要 ARW×2 + JPEG×1 仅形成 {raw1,raw2} 重复组,JPEG 保持独立建议,重复组 evidence 无 stemPairedWith |
+| P2-13 | `localeCompare` 非确定性:clientFileId 允许 Unicode,`é` 与 `e\u0301` 可能返回 0,排序结果依赖输入顺序或运行环境 | `grouping.ts` 中所有影响输出、成员、代表项与 evidence 顺序的 5 处 localeCompare(候选排序、高置信成员排序、高置信建议排序、复核成员排序、复核建议排序)全部替换为确定性 UTF-16 代码单元比较器 `compareByCodeUnits`(`a < b ? -1 : a > b ? 1 : 0`),不依赖系统 locale | `grouping.test.ts` 新增"precomposed 与 combining Unicode ID 正反序结果 deepEqual":`é-shot`(U+00E9)与 `e\u0301-shot` 输入顺序互换后输出逐字节一致,且代码单元序固定为组合序列在前;`grep` 核对 grouping.ts 无残留 localeCompare(pairing.ts 的 relativePath 排序不在本项验收范围) |
+
+红灯证据(实际执行;以 `git diff` 暂存 3 个实现文件补丁、`git checkout` 还原实现仅保留新测试对旧实现运行后 `git apply` 恢复):
+
+- `pnpm --filter @mystcrag/asset-pipeline test`(旧实现 + 新测试):81 tests,pass 77,**fail 4**——`an empty SubIFD provides no RAW evidence on its own`、`a SONY TIFF with an ordinary RGB SubIFD is not an ARW`、`two identical ARWs and one JPEG of the same stem never form a three-member group`、`grouping output is deterministic for precomposed and combining Unicode ids`。
+- `pnpm exec tsx --test tests/archive-root-guard.test.ts`(旧实现 + 新测试):21 tests,pass 14,**fail 7**——locked+prunable porcelain、fallback 目标缺失、locked 目标缺失、空 gitdir、gitdir 非 `.git`、registry entry 文件/符号链接、真仓库不可证明登记项。
+
+真库环境与测试库(真实创建,均全新空库,migrate 后执行;PostgreSQL 17.10,Homebrew,aarch64):
+
+- Worker 联调:`mystcrag_assetworker001_r3_test_20260904`
+- `pnpm db:test`:`mystcrag_assetworker001_r3_dbtest_20260904`
+
+本阶段真实执行记录(全部实际执行):
+
+| 检查 | 结果 |
+| --- | --- |
+| `pnpm --filter @mystcrag/asset-pipeline lint` / `typecheck` / `test` | 通过;测试 81/81(0 fail,0 skipped;第 2 轮后 78 + 新增/重构 3) |
+| `pnpm --filter @mystcrag/asset-worker lint` / `typecheck` | 通过(`tsc --noEmit`) |
+| `pnpm --filter @mystcrag/asset-worker test`(真库联调 `mystcrag_assetworker001_r3_test_20260904`) | 68/68 通过,0 fail,0 skipped(单元 56 + 集成 12;第 2 轮后 63 + worktree 防护新增 5) |
+| `pnpm db:test` | 178/178 通过(0 fail,0 skipped);库 `mystcrag_assetworker001_r3_dbtest_20260904`(全新空库) |
+| `pnpm validate` / `git diff --check f17fa2e..HEAD` / `git status --short --branch` | 通过(提交后确认) |
+
+变更文件(相对 `4414c3b`,共 9 个):`apps/asset-worker/src/repository-roots.ts`、`packages/asset-pipeline/src/{content-type,grouping}.ts`、`apps/asset-worker/tests/archive-root-guard.test.ts`、`packages/asset-pipeline/tests/{content-type,grouping,image-processor}.test.ts`、本文件与 `docs/tasks/TASK_REGISTRY.md`。无数据库/Prisma/共享 Contract/后台/前端/知识库改动,无新增运行时依赖,变更集无任何图片/二进制文件(全部 fixture 为 SVG→sharp PNG 或 `buildTiff`/`syntheticSonyArw` 合成字节)。G5(§7)保持登记不变。
 
 ## 11. 操作
 

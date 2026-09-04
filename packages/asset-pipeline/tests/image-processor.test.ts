@@ -240,13 +240,14 @@ test("flags subjects clipped at the source border but still produces the output"
 
 /**
  * Minimal little-endian Sony ARW: IFD0 holds an ASCII Make tag whose value
- * is "SONY" plus a SubIFDs pointer chain — the RAW-specific evidence real
- * ARWs always carry (sensor strips live in SubIFDs) and without which
- * content detection rejects the payload as a plain TIFF. No bare `II*\0`
- * header or Make-only TIFF qualifies as ARW.
+ * is "SONY" plus a SubIFDs pointer chain whose SubIFD itself carries the
+ * Sony RAW compression code (32767) — the RAW-specific evidence real ARWs
+ * always carry (sensor strips live in SubIFDs) and without which content
+ * detection rejects the payload as a plain TIFF. No bare `II*\0` header,
+ * Make-only TIFF, or empty/RGB SubIFD qualifies as ARW.
  */
 function syntheticSonyArw(): Uint8Array {
-  const buffer = Buffer.alloc(49);
+  const buffer = Buffer.alloc(61);
   const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   buffer.write("II", 0, "latin1");
   view.setUint16(2, 42, true);
@@ -262,8 +263,12 @@ function syntheticSonyArw(): Uint8Array {
   view.setUint32(30, 43, true); // inline pointer to the SubIFD
   view.setUint32(34, 0, true); // no next IFD
   buffer.write("SONY\0", 38, "latin1");
-  view.setUint16(43, 0, true); // SubIFD entry count
-  view.setUint32(45, 0, true); // no next SubIFD
+  view.setUint16(43, 1, true); // SubIFD entry count
+  view.setUint16(45, 0x0103, true); // Compression
+  view.setUint16(47, 3, true); // SHORT
+  view.setUint32(49, 1, true); // count 1
+  view.setUint16(53, 32767, true); // Sony RAW compression
+  view.setUint32(57, 0, true); // no next SubIFD
   return new Uint8Array(buffer);
 }
 

@@ -174,17 +174,27 @@ test("ambiguous same-stem sets group deterministically regardless of input order
   assert.deepEqual(first, third);
 });
 
-test("exact-duplicate ARWs collapse before stem pairing, so one JPEG still pairs", () => {
+test("two identical ARWs and one JPEG of the same stem never form a three-member group", () => {
   const outcome = suggestGroups([
     candidate("jpg", "dir/DSC01535.JPG", HASH_A, { kind: "JPEG" }),
     candidate("raw1", "dir/DSC01535.ARW", HASH_B, { kind: "ARW" }),
     candidate("raw2", "card-two/DSC01535.ARW", HASH_B, { kind: "ARW" })
   ]);
 
-  const merged = outcome.suggestions.find((item) => item.memberFileIds.length === 3);
-  assert.ok(merged, "identical ARWs plus their JPEG form one group");
-  assert.deepEqual(merged!.memberFileIds, ["jpg", "raw1", "raw2"]);
-  assert.ok(merged!.evidence.some((entry) => entry.stemPairedWith === "jpg"));
+  const merged = outcome.suggestions.filter((item) => item.memberFileIds.length > 1);
+  assert.equal(merged.length, 1, "only the exact-duplicate ARW pair may merge");
+  assert.deepEqual(merged[0]!.memberFileIds, ["raw1", "raw2"]);
+  assert.ok(
+    merged[0]!.evidence.every((entry) => entry.stemPairedWith === null),
+    "the duplicate group must not gain stem-pairing evidence"
+  );
+  const jpegGroup = outcome.suggestions.find((item) => item.memberFileIds.includes("jpg"));
+  assert.ok(jpegGroup, "the JPEG must still appear as its own suggestion");
+  assert.deepEqual(
+    jpegGroup!.memberFileIds,
+    ["jpg"],
+    "identical ARWs must not smuggle the JPEG into their duplicate group through the stem"
+  );
 });
 
 test("same-stem JPEGs with different content never merge on the stem alone", () => {
@@ -196,6 +206,23 @@ test("same-stem JPEGs with different content never merge on the stem alone", () 
   const merged = outcome.suggestions.filter((item) => item.memberFileIds.length > 1);
   assert.deepEqual(merged, [], "two JPEGs must not high-confidence merge on file name alone");
   assert.equal(outcome.suggestions.length, 2);
+});
+
+test("grouping output is deterministic for precomposed and combining Unicode ids", () => {
+  // localeCompare treats U+00E9 and e+U+0301 as equal, so a collation-based
+  // sort keeps input order; the code-unit order (U+0065 < U+00E9) is fixed.
+  const precomposed = candidate("é-shot", "dir/DSC0001.JPG", HASH_A, { kind: "JPEG" });
+  const combining = candidate("e\u0301-shot", "dir/DSC0002.JPG", HASH_B, { kind: "JPEG" });
+
+  const forward = suggestGroups([precomposed, combining]);
+  const reverse = suggestGroups([combining, precomposed]);
+
+  assert.deepEqual(
+    forward.suggestions.map((item) => item.memberFileIds[0]),
+    ["e\u0301-shot", "é-shot"],
+    "code-unit order must place the combining sequence first"
+  );
+  assert.deepEqual(forward, reverse, "reversing the input order must not change any output byte");
 });
 
 test("cross-directory same-stem PNG and WebP files stay separate without visual agreement", () => {

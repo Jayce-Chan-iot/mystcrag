@@ -74,12 +74,31 @@ function readShortOrLongValue(
     : view.getUint32(offset, littleEndian);
 }
 
+/** True when the entry's SHORT/LONG value equals the wanted RAW marker. */
+function entryCarriesRawMarker(
+  view: DataView,
+  entryAt: number,
+  tag: number,
+  type: number,
+  count: number,
+  littleEndian: boolean,
+  byteLength: number
+): boolean {
+  const value = readShortOrLongValue(view, entryAt, type, count, littleEndian, byteLength);
+  if (value === null) return false;
+  return (tag === TAG_COMPRESSION && value === SONY_RAW_COMPRESSION) ||
+    (tag === TAG_PHOTOMETRIC && value === CFA_PHOTOMETRIC);
+}
+
 /**
- * Real ARWs keep their sensor strips in SubIFD chains. Evidence requires at
- * least one SubIFDs pointer whose target IFD header (entry count plus entry
- * table plus next-IFD link) lies inside the buffer.
+ * Real ARWs keep their sensor strips in SubIFD chains, but SubIFDs themselves
+ * are generic TIFF structure — ordinary multi-page/RGB TIFFs carry them too.
+ * A SubIFDs tag therefore only counts as evidence when at least one pointed-to
+ * SubIFD is fully in bounds AND one of its entries is itself a RAW marker:
+ * the Sony RAW compression code (32767) or a CFA photometric interpretation
+ * (32803). An empty or RGB SubIFD provides no evidence.
  */
-function subIfdLayoutExists(
+function subIfdCarriesRawEvidence(
   view: DataView,
   entryAt: number,
   type: number,
@@ -101,7 +120,19 @@ function subIfdLayoutExists(
     const pointer = view.getUint32(base + index * 4, littleEndian);
     if (pointer < TIFF_HEADER_SIZE || pointer + 2 > byteLength) continue;
     const subEntryCount = view.getUint16(pointer, littleEndian);
-    if (pointer + 2 + subEntryCount * IFD_ENTRY_SIZE + 4 <= byteLength) return true;
+    if (pointer + 2 + subEntryCount * IFD_ENTRY_SIZE + 4 > byteLength) continue;
+    for (let subIndex = 0; subIndex < subEntryCount; subIndex += 1) {
+      const subEntryAt = pointer + 2 + subIndex * IFD_ENTRY_SIZE;
+      const subTag = view.getUint16(subEntryAt, littleEndian);
+      if (subTag !== TAG_COMPRESSION && subTag !== TAG_PHOTOMETRIC) continue;
+      const subType = view.getUint16(subEntryAt + 2, littleEndian);
+      const subCount = view.getUint32(subEntryAt + 4, littleEndian);
+      if (
+        entryCarriesRawMarker(view, subEntryAt, subTag, subType, subCount, littleEndian, byteLength)
+      ) {
+        return true;
+      }
+    }
   }
   return false;
 }
@@ -112,11 +143,12 @@ function subIfdLayoutExists(
  * payload only counts as ARW when the TIFF structure is intact — magic 42,
  * an in-bounds IFD0 offset, an entry table that fits inside the buffer —
  * AND IFD0 carries BOTH an ASCII Make tag identifying Sony AND at least one
- * RAW-specific evidence that plain Sony TIFFs never carry: a readable
- * SubIFDs chain (sensor strips live there), the Sony RAW compression code
- * 32767, or a CFA photometric interpretation (32803). A Make tag alone is
- * not evidence — Sony also produces plain TIFFs — so a file that cannot be
- * proven RAW is rejected rather than archived as ARW.
+ * RAW-specific marker that plain Sony TIFFs never carry: the Sony RAW
+ * compression code 32767 or a CFA photometric interpretation (32803), either
+ * directly in IFD0 or inside a SubIFD the SubIFDs tag points to. A bare
+ * SubIFDs tag is generic TIFF structure and never evidence by itself; a Make
+ * tag alone is not evidence either — Sony also produces plain TIFFs — so a
+ * file that cannot be proven RAW is rejected rather than archived as ARW.
  */
 function isSonyArw(bytes: Uint8Array): boolean {
   const littleEndian = startsWith(bytes, TIFF_LITTLE_ENDIAN_MAGIC);
@@ -157,20 +189,17 @@ function isSonyArw(bytes: Uint8Array): boolean {
       continue;
     }
 
-    if (tag === TAG_COMPRESSION) {
-      const value = readShortOrLongValue(view, entryAt, type, count, littleEndian, bytes.length);
-      if (value === SONY_RAW_COMPRESSION) hasRawEvidence = true;
+    if (tag === TAG_COMPRESSION || tag === TAG_PHOTOMETRIC) {
+      if (entryCarriesRawMarker(view, entryAt, tag, type, count, littleEndian, bytes.length)) {
+        hasRawEvidence = true;
+      }
       continue;
     }
 
-    if (tag === TAG_PHOTOMETRIC) {
-      const value = readShortOrLongValue(view, entryAt, type, count, littleEndian, bytes.length);
-      if (value === CFA_PHOTOMETRIC) hasRawEvidence = true;
-      continue;
-    }
-
-    if (tag === TAG_SUB_IFDS && subIfdLayoutExists(view, entryAt, type, count, littleEndian, bytes.length)) {
-      hasRawEvidence = true;
+    if (tag === TAG_SUB_IFDS) {
+      if (subIfdCarriesRawEvidence(view, entryAt, type, count, littleEndian, bytes.length)) {
+        hasRawEvidence = true;
+      }
     }
   }
 

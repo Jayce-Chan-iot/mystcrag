@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -164,6 +165,39 @@ test("git worktree listing fails closed on a missing worktree that is not marked
   }
 });
 
+test("git worktree listing fails closed on a locked worktree even when marked prunable", async () => {
+  const existing = makeTempDir();
+  try {
+    const fixture = [
+      `worktree ${existing}`,
+      "HEAD 0000000000000000000000000000000000000000",
+      "branch refs/heads/main",
+      "",
+      "worktree /nonexistent/locked-worktree",
+      "HEAD 0000000000000000000000000000000000000000",
+      "branch refs/heads/task/locked",
+      "locked",
+      "prunable gitdir file points to non-existent location",
+      ""
+    ].join("\n");
+
+    await assert.rejects(
+      discoverRepositoryRoots({
+        startDir: existing,
+        runGit: async () => fixture
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof RepositoryRootsError);
+        assert.match(error.message, /locked-worktree/);
+        return true;
+      },
+      "a locked missing worktree must refuse to start even if porcelain also marks it prunable"
+    );
+  } finally {
+    rmSync(existing, { recursive: true, force: true });
+  }
+});
+
 test("a failing git command falls back to filesystem discovery", async () => {
   const layout = makeSyntheticWorktrees();
   try {
@@ -239,19 +273,93 @@ test("filesystem discovery enumerates sibling worktrees that live outside the ma
   }
 });
 
-test("filesystem discovery skips registered worktrees whose recorded directory is gone", () => {
+test("filesystem discovery fails closed on a registered worktree it cannot prove prunable", () => {
   const layout = makeSyntheticSiblingWorktrees();
   try {
-    // The registration survives while the worktree directory is gone — the
-    // same state git itself reports as prunable.
+    // The registration survives while the worktree directory is gone. Git
+    // would report it prunable, but the fallback cannot prove that — so it
+    // must refuse to start instead of silently dropping the entry.
     rmSync(layout.worktreeB, { recursive: true, force: true });
 
-    const roots = discoverRepositoryRootsFromFilesystem(join(layout.worktreeA, "apps", "worker", "src"));
-
-    assert.deepEqual(
-      new Set(roots),
-      new Set([realpathSync(layout.worktreeA), realpathSync(layout.main)])
+    assert.throws(
+      () => discoverRepositoryRootsFromFilesystem(join(layout.worktreeA, "apps", "worker", "src")),
+      (error: unknown) => error instanceof RepositoryRootsError,
+      "a missing registered worktree must fail closed when git cannot prove it prunable"
     );
+  } finally {
+    rmSync(layout.base, { recursive: true, force: true });
+  }
+});
+
+test("filesystem discovery fails closed on a locked worktree whose directory is missing", () => {
+  const layout = makeSyntheticSiblingWorktrees();
+  try {
+    writeFileSync(join(layout.main, ".git", "worktrees", "wt-b", "locked"), "held by CI\n", "utf8");
+    rmSync(layout.worktreeB, { recursive: true, force: true });
+
+    assert.throws(
+      () => discoverRepositoryRootsFromFilesystem(join(layout.worktreeA, "apps", "worker", "src")),
+      (error: unknown) => {
+        assert.ok(error instanceof RepositoryRootsError);
+        assert.match(error.message, /locked/i);
+        return true;
+      },
+      "a locked worktree whose target is missing must refuse to start"
+    );
+  } finally {
+    rmSync(layout.base, { recursive: true, force: true });
+  }
+});
+
+test("filesystem discovery fails closed on an empty gitdir file", () => {
+  const layout = makeSyntheticSiblingWorktrees();
+  try {
+    writeFileSync(join(layout.main, ".git", "worktrees", "wt-b", "gitdir"), "  \n\t\n", "utf8");
+
+    assert.throws(
+      () => discoverRepositoryRootsFromFilesystem(join(layout.worktreeA, "apps", "worker", "src")),
+      (error: unknown) => error instanceof RepositoryRootsError,
+      "an empty gitdir file must fail closed instead of resolving to a bogus path"
+    );
+  } finally {
+    rmSync(layout.base, { recursive: true, force: true });
+  }
+});
+
+test("filesystem discovery fails closed on a gitdir file that does not point at a .git entry", () => {
+  const layout = makeSyntheticSiblingWorktrees();
+  try {
+    const bogus = join(layout.base, "not-a-worktree", "readme.txt");
+    writeFileSync(join(layout.main, ".git", "worktrees", "wt-b", "gitdir"), `${bogus}\n`, "utf8");
+
+    assert.throws(
+      () => discoverRepositoryRootsFromFilesystem(join(layout.worktreeA, "apps", "worker", "src")),
+      (error: unknown) => error instanceof RepositoryRootsError,
+      "a gitdir file pointing anywhere other than the worktree's .git must fail closed"
+    );
+  } finally {
+    rmSync(layout.base, { recursive: true, force: true });
+  }
+});
+
+test("filesystem discovery fails closed when a registry entry is a file or a symlink", () => {
+  const layout = makeSyntheticSiblingWorktrees();
+  try {
+    writeFileSync(join(layout.main, ".git", "worktrees", "bogus-file"), "not a worktree", "utf8");
+    symlinkSync(layout.worktreeA, join(layout.main, ".git", "worktrees", "bogus-link"));
+
+    for (const bogus of ["bogus-file", "bogus-link"]) {
+      assert.throws(
+        () => discoverRepositoryRootsFromFilesystem(join(layout.worktreeA, "apps", "worker", "src")),
+        (error: unknown) => {
+          assert.ok(error instanceof RepositoryRootsError);
+          assert.match(error.message, new RegExp(bogus));
+          return true;
+        },
+        `registry entry ${bogus} must fail closed`
+      );
+      rmSync(join(layout.main, ".git", "worktrees", bogus), { recursive: true, force: true });
+    }
   } finally {
     rmSync(layout.base, { recursive: true, force: true });
   }
@@ -369,10 +477,34 @@ test("discovery from the real repository reports the current worktree root and t
   );
 });
 
-test("filesystem discovery without git protects every worktree that git reports on the real repository", async () => {
+test("filesystem discovery without git fails closed on the real repository's unprovable registrations", async () => {
+  // The real repository carries stale registrations whose directories are
+  // gone. Git marks them prunable and may drop them, but the filesystem
+  // fallback cannot prove prunability — so it must refuse to start. Only a
+  // repository without any missing registration may rely on the fallback.
+  const porcelain = execFileSync("git", ["worktree", "list", "--porcelain"], {
+    cwd: testsDir,
+    encoding: "utf8"
+  });
+  const missing = [...porcelain.matchAll(/^worktree (.+)$/gm)]
+    .map((match) => match[1]!.trim())
+    .filter((path) => !existsSync(path));
+
+  if (missing.length > 0) {
+    assert.throws(
+      () => discoverRepositoryRootsFromFilesystem(testsDir),
+      (error: unknown) => {
+        assert.ok(error instanceof RepositoryRootsError);
+        assert.match(error.message, /cannot be proven prunable|locked/i);
+        return true;
+      },
+      `the fallback must fail closed on ${missing.length} unprovable missing registration(s)`
+    );
+    return;
+  }
+
   const viaGit = await discoverRepositoryRoots();
   const viaFilesystem = discoverRepositoryRootsFromFilesystem(testsDir);
-
   for (const root of viaGit) {
     assert.ok(
       viaFilesystem.includes(root),

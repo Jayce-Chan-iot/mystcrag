@@ -70,6 +70,7 @@ function resolveWorktreeRoot(path: string, description: string): string | null {
 type PorcelainWorktree = {
   path: string;
   prunable: boolean;
+  locked: boolean;
 };
 
 function parseGitWorktreeList(output: string): PorcelainWorktree[] {
@@ -84,13 +85,16 @@ function parseGitWorktreeList(output: string): PorcelainWorktree[] {
     }
     if (line.startsWith("worktree ")) {
       if (current !== null) entries.push(current);
-      current = { path: line.slice("worktree ".length).trim(), prunable: false };
+      current = { path: line.slice("worktree ".length).trim(), prunable: false, locked: false };
       continue;
     }
     if (line.startsWith("prunable") && current !== null) {
       current.prunable = true;
     }
-    // HEAD/branch/bare/detached/locked lines carry no discovery signal.
+    if (line.startsWith("locked") && current !== null) {
+      current.locked = true;
+    }
+    // HEAD/branch/bare/detached lines carry no discovery signal.
   }
   if (current !== null) entries.push(current);
   return entries.filter((entry) => entry.path.length > 0);
@@ -152,11 +156,14 @@ function commonGitDirOf(gitdirPath: string): string {
  * EVERY worktree registered in the shared git dir's `worktrees/<name>/gitdir`
  * files, so sibling worktrees outside the main checkout stay protected.
  *
- * A registered worktree whose recorded path no longer exists is skipped —
- * that is exactly the state git itself reports as prunable, and nothing can
- * be archived inside a nonexistent directory. Any registration that exists
- * but cannot be resolved fails closed, and an unreadable registry fails
- * closed because enumeration completeness can no longer be proven.
+ * Without git, prunability cannot be proven, so a registration whose recorded
+ * directory is gone is NOT skipped — the guard refuses to start. Locked
+ * registrations are treated the same (locked worktrees must never be
+ * dropped). Only git's porcelain output, which explicitly marks entries
+ * prunable, may ignore a nonexistent path. Every registry entry must be a
+ * verifiable directory with a readable, non-empty gitdir file pointing at
+ * the worktree's `.git` entry; anything else fails closed because
+ * enumeration completeness can no longer be proven.
  */
 export function discoverRepositoryRootsFromFilesystem(startDir: string): string[] {
   let dir = resolve(startDir);
@@ -211,7 +218,12 @@ export function discoverRepositoryRootsFromFilesystem(startDir: string): string[
 
   if (basename(commonDir) === ".git") {
     const mainRoot = resolveWorktreeRoot(dirname(commonDir), "the main checkout");
-    if (mainRoot !== null) roots.add(mainRoot);
+    if (mainRoot === null) {
+      throw new RepositoryRootsError(
+        `The main checkout at ${dirname(commonDir)} is no longer accessible; cannot prove the archive root is outside the repository`
+      );
+    }
+    roots.add(mainRoot);
   }
 
   const worktreesDir = join(commonDir, "worktrees");
@@ -230,8 +242,13 @@ export function discoverRepositoryRootsFromFilesystem(startDir: string): string[
   }
 
   for (const entry of registered) {
-    if (!entry.isDirectory()) continue;
-    const gitdirFile = join(worktreesDir, entry.name, "gitdir");
+    if (!entry.isDirectory()) {
+      throw new RepositoryRootsError(
+        `The worktrees registry entry ${entry.name} is not a directory; cannot prove the archive root is outside the repository`
+      );
+    }
+    const worktreeDir = join(worktreesDir, entry.name);
+    const gitdirFile = join(worktreeDir, "gitdir");
     let content: string;
     try {
       content = readFileSync(gitdirFile, "utf8");
@@ -241,9 +258,39 @@ export function discoverRepositoryRootsFromFilesystem(startDir: string): string[
         { cause: error }
       );
     }
-    const recorded = resolve(dirname(gitdirFile), content.trim());
-    const root = resolveWorktreeRoot(dirname(recorded), `registered worktree ${entry.name}`);
-    if (root === null) continue; // prunable: the recorded worktree no longer exists
+    const recordedPath = content.trim();
+    if (recordedPath.length === 0) {
+      throw new RepositoryRootsError(
+        `The gitdir file of registered worktree ${entry.name} is empty; cannot resolve its worktree`
+      );
+    }
+    const recorded = resolve(dirname(gitdirFile), recordedPath);
+    if (basename(recorded) !== ".git") {
+      throw new RepositoryRootsError(
+        `The gitdir file of registered worktree ${entry.name} points at ${recorded} instead of the worktree's .git entry; cannot prove the archive root is outside the repository`
+      );
+    }
+    const worktreeRootPath = dirname(recorded);
+    const root = resolveWorktreeRoot(worktreeRootPath, `registered worktree ${entry.name}`);
+    if (root === null) {
+      let locked = false;
+      try {
+        statSync(join(worktreeDir, "locked"));
+        locked = true;
+      } catch (error) {
+        if (errnoCode(error) !== "ENOENT") {
+          throw new RepositoryRootsError(
+            `Cannot inspect the lock state of registered worktree ${entry.name}: ${(error as Error).message}`,
+            { cause: error }
+          );
+        }
+      }
+      throw new RepositoryRootsError(
+        locked
+          ? `Registered worktree ${entry.name} at ${worktreeRootPath} is locked but its directory is missing; cannot prove the archive root is outside the repository`
+          : `Registered worktree ${entry.name} at ${worktreeRootPath} is missing and cannot be proven prunable without git; cannot prove the archive root is outside the repository`
+      );
+    }
     roots.add(root);
   }
 
@@ -256,11 +303,13 @@ export function discoverRepositoryRootsFromFilesystem(startDir: string): string[
  * worktrees registered for this repository.
  *
  * `git worktree list --porcelain` is authoritative when available: only
- * entries explicitly marked prunable may be ignored when their directory is
- * gone, while a missing non-prunable worktree fails closed. A missing git
- * binary or a failed command falls back to a filesystem walk that enumerates
- * the shared git dir's `worktrees/<name>/gitdir` registry. When neither can
- * identify a repository the discovery fails closed with
+ * entries explicitly marked prunable (and not locked) may be ignored when
+ * their directory is gone, while a locked or unmarked missing worktree
+ * fails closed. A missing git binary or a failed command falls back to a
+ * filesystem walk that enumerates the shared git dir's
+ * `worktrees/<name>/gitdir` registry; because that walk cannot prove
+ * prunability, any missing registration fails closed there. When neither
+ * path can identify a repository the discovery fails closed with
  * {@link RepositoryRootsError}.
  */
 export async function discoverRepositoryRoots(options?: {
@@ -283,9 +332,11 @@ export async function discoverRepositoryRoots(options?: {
     for (const entry of entries) {
       const real = resolveWorktreeRoot(entry.path, "git worktree");
       if (real === null) {
-        if (entry.prunable) continue;
+        if (entry.prunable && !entry.locked) continue;
         throw new RepositoryRootsError(
-          `Git worktree ${entry.path} is missing and not marked prunable; cannot prove the archive root is outside the repository`
+          entry.locked
+            ? `Git worktree ${entry.path} is missing and locked; cannot prove the archive root is outside the repository`
+            : `Git worktree ${entry.path} is missing and not marked prunable; cannot prove the archive root is outside the repository`
         );
       }
       roots.push(real);

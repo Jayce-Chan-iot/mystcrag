@@ -28,6 +28,17 @@ const DHASH_PATTERN = /^[0-9a-f]{16}$/;
 const HISTOGRAM_BINS = 64;
 const KINDS: readonly string[] = ["ARW", "JPEG", "PNG", "WEBP"];
 
+/**
+ * Deterministic UTF-16 code-unit comparison. clientFileId accepts arbitrary
+ * Unicode, and localeCompare may report `é` (U+00E9) and `e\u0301` as equal
+ * depending on the runtime locale, which would make member order, group
+ * representatives, and evidence order depend on input order or the host
+ * environment. Code-unit order is fixed for every environment.
+ */
+function compareByCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 export type GroupingCandidate = {
   clientFileId: string;
   relativePath: string;
@@ -214,7 +225,7 @@ export function suggestGroups(
     }
   }
 
-  const sorted = [...candidates].sort((left, right) => left.clientFileId.localeCompare(right.clientFileId));
+  const sorted = [...candidates].sort((left, right) => compareByCodeUnits(left.clientFileId, right.clientFileId));
   const parent = sorted.map((_, index) => index);
 
   const find = (index: number): number => {
@@ -267,11 +278,14 @@ export function suggestGroups(
 
   // 2. Same-stem RAW/JPEG pairing (different digests only). A Sony burst
   // stores the ARW and its in-camera JPEG under one stem, so a stem pairs
-  // ONLY when it holds exactly one ARW side and exactly one JPEG side after
-  // the exact-duplicate collapse — anything else (2 ARW + 1 JPEG, 1 + 2,
-  // 2 + 2, …) is ambiguous: repeated camera filenames must not fuse
-  // unrelated shots, so no stem-based merge happens and the members stay
-  // independent unless the visual thresholds below prove a merge. This is
+  // ONLY when the ORIGINAL candidate set holds exactly one ARW side and
+  // exactly one JPEG side — anything else (2 ARW + 1 JPEG, 1 + 2, 2 + 2, …)
+  // is ambiguous: repeated camera filenames must not fuse unrelated shots,
+  // so no stem-based merge happens and the members stay independent unless
+  // the visual thresholds below prove a merge. Counting is deliberately done
+  // on raws/jpegs, not on collapsed components: exact duplicates fold into
+  // one root, so two identical ARWs would collapse to a single root and let
+  // the stem edge smuggle their JPEG into the duplicate group. This is
   // deliberately stricter than pairRawAndJpeg (pairing.ts), which resolves
   // ambiguity by deterministically picking a winner: grouping must never
   // silently choose, so the one-pairing rule is enforced here on its own.
@@ -287,11 +301,11 @@ export function suggestGroups(
   }
   for (const { raws, jpegs } of stemBuckets.values()) {
     if (raws.length === 0 || jpegs.length === 0) continue;
-    const rawRoots = new Set(raws.map((index) => find(index)));
-    const jpegRoots = new Set(jpegs.map((index) => find(index)));
-    // Exactly one distinct ARW and one distinct JPEG may pair; identical
-    // duplicates of the same shot already collapsed into one component.
-    if (rawRoots.size !== 1 || jpegRoots.size !== 1) continue;
+    // Exactly one ARW and one JPEG may pair, counted on the original
+    // candidates: identical duplicates already collapsed into one component,
+    // so component counts would falsely report "one ARW" for two identical
+    // ARWs and wrongly attach the JPEG.
+    if (raws.length !== 1 || jpegs.length !== 1) continue;
 
     const jpegRepIndex = jpegs[0]!;
     const jpegRep = sorted[jpegRepIndex]!;
@@ -422,13 +436,13 @@ export function suggestGroups(
   }
 
   const suggestions: GroupSuggestion[] = [...suggestionsByRoot.entries()].map(([, members]) => {
-    const orderedMembers = [...members].sort((left, right) => left.localeCompare(right));
+    const orderedMembers = [...members].sort(compareByCodeUnits);
     const evidence = orderedMembers.flatMap(
       (member) => evidenceByFileId.get(member) ?? []
     );
     return { memberFileIds: orderedMembers, confidence: "high" as const, evidence };
   });
-  suggestions.sort((left, right) => left.memberFileIds[0]!.localeCompare(right.memberFileIds[0]!));
+  suggestions.sort((left, right) => compareByCodeUnits(left.memberFileIds[0]!, right.memberFileIds[0]!));
 
   // Assemble borderline components as review suggestions.
   const reviewGroupsByRoot = new Map<number, string[]>();
@@ -443,11 +457,11 @@ export function suggestGroups(
   const reviewSuggestions: GroupSuggestion[] = [...reviewGroupsByRoot.values()]
     .filter((members) => members.length > 1)
     .map((members) => {
-      const orderedMembers = [...members].sort((left, right) => left.localeCompare(right));
+      const orderedMembers = [...members].sort(compareByCodeUnits);
       const evidence = orderedMembers.flatMap((member) => reviewEvidenceByFileId.get(member) ?? []);
       return { memberFileIds: orderedMembers, confidence: "low" as const, evidence };
     });
-  reviewSuggestions.sort((left, right) => left.memberFileIds[0]!.localeCompare(right.memberFileIds[0]!));
+  reviewSuggestions.sort((left, right) => compareByCodeUnits(left.memberFileIds[0]!, right.memberFileIds[0]!));
 
   return { suggestions, reviewSuggestions };
 }
