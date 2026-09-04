@@ -182,12 +182,13 @@ function assertSha256(value: string): void {
 /**
  * Deterministic, conservative grouping suggestions (spec §7): exact
  * duplicates collapse first, an unambiguous same-stem ARW+JPEG pair groups
- * next (exactly one distinct ARW and one distinct JPEG per stem — ambiguous
- * stems never merge on the file name), and remaining neighbors merge only
- * when visual thresholds and capture proximity agree. Borderline pairs never
- * auto-merge — they surface as low-confidence review suggestions carrying
- * their similarity evidence so the UI can explain the proposal. Suggestions
- * and their evidence are fully deterministic and independent of input order.
+ * next (exactly one original ARW candidate and one original JPEG candidate
+ * per stem — ambiguous stems never merge on the file name, in the stem stage
+ * or in the visual stage), and remaining neighbors merge only when visual
+ * thresholds and capture proximity agree. Borderline pairs never auto-merge —
+ * they surface as low-confidence review suggestions carrying their similarity
+ * evidence so the UI can explain the proposal. Suggestions and their evidence
+ * are fully deterministic and independent of input order.
  */
 export function suggestGroups(
   candidates: readonly GroupingCandidate[],
@@ -278,17 +279,18 @@ export function suggestGroups(
 
   // 2. Same-stem RAW/JPEG pairing (different digests only). A Sony burst
   // stores the ARW and its in-camera JPEG under one stem, so a stem pairs
-  // ONLY when the ORIGINAL candidate set holds exactly one ARW side and
-  // exactly one JPEG side — anything else (2 ARW + 1 JPEG, 1 + 2, 2 + 2, …)
-  // is ambiguous: repeated camera filenames must not fuse unrelated shots,
-  // so no stem-based merge happens and the members stay independent unless
-  // the visual thresholds below prove a merge. Counting is deliberately done
-  // on raws/jpegs, not on collapsed components: exact duplicates fold into
-  // one root, so two identical ARWs would collapse to a single root and let
-  // the stem edge smuggle their JPEG into the duplicate group. This is
-  // deliberately stricter than pairRawAndJpeg (pairing.ts), which resolves
-  // ambiguity by deterministically picking a winner: grouping must never
-  // silently choose, so the one-pairing rule is enforced here on its own.
+  // ONLY when the ORIGINAL candidate set holds exactly one original ARW
+  // candidate and one original JPEG candidate — anything else (2 ARW + 1
+  // JPEG, 1 + 2, 2 + 2, …) is ambiguous: repeated camera filenames must not
+  // fuse unrelated shots, so no stem-based merge happens and the members stay
+  // independent unless the visual thresholds below prove a merge. Counting is
+  // deliberately done on raws/jpegs, not on collapsed components: exact
+  // duplicates fold into one root, so two identical ARWs would collapse to a
+  // single root and let the stem edge smuggle their JPEG into the duplicate
+  // group. This is deliberately stricter than pairRawAndJpeg (pairing.ts),
+  // which resolves ambiguity by deterministically picking a winner: grouping
+  // must never silently choose, so the one-pairing rule is enforced here on
+  // its own.
   const stemBuckets = new Map<string, { raws: number[]; jpegs: number[] }>();
   for (let index = 0; index < sorted.length; index += 1) {
     const candidateAt = sorted[index]!;
@@ -299,12 +301,28 @@ export function suggestGroups(
     else bucket.jpegs.push(index);
     stemBuckets.set(stem, bucket);
   }
+  // An ARW/JPEG pair of the same stem belongs to an ambiguous set when that
+  // stem holds more than one original ARW candidate or more than one
+  // original JPEG candidate. The stem stage already refused to pick a
+  // winner there, so the visual stage must not smuggle one side into the
+  // other's component either — identical visual features on an ambiguous
+  // stem are exactly what repeated camera filenames look like.
+  const ambiguousSameStemCrossKind = (a: GroupingCandidate, b: GroupingCandidate): boolean => {
+    if (a.kind === b.kind) return false;
+    if (a.kind !== "ARW" && a.kind !== "JPEG") return false;
+    if (b.kind !== "ARW" && b.kind !== "JPEG") return false;
+    const stem = stemOf(a.relativePath);
+    if (stem !== stemOf(b.relativePath)) return false;
+    const bucket = stemBuckets.get(stem);
+    if (bucket === undefined) return false;
+    return bucket.raws.length > 1 || bucket.jpegs.length > 1;
+  };
   for (const { raws, jpegs } of stemBuckets.values()) {
     if (raws.length === 0 || jpegs.length === 0) continue;
-    // Exactly one ARW and one JPEG may pair, counted on the original
-    // candidates: identical duplicates already collapsed into one component,
-    // so component counts would falsely report "one ARW" for two identical
-    // ARWs and wrongly attach the JPEG.
+    // Exactly one original ARW candidate and one original JPEG candidate may
+    // pair, counted on the original candidates: identical duplicates already
+    // collapsed into one component, so component counts would falsely report
+    // "one ARW" for two identical ARWs and wrongly attach the JPEG.
     if (raws.length !== 1 || jpegs.length !== 1) continue;
 
     const jpegRepIndex = jpegs[0]!;
@@ -327,12 +345,17 @@ export function suggestGroups(
   }
 
   // 3a. Confident merges need both visual thresholds and capture proximity.
+  // A cross-kind pair from an ambiguous same-stem set never merges here: the
+  // stem stage refused to pick a winner, so the visual stage must not let the
+  // JPEG (or ARW) re-enter the duplicate component through near-identical
+  // features — the members stay independent or surface for human review.
   for (let left = 0; left < sorted.length; left += 1) {
     for (let right = left + 1; right < sorted.length; right += 1) {
       const a = sorted[left]!;
       const b = sorted[right]!;
       if (find(left) === find(right)) continue;
       if (a.dHash === null || b.dHash === null || a.histogram === null || b.histogram === null) continue;
+      if (ambiguousSameStemCrossKind(a, b)) continue;
 
       const dHashDistance = hammingDistance(a.dHash, b.dHash);
       const histogramDelta = histogramDistance(a.histogram, b.histogram);

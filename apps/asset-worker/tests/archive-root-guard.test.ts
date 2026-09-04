@@ -342,6 +342,113 @@ test("filesystem discovery fails closed on a gitdir file that does not point at 
   }
 });
 
+test("filesystem discovery fails closed when the recorded worktree's .git file is missing", () => {
+  const layout = makeSyntheticSiblingWorktrees();
+  try {
+    // The registry still points at <worktree>/.git and the decoy worktree
+    // directory still exists, but the .git entry itself is gone — a mere
+    // directory-existence check would silently accept the dangling
+    // registration.
+    rmSync(join(layout.worktreeB, ".git"));
+
+    assert.throws(
+      () => discoverRepositoryRootsFromFilesystem(join(layout.worktreeA, "apps", "worker", "src")),
+      (error: unknown) => {
+        assert.ok(error instanceof RepositoryRootsError);
+        assert.match(error.message, /wt-b/);
+        return true;
+      },
+      "a registered worktree whose recorded .git entry is missing must fail closed"
+    );
+  } finally {
+    rmSync(layout.base, { recursive: true, force: true });
+  }
+});
+
+test("filesystem discovery fails closed when the recorded worktree's .git is a directory", () => {
+  const layout = makeSyntheticSiblingWorktrees();
+  try {
+    rmSync(join(layout.worktreeB, ".git"));
+    mkdirSync(join(layout.worktreeB, ".git"));
+
+    assert.throws(
+      () => discoverRepositoryRootsFromFilesystem(join(layout.worktreeA, "apps", "worker", "src")),
+      (error: unknown) => error instanceof RepositoryRootsError,
+      "a .git directory inside a registered worktree is not a valid linked-worktree registration"
+    );
+  } finally {
+    rmSync(layout.base, { recursive: true, force: true });
+  }
+});
+
+test("filesystem discovery fails closed when the recorded worktree's .git is a symlink", () => {
+  const layout = makeSyntheticSiblingWorktrees();
+  try {
+    rmSync(join(layout.worktreeB, ".git"));
+    symlinkSync(join(layout.main, ".git", "worktrees", "wt-b"), join(layout.worktreeB, ".git"));
+
+    assert.throws(
+      () => discoverRepositoryRootsFromFilesystem(join(layout.worktreeA, "apps", "worker", "src")),
+      (error: unknown) => error instanceof RepositoryRootsError,
+      "a symlinked .git entry must fail closed; the registration may not resolve through links"
+    );
+  } finally {
+    rmSync(layout.base, { recursive: true, force: true });
+  }
+});
+
+test("filesystem discovery fails closed when the worktree's .git file has no gitdir pointer", () => {
+  const layout = makeSyntheticSiblingWorktrees();
+  try {
+    writeFileSync(join(layout.worktreeB, ".git"), "not a gitdir pointer\n", "utf8");
+
+    assert.throws(
+      () => discoverRepositoryRootsFromFilesystem(join(layout.worktreeA, "apps", "worker", "src")),
+      (error: unknown) => error instanceof RepositoryRootsError,
+      "a .git file without a gitdir pointer cannot prove the registration"
+    );
+  } finally {
+    rmSync(layout.base, { recursive: true, force: true });
+  }
+});
+
+test("filesystem discovery fails closed when the worktree's .git points back at another registry entry", () => {
+  const layout = makeSyntheticSiblingWorktrees();
+  try {
+    writeFileSync(
+      join(layout.worktreeB, ".git"),
+      `gitdir: ${join(layout.main, ".git", "worktrees", "wt-a")}\n`,
+      "utf8"
+    );
+
+    assert.throws(
+      () => discoverRepositoryRootsFromFilesystem(join(layout.worktreeA, "apps", "worker", "src")),
+      (error: unknown) => error instanceof RepositoryRootsError,
+      "a cross-wired back-pointer pointing at another registry entry must fail closed"
+    );
+  } finally {
+    rmSync(layout.base, { recursive: true, force: true });
+  }
+});
+
+test("filesystem discovery verifies the bidirectional registration and still finds every root", () => {
+  const layout = makeSyntheticSiblingWorktrees();
+  try {
+    // Starting from worktree B exercises both pointer verifications: B's own
+    // .git file (resolved to locate the shared git dir) and every registered
+    // worktree's back-pointer, including A's.
+    const roots = discoverRepositoryRootsFromFilesystem(join(layout.worktreeB, "apps", "worker", "src"));
+
+    assert.deepEqual(
+      new Set(roots),
+      new Set([realpathSync(layout.worktreeA), realpathSync(layout.worktreeB), realpathSync(layout.main)]),
+      "valid bidirectional registrations must still enumerate every root"
+    );
+  } finally {
+    rmSync(layout.base, { recursive: true, force: true });
+  }
+});
+
 test("filesystem discovery fails closed when a registry entry is a file or a symlink", () => {
   const layout = makeSyntheticSiblingWorktrees();
   try {

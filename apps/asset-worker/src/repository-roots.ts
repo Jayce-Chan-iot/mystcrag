@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -151,6 +151,64 @@ function commonGitDirOf(gitdirPath: string): string {
 }
 
 /**
+ * Verifies the bidirectional registration of a linked worktree. The registry
+ * entry's gitdir file points at `<worktree>/.git`; that entry must itself be a
+ * plain file (never a directory or a symlink) carrying a valid `gitdir:`
+ * pointer back to exactly this registry directory. A missing, unreadable,
+ * mistyped, malformed, or cross-wired registration fails closed: the guard
+ * can no longer prove the archive root is outside every repository.
+ */
+function verifyWorktreeRegistration(name: string, dotGitFile: string, registryDir: string): void {
+  let stats;
+  try {
+    stats = lstatSync(dotGitFile);
+  } catch (error) {
+    throw new RepositoryRootsError(
+      `The .git entry of registered worktree ${name} at ${dotGitFile} is missing or cannot be inspected: ${(error as Error).message}`,
+      { cause: error }
+    );
+  }
+  if (stats.isSymbolicLink()) {
+    throw new RepositoryRootsError(
+      `The .git entry of registered worktree ${name} at ${dotGitFile} is a symbolic link; cannot prove the archive root is outside the repository`
+    );
+  }
+  if (!stats.isFile()) {
+    throw new RepositoryRootsError(
+      `The .git entry of registered worktree ${name} at ${dotGitFile} is not a plain file; cannot prove the archive root is outside the repository`
+    );
+  }
+
+  let content: string;
+  try {
+    content = readFileSync(dotGitFile, "utf8");
+  } catch (error) {
+    throw new RepositoryRootsError(
+      `Cannot read the .git file of registered worktree ${name} at ${dotGitFile}: ${(error as Error).message}`,
+      { cause: error }
+    );
+  }
+  const match = GITDIR_POINTER.exec(content.trim());
+  if (match === null) {
+    throw new RepositoryRootsError(
+      `The .git file of registered worktree ${name} at ${dotGitFile} has no gitdir pointer; cannot prove the archive root is outside the repository`
+    );
+  }
+  const pointer = match[1]!.trim();
+  if (pointer.length === 0) {
+    throw new RepositoryRootsError(
+      `The .git file of registered worktree ${name} at ${dotGitFile} has an empty gitdir pointer; cannot prove the archive root is outside the repository`
+    );
+  }
+  const backPointer = resolve(dirname(dotGitFile), pointer);
+  if (backPointer !== resolve(registryDir)) {
+    throw new RepositoryRootsError(
+      `The .git file of registered worktree ${name} at ${dotGitFile} points back at ${backPointer} instead of its registry entry ${resolve(registryDir)}; cannot prove the archive root is outside the repository`
+    );
+  }
+}
+
+/**
  * Filesystem fallback for environments without a usable git binary. Instead
  * of trusting only the current worktree and the main checkout, it enumerates
  * EVERY worktree registered in the shared git dir's `worktrees/<name>/gitdir`
@@ -162,8 +220,10 @@ function commonGitDirOf(gitdirPath: string): string {
  * dropped). Only git's porcelain output, which explicitly marks entries
  * prunable, may ignore a nonexistent path. Every registry entry must be a
  * verifiable directory with a readable, non-empty gitdir file pointing at
- * the worktree's `.git` entry; anything else fails closed because
- * enumeration completeness can no longer be proven.
+ * the worktree's `.git` entry, and that entry must be a plain file whose
+ * `gitdir:` pointer resolves back to exactly this registry entry; anything
+ * else fails closed because enumeration completeness can no longer be
+ * proven.
  */
 export function discoverRepositoryRootsFromFilesystem(startDir: string): string[] {
   let dir = resolve(startDir);
@@ -291,6 +351,7 @@ export function discoverRepositoryRootsFromFilesystem(startDir: string): string[
           : `Registered worktree ${entry.name} at ${worktreeRootPath} is missing and cannot be proven prunable without git; cannot prove the archive root is outside the repository`
       );
     }
+    verifyWorktreeRegistration(entry.name, recorded, worktreeDir);
     roots.add(root);
   }
 

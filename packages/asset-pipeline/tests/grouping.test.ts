@@ -197,6 +197,44 @@ test("two identical ARWs and one JPEG of the same stem never form a three-member
   );
 });
 
+test("two identical ARWs and one same-stem JPEG with identical visual features and capture time never form a three-member high-confidence group", () => {
+  const dHash = "0".repeat(16);
+  const histogram = new Array<number>(64).fill(1 / 64);
+  const capturedAtMs = 1_700_000_000_000;
+  const inputs = [
+    candidate("jpg", "dir/DSC01535.JPG", HASH_A, { kind: "JPEG", dHash, histogram, capturedAtMs }),
+    candidate("raw1", "dir/DSC01535.ARW", HASH_B, { kind: "ARW", dHash, histogram, capturedAtMs }),
+    candidate("raw2", "card-two/DSC01535.ARW", HASH_B, { kind: "ARW", dHash, histogram, capturedAtMs })
+  ];
+
+  const forward = suggestGroups(inputs);
+  const reverse = suggestGroups([...inputs].reverse());
+
+  assert.deepEqual(forward, reverse, "reversing the input order must not change any output byte");
+
+  assert.ok(
+    forward.suggestions.every((item) => item.memberFileIds.length !== 3),
+    "no high-confidence suggestion may hold all three same-stem members"
+  );
+
+  const duplicateGroup = forward.suggestions.find((item) => item.memberFileIds.length === 2);
+  assert.ok(duplicateGroup, "the identical ARWs must keep their duplicate group");
+  assert.deepEqual(duplicateGroup!.memberFileIds, ["raw1", "raw2"]);
+
+  const jpegGroup = forward.suggestions.find((item) => item.memberFileIds.includes("jpg"));
+  assert.ok(jpegGroup, "the JPEG must still appear as its own suggestion");
+  assert.deepEqual(
+    jpegGroup!.memberFileIds,
+    ["jpg"],
+    "the JPEG must stay out of the duplicate RAW group even with identical visual features"
+  );
+
+  assert.ok(
+    forward.suggestions.every((item) => item.evidence.every((entry) => entry.stemPairedWith === null)),
+    "an ambiguous stem must not produce stem-pairing evidence anywhere"
+  );
+});
+
 test("same-stem JPEGs with different content never merge on the stem alone", () => {
   const outcome = suggestGroups([
     candidate("jpg1", "dir-one/bead.JPG", HASH_A, { kind: "JPEG" }),
