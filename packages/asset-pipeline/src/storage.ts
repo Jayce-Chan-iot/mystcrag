@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
@@ -14,6 +14,8 @@ export type ArchiveStoreErrorCode =
   | "REPOSITORY_ROOT_INVALID"
   | "KEY_INVALID"
   | "HASH_MISMATCH"
+  | "SIZE_MISMATCH"
+  | "PAYLOAD_TOO_LARGE"
   | "KEY_EXISTS_CONTENT_MISMATCH"
   | "WRITE_FAILED"
   | "READ_FAILED";
@@ -44,6 +46,12 @@ export type ArchivePutResult = {
   sha256: string;
   byteSize: number;
   reused: boolean;
+};
+
+export type StagingStreamPutResult = {
+  stagingKey: string;
+  sha256: string;
+  byteSize: number;
 };
 
 export type ArchiveStoreOptions = {
@@ -196,6 +204,102 @@ export class ArchiveStore {
     const sha256 = sha256OfBytes(input.bytes);
     const archiveKey = `imports/${input.sessionId}/staging/${randomUUID()}`;
     return this.verifiedPut(archiveKey, input.bytes, sha256);
+  }
+
+  /**
+   * Streams one upload into the canonical staging area. The source is consumed
+   * incrementally, bounded before every write and hashed as bytes land. A
+   * staged key becomes visible only after the complete temp file has been
+   * fsynced and independently re-verified; all failed attempts remove their
+   * temporary bytes and return no filesystem path.
+   */
+  async putStagingStream(input: {
+    sessionId: string;
+    source: AsyncIterable<Uint8Array>;
+    expectedByteSize: number;
+    maxByteSize: number;
+  }): Promise<StagingStreamPutResult> {
+    assertIdentifier(input.sessionId, "session id");
+    assertPositiveSafeByteSize(input.expectedByteSize, "expectedByteSize");
+    assertPositiveSafeByteSize(input.maxByteSize, "maxByteSize");
+    if (input.expectedByteSize > input.maxByteSize) {
+      throw new ArchiveStoreError(
+        "PAYLOAD_TOO_LARGE",
+        "Declared upload size exceeds the configured staging byte limit"
+      );
+    }
+
+    const stagingKey = `imports/${input.sessionId}/staging/${randomUUID()}`;
+    let tempPath: string | undefined;
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    let linkedTarget: string | undefined;
+    let completed = false;
+    try {
+      const target = await this.resolveWritablePath(stagingKey);
+      const sessionTempDir = join(this.rootReal, KEY_PREFIX, input.sessionId, "tmp");
+      tempPath = join(sessionTempDir, `${randomUUID()}.upload`);
+      await mkdir(sessionTempDir, { recursive: true });
+      handle = await open(tempPath, "wx", 0o600);
+
+      const digest = createHash("sha256");
+      let byteSize = 0;
+      for await (const chunk of input.source) {
+        if (!(chunk instanceof Uint8Array)) {
+          throw new ArchiveStoreError("WRITE_FAILED", "Upload stream produced a non-byte chunk");
+        }
+        const nextByteSize = byteSize + chunk.byteLength;
+        if (!Number.isSafeInteger(nextByteSize) || nextByteSize > input.maxByteSize) {
+          throw new ArchiveStoreError("PAYLOAD_TOO_LARGE", "Upload exceeded the configured staging byte limit");
+        }
+        if (nextByteSize > input.expectedByteSize) {
+          throw new ArchiveStoreError("SIZE_MISMATCH", "Upload exceeded its declared byte size");
+        }
+
+        digest.update(chunk);
+        let offset = 0;
+        while (offset < chunk.byteLength) {
+          const write = await handle.write(chunk, offset, chunk.byteLength - offset, null);
+          if (write.bytesWritten <= 0) {
+            throw new ArchiveStoreError("WRITE_FAILED", "Upload stream write made no progress");
+          }
+          offset += write.bytesWritten;
+        }
+        byteSize = nextByteSize;
+      }
+
+      if (byteSize !== input.expectedByteSize) {
+        throw new ArchiveStoreError("SIZE_MISMATCH", "Upload ended before its declared byte size");
+      }
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+
+      const sha256 = digest.digest("hex");
+      const verified = await sha256OfFile(tempPath);
+      if (verified.byteSize !== byteSize || verified.sha256 !== sha256) {
+        throw new ArchiveStoreError(
+          "HASH_MISMATCH",
+          "Staged upload failed size or SHA-256 verification after write"
+        );
+      }
+
+      await mkdir(dirname(target), { recursive: true });
+      await this.joinUnderRoot(stagingKey);
+      await link(tempPath, target);
+      linkedTarget = target;
+      await syncDirectoryMetadata(dirname(target));
+      completed = true;
+      return { stagingKey, sha256, byteSize };
+    } catch (error) {
+      if (error instanceof ArchiveStoreError) throw error;
+      throw new ArchiveStoreError("WRITE_FAILED", "Failed to stage the uploaded byte stream", {
+        cause: error
+      });
+    } finally {
+      if (handle !== undefined) await handle.close().catch(() => undefined);
+      if (!completed && linkedTarget !== undefined) await unlink(linkedTarget).catch(() => undefined);
+      if (tempPath !== undefined) await unlink(tempPath).catch(() => undefined);
+    }
   }
 
   /**
@@ -398,6 +502,12 @@ function assertIdentifier(value: string, field: string): void {
 function assertSha256(value: string): void {
   if (typeof value !== "string" || !SHA256_PATTERN.test(value)) {
     throw new ArchiveStoreError("KEY_INVALID", "SHA-256 must be 64 lowercase hex characters");
+  }
+}
+
+function assertPositiveSafeByteSize(value: number, field: string): void {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new ArchiveStoreError("KEY_INVALID", `${field} must be a positive safe integer`);
   }
 }
 

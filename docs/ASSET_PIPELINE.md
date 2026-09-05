@@ -27,7 +27,7 @@ TASK-ASSET-WORKER-001 的模块接口、存储布局、配置与交付记录。�
 | `content-type.ts` | `detectAssetSourceKind(bytes): DetectedAssetSourceKind \| null`(魔数检测:ARW/JPEG/PNG/WEBP)。ARW 需完整 TIFF 结构(大小端魔数、IFD 偏移与条目边界)且 IFD0 同时携带 Make=SONY **与至少一项 RAW 专用证据**:Sony RAW 压缩码 32767 或 CFA 光度解释 32803,证据可在 IFD0 本身或 SubIFDs 指针指向的 SubIFD 条目中(SubIFD 自身是通用 TIFF 结构,空 SubIFD、RGB SubIFD、仅 Make=SONY 的普通 TIFF、无 Make、其他厂商、裸头、截断或损坏均判 `null`,fail-closed,不凭扩展名)。这是基于内容证据的判定,不是对全部 TIFF 变体的完备定义:无法证明即拒绝,宁可漏判不可误判 |
 | `hash.ts` | `sha256OfBytes`, `sha256OfFile`, `FileDigest` |
 | `pairing.ts` | `pairRawAndJpeg(files): PairingOutcome`(跨目录同 stem RAW/JPG 配对) |
-| `storage.ts` | `ArchiveStore`(`putOriginal`/`putProcessed`/`putStaging`/`removeStaging`/`read`/`verifiedRead`/`listSessionFiles`,原子 link+unlink、防符号链接越界、同 key 不同内容拒绝;仅 staging 可删除,raw/processed 不可变) |
+| `storage.ts` | `ArchiveStore`(`putOriginal`/`putProcessed`/`putStaging`/`putStagingStream`/`removeStaging`/`read`/`verifiedRead`/`listSessionFiles`,原子 link+unlink、防符号链接越界、同 key 不同内容拒绝;流式暂存逐块限长并同步计算 SHA-256;仅 staging 可删除,raw/processed 不可变) |
 | `grouping.ts` | `computeDHash`, `computeColorHistogram`, `hammingDistance`, `histogramDistance`, `suggestGroups`, `GROUPING_THRESHOLDS`。候选必须携带 `kind`;同 stem 强配对按**原始候选数量**计数:仅"exactly one original ARW candidate and one original JPEG candidate"(恰好一个原始 ARW 候选 + 恰好一个原始 JPEG 候选,1+1)直接高置信配对,精确重复折叠后的组件数不参与判定(两个完全相同的 ARW 折叠成一个组件后仍按 2 个 ARW 计,不得借 stem 边并入 JPEG),2 ARW+1 JPEG、1+2、2+2 等歧义组合不凭 stem 合并;歧义同 stem 的跨类型对同样不得经**视觉高置信阶段**合并——即使 dHash/histogram/capturedAtMs 完全相同,JPEG 也不得并入重复 RAW 组件(重复 ARW 保留自身 duplicate group,JPEG 保持独立或仅在双方均为独立单例时进入低置信度复核);不同 stem 的真实连拍仍按视觉+时间阈值正常合并。两张 JPEG/PNG/WebP 同 stem 不得仅凭文件名高置信度合并。所有影响输出、成员、代表项与 evidence 顺序的排序使用 UTF-16 代码单元比较器(不依赖系统 locale,`é` 与 `e\u0301` 等在 localeCompare 下可能相等的 ID 顺序固定),建议与证据完全确定,与输入顺序无关 |
 | `image-processor.ts` | `processBeadImage`(保真扣图,512/256 透明 WebP,`PROCESSOR_VERSION = "faithful-v1"`,不放大主体) |
 | `quality.ts` | `runQualityChecks`(11 项数值 QC,失败不静默通过) |
@@ -439,3 +439,13 @@ DATABASE_URL=… MYSTCRAG_ASSET_ARCHIVE_ROOT=/archive/outside-repo \
 ```
 
 任务来源与验收:见 `docs/superpowers/plans/2026-09-03-asset-worker-parallel-dispatch.md` 与 `docs/superpowers/plans/2026-08-31-bead-asset-import-assistant-implementation-plan.md` Task 3。
+
+## 12. TASK-ASSET-STORAGE-002：后台单文件流式暂存边界
+
+`ArchiveStore.putStagingStream` 是后台二进制上传进入现有档案流水线的唯一新增存储入口。它接收一个 `AsyncIterable<Uint8Array>`，调用方必须同时提供清单声明的 `expectedByteSize` 与服务端 `maxByteSize`。声明大小在读取前超过上限时直接返回 `PAYLOAD_TOO_LARGE`；读取过程中每个块在写入前重新检查累计长度，超过上限或声明长度立即停止消费；流结束仍不足声明长度返回 `SIZE_MISMATCH`。
+
+实现只处理一个文件，不接收文件夹或本机路径，也不把整个文件夹/批次放进内存。字节逐块写入会话 `tmp` 临时文件，同时增量计算 SHA-256；完整写入后先 `fsync`，再从文件重新计算长度和摘要，最后通过与现有 `verifiedPut` 相同的无覆盖 `link` 原子落入 `imports/<session>/staging/<server-uuid>`，并同步 staging 目录元数据。成功结果只有 `{ stagingKey, sha256, byteSize }`，不包含档案根或绝对路径。
+
+任何来源异常、写入异常、长度不符、摘要复核失败或落盘失败都会关闭描述符并删除临时文件；若目录同步前已建立 staging 链接但操作未完成，也会尝试撤销该链接。后续仍由 `ARCHIVE_FILE` Worker 完成内容识别、原片不可变归档、数据库提交，并且只在任务提交成功后删除 staging。这个入口不改变 raw/processed 不可变规则，也不授予发布或人工批准权限。
+
+2026-09-05 红灯与实现验证：新增 5 组定向用例，旧实现均因 `putStagingStream is not a function` 失败；实现后 storage 单文件测试 29/29，通过 chunked hash/落盘、声明大于上限的读取前拒绝、读取中/结束时长度不符、来源异常清理、非法 ID/非安全正整数限制与返回值无路径字段检查。完整 Task 验收以任务注册表最终记录为准。

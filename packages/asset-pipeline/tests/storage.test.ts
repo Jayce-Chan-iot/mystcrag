@@ -391,6 +391,155 @@ test("putStaging lands uploads under a fresh UUID key inside the session", async
   }
 });
 
+test("putStagingStream hashes and lands one chunked upload without exposing a path", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const chunks = [Buffer.from("chunk-one-"), Buffer.from("chunk-two"), Buffer.from("-three")];
+    const bytes = Buffer.concat(chunks);
+
+    const result = await archive.putStagingStream({
+      sessionId: "sess-stream",
+      source: (async function* () {
+        for (const chunk of chunks) yield chunk;
+      })(),
+      expectedByteSize: bytes.byteLength,
+      maxByteSize: 1024
+    });
+
+    assert.deepEqual(Object.keys(result).sort(), ["byteSize", "sha256", "stagingKey"]);
+    assert.match(result.stagingKey, /^imports\/sess-stream\/staging\/[0-9a-f-]{36}$/);
+    assert.equal(result.byteSize, bytes.byteLength);
+    assert.equal(result.sha256, sha256OfBytes(bytes));
+    assert.deepEqual(Buffer.from(await archive.read(result.stagingKey)), bytes);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("putStagingStream rejects an oversized upload before consuming later chunks", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    let chunksConsumed = 0;
+    const source = (async function* () {
+      chunksConsumed += 1;
+      yield Buffer.from("12345");
+      chunksConsumed += 1;
+      yield Buffer.from("must-not-be-consumed");
+    })();
+
+    await assert.rejects(
+      archive.putStagingStream({
+        sessionId: "sess-stream",
+        source,
+        expectedByteSize: 20,
+        maxByteSize: 4
+      }),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "PAYLOAD_TOO_LARGE"
+    );
+    assert.equal(chunksConsumed, 0, "an impossible declared length fails before source consumption");
+    assert.deepEqual(await archive.listSessionFiles("sess-stream"), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("putStagingStream rejects early and late declared-length mismatches and cleans partial files", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    let laterChunkConsumed = false;
+    await assert.rejects(
+      archive.putStagingStream({
+        sessionId: "sess-early",
+        source: (async function* () {
+          yield Buffer.from("too-long");
+          laterChunkConsumed = true;
+          yield Buffer.from("never");
+        })(),
+        expectedByteSize: 3,
+        maxByteSize: 100
+      }),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "SIZE_MISMATCH"
+    );
+    assert.equal(laterChunkConsumed, false, "the stream stops at the first over-declared chunk");
+    assert.deepEqual(await archive.listSessionFiles("sess-early"), []);
+
+    await assert.rejects(
+      archive.putStagingStream({
+        sessionId: "sess-late",
+        source: (async function* () {
+          yield Buffer.from("short");
+        })(),
+        expectedByteSize: 10,
+        maxByteSize: 100
+      }),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "SIZE_MISMATCH"
+    );
+    assert.deepEqual(await archive.listSessionFiles("sess-late"), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("putStagingStream wraps source failures and leaves no staging or temp file", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    await assert.rejects(
+      archive.putStagingStream({
+        sessionId: "sess-error",
+        source: (async function* () {
+          yield Buffer.from("partial");
+          throw new Error("socket reset with private upload details");
+        })(),
+        expectedByteSize: 20,
+        maxByteSize: 100
+      }),
+      (error: unknown) =>
+        error instanceof ArchiveStoreError &&
+        error.code === "WRITE_FAILED" &&
+        !error.message.includes("private upload details")
+    );
+    assert.deepEqual(await archive.listSessionFiles("sess-error"), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("putStagingStream validates identifiers and safe positive byte limits", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const attempts = [
+      { sessionId: "../escape", expectedByteSize: 1, maxByteSize: 1 },
+      { sessionId: "sess-1", expectedByteSize: 0, maxByteSize: 1 },
+      { sessionId: "sess-1", expectedByteSize: 1, maxByteSize: 0 },
+      { sessionId: "sess-1", expectedByteSize: 1.5, maxByteSize: 2 },
+      { sessionId: "sess-1", expectedByteSize: 1, maxByteSize: Number.MAX_SAFE_INTEGER + 1 }
+    ];
+    for (const attempt of attempts) {
+      await assert.rejects(
+        archive.putStagingStream({
+          ...attempt,
+          source: (async function* () {
+            yield Buffer.from("x");
+          })()
+        }),
+        (error: unknown) => error instanceof ArchiveStoreError && error.code === "KEY_INVALID"
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
 test("removeStaging consumes staging entries idempotently but refuses raw and processed keys", async () => {
   const { root, repositoryRoot } = await createArchiveRoot();
   try {
