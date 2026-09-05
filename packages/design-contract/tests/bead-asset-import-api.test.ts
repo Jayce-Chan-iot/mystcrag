@@ -99,7 +99,24 @@ const sessionResponse = (overrides: Record<string, unknown> = {}) => ({
       memberFileIds: ["file-1"],
       primaryFileId: "file-1",
       crystalName: "紫水晶",
-      revision: 2
+      revision: 2,
+      processedAssets: [
+        {
+          processedAssetId: "asset-1",
+          processingVersion: 2,
+          state: "QC_PENDING",
+          isCurrent: true,
+          qcPassed: true,
+          qcIssues: []
+        }
+      ],
+      crystalDraft: {
+        crystalDraftId: "draft-1",
+        revision: 2,
+        curationComplete: false,
+        missingFields: ["PRICE_LEVEL"],
+        promotionEligible: false
+      }
     }
   ],
   ...overrides
@@ -471,7 +488,7 @@ test("every object schema rejects unknown keys", () => {
     ["SelectProcessedVersionResponse", asset.SelectProcessedVersionResponseSchema, { groupId: "group-1", state: "PROCESSED", selectedProcessingVersion: 1, updatedAt: now, bogus: 1 }],
     ["SaveBeadProductDraftParams", asset.SaveBeadProductDraftParamsSchema, { groupId: "group-1", bogus: 1 }],
     ["SaveBeadProductDraftRequest", asset.SaveBeadProductDraftRequestSchema, { expectedGroupRevision: 1, crystalName: "紫水晶", bogus: 1 }],
-    ["SaveBeadProductDraftResponse", asset.SaveBeadProductDraftResponseSchema, { groupId: "group-1", state: "NAMED", revision: 2, draftSavedAt: now, bogus: 1 }],
+    ["SaveBeadProductDraftResponse", asset.SaveBeadProductDraftResponseSchema, { groupId: "group-1", state: "NAMED", revision: 2, crystalDraftId: "draft-1", crystalDraftRevision: 1, draftSavedAt: now, bogus: 1 }],
     ["CheckBeadProductDraftCompletenessParams", asset.CheckBeadProductDraftCompletenessParamsSchema, { groupId: "group-1", bogus: 1 }],
     ["CheckBeadProductDraftCompletenessResponse", asset.CheckBeadProductDraftCompletenessResponseSchema, { groupId: "group-1", state: "NAMED", complete: false, missingFields: ["CRYSTAL_NAME"], checkedAt: now, bogus: 1 }],
     ["PublishBeadImageGroupParams", asset.PublishBeadImageGroupParamsSchema, { groupId: "group-1", bogus: 1 }],
@@ -693,12 +710,59 @@ test("upload params and response never carry client or server filesystem paths",
 });
 
 test("session status response projects checkpoint, file and group review state", () => {
-  const response = accepts<{ files: unknown[]; groups: unknown[] }>(
+  const response = accepts<{
+    files: unknown[];
+    groups: Array<{ processedAssets: Array<{ processedAssetId: string }>; crystalDraft: { crystalDraftId: string } | null }>;
+  }>(
     asset.AssetImportSessionResponseSchema,
     sessionResponse(),
     "session status response"
   );
   assert.equal(response.files.length, 1);
+  assert.equal(response.groups[0]?.processedAssets[0]?.processedAssetId, "asset-1");
+  assert.equal(response.groups[0]?.crystalDraft?.crystalDraftId, "draft-1");
+  accepts(
+    asset.AssetImportSessionResponseSchema,
+    sessionResponse({
+      groups: [
+        {
+          groupId: "group-1",
+          state: "SUGGESTED",
+          memberFileIds: ["file-1"],
+          revision: 1,
+          processedAssets: [],
+          crystalDraft: null
+        }
+      ]
+    }),
+    "new group without processed assets or a crystal draft"
+  );
+  rejects(
+    asset.AssetImportSessionResponseSchema,
+    sessionResponse({
+      groups: [
+        {
+          groupId: "group-1",
+          state: "PROCESSED",
+          memberFileIds: ["file-1"],
+          revision: 2,
+          processedAssets: [
+            {
+              processedAssetId: "asset-1",
+              processingVersion: 2,
+              state: "QC_PENDING",
+              isCurrent: true,
+              qcPassed: true,
+              qcIssues: [],
+              storageKey: "imports/session-1/processed/group-1/v2/bead-512.webp"
+            }
+          ],
+          crystalDraft: null
+        }
+      ]
+    }),
+    "session group must not expose processed storage keys"
+  );
   accepts(
     asset.AssetImportSessionResponseSchema,
     sessionResponse({ lastVerifiedCheckpoint: null }),
@@ -1021,8 +1085,39 @@ test("product drafts save partially and keep unresolved permissions local", () =
 
   accepts(
     asset.SaveBeadProductDraftResponseSchema,
-    { groupId: "group-1", state: "NAMED", revision: 2, draftSavedAt: now },
+    {
+      groupId: "group-1",
+      state: "NAMED",
+      revision: 2,
+      crystalDraftId: "draft-1",
+      crystalDraftRevision: 1,
+      draftSavedAt: now
+    },
     "draft save response"
+  );
+  accepts(
+    asset.SaveBeadProductDraftResponseSchema,
+    {
+      groupId: "group-1",
+      state: "NAMED",
+      revision: 2,
+      crystalDraftId: null,
+      crystalDraftRevision: null,
+      draftSavedAt: now
+    },
+    "draft save without an auto-created crystal draft"
+  );
+  rejects(
+    asset.SaveBeadProductDraftResponseSchema,
+    {
+      groupId: "group-1",
+      state: "NAMED",
+      revision: 2,
+      crystalDraftId: "draft-1",
+      crystalDraftRevision: null,
+      draftSavedAt: now
+    },
+    "crystal draft id without its revision"
   );
 });
 
@@ -1810,6 +1905,11 @@ test("crystal draft curation accepts only complete human-authored material data"
   rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ complianceNote: "无" }), "placeholder compliance note");
   rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ complianceNote: "N/A" }), "placeholder compliance note N/A");
   rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ complianceNote: "同上" }), "placeholder compliance note referring elsewhere");
+  rejects(
+    asset.UpdateCrystalDraftCurationRequestSchema,
+    curationRequest({ complianceNote: "Pending manual curation." }),
+    "persisted pending-curation placeholder"
+  );
 
   accepts(asset.CrystalPriceLevelSchema, asset.CRYSTAL_PRICE_LEVEL_RANGE.min, "lowest crystal price level");
   accepts(asset.CrystalPriceLevelSchema, asset.CRYSTAL_PRICE_LEVEL_RANGE.max, "highest crystal price level");
@@ -1874,6 +1974,14 @@ test("crystal draft curation accepts only complete human-authored material data"
     "blank compliance note is not curated data"
   );
   assert.deepEqual(
+    asset.missingCrystalDraftCurationFields({
+      ...fullCurationDraft(),
+      complianceNote: "Pending manual curation."
+    }),
+    ["COMPLIANCE_NOTE"],
+    "persisted placeholder is never completed curation"
+  );
+  assert.deepEqual(
     asset.missingCrystalDraftCurationFields({ ...fullCurationDraft(), nameCn: "UNSPECIFIED" }),
     ["NAME_CN"],
     "placeholder name is not curated data"
@@ -1894,6 +2002,11 @@ test("crystal draft curation accepts only complete human-authored material data"
     asset.UpdateCrystalDraftCurationResponseSchema,
     curationResponse({ curationComplete: false, missingFields: ["PRICE_LEVEL", "COMPLIANCE_NOTE"], promotionEligible: false }),
     "incomplete curation response"
+  );
+  accepts(
+    asset.UpdateCrystalDraftCurationResponseSchema,
+    curationResponse({ promotionEligible: false }),
+    "complete curation may remain ineligible after duplicate checks"
   );
   rejects(
     asset.UpdateCrystalDraftCurationResponseSchema,

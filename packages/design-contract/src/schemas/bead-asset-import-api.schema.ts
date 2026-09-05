@@ -127,6 +127,19 @@ export const ProcessedAssetStateSchema = z.enum([
 ]);
 export type ProcessedAssetState = z.infer<typeof ProcessedAssetStateSchema>;
 
+export const CRYSTAL_DRAFT_CURATION_FIELDS = [
+  "NAME_CN",
+  "NAME_EN",
+  "MINERAL_NAME",
+  "COLOR_TAGS",
+  "VISUAL_TAGS",
+  "STYLE_TAGS",
+  "PRICE_LEVEL",
+  "COMPLIANCE_NOTE"
+] as const;
+export const CrystalDraftCurationFieldSchema = z.enum(CRYSTAL_DRAFT_CURATION_FIELDS);
+export type CrystalDraftCurationField = z.infer<typeof CrystalDraftCurationFieldSchema>;
+
 export const AssetProcessingJobStateSchema = z.enum(["QUEUED", "RUNNING", "COMPLETED", "FAILED"]);
 export type AssetProcessingJobState = z.infer<typeof AssetProcessingJobStateSchema>;
 
@@ -378,14 +391,77 @@ export const AssetImportSessionFileViewSchema = z.strictObject({
 });
 export type AssetImportSessionFileView = z.infer<typeof AssetImportSessionFileViewSchema>;
 
-export const AssetImportSessionGroupViewSchema = z.strictObject({
-  groupId: IdentifierSchema,
-  state: BeadImageGroupStateSchema,
-  memberFileIds: z.array(IdentifierSchema).min(1),
-  primaryFileId: IdentifierSchema.optional(),
-  crystalName: NonEmptyTextSchema.optional(),
-  revision: PositiveSafeIntegerSchema
-});
+export const AssetImportProcessedAssetViewSchema = z
+  .strictObject({
+    processedAssetId: IdentifierSchema,
+    processingVersion: PositiveSafeIntegerSchema,
+    state: ProcessedAssetStateSchema,
+    isCurrent: z.boolean(),
+    qcPassed: z.boolean().nullable(),
+    qcIssues: z.array(NonEmptyTextSchema).max(100)
+  })
+  .superRefine((asset, context) => {
+    if ((asset.state === "QC_PENDING" || asset.state === "APPROVED") && asset.qcPassed !== true) {
+      context.addIssue({ code: "custom", message: `${asset.state} requires passed QC`, path: ["qcPassed"] });
+    }
+    if (asset.state === "QC_FAILED" && asset.qcPassed !== false) {
+      context.addIssue({ code: "custom", message: "QC_FAILED requires failed QC", path: ["qcPassed"] });
+    }
+    if (asset.state === "QC_FAILED" && asset.qcIssues.length === 0) {
+      context.addIssue({ code: "custom", message: "QC_FAILED requires at least one issue", path: ["qcIssues"] });
+    }
+    if (asset.state === "DRAFT" && asset.qcPassed !== null) {
+      context.addIssue({ code: "custom", message: "DRAFT has no QC verdict", path: ["qcPassed"] });
+    }
+  });
+export type AssetImportProcessedAssetView = z.infer<typeof AssetImportProcessedAssetViewSchema>;
+
+export const AssetImportCrystalDraftViewSchema = z
+  .strictObject({
+    crystalDraftId: IdentifierSchema,
+    revision: PositiveSafeIntegerSchema,
+    curationComplete: z.boolean(),
+    missingFields: z.array(CrystalDraftCurationFieldSchema).max(CRYSTAL_DRAFT_CURATION_FIELDS.length),
+    promotionEligible: z.boolean()
+  })
+  .superRefine((draft, context) => {
+    if (new Set(draft.missingFields).size !== draft.missingFields.length) {
+      context.addIssue({ code: "custom", message: "missingFields must be unique", path: ["missingFields"] });
+    }
+    const complete = draft.missingFields.length === 0;
+    if (draft.curationComplete !== complete) {
+      context.addIssue({ code: "custom", message: "curationComplete must match missingFields", path: ["curationComplete"] });
+    }
+    if (draft.promotionEligible && !complete) {
+      context.addIssue({ code: "custom", message: "promotion requires complete curation", path: ["promotionEligible"] });
+    }
+  });
+export type AssetImportCrystalDraftView = z.infer<typeof AssetImportCrystalDraftViewSchema>;
+
+export const AssetImportSessionGroupViewSchema = z
+  .strictObject({
+    groupId: IdentifierSchema,
+    state: BeadImageGroupStateSchema,
+    memberFileIds: z.array(IdentifierSchema).min(1),
+    primaryFileId: IdentifierSchema.optional(),
+    crystalName: NonEmptyTextSchema.optional(),
+    revision: PositiveSafeIntegerSchema,
+    processedAssets: z.array(AssetImportProcessedAssetViewSchema),
+    crystalDraft: AssetImportCrystalDraftViewSchema.nullable()
+  })
+  .superRefine((group, context) => {
+    const ids = group.processedAssets.map((asset) => asset.processedAssetId);
+    if (new Set(ids).size !== ids.length) {
+      context.addIssue({ code: "custom", message: "Processed asset ids must be unique", path: ["processedAssets"] });
+    }
+    const versions = group.processedAssets.map((asset) => asset.processingVersion);
+    if (new Set(versions).size !== versions.length) {
+      context.addIssue({ code: "custom", message: "Processing versions must be unique", path: ["processedAssets"] });
+    }
+    if (group.processedAssets.filter((asset) => asset.isCurrent).length > 1) {
+      context.addIssue({ code: "custom", message: "At most one processed asset may be current", path: ["processedAssets"] });
+    }
+  });
 export type AssetImportSessionGroupView = z.infer<typeof AssetImportSessionGroupViewSchema>;
 
 export const AssetImportSessionResponseSchema = z.strictObject({
@@ -742,19 +818,6 @@ export const ReviewProcessedAssetResponseSchema = z
   });
 export type ReviewProcessedAssetResponse = z.infer<typeof ReviewProcessedAssetResponseSchema>;
 
-export const CRYSTAL_DRAFT_CURATION_FIELDS = [
-  "NAME_CN",
-  "NAME_EN",
-  "MINERAL_NAME",
-  "COLOR_TAGS",
-  "VISUAL_TAGS",
-  "STYLE_TAGS",
-  "PRICE_LEVEL",
-  "COMPLIANCE_NOTE"
-] as const;
-export const CrystalDraftCurationFieldSchema = z.enum(CRYSTAL_DRAFT_CURATION_FIELDS);
-export type CrystalDraftCurationField = z.infer<typeof CrystalDraftCurationFieldSchema>;
-
 export const CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS = {
   nameCn: "NAME_CN",
   nameEn: "NAME_EN",
@@ -786,6 +849,7 @@ const CRYSTAL_DRAFT_PLACEHOLDERS = new Set([
   "n/a",
   "na",
   "none",
+  "pending manual curation.",
   "待补充",
   "未知",
   "无",
@@ -883,7 +947,7 @@ export const UpdateCrystalDraftCurationResponseSchema = z
         path: ["curationComplete"]
       });
     }
-    if (response.promotionEligible !== complete) {
+    if (response.promotionEligible && !complete) {
       context.addIssue({
         code: "custom",
         message: "promotionEligible requires complete human curation",
@@ -965,12 +1029,22 @@ export const SaveBeadProductDraftRequestSchema = z
   );
 export type SaveBeadProductDraftRequest = z.infer<typeof SaveBeadProductDraftRequestSchema>;
 
-export const SaveBeadProductDraftResponseSchema = z.strictObject({
-  groupId: IdentifierSchema,
-  state: BeadImageGroupStateSchema,
-  revision: PositiveSafeIntegerSchema,
-  draftSavedAt: IsoDateTimeSchema
-});
+export const SaveBeadProductDraftResponseSchema = z
+  .strictObject({
+    groupId: IdentifierSchema,
+    state: BeadImageGroupStateSchema,
+    revision: PositiveSafeIntegerSchema,
+    crystalDraftId: IdentifierSchema.nullable(),
+    crystalDraftRevision: PositiveSafeIntegerSchema.nullable(),
+    draftSavedAt: IsoDateTimeSchema
+  })
+  .refine(
+    (response) => (response.crystalDraftId === null) === (response.crystalDraftRevision === null),
+    {
+      message: "crystalDraftId and crystalDraftRevision must be present or null together",
+      path: ["crystalDraftId"]
+    }
+  );
 export type SaveBeadProductDraftResponse = z.infer<typeof SaveBeadProductDraftResponseSchema>;
 
 export const DRAFT_COMPLETENESS_FIELDS = [
