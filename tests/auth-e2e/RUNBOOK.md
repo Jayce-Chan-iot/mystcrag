@@ -80,6 +80,13 @@ Both must pass. There is no retry configuration anywhere in the gate.
 - `openssl` on PATH (generates the multi-SAN synthetic topology certificate).
 - Playwright 1.62.1 browsers installed (`pnpm exec playwright install chromium`).
 
+The worker-side SQL assertion helper uses the same `AUTH006_DATABASE_ADMIN_URL`
+priority as setup/teardown; `AUTH006_DATABASE_URL` is not a supported override.
+Only the database pathname is replaced with this run's isolated database name.
+`node --test tests/auth-ci-database-url.test.mjs` checks CI credentials, priority,
+ambient URL normalization and the local fallback without requiring PostgreSQL.
+These regressions are also discovered by the root `pnpm test` / `pnpm validate` gate.
+
 ## Environment variables (all optional)
 
 | Variable | Default | Meaning |
@@ -170,6 +177,14 @@ in a staging directory and published with one atomic rename only after a zero-vi
 scan — a failing scan publishes nothing at all. The artifact upload step is double-gated
 (`failure() && steps.sanitize_auth006.outcome == 'success'`), so a failing sanitizer can
 never publish a partial sanitized directory.
+
+Known diagnostic limitation: the run-scoped build checkout deliberately contains
+dependency symlinks. On a failed full run, scanning the entire raw root can therefore
+reject evidence with `symbolic-link-in-source` even after credential redaction.
+This is a secondary evidence-publication failure, not the cause of failed product
+assertions. Do not bypass the sanitizer, upload raw output, or permit symlink traversal
+to obtain artifacts. Job logs remain the available failure evidence; redesigning the
+evidence root requires a separately reviewed change.
 
 ## Failure recovery
 

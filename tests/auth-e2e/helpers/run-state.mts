@@ -77,12 +77,16 @@ export function requireSecret(name: "AUTH006_CLIENT_SECRET" | "AUTH006_SESSION_S
 }
 
 export function databaseUrl(): string {
-  const explicit = process.env.AUTH006_DATABASE_URL;
+  // Match the setup/teardown resolver and the CI/RUNBOOK configuration.
+  // Otherwise SQL assertions silently lose the CI admin credentials.
+  const explicit = process.env.AUTH006_DATABASE_ADMIN_URL;
   if (explicit) return explicit;
   const fromEnv = process.env.DATABASE_URL;
   if (fromEnv) {
     const url = new URL(fromEnv);
     url.pathname = "/postgres";
+    url.search = "";
+    url.hash = "";
     return url.toString();
   }
   const user = process.env.USER || process.env.USERNAME || "postgres";

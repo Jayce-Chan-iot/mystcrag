@@ -102,6 +102,101 @@ enum KnowledgeVersionStatus {
   RETIRED
 }
 
+// ---------------------------------------------------------------------------
+// Bead asset import (TASK-ASSET-DB-001). Lifecycle enums mirror the accepted
+// design contract (bead-asset-import-api.schema.ts) exactly; CANCELLED is a
+// first-class terminal session state.
+// ---------------------------------------------------------------------------
+
+enum AssetImportSessionState {
+  CREATED
+  UPLOADING
+  ARCHIVING
+  PROCESSING
+  NEEDS_REVIEW
+  READY_TO_PUBLISH
+  PUBLISHING
+  PUBLISHED
+  PARTIALLY_FAILED
+  FAILED
+  CANCELLED
+}
+
+enum AssetImportCheckpoint {
+  ARCHIVED
+  GROUPED
+  LABELED
+  PROCESSED
+  REVIEWED
+  PUBLISHED
+}
+
+enum AssetSourceFileKind {
+  ARW
+  JPEG
+  PNG
+  WEBP
+}
+
+enum AssetSourceFileState {
+  PENDING
+  UPLOADING
+  ARCHIVED
+  FAILED
+  SKIPPED_DUPLICATE
+}
+
+enum BeadImageGroupState {
+  SUGGESTED
+  CONFIRMED
+  NAMED
+  PROCESSED
+  QC_FAILED
+  READY
+  PUBLISHED
+}
+
+enum ProcessedAssetPurpose {
+  MAIN
+  TEXTURE
+  MODEL
+  PREVIEW
+}
+
+enum ProcessedAssetState {
+  DRAFT
+  QC_PENDING
+  QC_FAILED
+  APPROVED
+  RETIRED
+}
+
+enum AssetProcessingJobType {
+  ARCHIVE_FILE
+  GROUP_SESSION
+  PROCESS_GROUP
+}
+
+enum AssetProcessingJobState {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum AssetUsagePermission {
+  UNKNOWN
+  OWNED
+  GRANTED
+  PROHIBITED
+}
+
+enum ProductAssetBindingStatus {
+  DRAFT
+  APPROVED
+  RETIRED
+}
+
 model User {
   id                 String              @id @default(cuid())
   email              String?             @unique
@@ -151,9 +246,12 @@ model Crystal {
   costRange          Json?             @map("cost_range")
   imageReference     String?           @map("image_reference")
   complianceNote     String            @map("compliance_note")
-  createdAt          DateTime          @default(now()) @map("created_at")
-  updatedAt          DateTime          @updatedAt @map("updated_at")
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
   materialProducts   MaterialProduct[]
+  assetImportGroups  BeadImageGroup[]
+  promotedDrafts     CrystalDraft[]
+  beadPublications   BeadGroupPublication[]
 
   @@map("crystals")
 }
@@ -335,6 +433,8 @@ model MaterialProduct {
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
   crystal             Crystal  @relation(fields: [crystalId], references: [id], onDelete: Restrict)
+  assetBindings       ProductAssetBinding[]
+  beadPublications    BeadGroupPublication[]
 
   @@index([crystalId, active])
   @@index([currency, active])
@@ -371,6 +471,8 @@ model InventorySnapshot {
   reservedQuantity  Int         @default(0) @map("reserved_quantity")
   capturedAt        DateTime    @default(now()) @map("captured_at")
   sourceVersion     String      @map("source_version")
+
+  beadPublications BeadGroupPublication[]
 
   @@unique([productType, productId, sourceVersion])
   @@index([productType, productId, capturedAt])
@@ -546,4 +648,314 @@ model TarotDesignRecommendation {
   @@unique([sessionId, rank])
   @@unique([sessionId, designId])
   @@map("tarot_design_recommendations")
+}
+
+/// One admin import run. `idempotencyKey` deduplicates session creation; the
+/// manifest key/fingerprint pair deduplicates manifest registration. Only
+/// provider names and storage/archive keys are stored, never absolute paths.
+/// File counters are disjoint: an archived file increments
+/// `archivedFileCount`, an exact duplicate increments `skippedFileCount`
+/// (never `failedFileCount`), and `failedFileCount` is reserved for real
+/// upload failures.
+model AssetImportSession {
+  id                     String                 @id @default(cuid())
+  idempotencyKey         String                 @unique @map("idempotency_key")
+  state                  AssetImportSessionState @default(CREATED)
+  lastVerifiedCheckpoint AssetImportCheckpoint? @map("last_verified_checkpoint")
+  declaredFileCount      Int                    @default(0) @map("declared_file_count")
+  archivedFileCount      Int                    @default(0) @map("archived_file_count")
+  failedFileCount        Int                    @default(0) @map("failed_file_count")
+  skippedFileCount       Int                    @default(0) @map("skipped_file_count")
+  declaredBytes          BigInt                 @default(0) @map("declared_bytes")
+  uploadedBytes          BigInt                 @default(0) @map("uploaded_bytes")
+  manifestIdempotencyKey String?                @map("manifest_idempotency_key")
+  manifestFingerprint    String?                @map("manifest_fingerprint")
+  createdAt              DateTime               @default(now()) @map("created_at")
+  updatedAt              DateTime               @updatedAt @map("updated_at")
+  sourceFiles            AssetSourceFile[]
+  groups                 BeadImageGroup[]
+  jobs                   AssetProcessingJob[]
+
+  @@index([state, updatedAt])
+  @@map("asset_import_sessions")
+}
+
+/// One client-declared file. `(sessionId, clientFileId)` is unique; the
+/// partial unique index on `(session_id, sha256) WHERE state = 'ARCHIVED'`
+/// (migration SQL) enforces per-session exact SHA-256 deduplication.
+/// `lastModifiedMs` persists the manifest-declared client mtime so re-run
+/// detection can compare content identity without re-reading the archive.
+/// A SKIPPED_DUPLICATE row counts toward `skippedFileCount` on the session,
+/// never toward `failedFileCount`.
+model AssetSourceFile {
+  id              String              @id @default(cuid())
+  sessionId       String              @map("session_id")
+  clientFileId    String              @map("client_file_id")
+  relativePath    String              @map("relative_path")
+  byteSize        BigInt              @map("byte_size")
+  lastModifiedMs  BigInt?             @map("last_modified_ms")
+  kind            AssetSourceFileKind
+  state           AssetSourceFileState @default(PENDING)
+  sha256          String?
+  archiveKey      String?             @map("archive_key")
+  storageProvider String?             @map("storage_provider")
+  duplicateOfId   String?             @map("duplicate_of_id")
+  duplicateOf     AssetSourceFile?    @relation("AssetSourceFileDuplicate", fields: [duplicateOfId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  duplicates      AssetSourceFile[]   @relation("AssetSourceFileDuplicate")
+  groupId         String?             @map("group_id")
+  group           BeadImageGroup?     @relation(fields: [groupId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  archivedAt      DateTime?           @map("archived_at")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  session         AssetImportSession  @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  processedAssets ProcessedAsset[]
+
+  @@unique([sessionId, clientFileId])
+  @@index([sessionId, state])
+  @@index([groupId])
+  @@map("asset_source_files")
+}
+
+/// A reviewable cluster of bead photos. `revision` is the compare-and-set
+/// guard for every operator edit (draft save, publish).
+model BeadImageGroup {
+  id                String             @id @default(cuid())
+  sessionId         String             @map("session_id")
+  state             BeadImageGroupState @default(SUGGESTED)
+  revision          Int                @default(1)
+  crystalName       String?            @map("crystal_name")
+  primaryFileId     String?            @map("primary_file_id")
+  similarityEvidence Json?             @map("similarity_evidence")
+  crystalId         String?            @map("crystal_id")
+  crystal           Crystal?           @relation(fields: [crystalId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  crystalDraftId    String?            @map("crystal_draft_id")
+  crystalDraft      CrystalDraft?      @relation(fields: [crystalDraftId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+  session           AssetImportSession @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  files             AssetSourceFile[]
+  assets            ProcessedAsset[]
+  jobs              AssetProcessingJob[]
+  productDraft      MaterialProductDraft?
+  publications      BeadGroupPublication[]
+
+  @@index([sessionId, state])
+  @@index([state, updatedAt])
+  @@map("bead_image_groups")
+}
+
+/// Pre-curation crystal candidate. Promoted into a real `Crystal` only inside
+/// the publish transaction after explicit operator confirmation, and only
+/// when every manual curation field is present: non-blank Chinese/English
+/// names, a real mineral name (never the "UNSPECIFIED" placeholder), at least
+/// one color/visual/style tag each, an operator-set price level, and a real
+/// compliance note (never the "Pending manual curation." placeholder).
+/// Promotion fails closed otherwise — placeholder values never become formal
+/// `Crystal` rows. The accepted design contract cannot deliver these fields
+/// yet (TASK-ASSET-CONTRACT blocker), so drafts created through the API stay
+/// unpromotable until the contract is revised.
+model CrystalDraft {
+  id                String           @id @default(cuid())
+  nameCn            String           @map("name_cn")
+  nameEn            String?          @map("name_en")
+  mineralName       String           @map("mineral_name")
+  colorTags         String[]         @default([]) @map("color_tags")
+  visualTags        String[]         @default([]) @map("visual_tags")
+  styleTags         String[]         @default([]) @map("style_tags")
+  priceLevel        Int?             @map("price_level")
+  gemologicalInfo   Json             @default("{}") @map("gemological_info")
+  complianceNote    String           @map("compliance_note")
+  promotedCrystalId String?          @map("promoted_crystal_id")
+  promotedCrystal   Crystal?         @relation(fields: [promotedCrystalId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  promotedAt        DateTime?        @map("promoted_at")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+  groups            BeadImageGroup[]
+
+  @@map("crystal_drafts")
+}
+
+/// Operator-editable draft fields for one group; one row per group. Drafts are
+/// never visible through approved-only public asset queries.
+model MaterialProductDraft {
+  id                   String               @id @default(cuid())
+  groupId              String               @unique @map("group_id")
+  crystalName          String?              @map("crystal_name")
+  crystalId            String?              @map("crystal_id")
+  crystalDraftId       String?              @map("crystal_draft_id")
+  displayName          String?              @map("display_name")
+  sku                  String?              @map("sku")
+  materialKey          String?              @map("material_key")
+  shape                String?
+  diameterMm           Float?               @map("diameter_mm")
+  lengthAlongStringMm  Float?               @map("length_along_string_mm")
+  currency             Currency?
+  unitPriceMinor       BigInt?              @map("unit_price_minor")
+  costMinor            BigInt?              @map("cost_minor")
+  availableQuantity    Int?                 @map("available_quantity")
+  qualityStatement     String?              @map("quality_statement")
+  qualitySource        String?              @map("quality_source")
+  textureAssetKey      String?              @map("texture_asset_key")
+  modelAssetKey        String?              @map("model_asset_key")
+  rightsHolder         String?              @map("rights_holder")
+  usagePermission      AssetUsagePermission? @map("usage_permission")
+  isAuthenticPhotograph Boolean?            @map("is_authentic_photograph")
+  allowAiTraining      Boolean?             @map("allow_ai_training")
+  allowCommercialUse   Boolean?             @map("allow_commercial_use")
+  allowPublicDisplay   Boolean?             @map("allow_public_display")
+  allowAiRecommendation Boolean?            @map("allow_ai_recommendation")
+  draftSavedAt         DateTime             @default(now()) @map("draft_saved_at")
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
+  group                BeadImageGroup       @relation(fields: [groupId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("material_product_drafts")
+}
+
+/// One processed output version. Worker completion records output and
+/// automatic QC only: a QC pass parks the asset in QC_PENDING with neutral
+/// permission defaults. `assetKey` is the content-addressed public key
+/// `approved:<sha256>`; it is minted only by the human review approval
+/// (reviewProcessedAsset), which is also the only writer of the usage
+/// permission columns. The partial unique index on
+/// `(group_id, purpose) WHERE is_current_version` (migration SQL) keeps
+/// exactly one current version per purpose.
+model ProcessedAsset {
+  id                    String               @id @default(cuid())
+  sourceFileId          String               @map("source_file_id")
+  groupId               String               @map("group_id")
+  purpose               ProcessedAssetPurpose
+  processingVersion     Int                  @map("processing_version")
+  state                 ProcessedAssetState  @default(QC_PENDING)
+  storageProvider       String               @map("storage_provider")
+  storageKey            String               @map("storage_key")
+  assetKey              String?              @unique @map("asset_key")
+  outputSha256          String               @map("output_sha256")
+  outputBytes           BigInt               @map("output_bytes")
+  outputContentType     String               @map("output_content_type")
+  widthPx               Int?                 @map("width_px")
+  heightPx              Int?                 @map("height_px")
+  processorVersion      String               @map("processor_version")
+  parameters            Json                 @default("{}")
+  qcResult              Json                 @map("qc_result")
+  qcPassedAt            DateTime?            @map("qc_passed_at")
+  approvedAt            DateTime?            @map("approved_at")
+  usagePermission       AssetUsagePermission @default(UNKNOWN) @map("usage_permission")
+  rightsHolder          String?              @map("rights_holder")
+  isAuthenticPhotograph Boolean              @default(false) @map("is_authentic_photograph")
+  allowCommercialUse    Boolean              @default(false) @map("allow_commercial_use")
+  allowPublicDisplay    Boolean              @default(false) @map("allow_public_display")
+  allowAiTraining       Boolean?             @map("allow_ai_training")
+  allowAiRecommendation Boolean?             @map("allow_ai_recommendation")
+  isCurrentVersion      Boolean              @default(false) @map("is_current_version")
+  createdAt             DateTime             @default(now()) @map("created_at")
+  updatedAt             DateTime             @updatedAt @map("updated_at")
+  sourceFile            AssetSourceFile      @relation(fields: [sourceFileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  group                 BeadImageGroup       @relation(fields: [groupId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  bindings              ProductAssetBinding[]
+
+  @@unique([groupId, purpose, processingVersion])
+  @@index([groupId, state])
+  @@index([assetKey])
+  @@map("processed_assets")
+}
+
+/// Worker job with a PostgreSQL-native lease. claimNextJob uses
+/// `FOR UPDATE SKIP LOCKED`. Every lease-holder transition — heartbeat,
+/// completeJob, failJob — is a single conditional UPDATE matching
+/// `jobId + state=RUNNING + workerId + leaseToken + unexpired leaseUntil`,
+/// so a stale worker whose lease expired and was reclaimed can never
+/// overwrite the new owner's outcome. PROCESS_GROUP result application runs
+/// inside the same protected transaction as the completing CAS.
+model AssetProcessingJob {
+  id              String                  @id @default(cuid())
+  sessionId       String                  @map("session_id")
+  groupId         String?                 @map("group_id")
+  jobType         AssetProcessingJobType  @map("job_type")
+  state           AssetProcessingJobState @default(QUEUED)
+  payload         Json                    @default("{}")
+  result          Json?
+  retryCount      Int                     @default(0) @map("retry_count")
+  maxRetries      Int                     @default(3) @map("max_retries")
+  workerId        String?                 @map("worker_id")
+  leaseToken      String?                 @map("lease_token")
+  leaseUntil      DateTime?               @map("lease_until")
+  claimedAt       DateTime?               @map("claimed_at")
+  nextAttemptAt   DateTime?               @map("next_attempt_at")
+  errorCode       String?                 @map("error_code")
+  errorMessage    String?                 @map("error_message")
+  completedAt     DateTime?               @map("completed_at")
+  failedAt        DateTime?               @map("failed_at")
+  createdAt       DateTime                @default(now()) @map("created_at")
+  updatedAt       DateTime                @updatedAt @map("updated_at")
+  session         AssetImportSession      @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  group           BeadImageGroup?         @relation(fields: [groupId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([state, nextAttemptAt, createdAt])
+  @@index([state, leaseUntil])
+  @@index([sessionId, state])
+  @@map("asset_processing_jobs")
+}
+
+/// Approved asset attached to a formal product. The partial unique index on
+/// `material_product_id WHERE binding_status = 'APPROVED'` (migration SQL)
+/// guarantees at most one active binding per product.
+model ProductAssetBinding {
+  id                 String                   @id @default(cuid())
+  materialProductId  String                   @map("material_product_id")
+  processedAssetId   String                   @map("processed_asset_id")
+  assetKey           String                   @map("asset_key")
+  purpose            ProcessedAssetPurpose
+  bindingStatus      ProductAssetBindingStatus @default(DRAFT) @map("binding_status")
+  allowPublicDisplay Boolean                  @default(false) @map("allow_public_display")
+  allowCommercialUse Boolean                  @default(false) @map("allow_commercial_use")
+  approvedAt         DateTime?                @map("approved_at")
+  retiredAt          DateTime?                @map("retired_at")
+  createdAt          DateTime                 @default(now()) @map("created_at")
+  updatedAt          DateTime                 @updatedAt @map("updated_at")
+  product            MaterialProduct          @relation(fields: [materialProductId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  asset              ProcessedAsset           @relation(fields: [processedAssetId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([materialProductId, bindingStatus])
+  @@index([assetKey, bindingStatus])
+  @@map("product_asset_bindings")
+}
+
+/// Durable publish outcome; both `idempotencyKey` and `groupId` are unique so
+/// an identical retry replays the stored result and any divergent retry
+/// conflicts. `payloadFingerprint` separates same-key/different-payload abuse.
+/// The operator approval decisions (quality statement/source, rights holder,
+/// usage permission and every allow-* flag) are snapshotted here at publish
+/// time so the formal record is queryable without re-reading the still
+/// editable draft rows. `publishedAssetKeys` lists only the assets that
+/// actually received an APPROVED binding in this publication. Restrict
+/// foreign keys to `MaterialProduct`, `Crystal` and `InventorySnapshot` keep
+/// the publish evidence anchored to live catalog rows.
+model BeadGroupPublication {
+  id                    String            @id @default(cuid())
+  groupId               String            @unique @map("group_id")
+  idempotencyKey        String            @unique @map("idempotency_key")
+  payloadFingerprint    String            @map("payload_fingerprint")
+  materialProductId     String            @map("material_product_id")
+  crystalId             String            @map("crystal_id")
+  inventorySnapshotId   String            @map("inventory_snapshot_id")
+  qualityStatement      String            @map("quality_statement")
+  qualitySource         String            @map("quality_source")
+  rightsHolder          String            @map("rights_holder")
+  usagePermission       String            @map("usage_permission")
+  isAuthenticPhotograph Boolean           @map("is_authentic_photograph")
+  allowAiTraining       Boolean           @map("allow_ai_training")
+  allowAiRecommendation Boolean           @map("allow_ai_recommendation")
+  allowCommercialUse    Boolean           @map("allow_commercial_use")
+  allowPublicDisplay    Boolean           @map("allow_public_display")
+  publishedAssetKeys    String[]          @map("published_asset_keys")
+  publishedAt           DateTime          @default(now()) @map("published_at")
+  createdAt             DateTime          @default(now()) @map("created_at")
+  group                 BeadImageGroup    @relation(fields: [groupId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  materialProduct       MaterialProduct   @relation(fields: [materialProductId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  crystal               Crystal           @relation(fields: [crystalId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  inventorySnapshot     InventorySnapshot @relation(fields: [inventorySnapshotId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([publishedAt])
+  @@map("bead_group_publications")
 }

@@ -191,6 +191,8 @@ Commit: `feat(database): persist bead asset import drafts`
 
 ## Task 3: Deterministic image pipeline and separate local worker
 
+**2026-09-03 dispatch amendment:** The Product Owner permits development in parallel with Task 2 PR #5. Read [the pinned-baseline dispatch](2026-09-03-asset-worker-parallel-dispatch.md) before this task. It supersedes the old merge-before-start hold and the illustrative Task 2 lease signatures above; the accepted repository at `8d66120` controls actual APIs. It does not permit dependency edits, human approval, premature integration or automatic agent dispatch.
+
 **Registry:** `TASK-ASSET-WORKER-001`  
 **Executor:** GLM
 **Branch:** `task/asset-worker-001-local-pipeline`

@@ -297,6 +297,8 @@ Admin browser
 
 每个任务必须在 `docs/tasks/TASK_REGISTRY.md` 拥有自己的 ID、负责人、分支、可写路径和验收门。Contract 和 Database 任务先于消费者任务合入；Frontend、Worker 可在稳定 DTO 之后并行。
 
+2026-09-03 产品负责人授权 Task 3 在 Task 2 PR #5 检查/合并期间并行开发：以已验收数据库 `8d66120` 和归档 `ed03ba2` 为固定祖先，使用独立 GLM 分支与 worktree，不修改依赖。此例外只放宽开发启动顺序，不放宽依赖先合入、消费者复验后合入的要求。具体条件见 [Task 3 并行交接](../plans/2026-09-03-asset-worker-parallel-dispatch.md)。
+
 ## 14. 发布与回退
 
 - 功能使用默认关闭的管理功能开关；未配置管理鉴权或档案根目录时 fail closed。
