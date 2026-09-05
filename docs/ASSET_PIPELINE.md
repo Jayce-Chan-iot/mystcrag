@@ -442,10 +442,10 @@ DATABASE_URL=… MYSTCRAG_ASSET_ARCHIVE_ROOT=/archive/outside-repo \
 
 ## 12. TASK-ASSET-STORAGE-002：后台单文件流式暂存边界
 
-`ArchiveStore.putStagingStream` 是后台二进制上传进入现有档案流水线的唯一新增存储入口。它接收一个 `AsyncIterable<Uint8Array>`，调用方必须同时提供清单声明的 `expectedByteSize` 与服务端 `maxByteSize`。声明大小在读取前超过上限时直接返回 `PAYLOAD_TOO_LARGE`；读取过程中每个块在写入前重新检查累计长度，超过上限或声明长度立即停止消费；流结束仍不足声明长度返回 `SIZE_MISMATCH`。
+`ArchiveStore.putStagingStream` 是后台二进制上传进入现有档案流水线的唯一新增存储入口。它接收一个 `AsyncIterable<Uint8Array>`，调用方必须同时提供清单声明的 `expectedByteSize` 与服务端 `maxByteSize`。该方法在调用期间拥有流的消费权：包括声明大小预检在内的任一失败都会调用 iterator `return()` 取消未耗尽来源。声明大小在读取前超过上限时直接返回 `PAYLOAD_TOO_LARGE`；读取过程中每个块在写入前重新检查累计长度，超过上限或声明长度立即停止消费；流结束仍不足声明长度返回 `SIZE_MISMATCH`。
 
 实现只处理一个文件，不接收文件夹或本机路径，也不把整个文件夹/批次放进内存。字节逐块写入会话 `tmp` 临时文件，同时增量计算 SHA-256；完整写入后先 `fsync`，再从文件重新计算长度和摘要，最后通过与现有 `verifiedPut` 相同的无覆盖 `link` 原子落入 `imports/<session>/staging/<server-uuid>`，并同步 staging 目录元数据。成功结果只有 `{ stagingKey, sha256, byteSize }`，不包含档案根或绝对路径。
 
-任何来源异常、写入异常、长度不符、摘要复核失败或落盘失败都会关闭描述符并删除临时文件；若目录同步前已建立 staging 链接但操作未完成，也会尝试撤销该链接。后续仍由 `ARCHIVE_FILE` Worker 完成内容识别、原片不可变归档、数据库提交，并且只在任务提交成功后删除 staging。这个入口不改变 raw/processed 不可变规则，也不授予发布或人工批准权限。
+任何来源异常、写入异常、长度不符、摘要复核失败或落盘失败都会关闭描述符并删除临时文件；`tmp` 和 `staging` 的每层路径都重新执行防符号链接校验，临时文件本身以 `O_NOFOLLOW | O_EXCL` 创建。成功返回前必须删除并 `fsync` 临时目录；若清理失败，方法显式返回 `WRITE_FAILED`、撤销并同步业务 staging 链接，不会把带有未完成清理的结果报为成功；底层文件系统若同时拒绝删除，错误会继续显式暴露，可供运维恢复。后续仍由 `ARCHIVE_FILE` Worker 完成内容识别、原片不可变归档、数据库提交，并且只在任务提交成功后删除 staging。这个入口不改变 raw/processed 不可变规则，也不授予发布或人工批准权限。
 
-2026-09-05 红灯与实现验证：新增 5 组定向用例，旧实现均因 `putStagingStream is not a function` 失败；实现后 storage 单文件测试 29/29，通过 chunked hash/落盘、声明大于上限的读取前拒绝、读取中/结束时长度不符、来源异常清理、非法 ID/非安全正整数限制与返回值无路径字段检查。完整 Task 验收以任务注册表最终记录为准。
+2026-09-05 红灯与实现验证：首轮新增 5 组定向用例，旧实现均因 `putStagingStream is not a function` 失败；独立审查后再补 3 组红灯，分别证明预检失败未取消来源、符号链接 `tmp` 可越界写入、临时文件清理失败被静默吞掉。修复后通过 chunked hash/落盘、声明大于上限的读取前拒绝与取消、读取中/结束时长度不符、来源异常清理、非法 ID/非安全正整数限制、返回值无路径字段、`tmp` 防符号链接和清理失败回滚检查。完整 Task 验收以任务注册表最终记录为准。

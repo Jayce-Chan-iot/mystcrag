@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { realpathSync, statSync } from "node:fs";
+import { constants, realpathSync, statSync } from "node:fs";
 import { link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 
@@ -219,31 +219,52 @@ export class ArchiveStore {
     expectedByteSize: number;
     maxByteSize: number;
   }): Promise<StagingStreamPutResult> {
-    assertIdentifier(input.sessionId, "session id");
-    assertPositiveSafeByteSize(input.expectedByteSize, "expectedByteSize");
-    assertPositiveSafeByteSize(input.maxByteSize, "maxByteSize");
-    if (input.expectedByteSize > input.maxByteSize) {
-      throw new ArchiveStoreError(
-        "PAYLOAD_TOO_LARGE",
-        "Declared upload size exceeds the configured staging byte limit"
-      );
-    }
-
     const stagingKey = `imports/${input.sessionId}/staging/${randomUUID()}`;
+    let sourceIterator: AsyncIterator<Uint8Array> | undefined;
+    let sourceExhausted = false;
     let tempPath: string | undefined;
+    let tempCleanupAttempted = false;
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     let linkedTarget: string | undefined;
-    let completed = false;
+    let operationError: ArchiveStoreError | undefined;
+    let result: StagingStreamPutResult | undefined;
+    const cleanupErrors: unknown[] = [];
+
     try {
+      sourceIterator = getAsyncIterator(input.source);
+      assertIdentifier(input.sessionId, "session id");
+      assertPositiveSafeByteSize(input.expectedByteSize, "expectedByteSize");
+      assertPositiveSafeByteSize(input.maxByteSize, "maxByteSize");
+      if (input.expectedByteSize > input.maxByteSize) {
+        throw new ArchiveStoreError(
+          "PAYLOAD_TOO_LARGE",
+          "Declared upload size exceeds the configured staging byte limit"
+        );
+      }
+
       const target = await this.resolveWritablePath(stagingKey);
-      const sessionTempDir = join(this.rootReal, KEY_PREFIX, input.sessionId, "tmp");
-      tempPath = join(sessionTempDir, `${randomUUID()}.upload`);
+      const tempDirectoryKey = `${KEY_PREFIX}/${input.sessionId}/tmp`;
+      const tempKey = `${tempDirectoryKey}/${randomUUID()}.upload`;
+      const sessionTempDir = await this.resolveWritablePath(tempDirectoryKey);
       await mkdir(sessionTempDir, { recursive: true });
-      handle = await open(tempPath, "wx", 0o600);
+      // Re-walk the path after mkdir so an existing or swapped-in symlink is
+      // rejected before any upload byte can be written through it.
+      tempPath = await this.resolveWritablePath(tempKey);
+      handle = await open(
+        tempPath,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+        0o600
+      );
 
       const digest = createHash("sha256");
       let byteSize = 0;
-      for await (const chunk of input.source) {
+      while (true) {
+        const next = await sourceIterator.next();
+        if (next.done) {
+          sourceExhausted = true;
+          break;
+        }
+        const chunk = next.value;
         if (!(chunk instanceof Uint8Array)) {
           throw new ArchiveStoreError("WRITE_FAILED", "Upload stream produced a non-byte chunk");
         }
@@ -288,18 +309,75 @@ export class ArchiveStore {
       await link(tempPath, target);
       linkedTarget = target;
       await syncDirectoryMetadata(dirname(target));
-      completed = true;
-      return { stagingKey, sha256, byteSize };
+      result = { stagingKey, sha256, byteSize };
     } catch (error) {
-      if (error instanceof ArchiveStoreError) throw error;
-      throw new ArchiveStoreError("WRITE_FAILED", "Failed to stage the uploaded byte stream", {
-        cause: error
-      });
-    } finally {
-      if (handle !== undefined) await handle.close().catch(() => undefined);
-      if (!completed && linkedTarget !== undefined) await unlink(linkedTarget).catch(() => undefined);
-      if (tempPath !== undefined) await unlink(tempPath).catch(() => undefined);
+      operationError = normalizeStagingStreamError(error);
     }
+
+    if (handle !== undefined) {
+      try {
+        await handle.close();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+
+    if (!sourceExhausted && sourceIterator?.return !== undefined) {
+      try {
+        await sourceIterator.return();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+
+    // A successful operation is not reported until the temporary link has
+    // itself been durably removed. If that final cleanup fails, convert the
+    // call to a failure and roll back the business-visible staging key.
+    if (operationError === undefined && cleanupErrors.length === 0 && tempPath !== undefined) {
+      tempCleanupAttempted = true;
+      try {
+        await unlinkAndSyncParent(tempPath);
+        tempPath = undefined;
+      } catch (error) {
+        operationError = new ArchiveStoreError(
+          "WRITE_FAILED",
+          "The upload was staged but temporary-file cleanup could not be completed",
+          { cause: error }
+        );
+        result = undefined;
+      }
+    }
+
+    if ((operationError !== undefined || cleanupErrors.length > 0) && linkedTarget !== undefined) {
+      try {
+        await unlinkAndSyncParent(linkedTarget);
+        linkedTarget = undefined;
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+
+    if (tempPath !== undefined && !tempCleanupAttempted) {
+      try {
+        await unlinkAndSyncParent(tempPath);
+        tempPath = undefined;
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+
+    if (cleanupErrors.length > 0) {
+      throw new ArchiveStoreError(
+        "WRITE_FAILED",
+        "The upload failed and one or more stream or filesystem cleanup operations could not be completed",
+        { cause: new AggregateError([operationError, ...cleanupErrors].filter(Boolean)) }
+      );
+    }
+    if (operationError !== undefined) throw operationError;
+    if (result === undefined) {
+      throw new ArchiveStoreError("WRITE_FAILED", "The upload did not produce a staged result");
+    }
+    return result;
   }
 
   /**
@@ -511,6 +589,28 @@ function assertPositiveSafeByteSize(value: number, field: string): void {
   }
 }
 
+function getAsyncIterator(source: AsyncIterable<Uint8Array>): AsyncIterator<Uint8Array> {
+  if (
+    (typeof source !== "object" && typeof source !== "function") ||
+    source === null ||
+    typeof source[Symbol.asyncIterator] !== "function"
+  ) {
+    throw new ArchiveStoreError("KEY_INVALID", "Upload source must be an async byte iterable");
+  }
+  const iterator = source[Symbol.asyncIterator]();
+  if (iterator === null || typeof iterator !== "object" || typeof iterator.next !== "function") {
+    throw new ArchiveStoreError("KEY_INVALID", "Upload source did not provide a valid async iterator");
+  }
+  return iterator;
+}
+
+function normalizeStagingStreamError(error: unknown): ArchiveStoreError {
+  if (error instanceof ArchiveStoreError) return error;
+  return new ArchiveStoreError("WRITE_FAILED", "Failed to stage the uploaded byte stream", {
+    cause: error
+  });
+}
+
 function assertArchiveKey(archiveKey: string): void {
   if (typeof archiveKey !== "string" || archiveKey.length === 0) {
     throw new ArchiveStoreError("KEY_INVALID", "Archive key is required");
@@ -553,6 +653,17 @@ async function syncDirectoryMetadata(path: string): Promise<void> {
   } finally {
     await handle.close();
   }
+}
+
+/** Removes a created link and includes its parent entry in the durability boundary. */
+async function unlinkAndSyncParent(path: string): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  await syncDirectoryMetadata(dirname(path));
 }
 
 function isLinkExistsError(error: unknown): boolean {

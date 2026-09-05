@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -423,12 +423,23 @@ test("putStagingStream rejects an oversized upload before consuming later chunks
   try {
     const archive = store(root, repositoryRoot);
     let chunksConsumed = 0;
-    const source = (async function* () {
-      chunksConsumed += 1;
-      yield Buffer.from("12345");
-      chunksConsumed += 1;
-      yield Buffer.from("must-not-be-consumed");
-    })();
+    let iteratorCreated = false;
+    let iteratorReturned = false;
+    const source: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]() {
+        iteratorCreated = true;
+        return {
+          async next() {
+            chunksConsumed += 1;
+            return { done: false as const, value: Buffer.from("must-not-be-consumed") };
+          },
+          async return() {
+            iteratorReturned = true;
+            return { done: true as const, value: undefined };
+          }
+        };
+      }
+    };
 
     await assert.rejects(
       archive.putStagingStream({
@@ -440,8 +451,74 @@ test("putStagingStream rejects an oversized upload before consuming later chunks
       (error: unknown) => error instanceof ArchiveStoreError && error.code === "PAYLOAD_TOO_LARGE"
     );
     assert.equal(chunksConsumed, 0, "an impossible declared length fails before source consumption");
+    assert.equal(iteratorCreated, true, "the store takes ownership of the supplied source");
+    assert.equal(iteratorReturned, true, "a pre-read rejection still cancels the supplied source");
     assert.deepEqual(await archive.listSessionFiles("sess-stream"), []);
   } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("putStagingStream refuses a symlinked temp directory without writing outside the archive", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  const outside = await mkdtemp(join(tmpdir(), "asset-pipeline-storage-outside-"));
+  try {
+    const archive = store(root, repositoryRoot);
+    await mkdir(join(root, "imports", "sess-symlink"), { recursive: true });
+    await symlink(outside, join(root, "imports", "sess-symlink", "tmp"), "dir");
+
+    await assert.rejects(
+      archive.putStagingStream({
+        sessionId: "sess-symlink",
+        source: (async function* () {
+          yield Buffer.from("must remain inside the archive");
+        })(),
+        expectedByteSize: 30,
+        maxByteSize: 100
+      }),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "KEY_INVALID"
+    );
+    assert.deepEqual(await archive.listSessionFiles("sess-symlink"), []);
+    assert.deepEqual(await readdir(outside), []);
+  } finally {
+    await rm(outside, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("putStagingStream surfaces temp cleanup failure and rolls back the business staging key", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  const sessionId = "sess-cleanup";
+  const tempDir = join(root, "imports", sessionId, "tmp");
+  try {
+    const archive = store(root, repositoryRoot);
+    await mkdir(tempDir, { recursive: true });
+    const bytes = Buffer.from("cleanup must be explicit");
+
+    await assert.rejects(
+      archive.putStagingStream({
+        sessionId,
+        source: (async function* () {
+          yield bytes;
+          await chmod(tempDir, 0o500);
+        })(),
+        expectedByteSize: bytes.byteLength,
+        maxByteSize: 100
+      }),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "WRITE_FAILED"
+    );
+
+    await chmod(tempDir, 0o700);
+    const files = await archive.listSessionFiles(sessionId);
+    assert.equal(
+      files.some((key) => key.includes("/staging/")),
+      false,
+      "a call that reports failure must not leave a business-visible staging key"
+    );
+  } finally {
+    await chmod(tempDir, 0o700).catch(() => undefined);
     await rm(root, { recursive: true, force: true });
     await rm(repositoryRoot, { recursive: true, force: true });
   }
