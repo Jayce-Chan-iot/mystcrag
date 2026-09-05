@@ -15,7 +15,7 @@ TASK-ASSET-WORKER-001 的模块接口、存储布局、配置与交付记录。�
 | SOL 第 2 轮修复提交 | `ca480bf`(§10.4,基于 `9ea6fc4`) |
 | SOL 第 3 轮修复提交 | `f5b5d97`(§10.5,基于 `4414c3b`) |
 | SOL 第 4 轮修复提交 | `9ca2a92`(§10.6,基于 `c091a9d`) |
-| 第 5 轮接管修复提交 | 待提交(§10.7,基于 `ec11bd5`;GLM 因 TraeWork CN 额度中断后由 Codex 按用户指令接管) |
+| 第 5 轮接管修复提交 | `e31629f`(§10.7,基于 `ec11bd5`;GLM 因 TraeWork CN 额度中断后由 Codex 按用户指令接管) |
 | 当前状态 | REVIEW:SOL 验收第 1–4 轮及第 5 轮 A–J 验收项已修复(§10.3–§10.7);未推送、未合并、未开始 Task 4 |
 
 ## 2. 模块与接口
@@ -373,7 +373,7 @@ SOL 第 4 轮验收提出 2 项问题,全部以"先补失败测试、再修复"�
 
 变更文件(相对 `c091a9d`,共 4 个 + 文档):`apps/asset-worker/src/repository-roots.ts`、`apps/asset-worker/tests/archive-root-guard.test.ts`、`packages/asset-pipeline/src/grouping.ts`、`packages/asset-pipeline/tests/grouping.test.ts`(提交 `9ca2a92`),以及本文件与 `docs/tasks/TASK_REGISTRY.md`(文档提交)。无数据库/Prisma/共享 Contract/后台/前端/知识库改动,无新增运行时依赖。G5(§7)保持登记不变。
 
-### 2026-09-05 SOL 验收第 5 轮接管修复(基线 `ec11bd5`,分支 `task/asset-worker-001-local-pipeline`,worktree `.worktrees/asset-worker-001`)
+### 2026-09-05 SOL 验收第 5 轮接管修复(基线 `ec11bd5`,分支 `task/asset-worker-001-local-pipeline`,worktree `.worktrees/asset-worker-001`,修复提交 `e31629f`)
 
 GLM 已在 TraeWork CN 中完成第 5 轮大部分实现与测试,但因积分不足中断于文档、真实数据库复验、全仓门禁和提交之前。Codex 按用户指令接管,先复核未提交差异,再以新增失败测试补齐遗漏问题,最后完成真实空库与全仓验收。任务保持 REVIEW;未推送、未合并、未开始 Task 4、未处理 A7/Batch B。
 
