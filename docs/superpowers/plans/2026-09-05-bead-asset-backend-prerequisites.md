@@ -57,7 +57,7 @@
 **Files:**
 
 - Modify: `packages/asset-pipeline/src/storage.ts`
-- Modify: `packages/asset-pipeline/src/storage.test.ts`
+- Modify: `packages/asset-pipeline/tests/storage.test.ts`
 - Modify: `packages/asset-pipeline/src/index.ts`
 - Modify: `docs/ASSET_PIPELINE.md`
 - Modify only its row: `docs/tasks/TASK_REGISTRY.md`
