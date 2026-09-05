@@ -1,6 +1,20 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants, realpathSync, statSync } from "node:fs";
-import { link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
+  openSync,
+  read as readDescriptor,
+  readdirSync,
+  realpathSync,
+  statSync,
+  unlinkSync,
+  write as writeDescriptor
+} from "node:fs";
+import { type FileHandle, link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 
 import { normalizeAssetRelativePath } from "@mystcrag/design-contract";
@@ -57,6 +71,21 @@ export type StagingStreamPutResult = {
 export type ArchiveStoreOptions = {
   root: string;
   repositoryRoots: readonly string[];
+};
+
+type StagingDirectoryContext = {
+  handles: FileHandle[];
+  session: FileHandle;
+  temp: FileHandle;
+  staging: FileHandle;
+  sessionLogicalPath: string;
+  tempLogicalPath: string;
+  stagingLogicalPath: string;
+};
+
+type FileIdentity = {
+  dev: number;
+  ino: number;
 };
 
 /**
@@ -210,8 +239,9 @@ export class ArchiveStore {
    * Streams one upload into the canonical staging area. The source is consumed
    * incrementally, bounded before every write and hashed as bytes land. A
    * staged key becomes visible only after the complete temp file has been
-   * fsynced and independently re-verified; all failed attempts remove their
-   * temporary bytes and return no filesystem path.
+   * fsynced and independently re-verified. Failed attempts remove only entries
+   * whose original inode ownership can still be proven, and never follow a
+   * replacement path to delete unrelated content.
    */
   async putStagingStream(input: {
     sessionId: string;
@@ -219,12 +249,16 @@ export class ArchiveStore {
     expectedByteSize: number;
     maxByteSize: number;
   }): Promise<StagingStreamPutResult> {
-    const stagingKey = `imports/${input.sessionId}/staging/${randomUUID()}`;
     let sourceIterator: AsyncIterator<Uint8Array> | undefined;
     let sourceExhausted = false;
+    let directoryContext: StagingDirectoryContext | undefined;
+    let stagingKey: string | undefined;
+    let stagingName: string | undefined;
     let tempPath: string | undefined;
+    let tempName: string | undefined;
+    let tempIdentity: FileIdentity | undefined;
     let tempCleanupAttempted = false;
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    let fileDescriptor: number | undefined;
     let linkedTarget: string | undefined;
     let operationError: ArchiveStoreError | undefined;
     let result: StagingStreamPutResult | undefined;
@@ -242,19 +276,19 @@ export class ArchiveStore {
         );
       }
 
-      const target = await this.resolveWritablePath(stagingKey);
-      const tempDirectoryKey = `${KEY_PREFIX}/${input.sessionId}/tmp`;
-      const tempKey = `${tempDirectoryKey}/${randomUUID()}.upload`;
-      const sessionTempDir = await this.resolveWritablePath(tempDirectoryKey);
-      await mkdir(sessionTempDir, { recursive: true });
-      // Re-walk the path after mkdir so an existing or swapped-in symlink is
-      // rejected before any upload byte can be written through it.
-      tempPath = await this.resolveWritablePath(tempKey);
-      handle = await open(
+      stagingName = randomUUID();
+      stagingKey = `${KEY_PREFIX}/${input.sessionId}/staging/${stagingName}`;
+      directoryContext = await openStagingDirectoryContext(this.rootReal, input.sessionId);
+      tempName = `${randomUUID()}.upload`;
+      tempPath = join(directoryContext.tempLogicalPath, tempName);
+      const target = join(directoryContext.stagingLogicalPath, stagingName);
+      assertLogicalDirectoryIdentity(directoryContext.tempLogicalPath, directoryContext.temp);
+      fileDescriptor = openSync(
         tempPath,
-        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+        constants.O_CREAT | constants.O_EXCL | constants.O_RDWR | constants.O_NOFOLLOW,
         0o600
       );
+      tempIdentity = identityOfFileDescriptor(fileDescriptor);
 
       const digest = createHash("sha256");
       let byteSize = 0;
@@ -279,11 +313,16 @@ export class ArchiveStore {
         digest.update(chunk);
         let offset = 0;
         while (offset < chunk.byteLength) {
-          const write = await handle.write(chunk, offset, chunk.byteLength - offset, null);
-          if (write.bytesWritten <= 0) {
+          const bytesWritten = await writeToDescriptor(
+            fileDescriptor,
+            chunk,
+            offset,
+            chunk.byteLength - offset
+          );
+          if (bytesWritten <= 0) {
             throw new ArchiveStoreError("WRITE_FAILED", "Upload stream write made no progress");
           }
-          offset += write.bytesWritten;
+          offset += bytesWritten;
         }
         byteSize = nextByteSize;
       }
@@ -291,40 +330,47 @@ export class ArchiveStore {
       if (byteSize !== input.expectedByteSize) {
         throw new ArchiveStoreError("SIZE_MISMATCH", "Upload ended before its declared byte size");
       }
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
+      fsyncSync(fileDescriptor);
 
       const sha256 = digest.digest("hex");
-      const verified = await sha256OfFile(tempPath);
+      const verified = await sha256OfDescriptor(fileDescriptor);
       if (verified.byteSize !== byteSize || verified.sha256 !== sha256) {
         throw new ArchiveStoreError(
           "HASH_MISMATCH",
           "Staged upload failed size or SHA-256 verification after write"
         );
       }
+      closeSync(fileDescriptor);
+      fileDescriptor = undefined;
 
-      await mkdir(dirname(target), { recursive: true });
-      await this.joinUnderRoot(stagingKey);
-      await link(tempPath, target);
+      // Source callbacks are exhausted before this synchronous critical
+      // section. Pinned directory identities and file-inode checks prevent a
+      // path replacement from redirecting link/unlink to unrelated content.
+      assertLogicalDirectoryIdentity(directoryContext.tempLogicalPath, directoryContext.temp);
+      assertLogicalDirectoryIdentity(
+        directoryContext.stagingLogicalPath,
+        directoryContext.staging
+      );
+      assertFileIdentity(tempPath, tempIdentity);
+      linkSync(tempPath, target);
       linkedTarget = target;
-      await syncDirectoryMetadata(dirname(target));
+      await directoryContext.staging.sync();
+      assertLogicalDirectoryIdentity(
+        directoryContext.stagingLogicalPath,
+        directoryContext.staging
+      );
+      assertFileIdentity(target, tempIdentity);
       result = { stagingKey, sha256, byteSize };
     } catch (error) {
       operationError = normalizeStagingStreamError(error);
     }
 
-    if (handle !== undefined) {
+    if (!sourceExhausted && sourceIterator !== undefined) {
       try {
-        await handle.close();
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
-    }
-
-    if (!sourceExhausted && sourceIterator?.return !== undefined) {
-      try {
-        await sourceIterator.return();
+        const returnSource = sourceIterator.return;
+        if (typeof returnSource === "function") {
+          await returnSource.call(sourceIterator);
+        }
       } catch (error) {
         cleanupErrors.push(error);
       }
@@ -333,10 +379,24 @@ export class ArchiveStore {
     // A successful operation is not reported until the temporary link has
     // itself been durably removed. If that final cleanup fails, convert the
     // call to a failure and roll back the business-visible staging key.
-    if (operationError === undefined && cleanupErrors.length === 0 && tempPath !== undefined) {
+    if (
+      operationError === undefined &&
+      cleanupErrors.length === 0 &&
+      tempPath !== undefined &&
+      tempName !== undefined &&
+      tempIdentity !== undefined &&
+      directoryContext !== undefined
+    ) {
       tempCleanupAttempted = true;
       try {
-        await unlinkAndSyncParent(tempPath);
+        await unlinkPinnedDirectoryEntry({
+          logicalDirectoryPath: directoryContext.tempLogicalPath,
+          recoveryParentPath: directoryContext.sessionLogicalPath,
+          recoveryParent: directoryContext.session,
+          directory: directoryContext.temp,
+          entryName: tempName,
+          expectedFile: tempIdentity
+        });
         tempPath = undefined;
       } catch (error) {
         operationError = new ArchiveStoreError(
@@ -348,21 +408,66 @@ export class ArchiveStore {
       }
     }
 
-    if ((operationError !== undefined || cleanupErrors.length > 0) && linkedTarget !== undefined) {
+    if (
+      (operationError !== undefined || cleanupErrors.length > 0) &&
+      linkedTarget !== undefined &&
+      stagingName !== undefined &&
+      tempIdentity !== undefined &&
+      directoryContext !== undefined
+    ) {
       try {
-        await unlinkAndSyncParent(linkedTarget);
+        await unlinkPinnedDirectoryEntry({
+          logicalDirectoryPath: directoryContext.stagingLogicalPath,
+          recoveryParentPath: directoryContext.sessionLogicalPath,
+          recoveryParent: directoryContext.session,
+          directory: directoryContext.staging,
+          entryName: stagingName,
+          expectedFile: tempIdentity
+        });
         linkedTarget = undefined;
       } catch (error) {
         cleanupErrors.push(error);
       }
     }
 
-    if (tempPath !== undefined && !tempCleanupAttempted) {
+    if (
+      tempPath !== undefined &&
+      tempName !== undefined &&
+      tempIdentity !== undefined &&
+      !tempCleanupAttempted &&
+      directoryContext !== undefined
+    ) {
       try {
-        await unlinkAndSyncParent(tempPath);
+        await unlinkPinnedDirectoryEntry({
+          logicalDirectoryPath: directoryContext.tempLogicalPath,
+          recoveryParentPath: directoryContext.sessionLogicalPath,
+          recoveryParent: directoryContext.session,
+          directory: directoryContext.temp,
+          entryName: tempName,
+          expectedFile: tempIdentity
+        });
         tempPath = undefined;
       } catch (error) {
         cleanupErrors.push(error);
+      }
+    }
+
+    if (fileDescriptor !== undefined) {
+      try {
+        closeSync(fileDescriptor);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+
+    if (directoryContext !== undefined) {
+      const closeErrors = await closeDirectoryHandles(directoryContext.handles);
+      // Once the business key and its parent are durable and the temp entry is
+      // gone, a read-only directory descriptor close error cannot invalidate
+      // the staged result. During a failed operation it is retained as cleanup
+      // evidence because no success will be returned.
+      if (operationError !== undefined || cleanupErrors.length > 0) {
+        cleanupErrors.push(...closeErrors);
       }
     }
 
@@ -374,7 +479,7 @@ export class ArchiveStore {
       );
     }
     if (operationError !== undefined) throw operationError;
-    if (result === undefined) {
+    if (result === undefined || stagingKey === undefined) {
       throw new ArchiveStoreError("WRITE_FAILED", "The upload did not produce a staged result");
     }
     return result;
@@ -655,15 +760,258 @@ async function syncDirectoryMetadata(path: string): Promise<void> {
   }
 }
 
-/** Removes a created link and includes its parent entry in the durability boundary. */
-async function unlinkAndSyncParent(path: string): Promise<void> {
+async function openStagingDirectoryContext(
+  root: string,
+  sessionId: string
+): Promise<StagingDirectoryContext> {
+  const handles: FileHandle[] = [];
   try {
-    await unlink(path);
+    const rootHandle = await openDirectory(root);
+    handles.push(rootHandle);
+    const importsPath = join(root, KEY_PREFIX);
+    const importsHandle = await openOrCreateChildDirectory(rootHandle, root, KEY_PREFIX);
+    handles.push(importsHandle);
+    const sessionPath = join(importsPath, sessionId);
+    const sessionHandle = await openOrCreateChildDirectory(importsHandle, importsPath, sessionId);
+    handles.push(sessionHandle);
+    const tempHandle = await openOrCreateChildDirectory(sessionHandle, sessionPath, "tmp");
+    handles.push(tempHandle);
+    const stagingHandle = await openOrCreateChildDirectory(sessionHandle, sessionPath, "staging");
+    handles.push(stagingHandle);
+    return {
+      handles,
+      session: sessionHandle,
+      temp: tempHandle,
+      staging: stagingHandle,
+      sessionLogicalPath: sessionPath,
+      tempLogicalPath: join(sessionPath, "tmp"),
+      stagingLogicalPath: join(sessionPath, "staging")
+    };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    await closeDirectoryHandles(handles);
     throw error;
   }
-  await syncDirectoryMetadata(dirname(path));
+}
+
+async function openDirectory(path: string): Promise<FileHandle> {
+  return open(
+    path,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
+  );
+}
+
+async function openOrCreateChildDirectory(
+  parent: FileHandle,
+  parentPath: string,
+  name: string
+): Promise<FileHandle> {
+  assertLogicalDirectoryIdentity(parentPath, parent);
+  const childPath = join(parentPath, name);
+  let created = false;
+  try {
+    await mkdir(childPath, { mode: 0o700 });
+    created = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+
+  let child: FileHandle;
+  try {
+    child = await openDirectory(childPath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "ENOTDIR") {
+      throw new ArchiveStoreError(
+        "KEY_INVALID",
+        "Archive staging directories must be real directories, never symbolic links",
+        { cause: error }
+      );
+    }
+    throw error;
+  }
+  try {
+    assertLogicalDirectoryIdentity(childPath, child);
+    if (created) {
+      // Persist both the new directory inode and its entry in the parent.
+      await child.sync();
+      await parent.sync();
+    }
+  } catch (error) {
+    await child.close().catch(() => undefined);
+    throw error;
+  }
+  return child;
+}
+
+function assertLogicalDirectoryIdentity(path: string, handle: FileHandle): void {
+  let logical: ReturnType<typeof lstatSync>;
+  let opened: ReturnType<typeof fstatSync>;
+  try {
+    logical = lstatSync(path);
+    opened = fstatSync(handle.fd);
+  } catch (error) {
+    throw new ArchiveStoreError(
+      "KEY_INVALID",
+      "An archive staging directory changed while the upload was in progress",
+      { cause: error }
+    );
+  }
+  if (
+    logical.isSymbolicLink() ||
+    !logical.isDirectory() ||
+    !opened.isDirectory() ||
+    logical.dev !== opened.dev ||
+    logical.ino !== opened.ino
+  ) {
+    throw new ArchiveStoreError(
+      "KEY_INVALID",
+      "An archive staging directory changed while the upload was in progress"
+    );
+  }
+}
+
+function identityOfFileDescriptor(fileDescriptor: number): FileIdentity {
+  const info = fstatSync(fileDescriptor);
+  if (!info.isFile()) {
+    throw new ArchiveStoreError("WRITE_FAILED", "The temporary upload is not a regular file");
+  }
+  return { dev: info.dev, ino: info.ino };
+}
+
+function assertFileIdentity(path: string, expected: FileIdentity): void {
+  let info: ReturnType<typeof lstatSync>;
+  try {
+    info = lstatSync(path);
+  } catch (error) {
+    throw new ArchiveStoreError("KEY_INVALID", "An upload file changed during staging", {
+      cause: error
+    });
+  }
+  if (info.isSymbolicLink() || !info.isFile() || info.dev !== expected.dev || info.ino !== expected.ino) {
+    throw new ArchiveStoreError("KEY_INVALID", "An upload file changed during staging");
+  }
+}
+
+function resolvePinnedDirectoryPath(input: {
+  logicalPath: string;
+  recoveryParentPath: string;
+  recoveryParent: FileHandle;
+  directory: FileHandle;
+}): string {
+  try {
+    assertLogicalDirectoryIdentity(input.logicalPath, input.directory);
+    return input.logicalPath;
+  } catch (originalError) {
+    // A source cancellation callback may have renamed the directory. Recover
+    // only when the same inode is still a direct child of the pinned session;
+    // never follow the replacement path or scan outside that safe boundary.
+    assertLogicalDirectoryIdentity(input.recoveryParentPath, input.recoveryParent);
+    const expected = fstatSync(input.directory.fd);
+    for (const name of readdirSync(input.recoveryParentPath)) {
+      const candidate = join(input.recoveryParentPath, name);
+      let info: ReturnType<typeof lstatSync>;
+      try {
+        info = lstatSync(candidate);
+      } catch {
+        continue;
+      }
+      if (
+        !info.isSymbolicLink() &&
+        info.isDirectory() &&
+        info.dev === expected.dev &&
+        info.ino === expected.ino
+      ) {
+        return candidate;
+      }
+    }
+    throw originalError;
+  }
+}
+
+async function unlinkPinnedDirectoryEntry(input: {
+  logicalDirectoryPath: string;
+  recoveryParentPath: string;
+  recoveryParent: FileHandle;
+  directory: FileHandle;
+  entryName: string;
+  expectedFile: FileIdentity;
+}): Promise<void> {
+  const actualDirectoryPath = resolvePinnedDirectoryPath({
+    logicalPath: input.logicalDirectoryPath,
+    recoveryParentPath: input.recoveryParentPath,
+    recoveryParent: input.recoveryParent,
+    directory: input.directory
+  });
+  const entryPath = join(actualDirectoryPath, input.entryName);
+  assertFileIdentity(entryPath, input.expectedFile);
+  unlinkSync(entryPath);
+  await input.directory.sync();
+}
+
+function writeToDescriptor(
+  fileDescriptor: number,
+  chunk: Uint8Array,
+  offset: number,
+  length: number
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    writeDescriptor(fileDescriptor, chunk, offset, length, null, (error, bytesWritten) => {
+      if (error) reject(error);
+      else resolve(bytesWritten);
+    });
+  });
+}
+
+function readFromDescriptor(
+  fileDescriptor: number,
+  buffer: Uint8Array,
+  length: number,
+  position: number
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    readDescriptor(fileDescriptor, buffer, 0, length, position, (error, bytesRead) => {
+      if (error) reject(error);
+      else resolve(bytesRead);
+    });
+  });
+}
+
+async function sha256OfDescriptor(
+  fileDescriptor: number
+): Promise<{ sha256: string; byteSize: number }> {
+  const info = fstatSync(fileDescriptor);
+  if (!info.isFile() || !Number.isSafeInteger(info.size) || info.size < 0) {
+    throw new ArchiveStoreError("WRITE_FAILED", "The temporary upload has an invalid file size");
+  }
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let position = 0;
+  while (position < info.size) {
+    const bytesRead = await readFromDescriptor(
+      fileDescriptor,
+      buffer,
+      Math.min(buffer.byteLength, info.size - position),
+      position
+    );
+    if (bytesRead <= 0) {
+      throw new ArchiveStoreError("WRITE_FAILED", "Temporary upload verification made no progress");
+    }
+    hash.update(buffer.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+  return { sha256: hash.digest("hex"), byteSize: info.size };
+}
+
+async function closeDirectoryHandles(handles: readonly FileHandle[]): Promise<unknown[]> {
+  const errors: unknown[] = [];
+  for (const handle of [...handles].reverse()) {
+    try {
+      await handle.close();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
 }
 
 function isLinkExistsError(error: unknown): boolean {

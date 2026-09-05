@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rename,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  writeFile
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -519,6 +530,176 @@ test("putStagingStream surfaces temp cleanup failure and rolls back the business
     );
   } finally {
     await chmod(tempDir, 0o700).catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("putStagingStream cleanup stays bound to its verified temp directory during a symlink swap", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  const outside = await mkdtemp(join(tmpdir(), "asset-pipeline-storage-victim-"));
+  const sessionId = "sess-race";
+  const sessionDir = join(root, "imports", sessionId);
+  const tempDir = join(sessionDir, "tmp");
+  const heldTempDir = join(sessionDir, "tmp-held");
+  let swapped = false;
+  let victimPath: string | undefined;
+  try {
+    const archive = store(root, repositoryRoot);
+    const source: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            return { done: false as const, value: Buffer.from("too long") };
+          },
+          async return() {
+            const [tempName] = await readdir(tempDir);
+            assert.ok(tempName, "the temp upload exists before source cancellation");
+            victimPath = join(outside, tempName);
+            await writeFile(victimPath, "outside victim must survive");
+            await rename(tempDir, heldTempDir);
+            await symlink(outside, tempDir, "dir");
+            swapped = true;
+            return { done: true as const, value: undefined };
+          }
+        };
+      }
+    };
+
+    await assert.rejects(
+      archive.putStagingStream({
+        sessionId,
+        source,
+        expectedByteSize: 1,
+        maxByteSize: 100
+      }),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "SIZE_MISMATCH"
+    );
+
+    assert.ok(victimPath);
+    assert.equal((await stat(victimPath)).isFile(), true, "cleanup must not unlink an external same-name file");
+    assert.deepEqual(await readdir(heldTempDir), [], "cleanup targets the originally opened temp directory");
+  } finally {
+    if (swapped) {
+      await unlink(tempDir).catch(() => undefined);
+      await rename(heldTempDir, tempDir).catch(() => undefined);
+    }
+    await rm(outside, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("putStagingStream never links into a swapped external staging directory", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  const outside = await mkdtemp(join(tmpdir(), "asset-pipeline-storage-staging-victim-"));
+  const sessionId = "sess-staging-race";
+  const sessionDir = join(root, "imports", sessionId);
+  const stagingDir = join(sessionDir, "staging");
+  const heldStagingDir = join(sessionDir, "staging-held");
+  let swapped = false;
+  try {
+    const archive = store(root, repositoryRoot);
+    await mkdir(stagingDir, { recursive: true });
+    const bytes = Buffer.from("staging target must stay inside");
+
+    await assert.rejects(
+      archive.putStagingStream({
+        sessionId,
+        source: (async function* () {
+          yield bytes;
+          await rename(stagingDir, heldStagingDir);
+          await symlink(outside, stagingDir, "dir");
+          swapped = true;
+        })(),
+        expectedByteSize: bytes.byteLength,
+        maxByteSize: 100
+      }),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "KEY_INVALID"
+    );
+
+    assert.deepEqual(await readdir(outside), [], "the external replacement receives no upload link");
+    assert.deepEqual(await readdir(heldStagingDir), [], "the internal target is rolled back on mapping loss");
+  } finally {
+    if (swapped) {
+      await unlink(stagingDir).catch(() => undefined);
+      await rename(heldStagingDir, stagingDir).catch(() => undefined);
+    }
+    await rm(outside, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("putStagingStream cancels the source and returns a stable error for a non-string session id", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    let iteratorCreated = false;
+    let iteratorReturned = false;
+    const source: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]() {
+        iteratorCreated = true;
+        return {
+          async next() {
+            return { done: true as const, value: undefined };
+          },
+          async return() {
+            iteratorReturned = true;
+            return { done: true as const, value: undefined };
+          }
+        };
+      }
+    };
+
+    await assert.rejects(
+      archive.putStagingStream({
+        sessionId: Symbol("not-a-session") as never,
+        source,
+        expectedByteSize: 1,
+        maxByteSize: 1
+      }),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "KEY_INVALID"
+    );
+    assert.equal(iteratorCreated, true);
+    assert.equal(iteratorReturned, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("putStagingStream still cleans files when the iterator return getter throws", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const source: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            return { done: false as const, value: Buffer.from("too long") };
+          },
+          get return(): AsyncIterator<Uint8Array>["return"] {
+            throw new Error("return getter failed with private details");
+          }
+        };
+      }
+    };
+
+    await assert.rejects(
+      archive.putStagingStream({
+        sessionId: "sess-return-getter",
+        source,
+        expectedByteSize: 1,
+        maxByteSize: 100
+      }),
+      (error: unknown) =>
+        error instanceof ArchiveStoreError &&
+        error.code === "WRITE_FAILED" &&
+        !error.message.includes("private details")
+    );
+    assert.deepEqual(await archive.listSessionFiles("sess-return-getter"), []);
+  } finally {
     await rm(root, { recursive: true, force: true });
     await rm(repositoryRoot, { recursive: true, force: true });
   }
