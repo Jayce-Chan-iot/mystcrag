@@ -23,11 +23,12 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
   function processResult(
     sourceFileId: string,
     outputSha256: string,
-    storageKey: string
+    storageKey: string,
+    processingVersion = 1
   ): CompleteAssetJobResult {
     return {
       kind: "PROCESS_GROUP",
-      processingVersion: 1,
+      processingVersion,
       output: {
         sourceFileId,
         purpose: "MAIN",
@@ -117,6 +118,50 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
     return crystal.id;
   }
 
+  let archiveLeaseSequence = 0;
+  async function recordUploadedFileWithLease(
+    fileId: string,
+    sha256: string,
+    archiveKey: string,
+    storageProvider = "local-fs"
+  ) {
+    const file = await prisma.assetSourceFile.findUniqueOrThrow({ where: { id: fileId } });
+    const sequence = ++archiveLeaseSequence;
+    const lease = {
+      workerId: `integration-archive-worker-${sequence}`,
+      leaseToken: `integration-archive-lease-${sequence}`
+    };
+    const job = await prisma.assetProcessingJob.create({
+      data: {
+        sessionId: file.sessionId,
+        groupId: null,
+        jobType: "ARCHIVE_FILE",
+        state: "RUNNING",
+        payload: {
+          fileId,
+          stagingKey: `imports/${file.sessionId}/staging/00000000-0000-4000-8000-${String(sequence).padStart(12, "0")}`,
+          sha256
+        },
+        maxRetries: 3,
+        workerId: lease.workerId,
+        leaseToken: lease.leaseToken,
+        leaseUntil: new Date(Date.now() + 60_000)
+      }
+    });
+    const result = await repository.recordUploadedFile(fileId, sha256, archiveKey, {
+      storageProvider,
+      jobId: job.id,
+      lease
+    });
+    await repository.completeJob(job.id, {
+      kind: "ARCHIVE_FILE",
+      sha256,
+      archiveKey: result.archiveKey ?? archiveKey,
+      storageProvider
+    }, lease);
+    return result;
+  }
+
   async function driveGroupToReady(scenario: string): Promise<{
     sessionId: string;
     groupId: string;
@@ -141,12 +186,12 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
     });
     const fileIds = registered.files.map((file) => file.fileId);
     const outputSha256 = shaOf(`output-${scenario}`);
-    await repository.recordUploadedFile(fileIds[0]!, outputSha256, `imports/${prefix}/raw/${scenario}-1.jpg`, {
-      storageProvider: "local-fs"
-    });
+    const archiveKey = `imports/${session.sessionId}/raw/${scenario}-1.jpg`;
+    await recordUploadedFileWithLease(fileIds[0]!, outputSha256, archiveKey);
     const group = await prisma.beadImageGroup.create({
       data: { sessionId: session.sessionId, state: "NAMED", revision: 1 }
     });
+    const reservedOutputStorageKey = `imports/${session.sessionId}/processed/${group.id}/v1/bead-512.webp`;
     await prisma.assetSourceFile.update({
       where: { id: fileIds[0]! },
       data: { groupId: group.id }
@@ -156,18 +201,25 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         sessionId: session.sessionId,
         groupId: group.id,
         jobType: "PROCESS_GROUP",
-        state: "QUEUED",
-        payload: {},
-        maxRetries: 3
+        state: "RUNNING",
+        payload: {
+          groupId: group.id,
+          processingVersion: 1,
+          primaryFileId: fileIds[0]!,
+          files: [{ fileId: fileIds[0]!, archiveKey, sha256: outputSha256 }],
+          outputStorageKey: reservedOutputStorageKey
+        },
+        maxRetries: 3,
+        workerId: `worker-${scenario}`,
+        leaseToken: `lease-${scenario}`,
+        leaseUntil: new Date(Date.now() + 60_000)
       }
     });
-    const claimed = await repository.claimNextJob(`worker-${scenario}`, new Date(Date.now() + 60_000));
-    assert.ok(claimed, `expected the seeded ${scenario} job to be claimable`);
-    assert.equal(claimed.jobId, job.id);
+    const lease = { workerId: `worker-${scenario}`, leaseToken: `lease-${scenario}` };
     const completed = await repository.completeJob(
-      claimed.jobId,
-      processResult(fileIds[0]!, outputSha256, `imports/${prefix}/processed/${scenario}/v1/bead-512.webp`),
-      claimed.lease
+      job.id,
+      processResult(fileIds[0]!, outputSha256, reservedOutputStorageKey),
+      lease
     );
     assert.equal(completed.state, "COMPLETED");
     // QC pass parks the asset in QC_PENDING; the operator approval is what
@@ -186,6 +238,10 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
     assert.equal(review.reviewAction, "APPROVE");
     const groupRow = await prisma.beadImageGroup.findUniqueOrThrow({ where: { id: group.id } });
     assert.equal(groupRow.state, "READY");
+    const sessionRow = await prisma.assetImportSession.findUniqueOrThrow({
+      where: { id: session.sessionId }
+    });
+    assert.equal(sessionRow.state, "READY_TO_PUBLISH");
     return {
       sessionId: session.sessionId,
       groupId: group.id,
@@ -193,8 +249,8 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       sourceFileId: fileIds[0]!,
       outputSha256,
       assetKey: `approved:${outputSha256}`,
-      jobId: claimed.jobId,
-      lease: claimed.lease
+      jobId: job.id,
+      lease
     };
   }
 
@@ -204,6 +260,60 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       assert.equal(error.code, code);
       return true;
     };
+  }
+
+  function publishAsAdmin(
+    groupId: string,
+    input: PublishAssetGroupInput,
+    actorId = "integration-admin-publisher"
+  ) {
+    return repository.publishGroup(groupId, input, actorId);
+  }
+
+  async function pauseMatchingUpdates(
+    tableName: "asset_processing_jobs" | "bead_image_groups",
+    triggerName: string,
+    functionName: string,
+    whenClause: string
+  ): Promise<() => Promise<void>> {
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "${tableName}"`);
+    await prisma.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION "${functionName}"()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        PERFORM pg_sleep(0.2);
+        RETURN NEW;
+      END;
+      $$
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${triggerName}"
+      BEFORE UPDATE ON "${tableName}"
+      FOR EACH ROW
+      WHEN (${whenClause})
+      EXECUTE FUNCTION "${functionName}"()
+    `);
+    return async () => {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "${tableName}"`);
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${functionName}"()`);
+    };
+  }
+
+  const waitForLockInterleave = () => new Promise<void>((resolve) => setTimeout(resolve, 40));
+
+  function assertConflictLoser(outcomes: PromiseSettledResult<unknown>[]): void {
+    assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+    const loser = outcomes.find(
+      (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected"
+    );
+    assert.ok(loser);
+    assert.ok(
+      loser.reason instanceof PersistenceError,
+      `expected PersistenceError, got ${String(loser.reason)}`
+    );
+    assert.equal(loser.reason.code, "CONFLICT");
   }
 
   await prisma.$connect();
@@ -458,22 +568,21 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       });
       const [firstFile, secondFile] = registered.files;
       const archiveSha = shaOf("upload-payload");
-      const archived = await repository.recordUploadedFile(
+      const archived = await recordUploadedFileWithLease(
         firstFile!.fileId,
         archiveSha,
-        `imports/${prefix}/raw/upload-1.jpg`,
-        { storageProvider: "local-fs" }
+        `imports/${session.sessionId}/raw/upload.jpg`
       );
       assert.equal(archived.uploadStatus, "ARCHIVED");
-      assert.equal(archived.archiveKey, `imports/${prefix}/raw/upload-1.jpg`);
+      assert.equal(archived.archiveKey, `imports/${session.sessionId}/raw/upload.jpg`);
 
-      const duplicate = await repository.recordUploadedFile(
+      const duplicate = await recordUploadedFileWithLease(
         secondFile!.fileId,
         archiveSha,
-        `imports/${prefix}/raw/upload-2.jpg`
+        `imports/${session.sessionId}/raw/upload.jpg`
       );
       assert.equal(duplicate.uploadStatus, "SKIPPED_DUPLICATE");
-      assert.equal(duplicate.archiveKey, `imports/${prefix}/raw/upload-1.jpg`);
+      assert.equal(duplicate.archiveKey, `imports/${session.sessionId}/raw/upload.jpg`);
       const duplicateRow = await prisma.assetSourceFile.findUniqueOrThrow({
         where: { id: secondFile!.fileId }
       });
@@ -481,10 +590,10 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
 
       await assert.rejects(
         () =>
-          repository.recordUploadedFile(
+          recordUploadedFileWithLease(
             firstFile!.fileId,
             shaOf("different-payload"),
-            `imports/${prefix}/raw/upload-1.jpg`
+            `imports/${session.sessionId}/raw/upload.jpg`
           ),
         expectCode("CONFLICT")
       );
@@ -562,12 +671,29 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
 
     await t.test("6. an expired lease is reclaimed and the stale worker is rejected", async () => {
       const session = await repository.createSession({ idempotencyKey: keyOf("session-expired") });
+      const registered = await repository.registerManifest(session.sessionId, {
+        idempotencyKey: keyOf("manifest-expired"),
+        files: [{
+          clientFileId: `${prefix}-expired-file`,
+          relativePath: `imports/expired/${prefix}.jpg`,
+          byteSize: 1024,
+          lastModifiedMs: 1_750_000_000_000,
+          kind: "JPEG"
+        }]
+      });
+      const fileId = registered.files[0]!.fileId;
+      const recoverySha = shaOf("expired-recovery");
+      const archiveKey = `imports/${session.sessionId}/raw/expired.jpg`;
       const job = await prisma.assetProcessingJob.create({
         data: {
           sessionId: session.sessionId,
           jobType: "ARCHIVE_FILE",
           state: "QUEUED",
-          payload: {},
+          payload: {
+            fileId,
+            stagingKey: `imports/${session.sessionId}/staging/00000000-0000-4000-8000-000000000006`,
+            sha256: recoverySha
+          },
           maxRetries: 3
         }
       });
@@ -587,7 +713,7 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         () =>
           repository.completeJob(
             staleLease.jobId,
-            { kind: "ARCHIVE_FILE", sha256: shaOf("stale-output"), archiveKey: `imports/${prefix}/raw/stale.jpg`, storageProvider: "local-fs" },
+            { kind: "ARCHIVE_FILE", sha256: recoverySha, archiveKey, storageProvider: "local-fs" },
             staleLease.lease
           ),
         expectCode("CONFLICT")
@@ -615,12 +741,17 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         expectCode("CONFLICT")
       );
 
+      await repository.recordUploadedFile(fileId, recoverySha, archiveKey, {
+        storageProvider: "local-fs",
+        jobId: job.id,
+        lease: reclaimed.lease
+      });
       const completed = await repository.completeJob(
         job.id,
         {
           kind: "ARCHIVE_FILE",
-          sha256: shaOf("expired-recovery"),
-          archiveKey: `imports/${prefix}/raw/expired.jpg`,
+          sha256: recoverySha,
+          archiveKey,
           storageProvider: "local-fs"
         },
         reclaimed.lease
@@ -720,7 +851,7 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       assert.equal(draft.state, "READY");
       assert.equal(draft.revision, 3);
 
-      const published = await repository.publishGroup(
+      const published = await publishAsAdmin(
         fixture.groupId,
         publishInput(scenario, crystalId, fixture.assetKey, { expectedGroupRevision: 3 })
       );
@@ -763,6 +894,7 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         where: { groupId: fixture.groupId }
       });
       assert.equal(publication.materialProductId, product.id);
+      assert.equal(publication.publishedByActorId, "integration-admin-publisher");
 
       const publicAsset = await repository.findApprovedPublicAsset(fixture.assetKey);
       assert.ok(publicAsset);
@@ -777,8 +909,8 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       const fixture = await driveGroupToReady(scenario);
       const crystalId = await createCrystal(scenario);
       const input = publishInput(scenario, crystalId, fixture.assetKey);
-      const first = await repository.publishGroup(fixture.groupId, input);
-      const retry = await repository.publishGroup(fixture.groupId, input);
+      const first = await publishAsAdmin(fixture.groupId, input);
+      const retry = await publishAsAdmin(fixture.groupId, input);
       assert.equal(retry.materialProductId, first.materialProductId);
       assert.equal(retry.inventorySnapshotId, first.inventorySnapshotId);
       assert.equal(retry.publishedAt.getTime(), first.publishedAt.getTime());
@@ -799,14 +931,14 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
 
       await assert.rejects(
         () =>
-          repository.publishGroup(fixture.groupId, publishInput(scenario, crystalId, fixture.assetKey, {
+          publishAsAdmin(fixture.groupId, publishInput(scenario, crystalId, fixture.assetKey, {
             unitPriceMinor: 999
           })),
         expectCode("CONFLICT")
       );
       await assert.rejects(
         () =>
-          repository.publishGroup(
+          publishAsAdmin(
             fixture.groupId,
             publishInput(scenario, crystalId, fixture.assetKey, {
               idempotencyKey: keyOf("publish-idempotent-second"),
@@ -839,14 +971,17 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
           qcPassedAt: new Date(),
           approvedAt: new Date(),
           usagePermission: "OWNED",
+          rightsHolder: "Mystcrag Studio",
           isAuthenticPhotograph: true,
           allowCommercialUse: true,
           allowPublicDisplay: true,
+          allowAiTraining: false,
+          allowAiRecommendation: true,
           isCurrentVersion: true
         }
       });
       const crystalId = await createCrystal(scenario);
-      const published = await repository.publishGroup(
+      const published = await publishAsAdmin(
         fixture.groupId,
         publishInput(scenario, crystalId, fixture.assetKey, {
           modelAssetKey: `approved:${modelSha}`
@@ -888,7 +1023,7 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       );
       try {
         await assert.rejects(
-          () => repository.publishGroup(fixture.groupId, publishInput(scenario, crystalId, fixture.assetKey)),
+          () => publishAsAdmin(fixture.groupId, publishInput(scenario, crystalId, fixture.assetKey)),
           expectCode("DATA_INTEGRITY_ERROR")
         );
       } finally {
@@ -1174,12 +1309,29 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       async () => {
         const scenario = "stalewrite";
         const session = await repository.createSession({ idempotencyKey: keyOf(`session-${scenario}`) });
+        const registered = await repository.registerManifest(session.sessionId, {
+          idempotencyKey: keyOf(`manifest-${scenario}`),
+          files: [{
+            clientFileId: `${scenario}-file`,
+            relativePath: `imports/${scenario}/file.jpg`,
+            byteSize: 1024,
+            lastModifiedMs: 1_750_000_000_000,
+            kind: "JPEG"
+          }]
+        });
+        const fileId = registered.files[0]!.fileId;
+        const resultSha = shaOf(`${scenario}-stale`);
+        const resultArchiveKey = `imports/${session.sessionId}/raw/${scenario}.jpg`;
         const job = await prisma.assetProcessingJob.create({
           data: {
             sessionId: session.sessionId,
             jobType: "ARCHIVE_FILE",
             state: "QUEUED",
-            payload: {},
+            payload: {
+              fileId,
+              stagingKey: `imports/${session.sessionId}/staging/00000000-0000-4000-8000-000000000015`,
+              sha256: resultSha
+            },
             maxRetries: 3
           }
         });
@@ -1187,8 +1339,8 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         assert.ok(staleLease);
         const staleResult: CompleteAssetJobResult = {
           kind: "ARCHIVE_FILE",
-          sha256: shaOf(`${scenario}-stale`),
-          archiveKey: `imports/${prefix}/raw/${scenario}-stale.jpg`,
+          sha256: resultSha,
+          archiveKey: resultArchiveKey,
           storageProvider: "local-fs"
         };
 
@@ -1257,12 +1409,17 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         assert.equal(jobRow.result, null);
         assert.equal(jobRow.completedAt, null);
 
+        await repository.recordUploadedFile(fileId, resultSha, resultArchiveKey, {
+          storageProvider: "local-fs",
+          jobId: job.id,
+          lease: reclaimerLease!.lease
+        });
         const completed = await repository.completeJob(
           job.id,
           {
             kind: "ARCHIVE_FILE",
-            sha256: shaOf(`${scenario}-reclaimer`),
-            archiveKey: `imports/${prefix}/raw/${scenario}-reclaimer.jpg`,
+            sha256: resultSha,
+            archiveKey: resultArchiveKey,
             storageProvider: "local-fs"
           },
           reclaimerLease!.lease
@@ -1415,7 +1572,7 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
 
       await assert.rejects(
         () =>
-          repository.publishGroup(
+          publishAsAdmin(
             fixture.groupId,
             publishInput(scenario, "unused-crystal-id", fixture.assetKey, {
               crystalId: undefined,
@@ -1449,7 +1606,7 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
           complianceNote: "合规说明：天然矿物，无处理。"
         }
       });
-      const published = await repository.publishGroup(
+      const published = await publishAsAdmin(
         fixture.groupId,
         publishInput(scenario, "unused-crystal-id", fixture.assetKey, {
           crystalId: undefined,
@@ -1679,7 +1836,7 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
           }
         });
         const crystalId = await createCrystal(scenario);
-        const published = await repository.publishGroup(
+        const published = await publishAsAdmin(
           fixture.groupId,
           publishInput(scenario, crystalId, fixture.assetKey, {
             allowAiTraining: false,
@@ -1740,9 +1897,8 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         });
         const fileIds = registered.files.map((file) => file.fileId);
         const outputSha256 = shaOf(`output-${scenario}`);
-        await repository.recordUploadedFile(fileIds[0]!, outputSha256, `imports/${prefix}/raw/${scenario}-1.jpg`, {
-          storageProvider: "local-fs"
-        });
+        const archiveKey = `imports/${session.sessionId}/raw/${scenario}-1.jpg`;
+        await recordUploadedFileWithLease(fileIds[0]!, outputSha256, archiveKey);
         const group = await prisma.beadImageGroup.create({
           data: { sessionId: session.sessionId, state: "NAMED", revision: 1 }
         });
@@ -1756,7 +1912,13 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
             groupId: group.id,
             jobType: "PROCESS_GROUP",
             state: "QUEUED",
-            payload: {},
+            payload: {
+              groupId: group.id,
+              processingVersion: 1,
+              primaryFileId: fileIds[0]!,
+              files: [{ fileId: fileIds[0]!, archiveKey, sha256: outputSha256 }],
+              outputStorageKey: `imports/${session.sessionId}/processed/${group.id}/v1/bead-512.webp`
+            },
             maxRetries: 3
           }
         });
@@ -1766,7 +1928,7 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         const output = processResult(
           fileIds[0]!,
           outputSha256,
-          `imports/${prefix}/processed/${scenario}/v1/bead-512.webp`
+          `imports/${session.sessionId}/processed/${group.id}/v1/bead-512.webp`
         );
 
         const smuggled = {
@@ -1807,7 +1969,7 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
 
         const crystalId = await createCrystal(scenario);
         await assert.rejects(
-          () => repository.publishGroup(
+          () => publishAsAdmin(
             group.id,
             publishInput(scenario, crystalId, `approved:${outputSha256}`, { expectedGroupRevision: 1 })
           ),
@@ -1835,7 +1997,7 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
           "a second review of the same asset must conflict"
         );
 
-        const published = await repository.publishGroup(
+        const published = await publishAsAdmin(
           group.id,
           publishInput(scenario, crystalId, `approved:${outputSha256}`)
         );
@@ -1933,11 +2095,10 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       });
       const fileIds = registered.files.map((file) => file.fileId);
       for (const [index, fileId] of fileIds.entries()) {
-        await repository.recordUploadedFile(
+        await recordUploadedFileWithLease(
           fileId,
           shaOf(`${scenario}-file-${index}`),
-          `imports/${session.sessionId}/raw/file-${index}.jpg`,
-          { storageProvider: "local-fs" }
+          `imports/${session.sessionId}/raw/file-${index}.jpg`
         );
       }
       const startInput = { idempotencyKey: keyOf(`grouping-${scenario}`) };
@@ -1947,8 +2108,8 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       const job = await prisma.assetProcessingJob.findFirstOrThrow({
         where: { sessionId: session.sessionId, jobType: "GROUP_SESSION" }
       });
-      const groupA = keyOf(`${scenario}-group-a`);
-      const groupB = keyOf(`${scenario}-group-b`);
+      const suggestedGroupA = keyOf(`${scenario}-group-a`);
+      const suggestedGroupB = keyOf(`${scenario}-group-b`);
       const leaseUntil = new Date(Date.now() + 60_000);
       await prisma.assetProcessingJob.update({
         where: { id: job.id },
@@ -1964,32 +2125,40 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         {
           kind: "GROUP_SESSION",
           groups: [
-            { groupId: groupA, memberFileIds: [fileIds[0]!, fileIds[1]!], primaryFileId: fileIds[0] },
-            { groupId: groupB, memberFileIds: [fileIds[2]!], primaryFileId: fileIds[2] }
+            { groupId: suggestedGroupA, memberFileIds: [fileIds[0]!, fileIds[1]!], primaryFileId: fileIds[0] },
+            { groupId: suggestedGroupB, memberFileIds: [fileIds[2]!], primaryFileId: fileIds[2] }
           ]
         },
         { workerId: `worker-${scenario}`, leaseToken: `lease-${scenario}` }
       );
       assert.equal((await repository.getSession(session.sessionId)).groups.length, 2);
+      const materializedFiles = await prisma.assetSourceFile.findMany({
+        where: { id: { in: fileIds } },
+        orderBy: { clientFileId: "asc" }
+      });
+      const groupA = materializedFiles[0]!.groupId!;
+      const groupB = materializedFiles[2]!.groupId!;
+      assert.notEqual(groupA, suggestedGroupA);
+      assert.notEqual(groupB, suggestedGroupB);
 
       const named = await repository.updateGroup(groupA, {
         action: "SET_NAME",
         expectedGroupRevision: 1,
         crystalName: "人工确认紫水晶"
-      });
+      }, "integration-admin");
       assert.equal(named.revision, 2);
       const primary = await repository.updateGroup(groupA, {
         action: "SET_PRIMARY",
         expectedGroupRevision: 2,
         primaryFileId: fileIds[0]!
-      });
+      }, "integration-admin");
       assert.equal(primary.revision, 3);
       await assert.rejects(
         () => repository.updateGroup(groupA, {
           action: "SET_NAME",
           expectedGroupRevision: 1,
           crystalName: "过期写入"
-        }),
+        }, "integration-admin"),
         expectCode("CONFLICT")
       );
       const moved = await repository.updateGroup(groupA, {
@@ -1997,13 +2166,13 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         expectedGroupRevision: 3,
         fileIds: [fileIds[1]!],
         targetGroupId: groupB
-      });
+      }, "integration-admin");
       assert.deepEqual(moved.memberFileIds, [fileIds[0]!]);
       const merged = await repository.updateGroup(groupA, {
         action: "MERGE_GROUPS",
         expectedGroupRevision: 4,
         sourceGroupIds: [groupA, groupB]
-      });
+      }, "integration-admin");
       assert.equal(merged.revision, 5);
       assert.deepEqual([...merged.memberFileIds].sort(), [...fileIds].sort());
       assert.equal(await prisma.beadImageGroup.count({ where: { sessionId: session.sessionId } }), 1);
@@ -2106,10 +2275,40 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         (queuedReprocessJobs[0]!.payload as { settings?: unknown }).settings,
         reprocessInput.settings
       );
-      const selected = await repository.selectProcessedVersion(orchestrationGroupId, {
-        expectedGroupRevision: 7,
-        processingVersion: 1
+      const reprocessJob = queuedReprocessJobs[0]!;
+      const reprocessPayload = reprocessJob.payload as {
+        primaryFileId?: string;
+        files: Array<{ fileId: string }>;
+        outputStorageKey: string;
+      };
+      const reprocessLease = {
+        workerId: `worker-${scenario}-reprocess`,
+        leaseToken: `lease-${scenario}-reprocess`
+      };
+      await prisma.assetProcessingJob.update({
+        where: { id: reprocessJob.id },
+        data: {
+          state: "RUNNING",
+          workerId: reprocessLease.workerId,
+          leaseToken: reprocessLease.leaseToken,
+          leaseUntil: new Date(Date.now() + 60_000)
+        }
       });
+      await repository.completeJob(
+        reprocessJob.id,
+        processResult(
+          reprocessPayload.primaryFileId ?? reprocessPayload.files[0]!.fileId,
+          shaOf(`${scenario}-reprocess-output`),
+          reprocessPayload.outputStorageKey,
+          2
+        ),
+        reprocessLease
+      );
+      const selected = await repository.selectProcessedVersion(
+        orchestrationGroupId,
+        { expectedGroupRevision: 7, processingVersion: 1 },
+        "integration-version-selector"
+      );
       assert.equal(selected.selectedProcessingVersion, 1);
       const current = await prisma.processedAsset.findMany({
         where: { groupId: orchestrationGroupId, isCurrentVersion: true }
@@ -2215,6 +2414,546 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       assert.equal(completeness.groupId, fullFlowGroupId);
       assert.equal(completeness.complete, false);
       assert.ok(completeness.missingFields.includes("CRYSTAL_REFERENCE"));
+    });
+
+    await t.test("26. aggregate work starts admit one distinct-key winner without duplicate jobs", async () => {
+      const scenario = "aggregate-work-cas";
+      const groupingSession = await repository.createSession({
+        idempotencyKey: keyOf(`${scenario}-grouping-session`)
+      });
+      const groupingManifest = await repository.registerManifest(groupingSession.sessionId, {
+        idempotencyKey: keyOf(`${scenario}-grouping-manifest`),
+        files: [{
+          clientFileId: `${scenario}-grouping-file`,
+          relativePath: `imports/${scenario}/grouping.jpg`,
+          byteSize: 2048,
+          lastModifiedMs: 1_750_000_000_010,
+          kind: "JPEG"
+        }]
+      });
+      const groupingFileId = groupingManifest.files[0]!.fileId;
+      await recordUploadedFileWithLease(
+        groupingFileId,
+        shaOf(`${scenario}-grouping-file`),
+        `imports/${groupingSession.sessionId}/raw/grouping.jpg`
+      );
+      const groupingOutcomes = await Promise.allSettled([
+        repository.startGrouping(groupingSession.sessionId, {
+          idempotencyKey: keyOf(`${scenario}-grouping-left`)
+        }),
+        repository.startGrouping(groupingSession.sessionId, {
+          idempotencyKey: keyOf(`${scenario}-grouping-right`)
+        })
+      ]);
+      assert.equal(groupingOutcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+      assert.equal(groupingOutcomes.filter((outcome) => outcome.status === "rejected").length, 1);
+      assert.equal(await prisma.assetProcessingJob.count({
+        where: { sessionId: groupingSession.sessionId, jobType: "GROUP_SESSION" }
+      }), 1);
+
+      const processingSession = await repository.createSession({
+        idempotencyKey: keyOf(`${scenario}-processing-session`)
+      });
+      const processingManifest = await repository.registerManifest(processingSession.sessionId, {
+        idempotencyKey: keyOf(`${scenario}-processing-manifest`),
+        files: [{
+          clientFileId: `${scenario}-processing-file`,
+          relativePath: `imports/${scenario}/processing.jpg`,
+          byteSize: 2048,
+          lastModifiedMs: 1_750_000_000_011,
+          kind: "JPEG"
+        }]
+      });
+      const processingFileId = processingManifest.files[0]!.fileId;
+      await recordUploadedFileWithLease(
+        processingFileId,
+        shaOf(`${scenario}-processing-file`),
+        `imports/${processingSession.sessionId}/raw/processing.jpg`
+      );
+      const group = await prisma.beadImageGroup.create({
+        data: {
+          sessionId: processingSession.sessionId,
+          state: "NAMED",
+          revision: 1,
+          primaryFileId: processingFileId,
+          crystalName: "并发测试水晶"
+        }
+      });
+      await prisma.assetSourceFile.update({
+        where: { id: processingFileId },
+        data: { groupId: group.id }
+      });
+      await prisma.assetImportSession.update({
+        where: { id: processingSession.sessionId },
+        data: { state: "NEEDS_REVIEW" }
+      });
+      const processingOutcomes = await Promise.allSettled([
+        repository.startProcessing(processingSession.sessionId, {
+          idempotencyKey: keyOf(`${scenario}-processing-left`)
+        }),
+        repository.startProcessing(processingSession.sessionId, {
+          idempotencyKey: keyOf(`${scenario}-processing-right`)
+        })
+      ]);
+      assert.equal(processingOutcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+      assert.equal(processingOutcomes.filter((outcome) => outcome.status === "rejected").length, 1);
+      assert.equal(await prisma.assetProcessingJob.count({
+        where: { sessionId: processingSession.sessionId, jobType: "PROCESS_GROUP" }
+      }), 1);
+    });
+
+    await t.test("27. archive enqueue and concurrent file completion remain aggregate-safe", async () => {
+      const scenario = "archive-aggregate-cas";
+      const session = await repository.createSession({ idempotencyKey: keyOf(`${scenario}-session`) });
+      const registered = await repository.registerManifest(session.sessionId, {
+        idempotencyKey: keyOf(`${scenario}-manifest`),
+        files: Array.from({ length: 8 }, (_, index) => ({
+          clientFileId: `${scenario}-${index}`,
+          relativePath: `imports/${scenario}/${index}.jpg`,
+          byteSize: 2048 + index,
+          lastModifiedMs: 1_750_000_000_100 + index,
+          kind: "JPEG" as const
+        }))
+      });
+      const [enqueuedFile, ...completionFiles] = registered.files;
+      assert.ok(enqueuedFile);
+      await repository.resolveUploadTarget({
+        sessionId: session.sessionId,
+        fileId: enqueuedFile.fileId,
+        contentLengthBytes: 2048
+      });
+      const enqueueBase = {
+        sessionId: session.sessionId,
+        fileId: enqueuedFile.fileId,
+        stagingKey: `imports/${session.sessionId}/staging/00000000-0000-4000-8000-000000000027`,
+        sha256: shaOf(`${scenario}-enqueue`)
+      };
+      const enqueueOutcomes = await Promise.allSettled([
+        repository.enqueueArchiveFile({
+          ...enqueueBase,
+          idempotencyKey: keyOf(`${scenario}-enqueue-left`)
+        }),
+        repository.enqueueArchiveFile({
+          ...enqueueBase,
+          idempotencyKey: keyOf(`${scenario}-enqueue-right`)
+        })
+      ]);
+      assert.equal(enqueueOutcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+      assert.equal(enqueueOutcomes.filter((outcome) => outcome.status === "rejected").length, 1);
+      assert.equal(await prisma.assetProcessingJob.count({
+        where: { sessionId: session.sessionId, jobType: "ARCHIVE_FILE" }
+      }), 1);
+
+      await Promise.all(completionFiles.map((file, index) => recordUploadedFileWithLease(
+        file.fileId,
+        shaOf(`${scenario}-completion-${index}`),
+        `imports/${session.sessionId}/raw/completion-${index}.jpg`
+      )));
+      const sessionRow = await prisma.assetImportSession.findUniqueOrThrow({ where: { id: session.sessionId } });
+      assert.equal(sessionRow.archivedFileCount, completionFiles.length);
+      assert.equal(
+        Number(sessionRow.uploadedBytes),
+        completionFiles.reduce((total, _file, index) => total + 2049 + index, 0)
+      );
+    });
+
+    await t.test("28. concurrent draft publication cannot create duplicate Crystal names", async () => {
+      const scenario = "crystal-promotion-race";
+      const left = await driveGroupToReady(`${scenario}-left`);
+      const right = await driveGroupToReady(`${scenario}-right`);
+      const sharedNameCn = `并发唯一水晶 ${prefix}`;
+      const sharedNameEn = `Concurrent Unique Crystal ${prefix}`;
+      const createDraft = () => prisma.crystalDraft.create({
+        data: {
+          nameCn: sharedNameCn,
+          nameEn: sharedNameEn,
+          mineralName: "Quartz",
+          colorTags: ["purple"],
+          visualTags: ["translucent"],
+          styleTags: ["minimal"],
+          gemologicalInfo: { source: "operator-curated" },
+          priceLevel: 3,
+          complianceNote: "仅作矿物材质与装饰用途说明，不构成功效结论"
+        }
+      });
+      const [leftDraft, rightDraft] = await Promise.all([createDraft(), createDraft()]);
+      await Promise.all([
+        prisma.beadImageGroup.update({ where: { id: left.groupId }, data: { crystalDraftId: leftDraft.id } }),
+        prisma.beadImageGroup.update({ where: { id: right.groupId }, data: { crystalDraftId: rightDraft.id } })
+      ]);
+      const draftPublishInput = (
+        side: "left" | "right",
+        draftId: string,
+        assetKey: string
+      ): PublishAssetGroupInput => publishInput(
+        `${scenario}-${side}`,
+        "unused-crystal-id",
+        assetKey,
+        {
+          crystalId: undefined,
+          crystalDraftId: draftId,
+          crystalDraftPromotionConfirmed: true,
+          crystalName: sharedNameCn,
+          idempotencyKey: keyOf(`${scenario}-publish-${side}`)
+        }
+      );
+      const outcomes = await Promise.allSettled([
+        publishAsAdmin(
+          left.groupId,
+          draftPublishInput("left", leftDraft.id, left.assetKey)
+        ),
+        publishAsAdmin(
+          right.groupId,
+          draftPublishInput("right", rightDraft.id, right.assetKey)
+        )
+      ]);
+      assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+      assert.equal(outcomes.filter((outcome) => outcome.status === "rejected").length, 1);
+      assert.equal(await prisma.crystal.count({ where: { nameCn: sharedNameCn } }), 1);
+      assert.equal(await prisma.beadGroupPublication.count({
+        where: { groupId: { in: [left.groupId, right.groupId] } }
+      }), 1);
+    });
+
+    await t.test("29. concurrent publication claims one group revision exactly once", async () => {
+      const scenario = "publish-cas";
+      const fixture = await driveGroupToReady(scenario);
+      const crystalId = await createCrystal(scenario);
+      const left = publishInput(scenario, crystalId, fixture.assetKey, {
+        idempotencyKey: keyOf(`${scenario}-left`)
+      });
+      const right = publishInput(scenario, crystalId, fixture.assetKey, {
+        idempotencyKey: keyOf(`${scenario}-right`)
+      });
+      const outcomes = await Promise.allSettled([
+        publishAsAdmin(fixture.groupId, left),
+        publishAsAdmin(fixture.groupId, right)
+      ]);
+      assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+      assert.equal(outcomes.filter((outcome) => outcome.status === "rejected").length, 1);
+      assert.equal(await prisma.beadGroupPublication.count({ where: { groupId: fixture.groupId } }), 1);
+      assert.equal(await prisma.materialProduct.count({ where: { sku: left.sku } }), 1);
+      const group = await prisma.beadImageGroup.findUniqueOrThrow({ where: { id: fixture.groupId } });
+      assert.equal(group.state, "PUBLISHED");
+      assert.equal(group.revision, 3);
+    });
+
+    await t.test("30. the asset operation audit ledger rejects UPDATE and DELETE", async () => {
+      const operation = await prisma.assetImportOperation.findFirstOrThrow({
+        orderBy: { createdAt: "asc" }
+      });
+      await assert.rejects(() => prisma.$executeRawUnsafe(
+        'UPDATE "asset_import_operations" SET "review_note" = $1 WHERE "id" = $2',
+        "tampered",
+        operation.id
+      ));
+      await assert.rejects(() => prisma.$executeRawUnsafe(
+        'DELETE FROM "asset_import_operations" WHERE "id" = $1',
+        operation.id
+      ));
+      assert.ok(await prisma.assetImportOperation.findUnique({ where: { id: operation.id } }));
+    });
+
+    await t.test("31. one merge source cannot be consumed by two concurrent target groups", async () => {
+      const scenario = "merge-source-cas";
+      const session = await repository.createSession({ idempotencyKey: keyOf(`${scenario}-session`) });
+      const registered = await repository.registerManifest(session.sessionId, {
+        idempotencyKey: keyOf(`${scenario}-manifest`),
+        files: [0, 1, 2].map((index) => ({
+          clientFileId: `${scenario}-${index}`,
+          relativePath: `imports/${scenario}/${index}.jpg`,
+          byteSize: 2048,
+          lastModifiedMs: 1_750_000_001_000 + index,
+          kind: "JPEG" as const
+        }))
+      });
+      const groups = await Promise.all([0, 1, 2].map((index) => prisma.beadImageGroup.create({
+        data: {
+          sessionId: session.sessionId,
+          state: "CONFIRMED",
+          revision: 1,
+          crystalName: `并发合并组 ${index}`
+        }
+      })));
+      await Promise.all(registered.files.map((file, index) => prisma.assetSourceFile.update({
+        where: { id: file.fileId },
+        data: { groupId: groups[index]!.id, state: "ARCHIVED" }
+      })));
+      const [left, right, source] = groups;
+      assert.ok(left && right && source);
+      const outcomes = await Promise.allSettled([
+        repository.updateGroup(left.id, {
+          action: "MERGE_GROUPS",
+          expectedGroupRevision: 1,
+          sourceGroupIds: [left.id, source.id]
+        }, "integration-merge-left"),
+        repository.updateGroup(right.id, {
+          action: "MERGE_GROUPS",
+          expectedGroupRevision: 1,
+          sourceGroupIds: [right.id, source.id]
+        }, "integration-merge-right")
+      ]);
+      assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+      assert.equal(outcomes.filter((outcome) => outcome.status === "rejected").length, 1);
+      assert.equal(await prisma.beadImageGroup.count({ where: { id: source.id } }), 0);
+      const sourceFile = await prisma.assetSourceFile.findUniqueOrThrow({
+        where: { id: registered.files[2]!.fileId }
+      });
+      assert.ok(sourceFile.groupId === left.id || sourceFile.groupId === right.id);
+      const audit = await prisma.assetImportOperation.findFirstOrThrow({
+        where: { operationType: "UPDATE_GROUP", aggregateId: sourceFile.groupId! }
+      });
+      assert.ok(audit.actorId === "integration-merge-left" || audit.actorId === "integration-merge-right");
+    });
+
+    await t.test("32. cancellation serializes with upload reservation and leaves no mutable file", async () => {
+      const scenario = "cancel-upload-race";
+      const session = await repository.createSession({ idempotencyKey: keyOf(`${scenario}-session`) });
+      const manifest = await repository.registerManifest(session.sessionId, {
+        idempotencyKey: keyOf(`${scenario}-manifest`),
+        files: [{
+          clientFileId: `${scenario}-file`,
+          relativePath: `imports/${scenario}/file.jpg`,
+          byteSize: 2048,
+          lastModifiedMs: 1_750_000_009_000,
+          kind: "JPEG"
+        }]
+      });
+      const fileId = manifest.files[0]!.fileId;
+      const outcomes = await Promise.allSettled([
+        repository.resolveUploadTarget({
+          sessionId: session.sessionId,
+          fileId,
+          contentLengthBytes: 2048
+        }),
+        repository.cancelSession(
+          session.sessionId,
+          { idempotencyKey: keyOf(`${scenario}-cancel`) },
+          "integration-canceller"
+        )
+      ]);
+      assert.equal(outcomes[1]!.status, "fulfilled");
+      const sessionRow = await prisma.assetImportSession.findUniqueOrThrow({
+        where: { id: session.sessionId }
+      });
+      const fileRow = await prisma.assetSourceFile.findUniqueOrThrow({ where: { id: fileId } });
+      assert.equal(sessionRow.state, "CANCELLED");
+      assert.equal(fileRow.state, "FAILED");
+      assert.equal(sessionRow.failedFileCount, 1);
+    });
+
+    await t.test("33. terminal archive failure propagates and can be queued for recovery", async () => {
+      const scenario = "archive-terminal-recovery";
+      const session = await repository.createSession({ idempotencyKey: keyOf(`${scenario}-session`) });
+      const manifest = await repository.registerManifest(session.sessionId, {
+        idempotencyKey: keyOf(`${scenario}-manifest`),
+        files: [{
+          clientFileId: `${scenario}-file`,
+          relativePath: `imports/${scenario}/file.jpg`,
+          byteSize: 2048,
+          lastModifiedMs: 1_750_000_010_000,
+          kind: "JPEG"
+        }]
+      });
+      const fileId = manifest.files[0]!.fileId;
+      await repository.resolveUploadTarget({
+        sessionId: session.sessionId,
+        fileId,
+        contentLengthBytes: 2048
+      });
+      await prisma.assetImportSession.update({
+        where: { id: session.sessionId },
+        data: { state: "ARCHIVING" }
+      });
+      const lease = {
+        workerId: `worker-${scenario}`,
+        leaseToken: `lease-${scenario}`
+      };
+      const digest = shaOf(scenario);
+      const failedJob = await prisma.assetProcessingJob.create({
+        data: {
+          sessionId: session.sessionId,
+          jobType: "ARCHIVE_FILE",
+          state: "RUNNING",
+          payload: {
+            fileId,
+            stagingKey: `imports/${session.sessionId}/staging/00000000-0000-4000-8000-000000000033`,
+            sha256: digest
+          },
+          retryCount: 0,
+          maxRetries: 0,
+          workerId: lease.workerId,
+          leaseToken: lease.leaseToken,
+          leaseUntil: new Date(Date.now() + 60_000)
+        }
+      });
+      const failure = await repository.failJob(
+        failedJob.id,
+        { code: "WRITE_FAILED", message: "archive retries exhausted" },
+        null,
+        lease
+      );
+      assert.equal(failure.state, "FAILED");
+      assert.equal((await prisma.assetSourceFile.findUniqueOrThrow({ where: { id: fileId } })).state, "FAILED");
+      assert.equal(
+        (await prisma.assetImportSession.findUniqueOrThrow({ where: { id: session.sessionId } })).state,
+        "PARTIALLY_FAILED"
+      );
+
+      await repository.resolveUploadTarget({
+        sessionId: session.sessionId,
+        fileId,
+        contentLengthBytes: 2048
+      });
+      const retry = await repository.enqueueArchiveFile({
+        sessionId: session.sessionId,
+        fileId,
+        idempotencyKey: keyOf(`${scenario}-retry`),
+        stagingKey: `imports/${session.sessionId}/staging/00000000-0000-4000-8000-000000000034`,
+        sha256: digest
+      });
+      assert.equal(retry.jobState, "QUEUED");
+    });
+
+    await t.test("34. one approved asset may serve texture and model without duplicate bindings", async () => {
+      const scenario = "shared-texture-model";
+      const fixture = await driveGroupToReady(scenario);
+      const crystalId = await createCrystal(scenario);
+      const published = await publishAsAdmin(
+        fixture.groupId,
+        publishInput(scenario, crystalId, fixture.assetKey, { modelAssetKey: fixture.assetKey }),
+        "integration-shared-asset-publisher"
+      );
+      assert.deepEqual(published.publishedAssetKeys, [fixture.assetKey]);
+      assert.equal(
+        await prisma.productAssetBinding.count({ where: { materialProductId: published.materialProductId } }),
+        1
+      );
+      const publication = await prisma.beadGroupPublication.findUniqueOrThrow({
+        where: { groupId: fixture.groupId }
+      });
+      assert.equal(publication.publishedByActorId, "integration-shared-asset-publisher");
+    });
+
+    await t.test("35. cancellation and upload recording use session-before-job lock order", async () => {
+      const scenario = "cancel-record-lock-order";
+      const session = await repository.createSession({ idempotencyKey: keyOf(`${scenario}-session`) });
+      const manifest = await repository.registerManifest(session.sessionId, {
+        idempotencyKey: keyOf(`${scenario}-manifest`),
+        files: [{
+          clientFileId: `${scenario}-file`,
+          relativePath: `imports/${scenario}/file.jpg`,
+          byteSize: 2048,
+          lastModifiedMs: 1_750_000_011_000,
+          kind: "JPEG"
+        }]
+      });
+      const fileId = manifest.files[0]!.fileId;
+      await repository.resolveUploadTarget({
+        sessionId: session.sessionId,
+        fileId,
+        contentLengthBytes: 2048
+      });
+      const digest = shaOf(scenario);
+      const lease = { workerId: `worker-${scenario}`, leaseToken: `lease-${scenario}` };
+      const job = await prisma.assetProcessingJob.create({
+        data: {
+          sessionId: session.sessionId,
+          jobType: "ARCHIVE_FILE",
+          state: "RUNNING",
+          payload: {
+            fileId,
+            stagingKey: `imports/${session.sessionId}/staging/00000000-0000-4000-8000-000000000035`,
+            sha256: digest
+          },
+          maxRetries: 3,
+          workerId: lease.workerId,
+          leaseToken: lease.leaseToken,
+          leaseUntil: new Date(Date.now() + 60_000)
+        }
+      });
+      const removePause = await pauseMatchingUpdates(
+        "asset_processing_jobs",
+        "assetdb002_pause_running_job_update",
+        "assetdb002_sleep_running_job_update",
+        "OLD.state = 'RUNNING' AND NEW.state = 'RUNNING'"
+      );
+      try {
+        const recording = repository.recordUploadedFile(
+          fileId,
+          digest,
+          `imports/${session.sessionId}/raw/${scenario}.jpg`,
+          { jobId: job.id, lease }
+        );
+        await waitForLockInterleave();
+        const cancelling = repository.cancelSession(
+          session.sessionId,
+          { idempotencyKey: keyOf(`${scenario}-cancel`) },
+          "integration-lock-order-canceller"
+        );
+        const outcomes = await Promise.allSettled([recording, cancelling]);
+        assert.equal(outcomes.every((outcome) => outcome.status === "fulfilled"), true);
+        assert.equal(
+          (await prisma.assetImportSession.findUniqueOrThrow({ where: { id: session.sessionId } })).state,
+          "CANCELLED"
+        );
+      } finally {
+        await removePause();
+      }
+    });
+
+    await t.test("36. group edits and draft saves use session-before-group lock order", async () => {
+      const scenario = "edit-save-lock-order";
+      const fixture = await driveGroupToReady(scenario);
+      const removePause = await pauseMatchingUpdates(
+        "bead_image_groups",
+        "assetdb002_pause_group_edit_update",
+        "assetdb002_sleep_group_edit_update",
+        "OLD.id = NEW.id"
+      );
+      try {
+        const editing = repository.updateGroup(fixture.groupId, {
+          action: "SET_NAME",
+          expectedGroupRevision: 2,
+          crystalName: "锁序编辑水晶"
+        }, "integration-lock-order-editor");
+        await waitForLockInterleave();
+        const saving = repository.saveGroupDraft(fixture.groupId, {
+          expectedGroupRevision: 2,
+          displayName: "锁序草稿"
+        });
+        assertConflictLoser(await Promise.allSettled([editing, saving]));
+      } finally {
+        await removePause();
+      }
+    });
+
+    await t.test("37. publication and version selection use session-before-group lock order", async () => {
+      const scenario = "publish-select-lock-order";
+      const fixture = await driveGroupToReady(scenario);
+      const crystalId = await createCrystal(scenario);
+      const removePause = await pauseMatchingUpdates(
+        "bead_image_groups",
+        "assetdb002_pause_group_publish_update",
+        "assetdb002_sleep_group_publish_update",
+        "OLD.id = NEW.id"
+      );
+      try {
+        const publishing = publishAsAdmin(
+          fixture.groupId,
+          publishInput(scenario, crystalId, fixture.assetKey),
+          "integration-lock-order-publisher"
+        );
+        await waitForLockInterleave();
+        const selecting = repository.selectProcessedVersion(
+          fixture.groupId,
+          { expectedGroupRevision: 2, processingVersion: 1 },
+          "integration-lock-order-selector"
+        );
+        assertConflictLoser(await Promise.allSettled([publishing, selecting]));
+      } finally {
+        await removePause();
+      }
     });
   } finally {
     await prisma.$disconnect();

@@ -76,10 +76,6 @@ const ArchiveKeyFieldSchema = z.strictObject({
     )
 });
 
-const StorageProviderFieldSchema = z.strictObject({
-  storageProvider: z.string().trim().min(1).max(120)
-});
-
 const WorkerIdFieldSchema = z.strictObject({
   workerId: z.string().trim().min(1).max(160)
 });
@@ -96,17 +92,30 @@ const AssetQcCheckSchema = z.strictObject({
   summary: z.string().max(2_000).nullable().optional()
 });
 
-const AssetQcResultSchema = z.strictObject({
-  passed: z.boolean(),
-  checks: z.array(AssetQcCheckSchema).max(200),
-  summary: z.string().max(2_000).nullable().optional()
-});
+const AssetQcResultSchema = z
+  .strictObject({
+    passed: z.boolean(),
+    checks: z.array(AssetQcCheckSchema).max(200),
+    summary: z.string().max(2_000).nullable().optional()
+  })
+  .superRefine((result, context) => {
+    const everyCheckPassed = result.checks.every((check) => check.passed);
+    if (result.passed !== everyCheckPassed) {
+      context.addIssue({
+        code: "custom",
+        message: result.passed
+          ? "QC cannot pass while an individual check failed"
+          : "QC cannot fail when every individual check passed",
+        path: ["passed"]
+      });
+    }
+  });
 
 const ProcessedOutputSchema = z.strictObject({
   sourceFileId: z.string().trim().min(1).max(MAX_IDENTIFIER_LENGTH),
   purpose: z.enum(["MAIN", "TEXTURE", "MODEL", "PREVIEW"]),
   storageProvider: z.string().trim().min(1).max(120),
-  storageKey: z.string().trim().min(1).max(512),
+  storageKey: ArchiveKeyFieldSchema.shape.archiveKey,
   outputSha256: Sha256Schema,
   outputContentType: z.enum(["image/webp", "image/png", "image/jpeg"]),
   byteSize: z.number().int().positive(),
@@ -185,6 +194,22 @@ const CompleteAssetJobResultSchema = z.discriminatedUnion("kind", [
   CompleteGroupSessionJobResultSchema
 ]);
 
+const ProcessGroupJobPayloadSchema = z.object({
+  groupId: z.string().trim().min(1).max(MAX_IDENTIFIER_LENGTH),
+  processingVersion: z.number().int().positive(),
+  primaryFileId: z.string().trim().min(1).max(MAX_IDENTIFIER_LENGTH).optional(),
+  files: z
+    .array(
+      z.object({
+        fileId: z.string().trim().min(1).max(MAX_IDENTIFIER_LENGTH),
+        archiveKey: ArchiveKeyFieldSchema.shape.archiveKey,
+        sha256: Sha256Schema
+      })
+    )
+    .min(1),
+  outputStorageKey: ArchiveKeyFieldSchema.shape.archiveKey
+});
+
 const ActorIdSchema = z.string().trim().min(1).max(MAX_IDENTIFIER_LENGTH);
 
 const EnqueueArchiveFileInputSchema = z.strictObject({
@@ -193,6 +218,21 @@ const EnqueueArchiveFileInputSchema = z.strictObject({
   idempotencyKey: z.string().trim().min(1).max(MAX_IDENTIFIER_LENGTH),
   stagingKey: z.string().trim().min(1).max(512),
   sha256: Sha256Schema
+});
+
+const ArchiveFileJobPayloadSchema = z.object({
+  fileId: z.string().trim().min(1).max(MAX_IDENTIFIER_LENGTH),
+  stagingKey: ArchiveKeyFieldSchema.shape.archiveKey,
+  sha256: Sha256Schema
+});
+
+const RecordUploadedFileContextSchema = z.strictObject({
+  storageProvider: z.string().trim().min(1).max(120).optional(),
+  jobId: z.string().trim().min(1).max(MAX_IDENTIFIER_LENGTH),
+  lease: z.strictObject({
+    workerId: z.string().trim().min(1).max(MAX_IDENTIFIER_LENGTH),
+    leaseToken: z.string().trim().min(1).max(MAX_IDENTIFIER_LENGTH)
+  })
 });
 
 const EnqueuedAssetJobReplaySchema = z.strictObject({
@@ -326,7 +366,10 @@ function validateWorkerId(workerId: string): void {
 }
 
 function validateActorId(actorId: string): void {
-  parseContract(ActorIdSchema, actorId, "asset import actor");
+  const normalized = parseContract(ActorIdSchema, actorId, "asset import actor");
+  if (normalized !== actorId) {
+    throw invalidParam("actorId", "surrounding whitespace is not allowed");
+  }
 }
 
 function validateStagingKey(stagingKey: string, sessionId: string): void {
@@ -346,6 +389,29 @@ function validateStagingKey(stagingKey: string, sessionId: string): void {
       "it must be a server-generated key for this session"
     );
   }
+}
+
+function processedMainStorageKey(sessionId: string, groupId: string, processingVersion: number): string {
+  return `imports/${sessionId}/processed/${groupId}/v${processingVersion}/bead-512.webp`;
+}
+
+function validateRawArchiveKey(archiveKey: string, sessionId: string): void {
+  const segments = archiveKey.split("/");
+  if (
+    segments.length !== 4 ||
+    segments[0] !== "imports" ||
+    segments[1] !== sessionId ||
+    segments[2] !== "raw" ||
+    !segments[3]
+  ) {
+    throw invalidParam("archiveKey", "it must be a server-generated raw key for this session");
+  }
+}
+
+function jobPayloadFileId(payload: Prisma.JsonValue): string | null {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
+  const fileId = payload.fileId;
+  return typeof fileId === "string" ? fileId : null;
 }
 
 function toSafeNumber(value: bigint | number, field: string): number {
@@ -546,8 +612,12 @@ type ProcessedAssetRow = {
   widthPx: number | null;
   heightPx: number | null;
   usagePermission: string;
+  rightsHolder: string | null;
+  isAuthenticPhotograph: boolean;
   allowPublicDisplay: boolean;
   allowCommercialUse: boolean;
+  allowAiTraining: boolean | null;
+  allowAiRecommendation: boolean | null;
   qcPassedAt: Date | null;
   qcResult: unknown;
   isCurrentVersion: boolean;
@@ -572,6 +642,7 @@ type PublicationRow = {
   allowCommercialUse: boolean;
   allowPublicDisplay: boolean;
   publishedAssetKeys: string[];
+  publishedByActorId: string | null;
   publishedAt: Date;
 };
 
@@ -670,6 +741,12 @@ export type ArchivedAssetFileResult = {
 export type AssetJobLease = {
   workerId: string;
   leaseToken: string;
+};
+
+export type RecordUploadedFileContext = {
+  storageProvider?: string;
+  jobId: string;
+  lease: AssetJobLease;
 };
 
 export type AssetJobFailure = z.infer<typeof AssetJobFailureSchema>;
@@ -1210,18 +1287,26 @@ export class AssetImportRepository {
     const request = parseContract(UploadAssetFileParamsSchema, input, "asset upload target");
     try {
       return await this.prisma.$transaction(async (tx) => {
+        const session = await this.lockSessionForUpdate(tx, request.sessionId);
         const file = (await tx.assetSourceFile.findFirst({
           where: { id: request.fileId, sessionId: request.sessionId }
         })) as unknown as SourceFileRow | null;
         if (!file) {
           throw new PersistenceError("NOT_FOUND", "The asset source file was not found in this session");
         }
-        const session = await tx.assetImportSession.findUnique({ where: { id: request.sessionId } });
-        if (!session) {
-          throw new PersistenceError("NOT_FOUND", `Asset import session ${request.sessionId} was not found`);
+        const sessionState = assertSessionState(session.state);
+        if (
+          sessionState !== "UPLOADING" &&
+          sessionState !== "ARCHIVING" &&
+          sessionState !== "PARTIALLY_FAILED"
+        ) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Uploads cannot be reserved while session ${request.sessionId} is ${sessionState}`
+          );
         }
         const state = assertFileState(file.state);
-        if (state !== "PENDING" && state !== "FAILED" && state !== "UPLOADING") {
+        if (state !== "PENDING" && state !== "FAILED") {
           throw new PersistenceError("CONFLICT", `Asset source file ${request.fileId} is ${state}, not mutable`);
         }
         const byteSize = toSafeNumber(file.byteSize, "asset source file byteSize");
@@ -1233,11 +1318,17 @@ export class AssetImportRepository {
         }
         const kind = assertEnumValue(file.kind, ["ARW", "JPEG", "PNG", "WEBP"], "asset source file kind");
         const updated = await tx.assetSourceFile.updateMany({
-          where: { id: file.id, sessionId: request.sessionId, state: { in: ["PENDING", "FAILED", "UPLOADING"] } },
+          where: { id: file.id, sessionId: request.sessionId, state },
           data: { state: "UPLOADING" }
         });
         if (updated.count !== 1) {
           throw new PersistenceError("CONFLICT", `Asset source file ${request.fileId} is no longer mutable`);
+        }
+        if (state === "FAILED") {
+          await tx.assetImportSession.update({
+            where: { id: request.sessionId },
+            data: { failedFileCount: Math.max(0, (session.failedFileCount ?? 0) - 1) }
+          });
         }
         return {
           sessionId: request.sessionId,
@@ -1269,6 +1360,8 @@ export class AssetImportRepository {
         "archive file enqueue"
       ),
       execute: async (tx) => {
+        const session = await this.lockSessionForUpdate(tx, request.sessionId);
+        await tx.$queryRaw`SELECT "id" FROM "asset_source_files" WHERE "id" = ${request.fileId} FOR UPDATE`;
         const file = await tx.assetSourceFile.findFirst({
           where: { id: request.fileId, sessionId: request.sessionId }
         });
@@ -1282,15 +1375,28 @@ export class AssetImportRepository {
             `Asset source file ${request.fileId} is ${fileState}, not ready for archival`
           );
         }
-        const session = await tx.assetImportSession.findUnique({ where: { id: request.sessionId } });
-        if (!session) {
-          throw new PersistenceError("NOT_FOUND", `Asset import session ${request.sessionId} was not found`);
-        }
         const sessionState = assertSessionState(session.state);
-        if (sessionState !== "UPLOADING" && sessionState !== "ARCHIVING") {
+        if (
+          sessionState !== "UPLOADING" &&
+          sessionState !== "ARCHIVING" &&
+          sessionState !== "PARTIALLY_FAILED"
+        ) {
           throw new PersistenceError(
             "CONFLICT",
             `Archival cannot be queued while session ${request.sessionId} is ${sessionState}`
+          );
+        }
+        const activeArchiveJobs = await tx.assetProcessingJob.findMany({
+          where: {
+            sessionId: request.sessionId,
+            jobType: "ARCHIVE_FILE",
+            state: { in: ["QUEUED", "RUNNING"] }
+          }
+        });
+        if (activeArchiveJobs.some((job) => jobPayloadFileId(job.payload) === request.fileId)) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Asset source file ${request.fileId} already has active archival work`
           );
         }
         const job = await tx.assetProcessingJob.create({
@@ -1343,15 +1449,18 @@ export class AssetImportRepository {
         return { ...stored, startedAt: new Date(stored.startedAt) };
       },
       execute: async (tx) => {
-        const session = await tx.assetImportSession.findUnique({ where: { id: sessionId } });
-        if (!session) {
-          throw new PersistenceError("NOT_FOUND", `Asset import session ${sessionId} was not found`);
-        }
-        const state = assertSessionState(session.state);
-        if (state !== "ARCHIVING") {
+        const claimed = await tx.assetImportSession.updateMany({
+          where: { id: sessionId, state: { in: ["ARCHIVING", "PARTIALLY_FAILED"] } },
+          data: { state: "PROCESSING" }
+        });
+        if (claimed.count !== 1) {
+          const current = await tx.assetImportSession.findUnique({ where: { id: sessionId } });
+          if (!current) {
+            throw new PersistenceError("NOT_FOUND", `Asset import session ${sessionId} was not found`);
+          }
           throw new PersistenceError(
             "CONFLICT",
-            `Grouping cannot start while asset import session ${sessionId} is ${state}`
+            `Grouping cannot start while asset import session ${sessionId} is ${assertSessionState(current.state)}`
           );
         }
         const files = (await tx.assetSourceFile.findMany({ where: { sessionId } })) as unknown as SourceFileRow[];
@@ -1371,6 +1480,10 @@ export class AssetImportRepository {
         const archived = files.filter((file) => assertFileState(file.state) === "ARCHIVED");
         if (archived.length === 0) {
           throw new PersistenceError("CONFLICT", "Grouping requires at least one unique archived source file");
+        }
+        const existingGroups = await tx.beadImageGroup.findMany({ where: { sessionId } });
+        if (existingGroups.length > 0) {
+          throw new PersistenceError("CONFLICT", "Grouping can restart only before groups are materialized");
         }
         const payloadFiles = archived
           .sort((left, right) => compareStable(left.id, right.id))
@@ -1403,10 +1516,6 @@ export class AssetImportRepository {
           }
         });
         const startedAt = new Date();
-        await tx.assetImportSession.update({
-          where: { id: sessionId },
-          data: { state: "PROCESSING" }
-        });
         const value = {
           sessionId,
           state: "PROCESSING" as const,
@@ -1442,15 +1551,18 @@ export class AssetImportRepository {
         return { ...stored, startedAt: new Date(stored.startedAt) };
       },
       execute: async (tx) => {
-        const session = await tx.assetImportSession.findUnique({ where: { id: sessionId } });
-        if (!session) {
-          throw new PersistenceError("NOT_FOUND", `Asset import session ${sessionId} was not found`);
-        }
-        const state = assertSessionState(session.state);
-        if (state !== "NEEDS_REVIEW" && state !== "PARTIALLY_FAILED") {
+        const claimed = await tx.assetImportSession.updateMany({
+          where: { id: sessionId, state: { in: ["NEEDS_REVIEW", "PARTIALLY_FAILED"] } },
+          data: { state: "PROCESSING" }
+        });
+        if (claimed.count !== 1) {
+          const current = await tx.assetImportSession.findUnique({ where: { id: sessionId } });
+          if (!current) {
+            throw new PersistenceError("NOT_FOUND", `Asset import session ${sessionId} was not found`);
+          }
           throw new PersistenceError(
             "CONFLICT",
-            `Processing cannot start while asset import session ${sessionId} is ${state}`
+            `Processing cannot start while asset import session ${sessionId} is ${assertSessionState(current.state)}`
           );
         }
         const activeJobs = await tx.assetProcessingJob.findMany({
@@ -1506,7 +1618,8 @@ export class AssetImportRepository {
                 groupId: group.id,
                 processingVersion,
                 ...(group.primaryFileId === null ? {} : { primaryFileId: group.primaryFileId }),
-                files: payloadFiles
+                files: payloadFiles,
+                outputStorageKey: processedMainStorageKey(sessionId, group.id, processingVersion)
               }),
               maxRetries: 3
             }
@@ -1517,10 +1630,6 @@ export class AssetImportRepository {
           });
         }
         const startedAt = new Date();
-        await tx.assetImportSession.update({
-          where: { id: sessionId },
-          data: { state: "PROCESSING" }
-        });
         const value = {
           sessionId,
           state: "PROCESSING" as const,
@@ -1536,20 +1645,79 @@ export class AssetImportRepository {
     fileId: string,
     sha256: string,
     archiveKey: string,
-    options: { storageProvider?: string } = {}
+    options: Partial<RecordUploadedFileContext> = {}
   ): Promise<ArchivedAssetFileResult> {
     validateIdentifierParam(fileId, "fileId");
     const hashRequest = parseContract(UploadedFileHashSchema, { sha256 }, "uploaded file");
     validateArchiveKeyValue(archiveKey);
-    if (options.storageProvider !== undefined) {
-      parseContract(StorageProviderFieldSchema, options, "uploaded file");
-    }
+    const context = parseContract(
+      RecordUploadedFileContextSchema,
+      options,
+      "uploaded file lease context"
+    );
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        const job = await tx.assetProcessingJob.findUnique({ where: { id: context.jobId } });
+        if (!job) {
+          throw new PersistenceError("NOT_FOUND", `Asset processing job ${context.jobId} was not found`);
+        }
+        if (assertJobType(job.jobType) !== "ARCHIVE_FILE" || job.groupId !== null) {
+          throw new PersistenceError("CONFLICT", `Asset processing job ${context.jobId} is not an archive-file job`);
+        }
+        const payloadResult = ArchiveFileJobPayloadSchema.safeParse(job.payload);
+        if (!payloadResult.success) {
+          throw new PersistenceError(
+            "DATA_INTEGRITY_ERROR",
+            `Archive file job ${context.jobId} carries a malformed payload`
+          );
+        }
+        const payload = payloadResult.data;
+        if (payload.fileId !== fileId || payload.sha256 !== hashRequest.sha256) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Archive file job ${context.jobId} does not authorize this file and digest`
+          );
+        }
+        const initialFile = await tx.assetSourceFile.findUnique({ where: { id: fileId } });
+        if (!initialFile) {
+          throw new PersistenceError("NOT_FOUND", `Asset source file ${fileId} was not found`);
+        }
+        if (initialFile.sessionId !== job.sessionId) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Archive file job ${context.jobId} belongs to a different session`
+          );
+        }
+        validateRawArchiveKey(archiveKey, initialFile.sessionId);
+        const session = await this.lockSessionForUpdate(tx, initialFile.sessionId);
+        const sessionState = assertSessionState(session.state);
+        if (
+          sessionState !== "UPLOADING" &&
+          sessionState !== "ARCHIVING" &&
+          sessionState !== "PARTIALLY_FAILED"
+        ) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `File ${fileId} cannot be archived while session ${initialFile.sessionId} is ${sessionState}`
+          );
+        }
+        const leaseClaim = await tx.assetProcessingJob.updateMany({
+          where: {
+            id: context.jobId,
+            state: "RUNNING",
+            workerId: context.lease.workerId,
+            leaseToken: context.lease.leaseToken,
+            leaseUntil: { gt: new Date() }
+          },
+          data: { updatedAt: new Date() }
+        });
+        if (leaseClaim.count !== 1) {
+          throw await this.jobLeaseNotHeld(tx, context.jobId);
+        }
         const file = await tx.assetSourceFile.findUnique({ where: { id: fileId } });
         if (!file) {
-          throw new PersistenceError("NOT_FOUND", `Asset source file ${fileId} was not found`);
+          throw new PersistenceError("DATA_INTEGRITY_ERROR", `Asset source file ${fileId} vanished`);
         }
         const fileState = assertFileState(file.state);
 
@@ -1582,21 +1750,18 @@ export class AssetImportRepository {
               duplicateOfId: duplicate.id
             }
           });
-          const session = await tx.assetImportSession.findUnique({ where: { id: file.sessionId } });
-          if (!session) {
-            throw new PersistenceError(
-              "DATA_INTEGRITY_ERROR",
-              `Asset import session ${file.sessionId} is missing for file ${fileId}`
-            );
-          }
           await tx.assetImportSession.update({
             where: { id: file.sessionId },
             data: {
               skippedFileCount: (session.skippedFileCount ?? 0) + 1,
+              failedFileCount:
+                fileState === "FAILED"
+                  ? Math.max(0, (session.failedFileCount ?? 0) - 1)
+                  : session.failedFileCount,
               ...((session.archivedFileCount ?? 0) + (session.skippedFileCount ?? 0) + 1 ===
-              session.declaredFileCount
+                session.declaredFileCount
                 ? {
-                    state: "ARCHIVING",
+                    ...(sessionState === "PARTIALLY_FAILED" ? {} : { state: "ARCHIVING" as const }),
                     lastVerifiedCheckpoint: advanceCheckpoint(
                       session.lastVerifiedCheckpoint,
                       "ARCHIVED"
@@ -1621,26 +1786,23 @@ export class AssetImportRepository {
             state: "ARCHIVED",
             sha256: hashRequest.sha256,
             archiveKey,
-            storageProvider: options.storageProvider ?? file.storageProvider,
+            storageProvider: context.storageProvider ?? file.storageProvider,
             archivedAt
           }
         });
-        const session = await tx.assetImportSession.findUnique({ where: { id: file.sessionId } });
-        if (!session) {
-          throw new PersistenceError(
-            "DATA_INTEGRITY_ERROR",
-            `Asset import session ${file.sessionId} is missing for file ${fileId}`
-          );
-        }
         await tx.assetImportSession.update({
           where: { id: file.sessionId },
           data: {
             archivedFileCount: (session.archivedFileCount ?? 0) + 1,
+            failedFileCount:
+              fileState === "FAILED"
+                ? Math.max(0, (session.failedFileCount ?? 0) - 1)
+                : session.failedFileCount,
             uploadedBytes: (session.uploadedBytes ?? 0n) + (file.byteSize ?? 0n),
             ...((session.archivedFileCount ?? 0) + 1 + (session.skippedFileCount ?? 0) ===
-            session.declaredFileCount
+              session.declaredFileCount
               ? {
-                  state: "ARCHIVING",
+                  ...(sessionState === "PARTIALLY_FAILED" ? {} : { state: "ARCHIVING" as const }),
                   lastVerifiedCheckpoint: advanceCheckpoint(
                     session.lastVerifiedCheckpoint,
                     "ARCHIVED"
@@ -1754,13 +1916,11 @@ export class AssetImportRepository {
   }
 
   /**
-   * Completes a leased job with an atomic compare-and-set: the first
-   * statement inside the transaction is a single conditional UPDATE matching
-   * jobId + RUNNING + workerId + leaseToken + unexpired leaseUntil. Only the
-   * current lease holder can flip the job to COMPLETED, and the row lock the
-   * UPDATE takes protects every later write in the transaction — a stale
-   * worker whose lease expired and was reclaimed sees zero affected rows and
-   * the whole attempt rolls back, leaving the reclaimer's state untouched.
+   * Completes a leased job with an atomic compare-and-set after locking the
+   * owning session first. The conditional UPDATE matches jobId + RUNNING +
+   * workerId + leaseToken + unexpired leaseUntil. Only the current lease
+   * holder can flip the job to COMPLETED, and the session→job lock order is
+   * shared by cancellation so legal concurrency cannot form a deadlock ring.
    */
   async completeJob(
     jobId: string,
@@ -1774,6 +1934,25 @@ export class AssetImportRepository {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        const initialJob = await tx.assetProcessingJob.findUnique({ where: { id: jobId } });
+        if (!initialJob) {
+          throw new PersistenceError("NOT_FOUND", `Asset processing job ${jobId} was not found`);
+        }
+        const jobType = assertJobType(initialJob.jobType);
+        if (request.kind !== jobType) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Asset processing job ${jobId} is of type ${jobType}, not ${request.kind}`
+          );
+        }
+        const session = await this.lockSessionForUpdate(tx, initialJob.sessionId);
+        const sessionState = assertSessionState(session.state);
+        if (sessionState === "PUBLISHED" || sessionState === "FAILED" || sessionState === "CANCELLED") {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Asset processing job ${jobId} cannot complete while session ${session.id} is ${sessionState}`
+          );
+        }
         const completedAt = new Date();
         const cas = await tx.assetProcessingJob.updateMany({
           where: {
@@ -1801,16 +1980,12 @@ export class AssetImportRepository {
         if (!job) {
           throw new PersistenceError("DATA_INTEGRITY_ERROR", `Asset processing job ${jobId} vanished mid-transaction`);
         }
-        const jobType = assertJobType(job.jobType);
         if (request.kind === "PROCESS_GROUP") {
           await this.applyProcessGroupResult(tx, job, request);
         } else if (request.kind === "GROUP_SESSION") {
           await this.applyGroupSessionResult(tx, job, request);
-        } else if (request.kind !== jobType) {
-          throw new PersistenceError(
-            "CONFLICT",
-            `Asset processing job ${jobId} is of type ${jobType}, not ${request.kind}`
-          );
+        } else {
+          await this.validateArchiveFileResult(tx, job, request);
         }
         return { jobId, state: "COMPLETED", completedAt };
       });
@@ -1861,6 +2036,18 @@ export class AssetImportRepository {
         return { ...stored, reviewedAt: new Date(stored.reviewedAt) };
       },
       execute: async (tx) => {
+        const owningGroup = await tx.beadImageGroup.findUnique({ where: { id: groupId } });
+        if (!owningGroup) {
+          throw new PersistenceError("NOT_FOUND", `Bead image group ${groupId} was not found`);
+        }
+        const session = await this.lockSessionForUpdate(tx, owningGroup.sessionId);
+        const sessionState = assertSessionState(session.state);
+        if (sessionState !== "NEEDS_REVIEW") {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Processed assets cannot be reviewed while session ${session.id} is ${sessionState}`
+          );
+        }
         const groupCas = await tx.beadImageGroup.updateMany({
           where: { id: groupId, revision: request.expectedGroupRevision },
           data: { revision: request.expectedGroupRevision + 1 }
@@ -1947,20 +2134,13 @@ export class AssetImportRepository {
         if (!group) {
           throw new PersistenceError("DATA_INTEGRITY_ERROR", `Bead image group ${groupId} vanished during review`);
         }
-        const session = await tx.assetImportSession.findUnique({ where: { id: group.sessionId } });
-        if (!session) {
-          throw new PersistenceError(
-            "DATA_INTEGRITY_ERROR",
-            `Asset import session ${group.sessionId} is missing for group ${groupId}`
-          );
-        }
         await tx.assetImportSession.update({
           where: { id: group.sessionId },
           data: {
-            state: "NEEDS_REVIEW",
             lastVerifiedCheckpoint: advanceCheckpoint(session.lastVerifiedCheckpoint, "REVIEWED")
           }
         });
+        await this.refreshSessionReviewState(tx, session);
         const value = {
           groupId,
           processedAssetId: assetId,
@@ -2008,6 +2188,9 @@ export class AssetImportRepository {
         const nextAttemptAt = terminal
           ? null
           : (retryAt ?? new Date(Date.now() + DEFAULT_RETRY_DELAY_MS));
+        const session = terminal
+          ? await this.lockSessionForUpdate(tx, job.sessionId)
+          : null;
 
         const cas = await tx.assetProcessingJob.updateMany({
           where: {
@@ -2032,6 +2215,50 @@ export class AssetImportRepository {
         if (cas.count !== 1) {
           throw await this.jobLeaseNotHeld(tx, jobId);
         }
+        if (terminal && session) {
+          const jobType = assertJobType(job.jobType);
+          if (jobType === "ARCHIVE_FILE") {
+            const payload = ArchiveFileJobPayloadSchema.safeParse(job.payload);
+            if (payload.success) {
+              await tx.assetSourceFile.updateMany({
+                where: {
+                  id: payload.data.fileId,
+                  sessionId: job.sessionId,
+                  state: "UPLOADING"
+                },
+                data: { state: "FAILED" }
+              });
+            }
+          } else if (jobType === "PROCESS_GROUP" && job.groupId) {
+            await tx.beadImageGroup.updateMany({
+              where: { id: job.groupId, sessionId: job.sessionId, state: { not: "PUBLISHED" } },
+              data: { state: "QC_FAILED" }
+            });
+          }
+          const failedFiles = await tx.assetSourceFile.findMany({
+            where: { sessionId: job.sessionId, state: "FAILED" }
+          });
+          const sessionState = assertSessionState(session.state);
+          const failedSessionState: AssetImportSessionState =
+            sessionState === "PARTIALLY_FAILED" ||
+            canTransitionAssetImportSession(sessionState, "PARTIALLY_FAILED")
+              ? "PARTIALLY_FAILED"
+              : canTransitionAssetImportSession(sessionState, "FAILED")
+                ? "FAILED"
+                : (() => {
+                    throw new PersistenceError(
+                      "CONFLICT",
+                      `Asset import session ${job.sessionId} cannot record terminal job failure from ${sessionState}`
+                    );
+                  })();
+          await tx.assetImportSession.update({
+            where: { id: job.sessionId },
+            data: {
+              state: failedSessionState,
+              failedFileCount: failedFiles.length
+            }
+          });
+        }
         return {
           jobId,
           state: terminal ? "FAILED" : "QUEUED",
@@ -2045,11 +2272,30 @@ export class AssetImportRepository {
     }
   }
 
-  async updateGroup(groupId: string, input: UpdateBeadImageGroupRequest): Promise<UpdateAssetGroupResult> {
+  async updateGroup(
+    groupId: string,
+    input: UpdateBeadImageGroupRequest,
+    actorId: string
+  ): Promise<UpdateAssetGroupResult> {
     validateIdentifierParam(groupId, "groupId");
+    validateActorId(actorId);
     const request = parseContract(UpdateBeadImageGroupRequestSchema, input, "bead image group update");
     try {
       return await this.prisma.$transaction(async (tx) => {
+        const owningGroup = (await tx.beadImageGroup.findUnique({
+          where: { id: groupId }
+        })) as unknown as GroupRow | null;
+        if (!owningGroup) {
+          throw new PersistenceError("NOT_FOUND", `Bead image group ${groupId} was not found`);
+        }
+        const session = await this.lockSessionForUpdate(tx, owningGroup.sessionId);
+        const sessionState = assertSessionState(session.state);
+        if (["PUBLISHING", "PUBLISHED", "FAILED", "CANCELLED"].includes(sessionState)) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Bead image group ${groupId} cannot be edited while session ${session.id} is ${sessionState}`
+          );
+        }
         const cas = await tx.beadImageGroup.updateMany({
           where: { id: groupId, revision: request.expectedGroupRevision },
           data: { revision: request.expectedGroupRevision + 1 }
@@ -2065,13 +2311,39 @@ export class AssetImportRepository {
         if (state === "PUBLISHED") {
           throw new PersistenceError("CONFLICT", `Published group ${groupId} cannot be edited`);
         }
+        const structuralEdit = request.action !== "SET_NAME";
+        const structuralState = group.crystalName?.trim() ? "NAMED" : "CONFIRMED";
+        if (structuralEdit) {
+          if (sessionState === "READY_TO_PUBLISH") {
+            await tx.assetImportSession.update({
+              where: { id: session.id },
+              data: { state: "NEEDS_REVIEW" }
+            });
+          }
+          const activeJobs = await tx.assetProcessingJob.findMany({
+            where: { groupId, state: { in: ["QUEUED", "RUNNING"] } }
+          });
+          if (activeJobs.length > 0) {
+            throw new PersistenceError(
+              "CONFLICT",
+              `Bead image group ${groupId} has active processing work and cannot be structurally edited`
+            );
+          }
+          await this.invalidateGroupProcessing(tx, groupId);
+        }
         const members = (await tx.assetSourceFile.findMany({ where: { groupId } })) as unknown as SourceFileRow[];
         const memberIds = new Set(members.map((file) => file.id));
 
         if (request.action === "SET_NAME") {
           await tx.beadImageGroup.update({
             where: { id: groupId },
-            data: { crystalName: request.crystalName, state: "NAMED" }
+            data: {
+              crystalName: request.crystalName,
+              state:
+                state === "PROCESSED" || state === "QC_FAILED" || state === "READY"
+                  ? state
+                  : "NAMED"
+            }
           });
           const session = await tx.assetImportSession.findUnique({ where: { id: group.sessionId } });
           if (!session) {
@@ -2094,7 +2366,7 @@ export class AssetImportRepository {
           }
           await tx.beadImageGroup.update({
             where: { id: groupId },
-            data: { primaryFileId: request.primaryFileId, state: state === "SUGGESTED" ? "CONFIRMED" : state }
+            data: { primaryFileId: request.primaryFileId, state: structuralState }
           });
         } else if (request.action === "IGNORE_FILES") {
           const requested = new Set(request.fileIds);
@@ -2111,6 +2383,7 @@ export class AssetImportRepository {
           if (group.primaryFileId !== null && requested.has(group.primaryFileId)) {
             await tx.beadImageGroup.update({ where: { id: groupId }, data: { primaryFileId: null } });
           }
+          await tx.beadImageGroup.update({ where: { id: groupId }, data: { state: structuralState } });
         } else if (request.action === "MOVE_FILES") {
           const requested = new Set(request.fileIds);
           if (request.targetGroupId === groupId) {
@@ -2131,13 +2404,23 @@ export class AssetImportRepository {
           if (assertGroupState(target.state) === "PUBLISHED") {
             throw new PersistenceError("CONFLICT", "Files cannot move into a published group");
           }
+          const targetActiveJobs = await tx.assetProcessingJob.findMany({
+            where: { groupId: target.id, state: { in: ["QUEUED", "RUNNING"] } }
+          });
+          if (targetActiveJobs.length > 0) {
+            throw new PersistenceError("CONFLICT", "Files cannot move into a group with active processing work");
+          }
           const targetCas = await tx.beadImageGroup.updateMany({
             where: { id: target.id, revision: target.revision },
-            data: { revision: target.revision + 1 }
+            data: {
+              revision: target.revision + 1,
+              state: target.crystalName?.trim() ? "NAMED" : "CONFIRMED"
+            }
           });
           if (targetCas.count !== 1) {
             throw new PersistenceError("CONFLICT", "The target group changed during the move");
           }
+          await this.invalidateGroupProcessing(tx, target.id);
           await tx.assetSourceFile.updateMany({
             where: { id: { in: request.fileIds }, groupId },
             data: { groupId: target.id }
@@ -2145,6 +2428,7 @@ export class AssetImportRepository {
           if (group.primaryFileId !== null && requested.has(group.primaryFileId)) {
             await tx.beadImageGroup.update({ where: { id: groupId }, data: { primaryFileId: null } });
           }
+          await tx.beadImageGroup.update({ where: { id: groupId }, data: { state: structuralState } });
         } else if (request.action === "MERGE_GROUPS") {
           const sourceIds = [...new Set(request.sourceGroupIds)];
           if (sourceIds.length !== request.sourceGroupIds.length || !sourceIds.includes(groupId)) {
@@ -2162,6 +2446,13 @@ export class AssetImportRepository {
             if (assertGroupState(source.state) === "PUBLISHED") {
               throw new PersistenceError("CONFLICT", `Published group ${sourceId} cannot be merged`);
             }
+            const sourceCas = await tx.beadImageGroup.updateMany({
+              where: { id: sourceId, revision: source.revision, state: { not: "PUBLISHED" } },
+              data: { revision: source.revision + 1 }
+            });
+            if (sourceCas.count !== 1) {
+              throw new PersistenceError("CONFLICT", `Merge source group ${sourceId} changed during the merge`);
+            }
             const attachedAssets = await tx.processedAsset.findMany({ where: { groupId: sourceId } });
             const attachedJobs = await tx.assetProcessingJob.findMany({ where: { groupId: sourceId } });
             const attachedDraft = await tx.materialProductDraft.findUnique({ where: { groupId: sourceId } });
@@ -2171,12 +2462,19 @@ export class AssetImportRepository {
                 `Group ${sourceId} has downstream records and cannot be destructively merged`
               );
             }
-            await tx.assetSourceFile.updateMany({ where: { groupId: sourceId }, data: { groupId } });
-            await tx.beadImageGroup.deleteMany({ where: { id: sourceId } });
+            const sourceMembers = await tx.assetSourceFile.findMany({ where: { groupId: sourceId } });
+            const moved = await tx.assetSourceFile.updateMany({ where: { groupId: sourceId }, data: { groupId } });
+            if (moved.count !== sourceMembers.length) {
+              throw new PersistenceError("CONFLICT", `Merge source group ${sourceId} membership changed during the merge`);
+            }
+            const deleted = await tx.beadImageGroup.deleteMany({ where: { id: sourceId } });
+            if (deleted.count !== 1) {
+              throw new PersistenceError("CONFLICT", `Merge source group ${sourceId} changed before deletion`);
+            }
           }
           await tx.beadImageGroup.update({
             where: { id: groupId },
-            data: { state: state === "SUGGESTED" ? "CONFIRMED" : state }
+            data: { state: structuralState }
           });
         } else if (request.action === "SPLIT_GROUP") {
           const flattened = request.partitions.flat();
@@ -2210,7 +2508,7 @@ export class AssetImportRepository {
           await tx.beadImageGroup.update({
             where: { id: groupId },
             data: {
-              state: "CONFIRMED",
+              state: structuralState,
               primaryFileId:
                 group.primaryFileId !== null && retained.includes(group.primaryFileId)
                   ? group.primaryFileId
@@ -2218,7 +2516,20 @@ export class AssetImportRepository {
             }
           });
         }
-        return this.toGroupUpdateResult(tx, groupId);
+        const result = await this.toGroupUpdateResult(tx, groupId);
+        await tx.assetImportOperation.create({
+          data: {
+            operationType: "UPDATE_GROUP",
+            idempotencyKey: randomUUID(),
+            aggregateId: groupId,
+            payloadFingerprint: operationPayloadFingerprint({ request, actorId }),
+            requestPayload: toPrismaJson(request),
+            resultPayload: toPrismaJson(result),
+            actorId,
+            reviewNote: `Human group edit: ${request.action}`
+          }
+        });
+        return result;
       });
     } catch (error) {
       rethrowPersistenceError(error);
@@ -2242,6 +2553,28 @@ export class AssetImportRepository {
         "bead image group reprocess"
       ),
       execute: async (tx) => {
+        const owningGroup = await tx.beadImageGroup.findUnique({ where: { id: groupId } });
+        if (!owningGroup) {
+          throw new PersistenceError("NOT_FOUND", `Bead image group ${groupId} was not found`);
+        }
+        const session = await this.lockSessionForUpdate(tx, owningGroup.sessionId);
+        const sessionState = assertSessionState(session.state);
+        if (
+          sessionState !== "NEEDS_REVIEW" &&
+          sessionState !== "READY_TO_PUBLISH" &&
+          sessionState !== "PARTIALLY_FAILED"
+        ) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Bead image group ${groupId} cannot be reprocessed while session ${session.id} is ${sessionState}`
+          );
+        }
+        if (sessionState === "READY_TO_PUBLISH") {
+          await tx.assetImportSession.update({
+            where: { id: session.id },
+            data: { state: "NEEDS_REVIEW" }
+          });
+        }
         const cas = await tx.beadImageGroup.updateMany({
           where: {
             id: groupId,
@@ -2292,6 +2625,7 @@ export class AssetImportRepository {
               processingVersion,
               ...(group.primaryFileId === null ? {} : { primaryFileId: group.primaryFileId }),
               files: payloadFiles,
+              outputStorageKey: processedMainStorageKey(group.sessionId, groupId, processingVersion),
               ...(request.settings === undefined ? {} : { settings: request.settings })
             }),
             maxRetries: 3
@@ -2306,9 +2640,11 @@ export class AssetImportRepository {
 
   async selectProcessedVersion(
     groupId: string,
-    input: SelectProcessedVersionRequest
+    input: SelectProcessedVersionRequest,
+    actorId: string
   ): Promise<SelectProcessedVersionResult> {
     validateIdentifierParam(groupId, "groupId");
+    validateActorId(actorId);
     const request = parseContract(
       SelectProcessedVersionRequestSchema,
       input,
@@ -2316,6 +2652,29 @@ export class AssetImportRepository {
     );
     try {
       return await this.prisma.$transaction(async (tx) => {
+        const owningGroup = await tx.beadImageGroup.findUnique({ where: { id: groupId } });
+        if (!owningGroup) {
+          throw new PersistenceError("NOT_FOUND", `Bead image group ${groupId} was not found`);
+        }
+        let session = await this.lockSessionForUpdate(tx, owningGroup.sessionId);
+        const sessionState = assertSessionState(session.state);
+        if (
+          sessionState !== "NEEDS_REVIEW" &&
+          sessionState !== "READY_TO_PUBLISH" &&
+          sessionState !== "PARTIALLY_FAILED"
+        ) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Processed versions cannot be selected while session ${session.id} is ${sessionState}`
+          );
+        }
+        if (sessionState === "PARTIALLY_FAILED") {
+          await tx.assetImportSession.update({
+            where: { id: session.id },
+            data: { state: "NEEDS_REVIEW" }
+          });
+          session = { ...session, state: "NEEDS_REVIEW" };
+        }
         const cas = await tx.beadImageGroup.updateMany({
           where: { id: groupId, revision: request.expectedGroupRevision },
           data: { revision: request.expectedGroupRevision + 1 }
@@ -2339,6 +2698,15 @@ export class AssetImportRepository {
             `Processing version ${request.processingVersion} must identify exactly one group asset`
           );
         }
+        const selectedState = assertAssetState(selected[0]!.state);
+        if (selectedState === "DRAFT" || selectedState === "RETIRED") {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Processing version ${request.processingVersion} is ${selectedState} and cannot become current`
+          );
+        }
+        const groupState: (typeof GROUP_STATES)[number] =
+          selectedState === "QC_FAILED" ? "QC_FAILED" : "READY";
         await tx.processedAsset.updateMany({
           where: { groupId, isCurrentVersion: true },
           data: { isCurrentVersion: false }
@@ -2348,13 +2716,27 @@ export class AssetImportRepository {
           data: { isCurrentVersion: true }
         });
         const updatedAt = new Date();
-        await tx.beadImageGroup.update({ where: { id: groupId }, data: { state: "PROCESSED", updatedAt } });
-        return {
+        await tx.beadImageGroup.update({ where: { id: groupId }, data: { state: groupState, updatedAt } });
+        await this.refreshSessionReviewState(tx, session);
+        const result = {
           groupId,
-          state: "PROCESSED",
+          state: groupState,
           selectedProcessingVersion: request.processingVersion,
           updatedAt
         };
+        await tx.assetImportOperation.create({
+          data: {
+            operationType: "SELECT_PROCESSED_VERSION",
+            idempotencyKey: randomUUID(),
+            aggregateId: groupId,
+            payloadFingerprint: operationPayloadFingerprint({ request, actorId }),
+            requestPayload: toPrismaJson(request),
+            resultPayload: toPrismaJson({ ...result, updatedAt: updatedAt.toISOString() }),
+            actorId,
+            reviewNote: `Human selected processing version ${request.processingVersion}`
+          }
+        });
+        return result;
       });
     } catch (error) {
       rethrowPersistenceError(error);
@@ -2446,19 +2828,23 @@ export class AssetImportRepository {
         return { ...stored, cancelledAt: new Date(stored.cancelledAt) };
       },
       execute: async (tx) => {
-        const session = await tx.assetImportSession.findUnique({ where: { id: sessionId } });
-        if (!session) {
-          throw new PersistenceError("NOT_FOUND", `Asset import session ${sessionId} was not found`);
-        }
+        const session = await this.lockSessionForUpdate(tx, sessionId);
         const state = assertSessionState(session.state);
         if (!canTransitionAssetImportSession(state, "CANCELLED")) {
           throw new PersistenceError("CONFLICT", `Asset import session ${sessionId} is terminal in ${state}`);
         }
         const cancelledAt = new Date();
-        await tx.assetImportSession.update({
-          where: { id: sessionId },
+        const cancelled = await tx.assetImportSession.updateMany({
+          where: { id: sessionId, state },
           data: { state: "CANCELLED", updatedAt: cancelledAt }
         });
+        if (cancelled.count !== 1) {
+          const current = await tx.assetImportSession.findUnique({ where: { id: sessionId } });
+          throw new PersistenceError(
+            "CONFLICT",
+            `Asset import session ${sessionId} changed to ${current ? assertSessionState(current.state) : "missing"}`
+          );
+        }
         await tx.assetProcessingJob.updateMany({
           where: { sessionId, state: { in: ["QUEUED", "RUNNING"] } },
           data: {
@@ -2471,6 +2857,17 @@ export class AssetImportRepository {
             errorMessage: "The owning asset import session was cancelled",
             failedAt: cancelledAt
           }
+        });
+        await tx.assetSourceFile.updateMany({
+          where: { sessionId, state: { in: ["PENDING", "UPLOADING"] } },
+          data: { state: "FAILED" }
+        });
+        const failedFiles = await tx.assetSourceFile.findMany({
+          where: { sessionId, state: "FAILED" }
+        });
+        await tx.assetImportSession.update({
+          where: { id: sessionId },
+          data: { failedFileCount: failedFiles.length }
         });
         const value = { sessionId, state: "CANCELLED" as const, cancelledAt };
         return { value, persistedResult: { ...value, cancelledAt: cancelledAt.toISOString() } };
@@ -2529,6 +2926,18 @@ export class AssetImportRepository {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        const owningGroup = await tx.beadImageGroup.findUnique({ where: { id: groupId } });
+        if (!owningGroup) {
+          throw new PersistenceError("NOT_FOUND", `Bead image group ${groupId} was not found`);
+        }
+        const session = await this.lockSessionForUpdate(tx, owningGroup.sessionId);
+        const sessionState = assertSessionState(session.state);
+        if (["PUBLISHING", "PUBLISHED", "FAILED", "CANCELLED"].includes(sessionState)) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Bead image group ${groupId} cannot save a draft while session ${session.id} is ${sessionState}`
+          );
+        }
         const cas = await tx.beadImageGroup.updateMany({
           where: { id: groupId, revision: request.expectedGroupRevision },
           data: { revision: request.expectedGroupRevision + 1 }
@@ -2664,8 +3073,13 @@ export class AssetImportRepository {
     }
   }
 
-  async publishGroup(groupId: string, input: PublishAssetGroupInput): Promise<PublishAssetGroupResult> {
+  async publishGroup(
+    groupId: string,
+    input: PublishAssetGroupInput,
+    actorId: string
+  ): Promise<PublishAssetGroupResult> {
     validateIdentifierParam(groupId, "groupId");
+    validateActorId(actorId);
     const request = parseContract(
       PublishBeadImageGroupRequestSchema,
       input,
@@ -2673,7 +3087,13 @@ export class AssetImportRepository {
     );
     const fingerprint = publishPayloadFingerprint(request);
 
-    const replayed = await this.replayPublication(groupId, request.idempotencyKey, fingerprint, this.prisma);
+    const replayed = await this.replayPublication(
+      groupId,
+      request.idempotencyKey,
+      fingerprint,
+      actorId,
+      this.prisma
+    );
     if (replayed) return replayed;
 
     try {
@@ -2682,26 +3102,70 @@ export class AssetImportRepository {
           groupId,
           request.idempotencyKey,
           fingerprint,
+          actorId,
           tx
         );
         if (replayedAgain) return replayedAgain;
 
-        const group = await tx.beadImageGroup.findUnique({ where: { id: groupId } });
-        if (!group) {
+        const owningGroup = await tx.beadImageGroup.findUnique({ where: { id: groupId } });
+        if (!owningGroup) {
           throw new PersistenceError("NOT_FOUND", `Bead image group ${groupId} was not found`);
         }
-        const groupState = assertGroupState(group.state);
-        if (group.revision !== request.expectedGroupRevision) {
+        const session = await this.lockSessionForUpdate(tx, owningGroup.sessionId);
+        const sessionState = assertSessionState(session.state);
+        const approvedCurrentAsset = await tx.processedAsset.findFirst({
+          where: { groupId, isCurrentVersion: true, state: "APPROVED" }
+        });
+        if (!approvedCurrentAsset) {
           throw new PersistenceError(
-            "CONFLICT",
-            `Group revision ${group.revision} does not match the expected revision ${request.expectedGroupRevision}`
+            "COMPLIANCE_BLOCKED",
+            `Bead image group ${groupId} has no approved current asset version to publish`
           );
         }
-        if (groupState !== "READY") {
+        if (sessionState !== "READY_TO_PUBLISH" && sessionState !== "PUBLISHING") {
           throw new PersistenceError(
             "CONFLICT",
-            `Bead image group ${groupId} is ${groupState}, not READY`
+            `Bead image group ${groupId} cannot publish while its session is ${sessionState}; READY_TO_PUBLISH is required`
           );
+        }
+        const publishClaim = await tx.beadImageGroup.updateMany({
+          where: { id: groupId, revision: request.expectedGroupRevision, state: "READY" },
+          data: { state: "PUBLISHED", revision: request.expectedGroupRevision + 1 }
+        });
+        if (publishClaim.count !== 1) {
+          const current = await tx.beadImageGroup.findUnique({ where: { id: groupId } });
+          if (!current) {
+            throw new PersistenceError("NOT_FOUND", `Bead image group ${groupId} was not found`);
+          }
+          const currentState = assertGroupState(current.state);
+          throw new PersistenceError(
+            "CONFLICT",
+            current.revision !== request.expectedGroupRevision
+              ? `Group revision ${current.revision} does not match the expected revision ${request.expectedGroupRevision}`
+              : `Bead image group ${groupId} is ${currentState}, not READY`
+          );
+        }
+        const group = await tx.beadImageGroup.findUnique({ where: { id: groupId } });
+        if (!group) {
+          throw new PersistenceError("DATA_INTEGRITY_ERROR", `Bead image group ${groupId} vanished`);
+        }
+        const sessionGroups = await tx.beadImageGroup.findMany({ where: { sessionId: group.sessionId } });
+        if (
+          sessionGroups.some((row) => {
+            const state = assertGroupState(row.state);
+            return state !== "READY" && state !== "PUBLISHED";
+          })
+        ) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Asset import session ${group.sessionId} contains a group that is not ready to publish`
+          );
+        }
+        if (sessionState === "READY_TO_PUBLISH") {
+          await tx.assetImportSession.update({
+            where: { id: group.sessionId },
+            data: { state: "PUBLISHING" }
+          });
         }
 
         const crystalId = await this.resolvePublishCrystal(tx, request);
@@ -2759,6 +3223,20 @@ export class AssetImportRepository {
               `Asset ${String(asset.assetKey)} is not cleared for commercial use`
             );
           }
+          if (
+            permission !== request.usagePermission ||
+            asset.rightsHolder !== request.rightsHolder ||
+            asset.isAuthenticPhotograph !== request.isAuthenticPhotograph ||
+            asset.allowPublicDisplay !== request.allowPublicDisplay ||
+            asset.allowCommercialUse !== request.allowCommercialUse ||
+            asset.allowAiTraining !== request.allowAiTraining ||
+            asset.allowAiRecommendation !== request.allowAiRecommendation
+          ) {
+            throw new PersistenceError(
+              "COMPLIANCE_BLOCKED",
+              `Publication permissions for asset ${String(asset.assetKey)} do not match its human review decision`
+            );
+          }
           if (!asset.qcPassedAt) {
             throw new PersistenceError(
               "COMPLIANCE_BLOCKED",
@@ -2807,7 +3285,9 @@ export class AssetImportRepository {
         ];
         if (request.modelAssetKey !== undefined) {
           const modelAsset = currentAssets.find((asset) => asset.assetKey === request.modelAssetKey);
-          if (modelAsset) bindings.push({ asset: modelAsset, assetKey: request.modelAssetKey });
+          if (modelAsset && modelAsset.id !== textureAsset.id) {
+            bindings.push({ asset: modelAsset, assetKey: request.modelAssetKey });
+          }
         }
         for (const binding of bindings) {
           await tx.productAssetBinding.create({
@@ -2824,19 +3304,6 @@ export class AssetImportRepository {
           });
         }
 
-        await tx.beadImageGroup.update({
-          where: { id: groupId },
-          data: { state: "PUBLISHED", revision: group.revision + 1 }
-        });
-
-        const session = await tx.assetImportSession.findUnique({ where: { id: group.sessionId } });
-        if (!session) {
-          throw new PersistenceError(
-            "DATA_INTEGRITY_ERROR",
-            `Asset import session ${group.sessionId} is missing for group ${groupId}`
-          );
-        }
-        const sessionGroups = await tx.beadImageGroup.findMany({ where: { sessionId: group.sessionId } });
         const allPublished = sessionGroups.every((row) => row.id === groupId || row.state === "PUBLISHED");
         await tx.assetImportSession.update({
           where: { id: group.sessionId },
@@ -2872,6 +3339,7 @@ export class AssetImportRepository {
             allowCommercialUse: request.allowCommercialUse,
             allowPublicDisplay: request.allowPublicDisplay,
             publishedAssetKeys,
+            publishedByActorId: actorId,
             publishedAt: now
           }
         });
@@ -2887,6 +3355,19 @@ export class AssetImportRepository {
         };
       });
     } catch (error) {
+      if (
+        isUniqueViolation(error) ||
+        (error instanceof PersistenceError && error.code === "CONFLICT")
+      ) {
+        const winner = await this.replayPublication(
+          groupId,
+          request.idempotencyKey,
+          fingerprint,
+          actorId,
+          this.prisma
+        ).catch(rethrowPersistenceError);
+        if (winner) return winner;
+      }
       rethrowPersistenceError(error);
     }
   }
@@ -2962,6 +3443,73 @@ export class AssetImportRepository {
   // Internals
   // -------------------------------------------------------------------------
 
+  private async lockSessionForUpdate(tx: Db, sessionId: string): Promise<SessionRow> {
+    await tx.$queryRaw`SELECT "id" FROM "asset_import_sessions" WHERE "id" = ${sessionId} FOR UPDATE`;
+    const session = (await tx.assetImportSession.findUnique({ where: { id: sessionId } })) as unknown as
+      | SessionRow
+      | null;
+    if (!session) {
+      throw new PersistenceError("NOT_FOUND", `Asset import session ${sessionId} was not found`);
+    }
+    assertSessionState(session.state);
+    return session;
+  }
+
+  private async refreshSessionReviewState(
+    tx: Db,
+    session: SessionRow
+  ): Promise<AssetImportSessionState> {
+    const groups = (await tx.beadImageGroup.findMany({
+      where: { sessionId: session.id }
+    })) as unknown as GroupRow[];
+    if (groups.length === 0) {
+      throw new PersistenceError(
+        "DATA_INTEGRITY_ERROR",
+        `Asset import session ${session.id} has no groups to review`
+      );
+    }
+    const approvedAssets = await tx.processedAsset.findMany({
+      where: {
+        groupId: { in: groups.map((group) => group.id) },
+        state: "APPROVED",
+        isCurrentVersion: true
+      }
+    });
+    const approvedGroupIds = new Set(approvedAssets.map((asset) => asset.groupId));
+    const allGroupsReady = groups.every((group) => {
+      const state = assertGroupState(group.state);
+      return state === "PUBLISHED" || (state === "READY" && approvedGroupIds.has(group.id));
+    });
+    const anyPublished = groups.some((group) => assertGroupState(group.state) === "PUBLISHED");
+    const nextState: AssetImportSessionState = allGroupsReady
+      ? (anyPublished ? "PUBLISHING" : "READY_TO_PUBLISH")
+      : "NEEDS_REVIEW";
+    const currentState = assertSessionState(session.state);
+    if (currentState === nextState) return nextState;
+    if (!canTransitionAssetImportSession(currentState, nextState)) {
+      throw new PersistenceError(
+        "CONFLICT",
+        `Asset import session ${session.id} cannot transition from ${currentState} to ${nextState}`
+      );
+    }
+    await tx.assetImportSession.update({
+      where: { id: session.id },
+      data: { state: nextState }
+    });
+    return nextState;
+  }
+
+  private async invalidateGroupProcessing(tx: Db, groupId: string): Promise<void> {
+    await tx.processedAsset.updateMany({
+      where: { groupId, state: { not: "RETIRED" } },
+      data: {
+        state: "RETIRED",
+        isCurrentVersion: false,
+        assetKey: null
+      }
+    });
+  }
+
   private async runIdempotentOperation<T>(spec: {
     operationType: string;
     idempotencyKey: string;
@@ -2975,7 +3523,11 @@ export class AssetImportRepository {
     validateIdentifierParam(spec.operationType, "operationType");
     validateIdentifierParam(spec.idempotencyKey, "idempotencyKey");
     validateIdentifierParam(spec.aggregateId, "aggregateId");
-    const fingerprint = operationPayloadFingerprint(spec.requestPayload);
+    const fingerprint = operationPayloadFingerprint(
+      spec.actorId === undefined
+        ? spec.requestPayload
+        : { actorId: spec.actorId, requestPayload: spec.requestPayload }
+    );
     const replay = async (db: Db): Promise<T | null> => {
       const row = (await db.assetImportOperation.findUnique({
         where: {
@@ -3017,7 +3569,10 @@ export class AssetImportRepository {
         return executed.value;
       });
     } catch (error) {
-      if (isUniqueViolation(error)) {
+      if (
+        isUniqueViolation(error) ||
+        (error instanceof PersistenceError && error.code === "CONFLICT")
+      ) {
         const winner = await replay(this.prisma).catch(rethrowPersistenceError);
         if (winner !== null) return winner;
       }
@@ -3119,9 +3674,10 @@ export class AssetImportRepository {
       );
     }
     for (const group of request.groups) {
+      const authoritativeGroupId = randomUUID();
       await tx.beadImageGroup.create({
         data: {
-          id: group.groupId,
+          id: authoritativeGroupId,
           sessionId: job.sessionId,
           state: "SUGGESTED",
           revision: 1,
@@ -3136,7 +3692,7 @@ export class AssetImportRepository {
           state: "ARCHIVED",
           groupId: null
         },
-        data: { groupId: group.groupId }
+        data: { groupId: authoritativeGroupId }
       });
       if (assigned.count !== group.memberFileIds.length) {
         throw new PersistenceError(
@@ -3152,6 +3708,42 @@ export class AssetImportRepository {
         lastVerifiedCheckpoint: advanceCheckpoint(session.lastVerifiedCheckpoint, "GROUPED")
       }
     });
+  }
+
+  private async validateArchiveFileResult(
+    tx: Db,
+    job: JobRow,
+    request: Extract<CompleteAssetJobResult, { kind: "ARCHIVE_FILE" }>
+  ): Promise<void> {
+    if (job.groupId !== null) {
+      throw new PersistenceError("DATA_INTEGRITY_ERROR", `Archive file job ${job.id} must not carry a group`);
+    }
+    const payloadResult = ArchiveFileJobPayloadSchema.safeParse(job.payload);
+    if (!payloadResult.success) {
+      throw new PersistenceError("DATA_INTEGRITY_ERROR", `Archive file job ${job.id} carries a malformed payload`);
+    }
+    const payload = payloadResult.data;
+    if (payload.sha256 !== request.sha256) {
+      throw new PersistenceError("CONFLICT", `Archive file job ${job.id} completed with a different digest`);
+    }
+    validateRawArchiveKey(request.archiveKey, job.sessionId);
+    const file = await tx.assetSourceFile.findFirst({
+      where: { id: payload.fileId, sessionId: job.sessionId }
+    });
+    if (!file) {
+      throw new PersistenceError("DATA_INTEGRITY_ERROR", `Archive file job ${job.id} source file is missing`);
+    }
+    const fileState = assertFileState(file.state);
+    if (
+      (fileState !== "ARCHIVED" && fileState !== "SKIPPED_DUPLICATE") ||
+      file.sha256 !== request.sha256 ||
+      file.archiveKey !== request.archiveKey
+    ) {
+      throw new PersistenceError(
+        "CONFLICT",
+        `Archive file job ${job.id} result does not match its lease-bound archived file evidence`
+      );
+    }
   }
 
   /**
@@ -3177,6 +3769,7 @@ export class AssetImportRepository {
     groupId: string,
     idempotencyKey: string,
     fingerprint: string,
+    actorId: string,
     db: Db
   ): Promise<PublishAssetGroupResult | null> {
     const byKey = await db.beadGroupPublication.findUnique({ where: { idempotencyKey } });
@@ -3191,6 +3784,12 @@ export class AssetImportRepository {
         throw new PersistenceError(
           "CONFLICT",
           "The publish idempotency key was already used for another group"
+        );
+      }
+      if (byKey.publishedByActorId !== null && byKey.publishedByActorId !== actorId) {
+        throw new PersistenceError(
+          "CONFLICT",
+          "The publish idempotency key was already used by another actor"
         );
       }
       return toPublishResult(byKey as unknown as PublicationRow);
@@ -3223,11 +3822,33 @@ export class AssetImportRepository {
         "Publish request carries neither a crystalId nor a crystalDraftId"
       );
     }
-    const draft = (await tx.crystalDraft.findUnique({ where: { id: draftId } })) as unknown as
+    let draft = (await tx.crystalDraft.findUnique({ where: { id: draftId } })) as unknown as
       | CrystalDraftRow
       | null;
     if (!draft) {
       throw new PersistenceError("NOT_FOUND", `Crystal draft ${draftId} was not found`);
+    }
+    if (draft.promotedCrystalId) return draft.promotedCrystalId;
+
+    const nameLocks = [
+      `crystal-name-cn:${draft.nameCn.trim().toLocaleLowerCase("en-US")}`,
+      ...(draft.nameEn
+        ? [`crystal-name-en:${draft.nameEn.trim().toLocaleLowerCase("en-US")}`]
+        : [])
+    ].sort(compareStable);
+    for (const nameLock of nameLocks) {
+      await tx.$queryRaw`
+        WITH name_lock AS (
+          SELECT pg_advisory_xact_lock(hashtextextended(${nameLock}, 0))
+        )
+        SELECT true AS locked FROM name_lock
+      `;
+    }
+    draft = (await tx.crystalDraft.findUnique({ where: { id: draftId } })) as unknown as
+      | CrystalDraftRow
+      | null;
+    if (!draft) {
+      throw new PersistenceError("DATA_INTEGRITY_ERROR", `Crystal draft ${draftId} vanished`);
     }
     if (draft.promotedCrystalId) return draft.promotedCrystalId;
 
@@ -3292,6 +3913,39 @@ export class AssetImportRepository {
       throw new PersistenceError(
         "DATA_INTEGRITY_ERROR",
         `Process group job ${job.id} and group ${groupId} belong to different sessions`
+      );
+    }
+    const payloadResult = ProcessGroupJobPayloadSchema.safeParse(job.payload);
+    if (!payloadResult.success) {
+      throw new PersistenceError(
+        "DATA_INTEGRITY_ERROR",
+        `Process group job ${job.id} carries a malformed payload`
+      );
+    }
+    const payload = payloadResult.data;
+    const expectedSourceFileId = payload.primaryFileId ?? payload.files[0]!.fileId;
+    if (payload.groupId !== groupId) {
+      throw new PersistenceError(
+        "DATA_INTEGRITY_ERROR",
+        `Process group job ${job.id} payload targets a different group`
+      );
+    }
+    if (request.processingVersion !== payload.processingVersion) {
+      throw new PersistenceError(
+        "CONFLICT",
+        `Process group job ${job.id} expected version ${payload.processingVersion}, not ${request.processingVersion}`
+      );
+    }
+    if (request.output.sourceFileId !== expectedSourceFileId) {
+      throw new PersistenceError(
+        "CONFLICT",
+        `Process group job ${job.id} expected primary source ${expectedSourceFileId}, not ${request.output.sourceFileId}`
+      );
+    }
+    if (request.output.storageKey !== payload.outputStorageKey) {
+      throw new PersistenceError(
+        "CONFLICT",
+        `Process group job ${job.id} output storage key does not match its reserved destination`
       );
     }
     const sourceFile = await tx.assetSourceFile.findUnique({
@@ -3385,9 +4039,12 @@ export class AssetImportRepository {
       }
     });
     if (activeJobs.length === 0) {
+      const unfinishedGroups = await tx.beadImageGroup.findMany({
+        where: { sessionId: job.sessionId, state: "PROCESSED" }
+      });
       await tx.assetImportSession.update({
         where: { id: job.sessionId },
-        data: { state: "NEEDS_REVIEW" }
+        data: { state: unfinishedGroups.length > 0 ? "PARTIALLY_FAILED" : "NEEDS_REVIEW" }
       });
     }
   }

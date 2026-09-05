@@ -952,9 +952,11 @@ model ProductAssetBinding {
 /// usage permission and every allow-* flag) are snapshotted here at publish
 /// time so the formal record is queryable without re-reading the still
 /// editable draft rows. `publishedAssetKeys` lists only the assets that
-/// actually received an APPROVED binding in this publication. Restrict
-/// foreign keys to `MaterialProduct`, `Crystal` and `InventorySnapshot` keep
-/// the publish evidence anchored to live catalog rows.
+/// actually received an APPROVED binding in this publication, while
+/// `publishedByActorId` attributes new publications and remains nullable only
+/// so pre-migration rows stay readable. Restrict foreign keys to
+/// `MaterialProduct`, `Crystal` and `InventorySnapshot` keep the publish
+/// evidence anchored to live catalog rows.
 model BeadGroupPublication {
   id                    String            @id @default(cuid())
   groupId               String            @unique @map("group_id")
@@ -973,6 +975,7 @@ model BeadGroupPublication {
   allowCommercialUse    Boolean           @map("allow_commercial_use")
   allowPublicDisplay    Boolean           @map("allow_public_display")
   publishedAssetKeys    String[]          @map("published_asset_keys")
+  publishedByActorId    String?           @map("published_by_actor_id")
   publishedAt           DateTime          @default(now()) @map("published_at")
   createdAt             DateTime          @default(now()) @map("created_at")
   group                 BeadImageGroup    @relation(fields: [groupId], references: [id], onDelete: Restrict, onUpdate: Restrict)
