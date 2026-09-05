@@ -12,6 +12,8 @@ const TAG_COMPRESSION = 0x0103;
 const TAG_PHOTOMETRIC = 0x0106;
 const TAG_MAKE = 0x010f;
 const TAG_SUB_IFDS = 0x014a;
+const TAG_DNG_VERSION = 0xc612;
+const TAG_DNG_BACKWARD_VERSION = 0xc714;
 const TAG_TYPE_ASCII = 2;
 const TAG_TYPE_SHORT = 3;
 const TAG_TYPE_LONG = 4;
@@ -20,6 +22,8 @@ const TAG_TYPE_IFD = 13;
 const SONY_RAW_COMPRESSION = 32767;
 // CFA photometric interpretation: the sensor mosaic layout only RAW files carry.
 const CFA_PHOTOMETRIC = 32803;
+// The only Make value real Sony cameras write.
+const SONY_MAKE = "SONY";
 
 function startsWith(bytes: Uint8Array, magic: readonly number[]): boolean {
   if (bytes.length < magic.length) return false;
@@ -44,97 +48,92 @@ function decodeAscii(bytes: Uint8Array): string {
 }
 
 /**
- * Reads the first SHORT or LONG value of an IFD entry, honoring the entry's
- * type, count, endianness and inline/external value placement. Returns null
- * when the entry is malformed or points outside the buffer — a malformed
- * entry simply provides no evidence.
+ * True when a Compression or PhotometricInterpretation entry carries a RAW
+ * marker. Both tags are SHORT with count 1 per the TIFF 6.0 spec, and a SHORT
+ * count 1 always lives inline in the entry's value field. A LONG carrier or a
+ * multi-value count whose first value merely looks right is a spec violation
+ * and never evidence.
  */
-function readShortOrLongValue(
-  view: DataView,
-  entryAt: number,
-  type: number,
-  count: number,
-  littleEndian: boolean,
-  byteLength: number
-): number | null {
-  if (count < 1) return null;
-  const valueSize = type === TAG_TYPE_SHORT ? 2 : type === TAG_TYPE_LONG ? 4 : 0;
-  if (valueSize === 0) return null;
-  const total = valueSize * count;
-  let offset: number;
-  if (total <= 4) {
-    offset = entryAt + 8;
-  } else {
-    offset = view.getUint32(entryAt + 8, littleEndian);
-    if (offset + total > byteLength) return null;
-  }
-  if (offset + valueSize > byteLength) return null;
-  return type === TAG_TYPE_SHORT
-    ? view.getUint16(offset, littleEndian)
-    : view.getUint32(offset, littleEndian);
-}
-
-/** True when the entry's SHORT/LONG value equals the wanted RAW marker. */
 function entryCarriesRawMarker(
   view: DataView,
   entryAt: number,
   tag: number,
   type: number,
   count: number,
-  littleEndian: boolean,
-  byteLength: number
+  littleEndian: boolean
 ): boolean {
-  const value = readShortOrLongValue(view, entryAt, type, count, littleEndian, byteLength);
-  if (value === null) return false;
+  if (type !== TAG_TYPE_SHORT || count !== 1) return false;
+  const value = view.getUint16(entryAt + 8, littleEndian);
   return (tag === TAG_COMPRESSION && value === SONY_RAW_COMPRESSION) ||
     (tag === TAG_PHOTOMETRIC && value === CFA_PHOTOMETRIC);
+}
+
+type SubIfdScan = "evidence" | "clean" | "invalid";
+
+/**
+ * Scans one SubIFD a SubIFDs pointer declares. "invalid" means the pointer is
+ * out of bounds or the pointed-to IFD is structurally illegal — every declared
+ * pointer must resolve to a legal IFD, so any single invalid pointer fails the
+ * whole file closed. "clean" means the SubIFD is legal but carries no RAW
+ * marker: generic TIFF structure, not evidence.
+ */
+function scanSubIfd(
+  view: DataView,
+  pointer: number,
+  littleEndian: boolean,
+  byteLength: number
+): SubIfdScan {
+  if (pointer < TIFF_HEADER_SIZE || pointer + 2 > byteLength) return "invalid";
+  const subEntryCount = view.getUint16(pointer, littleEndian);
+  if (pointer + 2 + subEntryCount * IFD_ENTRY_SIZE + 4 > byteLength) return "invalid";
+  for (let subIndex = 0; subIndex < subEntryCount; subIndex += 1) {
+    const subEntryAt = pointer + 2 + subIndex * IFD_ENTRY_SIZE;
+    const subTag = view.getUint16(subEntryAt, littleEndian);
+    if (subTag !== TAG_COMPRESSION && subTag !== TAG_PHOTOMETRIC) continue;
+    const subType = view.getUint16(subEntryAt + 2, littleEndian);
+    const subCount = view.getUint32(subEntryAt + 4, littleEndian);
+    if (entryCarriesRawMarker(view, subEntryAt, subTag, subType, subCount, littleEndian)) {
+      return "evidence";
+    }
+  }
+  return "clean";
 }
 
 /**
  * Real ARWs keep their sensor strips in SubIFD chains, but SubIFDs themselves
  * are generic TIFF structure — ordinary multi-page/RGB TIFFs carry them too.
- * A SubIFDs tag therefore only counts as evidence when at least one pointed-to
- * SubIFD is fully in bounds AND one of its entries is itself a RAW marker:
- * the Sony RAW compression code (32767) or a CFA photometric interpretation
- * (32803). An empty or RGB SubIFD provides no evidence.
+ * A SubIFDs tag only provides evidence when every declared pointer resolves to
+ * a legal SubIFD AND at least one of them carries a RAW marker. A declared
+ * pointer that is out of bounds, or points at a structurally broken IFD,
+ * invalidates the whole file: the container claims structure it cannot
+ * deliver, so it fails closed instead of passing on the surviving pointers.
  */
-function subIfdCarriesRawEvidence(
+function scanSubIfdsTag(
   view: DataView,
   entryAt: number,
   type: number,
   count: number,
   littleEndian: boolean,
   byteLength: number
-): boolean {
-  if (count < 1) return false;
-  if (type !== TAG_TYPE_LONG && type !== TAG_TYPE_IFD) return false;
+): SubIfdScan {
+  if (count < 1) return "invalid";
+  if (type !== TAG_TYPE_LONG && type !== TAG_TYPE_IFD) return "invalid";
   const total = 4 * count;
   let base: number;
   if (total <= 4) {
     base = entryAt + 8;
   } else {
     base = view.getUint32(entryAt + 8, littleEndian);
-    if (base + total > byteLength) return false;
+    if (base + total > byteLength) return "invalid";
   }
+  let sawEvidence = false;
   for (let index = 0; index < count; index += 1) {
     const pointer = view.getUint32(base + index * 4, littleEndian);
-    if (pointer < TIFF_HEADER_SIZE || pointer + 2 > byteLength) continue;
-    const subEntryCount = view.getUint16(pointer, littleEndian);
-    if (pointer + 2 + subEntryCount * IFD_ENTRY_SIZE + 4 > byteLength) continue;
-    for (let subIndex = 0; subIndex < subEntryCount; subIndex += 1) {
-      const subEntryAt = pointer + 2 + subIndex * IFD_ENTRY_SIZE;
-      const subTag = view.getUint16(subEntryAt, littleEndian);
-      if (subTag !== TAG_COMPRESSION && subTag !== TAG_PHOTOMETRIC) continue;
-      const subType = view.getUint16(subEntryAt + 2, littleEndian);
-      const subCount = view.getUint32(subEntryAt + 4, littleEndian);
-      if (
-        entryCarriesRawMarker(view, subEntryAt, subTag, subType, subCount, littleEndian, byteLength)
-      ) {
-        return true;
-      }
-    }
+    const scan = scanSubIfd(view, pointer, littleEndian, byteLength);
+    if (scan === "invalid") return "invalid";
+    if (scan === "evidence") sawEvidence = true;
   }
-  return false;
+  return sawEvidence ? "evidence" : "clean";
 }
 
 /**
@@ -145,10 +144,15 @@ function subIfdCarriesRawEvidence(
  * AND IFD0 carries BOTH an ASCII Make tag identifying Sony AND at least one
  * RAW-specific marker that plain Sony TIFFs never carry: the Sony RAW
  * compression code 32767 or a CFA photometric interpretation (32803), either
- * directly in IFD0 or inside a SubIFD the SubIFDs tag points to. A bare
- * SubIFDs tag is generic TIFF structure and never evidence by itself; a Make
- * tag alone is not evidence either — Sony also produces plain TIFFs — so a
- * file that cannot be proven RAW is rejected rather than archived as ARW.
+ * directly in IFD0 or inside a SubIFD the SubIFDs tag points to. The Make tag
+ * must be a spec-legal ASCII value — NUL-terminated, in bounds — decoding to
+ * exactly "SONY": a prefix such as "SONYFAKE" or an unterminated 4-byte
+ * "SONY" is not a Sony camera. Compression and PhotometricInterpretation
+ * must be SHORT count 1 per the TIFF spec to count as markers. A DNGVersion
+ * or DNGBackwardVersion entry marks a DNG container and disqualifies the
+ * file outright. Every SubIFDs pointer must resolve to a legal IFD — one
+ * broken pointer fails the whole file closed. When in doubt the result is
+ * null, never ARW.
  */
 function isSonyArw(bytes: Uint8Array): boolean {
   const littleEndian = startsWith(bytes, TIFF_LITTLE_ENDIAN_MAGIC);
@@ -174,6 +178,10 @@ function isSonyArw(bytes: Uint8Array): boolean {
     const type = view.getUint16(entryAt + 2, littleEndian);
     const count = view.getUint32(entryAt + 4, littleEndian);
 
+    if (tag === TAG_DNG_VERSION || tag === TAG_DNG_BACKWARD_VERSION) {
+      return false;
+    }
+
     if (tag === TAG_MAKE) {
       if (type !== TAG_TYPE_ASCII) return false;
       if (count < 4 || count > bytes.length) return false;
@@ -184,22 +192,23 @@ function isSonyArw(bytes: Uint8Array): boolean {
         valueOffset = view.getUint32(entryAt + 8, littleEndian);
         if (valueOffset + count > bytes.length) return false;
       }
+      if (bytes[valueOffset + count - 1] !== 0) return false;
       const make = decodeAscii(bytes.subarray(valueOffset, valueOffset + count));
-      makeIsSony = make === "SONY" || make.startsWith("SONY");
+      makeIsSony = make === SONY_MAKE;
       continue;
     }
 
     if (tag === TAG_COMPRESSION || tag === TAG_PHOTOMETRIC) {
-      if (entryCarriesRawMarker(view, entryAt, tag, type, count, littleEndian, bytes.length)) {
+      if (entryCarriesRawMarker(view, entryAt, tag, type, count, littleEndian)) {
         hasRawEvidence = true;
       }
       continue;
     }
 
     if (tag === TAG_SUB_IFDS) {
-      if (subIfdCarriesRawEvidence(view, entryAt, type, count, littleEndian, bytes.length)) {
-        hasRawEvidence = true;
-      }
+      const scan = scanSubIfdsTag(view, entryAt, type, count, littleEndian, bytes.length);
+      if (scan === "invalid") return false;
+      if (scan === "evidence") hasRawEvidence = true;
     }
   }
 

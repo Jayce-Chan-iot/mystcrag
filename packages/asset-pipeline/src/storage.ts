@@ -1,15 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
-import { link, lstat, mkdir, open, readdir, readFile, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 
 import { normalizeAssetRelativePath } from "@mystcrag/design-contract";
 
 import { sha256OfBytes, sha256OfFile } from "./hash.js";
+import { probeRegularFile, readRegularFile } from "./safe-read.js";
 
 export type ArchiveStoreErrorCode =
   | "ARCHIVE_ROOT_MISSING"
   | "ARCHIVE_ROOT_INSIDE_REPOSITORY"
+  | "REPOSITORY_ROOT_INVALID"
   | "KEY_INVALID"
   | "HASH_MISMATCH"
   | "KEY_EXISTS_CONTENT_MISMATCH"
@@ -27,6 +29,8 @@ export class ArchiveStoreError extends Error {
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const STAGING_KEY_PATTERN =
+  /^imports\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})\/staging\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 const ORIGINAL_EXTENSIONS = new Set(["arw", "jpg", "jpeg", "png", "webp"]);
 
 export const PROCESSED_ARCHIVE_FILE_NAMES = ["bead-512.webp", "thumb-256.webp", "manifest.json"] as const;
@@ -83,8 +87,17 @@ export class ArchiveStore {
       let repoReal: string;
       try {
         repoReal = realpathSync(repositoryRoot);
-      } catch {
-        continue;
+        if (!statSync(repoReal).isDirectory()) {
+          throw new Error("not a directory");
+        }
+      } catch (error) {
+        // A supplied root that cannot be resolved is a fail-closed condition:
+        // skipping it would silently shrink the set of protected trees.
+        throw new ArchiveStoreError(
+          "REPOSITORY_ROOT_INVALID",
+          `Repository root ${repositoryRoot} cannot be resolved; cannot prove the archive root is outside every repository`,
+          { cause: error }
+        );
       }
       if (rootReal === repoReal || rootReal.startsWith(repoReal + sep)) {
         throw new ArchiveStoreError(
@@ -146,8 +159,8 @@ export class ArchiveStore {
   }): Promise<ArchivePutResult> {
     assertIdentifier(input.sessionId, "session id");
     assertIdentifier(input.groupId, "group id");
-    if (!Number.isInteger(input.processingVersion) || input.processingVersion < 1) {
-      throw new ArchiveStoreError("KEY_INVALID", "processingVersion must be a positive integer");
+    if (!Number.isSafeInteger(input.processingVersion) || input.processingVersion < 1) {
+      throw new ArchiveStoreError("KEY_INVALID", "processingVersion must be a positive safe integer");
     }
     if (typeof input.fileName !== "string" || !PROCESSED_FILE_NAMES.has(input.fileName)) {
       throw new ArchiveStoreError("KEY_INVALID", `Unsupported processed file name ${String(input.fileName)}`);
@@ -157,12 +170,19 @@ export class ArchiveStore {
   }
 
   async read(archiveKey: string): Promise<Uint8Array> {
-    const target = await this.resolveExistingFile(archiveKey);
+    assertArchiveKey(archiveKey);
+    let outcome: Awaited<ReturnType<typeof readRegularFile>>;
     try {
-      return await readFile(target);
+      const target = await this.joinUnderRoot(archiveKey);
+      outcome = await readRegularFile(target);
     } catch (error) {
+      if (error instanceof ArchiveStoreError) throw error;
       throw new ArchiveStoreError("READ_FAILED", `Failed to read ${redactKey(archiveKey)}`, { cause: error });
     }
+    if (outcome.status !== "read") {
+      throw new ArchiveStoreError("KEY_INVALID", "Archive key does not resolve to a stored file");
+    }
+    return outcome.bytes;
   }
 
   /**
@@ -179,30 +199,41 @@ export class ArchiveStore {
   }
 
   /**
-   * Removes a staging entry. Idempotent: a missing entry (already consumed by
-   * an earlier attempt) is a no-op. Only staging keys are removable — raw and
-   * processed keys are immutable by construction.
+   * Removes a staging entry. Only ENOENT is an idempotent no-op: a key that
+   * cannot be inspected (permissions) or that does not hold a regular file
+   * fails closed instead of pretending the entry was already consumed. Only
+   * staging keys — verified through the strict parser that putStaging's key
+   * grammar defines — are removable; raw and processed keys are immutable.
    */
   async removeStaging(archiveKey: string): Promise<void> {
-    const segments = archiveKey.split("/");
-    if (
-      segments.length !== 4 ||
-      segments[0] !== KEY_PREFIX ||
-      segments[1] === undefined ||
-      segments[1].length === 0 ||
-      segments[2] !== "staging" ||
-      segments[3] === undefined ||
-      segments[3].length === 0
-    ) {
+    if (typeof archiveKey !== "string" || !STAGING_KEY_PATTERN.test(archiveKey)) {
       throw new ArchiveStoreError(
         "KEY_INVALID",
-        "Only staging keys of the form imports/<session>/staging/<uuid> can be removed"
+        "Only staging keys of the form imports/<sessionId>/staging/<uuid> can be removed"
       );
     }
-    const target = await this.joinUnderRoot(archiveKey);
-    const info = await lstat(target).catch(() => null);
-    if (info?.isFile()) {
+    let probe: Awaited<ReturnType<typeof probeRegularFile>>;
+    let target: string;
+    try {
+      target = await this.joinUnderRoot(archiveKey);
+      probe = await probeRegularFile(target);
+    } catch (error) {
+      if (error instanceof ArchiveStoreError) throw error;
+      throw new ArchiveStoreError("WRITE_FAILED", `Failed to inspect staging entry ${redactKey(archiveKey)}`, {
+        cause: error
+      });
+    }
+    if (probe === "missing") return;
+    if (probe === "not-regular") {
+      throw new ArchiveStoreError("KEY_INVALID", "Staging key does not resolve to a staged file");
+    }
+    try {
       await unlink(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw new ArchiveStoreError("WRITE_FAILED", `Failed to remove staging entry ${redactKey(archiveKey)}`, {
+        cause: error
+      });
     }
   }
 
@@ -222,45 +253,56 @@ export class ArchiveStore {
     assertIdentifier(sessionId, "session id");
     const sessionDir = join(this.rootReal, KEY_PREFIX, sessionId);
     const results: string[] = [];
-    await this.walkFiles(sessionDir, `${KEY_PREFIX}/${sessionId}`, results);
+    await this.walkFiles(sessionDir, `${KEY_PREFIX}/${sessionId}`, results, true);
     return results.sort();
   }
 
-  private async walkFiles(directory: string, prefix: string, results: string[]): Promise<void> {
+  private async walkFiles(
+    directory: string,
+    prefix: string,
+    results: string[],
+    missingMeansEmpty: boolean
+  ): Promise<void> {
     let entries;
     try {
       entries = await readdir(directory, { withFileTypes: true });
-    } catch {
-      return;
+    } catch (error) {
+      // Only a directory that does not exist may read as an empty listing; an
+      // unreadable one must surface as READ_FAILED instead of pretending the
+      // session holds nothing.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" && missingMeansEmpty) return;
+      throw new ArchiveStoreError("READ_FAILED", `Failed to list ${redactKey(prefix)}`, { cause: error });
     }
     for (const entry of entries) {
       const entryKey = `${prefix}/${entry.name}`;
+      if (entry.isSymbolicLink()) continue; // never listed, never followed
       if (entry.isDirectory()) {
-        await this.walkFiles(join(directory, entry.name), entryKey, results);
-      } else {
+        await this.walkFiles(join(directory, entry.name), entryKey, results, false);
+      } else if (entry.isFile()) {
         results.push(entryKey);
       }
     }
   }
 
   private async verifiedPut(archiveKey: string, bytes: Uint8Array, sha256: string): Promise<ArchivePutResult> {
-    const target = await this.resolveWritablePath(archiveKey);
-
-    const existing = await readIfRegularFile(target);
-    if (existing !== null) {
-      if (sha256OfBytes(existing) === sha256) {
-        return { archiveKey, sha256, byteSize: existing.byteLength, reused: true };
-      }
-      throw new ArchiveStoreError(
-        "KEY_EXISTS_CONTENT_MISMATCH",
-        "Archive key already holds different content; overwriting is forbidden"
-      );
-    }
-
-    const sessionId = archiveKey.split("/")[1]!;
-    const tempDir = join(this.rootReal, KEY_PREFIX, sessionId, "tmp");
-    const tempPath = join(tempDir, `${randomUUID()}.tmp`);
+    let tempPath: string | undefined;
     try {
+      const target = await this.resolveWritablePath(archiveKey);
+      const existing = await readExistingRegularFile(target);
+      if (existing !== null) {
+        if (sha256OfBytes(existing) === sha256) {
+          await syncDirectoryMetadata(dirname(target));
+          return { archiveKey, sha256, byteSize: existing.byteLength, reused: true };
+        }
+        throw new ArchiveStoreError(
+          "KEY_EXISTS_CONTENT_MISMATCH",
+          "Archive key already holds different content; overwriting is forbidden"
+        );
+      }
+
+      const sessionId = archiveKey.split("/")[1]!;
+      const tempDir = join(this.rootReal, KEY_PREFIX, sessionId, "tmp");
+      tempPath = join(tempDir, `${randomUUID()}.tmp`);
       await mkdir(tempDir, { recursive: true });
       const handle = await open(tempPath, "w");
       try {
@@ -279,12 +321,17 @@ export class ArchiveStore {
       }
 
       await mkdir(dirname(target), { recursive: true });
+      // Re-verify every ancestor after the mkdir: freshly created segments and
+      // the segments between the first walk and the link must still be real
+      // directories, never swapped-in symlinks.
+      await this.joinUnderRoot(archiveKey);
       try {
         await link(tempPath, target);
       } catch (error) {
         if (isLinkExistsError(error)) {
-          const raced = await readIfRegularFile(target);
+          const raced = await readExistingRegularFile(target);
           if (raced !== null && sha256OfBytes(raced) === sha256) {
+            await syncDirectoryMetadata(dirname(target));
             return { archiveKey, sha256, byteSize: raced.byteLength, reused: true };
           }
           throw new ArchiveStoreError(
@@ -294,6 +341,7 @@ export class ArchiveStore {
         }
         throw error;
       }
+      await syncDirectoryMetadata(dirname(target));
       return { archiveKey, sha256, byteSize: bytes.byteLength, reused: false };
     } catch (error) {
       if (error instanceof ArchiveStoreError) throw error;
@@ -301,7 +349,9 @@ export class ArchiveStore {
         cause: error
       });
     } finally {
-      await unlink(tempPath).catch(() => undefined);
+      if (tempPath !== undefined) {
+        await unlink(tempPath).catch(() => undefined);
+      }
     }
   }
 
@@ -310,23 +360,29 @@ export class ArchiveStore {
     return this.joinUnderRoot(archiveKey);
   }
 
-  private async resolveExistingFile(archiveKey: string): Promise<string> {
-    assertArchiveKey(archiveKey);
-    const target = await this.joinUnderRoot(archiveKey);
-    const info = await lstat(target).catch(() => null);
-    if (!info || !info.isFile()) {
-      throw new ArchiveStoreError("KEY_INVALID", "Archive key does not resolve to a stored file");
-    }
-    return target;
-  }
-
   private async joinUnderRoot(archiveKey: string): Promise<string> {
     let current = this.rootReal;
-    for (const segment of archiveKey.split("/")) {
+    const segments = archiveKey.split("/");
+    for (const [index, segment] of segments.entries()) {
       current = join(current, segment);
-      const info = await lstat(current).catch(() => null);
-      if (info?.isSymbolicLink()) {
+      let info;
+      try {
+        info = await lstat(current);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") continue;
+        if (code === "ENOTDIR") {
+          throw new ArchiveStoreError("KEY_INVALID", "An archive key ancestor is not a directory", {
+            cause: error
+          });
+        }
+        throw error;
+      }
+      if (info.isSymbolicLink()) {
         throw new ArchiveStoreError("KEY_INVALID", "Archive keys must not traverse symbolic links");
+      }
+      if (index < segments.length - 1 && !info.isDirectory()) {
+        throw new ArchiveStoreError("KEY_INVALID", "An archive key ancestor is not a directory");
       }
     }
     return current;
@@ -368,10 +424,25 @@ function redactKey(archiveKey: string): string {
   return segments.length > 1 ? `${segments[0]}/…/${segments.at(-1)}` : archiveKey;
 }
 
-async function readIfRegularFile(path: string): Promise<Uint8Array | null> {
-  const info = await lstat(path).catch(() => null);
-  if (!info || !info.isFile()) return null;
-  return readFile(path);
+/** Existing content at a key, read through the same verified descriptor. */
+async function readExistingRegularFile(path: string): Promise<Uint8Array | null> {
+  const outcome = await readRegularFile(path);
+  return outcome.status === "read" ? outcome.bytes : null;
+}
+
+/**
+ * Fsyncs a directory after a link lands in it, so a successful archive write
+ * includes the directory entry in its durability boundary. Any unsupported or
+ * failed sync is surfaced as WRITE_FAILED by verifiedPut; durability must not
+ * be reported as successful when the metadata sync was not proven.
+ */
+async function syncDirectoryMetadata(path: string): Promise<void> {
+  const handle = await open(path, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }
 
 function isLinkExistsError(error: unknown): boolean {

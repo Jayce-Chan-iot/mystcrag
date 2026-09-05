@@ -16,6 +16,8 @@ import { detectAssetSourceKind } from "../src/content-type.js";
 type RawEvidence =
   | "ifdCompression"
   | "ifdCfa"
+  | "ifdCfaLong"
+  | "ifdCfaShortCount2"
   | "subIfdCfa"
   | "subIfdCompression"
   | "subIfdRgb"
@@ -38,12 +40,16 @@ function buildTiff(
   options: {
     littleEndian?: boolean;
     make?: string | null;
+    makeNoNul?: boolean;
     rawEvidence?: RawEvidence;
+    dngTag?: "dngVersion" | "dngBackward";
     corruptMagic?: boolean;
     ifdOffsetOverride?: number;
     entryCountOverride?: number;
     valueOffsetOverride?: number;
     subIfdOffsetOverride?: number;
+    subIfdPointers?: Array<number | "self">;
+    subIfdBadPointer?: boolean;
     truncateAt?: number;
   } = {}
 ): Buffer {
@@ -51,12 +57,13 @@ function buildTiff(
   const make = options.make === undefined ? "SONY" : options.make;
   const rawEvidence = options.rawEvidence ?? "subIfdCfa";
   const ifdOffset = 8;
-  const entryCount = 2;
-  const makeValueOffset = 38;
-  const subIfdOffset = 43;
-  const subIfdLength = rawEvidence === "subIfdEmpty" ? 6 : rawEvidence.startsWith("subIfd") ? 18 : 0;
 
-  const makeBytes = make === null ? null : Buffer.from(`${make}\0`, "latin1");
+  const makeBytes =
+    make === null
+      ? null
+      : options.makeNoNul
+        ? Buffer.from(make, "latin1")
+        : Buffer.from(`${make}\0`, "latin1");
   const makeInline = makeBytes !== null && makeBytes.length <= 4;
 
   type Entry = { tag: number; type: number; count: number; inline?: Buffer; offset?: number };
@@ -66,7 +73,7 @@ function buildTiff(
     entries.push(
       makeInline
         ? { tag: 0x010f, type: 2, count: makeBytes.length, inline: makeBytes }
-        : { tag: 0x010f, type: 2, count: makeBytes.length, offset: options.valueOffsetOverride ?? makeValueOffset }
+        : { tag: 0x010f, type: 2, count: makeBytes.length, offset: options.valueOffsetOverride ?? 0 }
     );
   } else {
     // A structurally valid TIFF without any Make entry (e.g. a plain TIFF).
@@ -82,12 +89,63 @@ function buildTiff(
       count: 1,
       inline: encodeShort(rawEvidence === "ifdCfa" ? 32803 : 2, littleEndian)
     });
+  } else if (rawEvidence === "ifdCfaLong") {
+    // PhotometricInterpretation illegally carried as a LONG.
+    entries.push({ tag: 0x0106, type: 4, count: 1, inline: encodeLong(32803, littleEndian) });
+  } else if (rawEvidence === "ifdCfaShortCount2") {
+    // PhotometricInterpretation illegally carrying two SHORT values, the first
+    // of which happens to be the CFA code.
+    entries.push({
+      tag: 0x0106,
+      type: 3,
+      count: 2,
+      inline: Buffer.concat([encodeShort(32803, littleEndian), encodeShort(0, littleEndian)])
+    });
   } else if (rawEvidence.startsWith("subIfd")) {
-    entries.push({ tag: 0x014a, type: 4, count: 1, offset: options.subIfdOffsetOverride ?? subIfdOffset });
+    entries.push({ tag: 0x014a, type: 4, count: 1, offset: options.subIfdOffsetOverride ?? 0 });
+  }
+
+  if (options.dngTag === "dngVersion") {
+    entries.push({ tag: 0xc612, type: 1, count: 4, inline: Buffer.from([1, 4, 0, 0]) });
+  } else if (options.dngTag === "dngBackward") {
+    entries.push({ tag: 0xc714, type: 1, count: 4, inline: Buffer.from([1, 1, 0, 0]) });
   }
   entries.sort((left, right) => left.tag - right.tag);
 
-  const buffer = Buffer.alloc(subIfdOffset + subIfdLength);
+  const entryCount = entries.length;
+  const ifdEnd = ifdOffset + 2 + entryCount * 12 + 4;
+  let cursor = ifdEnd;
+  const makeValueOffset = cursor;
+  if (makeBytes !== null && !makeInline) {
+    entries[entries.findIndex((entry) => entry.tag === 0x010f)]!.offset =
+      options.valueOffsetOverride ?? makeValueOffset;
+    cursor += makeBytes.length;
+  }
+  const subIfdPtrOffset = cursor;
+  const multiPointer = options.subIfdPointers !== undefined || options.subIfdBadPointer === true;
+  const pointerCount = multiPointer
+    ? (options.subIfdPointers?.length ?? 1) + (options.subIfdBadPointer ? 1 : 0)
+    : 0;
+  if (multiPointer) cursor += 4 * pointerCount;
+  const subIfdOffset = cursor;
+  const subIfdLength = rawEvidence === "subIfdEmpty" ? 6 : rawEvidence.startsWith("subIfd") ? 18 : 0;
+  const badSubIfdOffset = subIfdOffset + subIfdLength;
+  const badSubIfdLength = options.subIfdBadPointer ? 20 : 0;
+
+  // Patch the SubIFDs entry BEFORE the buffer is written: multi-pointer builds
+  // point at an external pointer array, single-pointer builds at the SubIFD.
+  const subIfdsEntry = entries.find((entry) => entry.tag === 0x014a);
+  if (subIfdsEntry) {
+    if (multiPointer) {
+      subIfdsEntry.count = pointerCount;
+      subIfdsEntry.offset = subIfdPtrOffset;
+    } else {
+      subIfdsEntry.count = 1;
+      subIfdsEntry.offset = options.subIfdOffsetOverride ?? subIfdOffset;
+    }
+  }
+
+  const buffer = Buffer.alloc(subIfdOffset + subIfdLength + badSubIfdLength);
   const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   buffer.write(littleEndian ? "II" : "MM", 0, "latin1");
   view.setUint16(2, options.corruptMagic ? 43 : 42, littleEndian);
@@ -111,6 +169,17 @@ function buildTiff(
     makeBytes.copy(buffer, makeValueOffset);
   }
 
+  if (multiPointer) {
+    const pointers: Array<number | "self" | "bad"> = [
+      ...(options.subIfdPointers ?? ["self"]),
+      ...(options.subIfdBadPointer ? (["bad"] as const) : [])
+    ];
+    pointers.forEach((pointer, index) => {
+      const value = pointer === "self" ? subIfdOffset : pointer === "bad" ? badSubIfdOffset : pointer;
+      view.setUint32(subIfdPtrOffset + index * 4, value, littleEndian);
+    });
+  }
+
   if (subIfdLength > 0) {
     if (rawEvidence === "subIfdEmpty") {
       // A minimal empty SubIFD: entry count 0 and no next IFD.
@@ -127,6 +196,12 @@ function buildTiff(
       encodeShort(subValue, littleEndian).copy(buffer, subIfdOffset + 10);
       view.setUint32(subIfdOffset + 14, 0, littleEndian); // no next SubIFD
     }
+  }
+
+  if (badSubIfdLength > 0) {
+    // A pointer destination that is inside the file but structurally broken:
+    // an entry count of 65535 cannot fit in any real buffer.
+    view.setUint16(badSubIfdOffset, 65535, littleEndian);
   }
 
   const truncated = options.truncateAt === undefined ? buffer : buffer.subarray(0, options.truncateAt);
@@ -262,4 +337,73 @@ test("never inspects anything beyond the header", () => {
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
   ]);
   assert.equal(detectAssetSourceKind(jpegWithPngTail), "JPEG");
+});
+
+// ---------------------------------------------------------------------------
+// Round 5: strict ARW tag grammar — Make NUL termination, TIFF type/count
+// conformance, DNG rejection, and fail-closed multi-SubIFD pointers.
+// ---------------------------------------------------------------------------
+
+test("a Make value that merely starts with SONY is not a Sony camera", () => {
+  assert.equal(
+    detectAssetSourceKind(buildTiff({ make: "SONYFAKE", rawEvidence: "subIfdCfa" })),
+    null,
+    "SONYFAKE must not pass a prefix match on the Make tag"
+  );
+});
+
+test("a four-byte SONY Make without NUL termination is not a valid ASCII tag", () => {
+  assert.equal(
+    detectAssetSourceKind(buildTiff({ makeNoNul: true, rawEvidence: "subIfdCfa" })),
+    null,
+    "an unterminated ASCII value must not qualify as SONY"
+  );
+});
+
+test("a CFA PhotometricInterpretation carried as LONG is not RAW evidence", () => {
+  assert.equal(
+    detectAssetSourceKind(buildTiff({ rawEvidence: "ifdCfaLong" })),
+    null,
+    "PhotometricInterpretation must be a SHORT with count 1 per the TIFF spec"
+  );
+});
+
+test("a CFA PhotometricInterpretation with count 2 is not RAW evidence", () => {
+  assert.equal(
+    detectAssetSourceKind(buildTiff({ rawEvidence: "ifdCfaShortCount2" })),
+    null,
+    "a SHORT count of 2 whose first value happens to be 32803 must not count"
+  );
+});
+
+test("a Sony TIFF carrying DNGVersion is a DNG, never an ARW", () => {
+  assert.equal(
+    detectAssetSourceKind(buildTiff({ rawEvidence: "subIfdCfa", dngTag: "dngVersion" })),
+    null,
+    "DNGVersion marks a DNG container even with CFA evidence and a SONY Make"
+  );
+});
+
+test("a Sony TIFF carrying DNGBackwardVersion is a DNG, never an ARW", () => {
+  assert.equal(
+    detectAssetSourceKind(buildTiff({ rawEvidence: "ifdCfa", dngTag: "dngBackward" })),
+    null,
+    "DNGBackwardVersion marks a DNG container even with CFA evidence and a SONY Make"
+  );
+});
+
+test("one out-of-bounds SubIFD pointer fails the whole file closed", () => {
+  assert.equal(
+    detectAssetSourceKind(buildTiff({ rawEvidence: "subIfdCfa", subIfdPointers: ["self", 1000] })),
+    null,
+    "a declared SubIFD pointer that leaves the file must disqualify every other pointer"
+  );
+});
+
+test("one structurally broken in-bounds SubIFD pointer fails the whole file closed", () => {
+  assert.equal(
+    detectAssetSourceKind(buildTiff({ rawEvidence: "subIfdCfa", subIfdBadPointer: true })),
+    null,
+    "a pointer to an in-bounds but structurally illegal SubIFD must fail closed"
+  );
 });

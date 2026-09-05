@@ -22,6 +22,51 @@ export class ImageProcessorError extends Error {
   }
 }
 
+export type RasterSourceKind = "JPEG" | "PNG" | "WEBP";
+
+const RASTER_FORMAT_BY_KIND: Record<RasterSourceKind, string> = {
+  JPEG: "jpeg",
+  PNG: "png",
+  WEBP: "webp"
+};
+
+export type RasterDecodeVerification =
+  | { ok: true; format: string }
+  | { ok: false; reason: "corrupt" | "kind-mismatch"; detail: string };
+
+/**
+ * Full-decode gate for raster originals. detectAssetSourceKind only sniffs
+ * magic bytes, so on its own it would archive 3-byte `ff d8 ff` stubs. This
+ * check forces Sharp to parse the container (metadata) AND walk every pixel
+ * (stats), so truncated or corrupt payloads fail before anything is archived.
+ * A payload whose decoded format disagrees with the sniffed kind is reported
+ * separately: that is a mislabeled container, not a broken one.
+ */
+export async function verifyRasterFullyDecodable(
+  bytes: Uint8Array,
+  expectedKind: RasterSourceKind
+): Promise<RasterDecodeVerification> {
+  const image = sharp(bytes);
+  let format: string | undefined;
+  try {
+    const metadata = await image.metadata();
+    format = metadata.format;
+    await image.stats();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { ok: false, reason: "corrupt", detail };
+  }
+  const expectedFormat = RASTER_FORMAT_BY_KIND[expectedKind];
+  if (format !== expectedFormat) {
+    return {
+      ok: false,
+      reason: "kind-mismatch",
+      detail: `content decodes as ${format ?? "an unknown format"}, expected ${expectedFormat}`
+    };
+  }
+  return { ok: true, format };
+}
+
 export const DEFAULT_PROCESSING_OPTIONS = {
   workingMaxEdge: 1024,
   fullResMaxEdge: 4096,
@@ -113,7 +158,7 @@ export async function processBeadImage(input: {
   }
 
   const working = await decodeWorking(bytes, options.workingMaxEdge);
-  const { background, backgroundRgb } = floodFillBackground(working, options);
+  const { background, backgroundColored, backgroundRgb, backgroundLuma } = floodFillBackground(working, options);
 
   const bbox = subjectBbox(background, working.width, working.height);
   const subjectPx = countSubjectInBbox(background, working.width, bbox);
@@ -124,7 +169,8 @@ export async function processBeadImage(input: {
     );
   }
 
-  const holeRatio = countInteriorHoles(background, working.width, bbox) / subjectPx;
+  const holeRatio =
+    countInteriorHoles(working, background, backgroundColored, bbox, backgroundLuma) / subjectPx;
   const clipped =
     bbox.x <= 1 ||
     bbox.y <= 1 ||
@@ -132,7 +178,7 @@ export async function processBeadImage(input: {
     bbox.y + bbox.height >= working.height - 1;
 
   const gray = grayscale(working);
-  const blurScore = maxLaplacian(gray, working.width, working.height, bbox);
+  const blurScore = edgeBandBlurScore(gray, working.width, working.height, background, bbox);
 
   const gains = whiteBalanceGains(backgroundRgb, options.whiteBalanceMaxGain);
   const colorDelta = await measureColorDelta(working, background, gains, options);
@@ -213,8 +259,11 @@ export async function processBeadImage(input: {
     .webp({ quality: options.thumbWebpQuality, alphaQuality: 100, effort: 6 })
     .toBuffer();
 
+  // subjectPx and bbox both live in working resolution, and outWidth/outHeight
+  // are the rendered size of that same bbox content, so the ratio stays
+  // scale-consistent no matter how the working/full-resolution split lands.
   const subjectCanvasRatio =
-    (subjectPx * (outWidth / region.width) * (outHeight / region.height)) / (MAIN_CANVAS_PX * MAIN_CANVAS_PX);
+    (subjectPx * (outWidth / bbox.width) * (outHeight / bbox.height)) / (MAIN_CANVAS_PX * MAIN_CANVAS_PX);
 
   const measurements: ProcessingMeasurements = {
     sourceWidthPx: fullWidth,
@@ -277,7 +326,12 @@ async function decodeWorking(bytes: Uint8Array, maxEdge: number): Promise<Workin
 function floodFillBackground(
   working: WorkingImage,
   options: ProcessingOptions
-): { background: Uint8Array; backgroundRgb: { r: number; g: number; b: number } } {
+): {
+  background: Uint8Array;
+  backgroundColored: Uint8Array;
+  backgroundRgb: { r: number; g: number; b: number };
+  backgroundLuma: number;
+} {
   const { data, width, height } = working;
   const ring = Math.max(2, Math.round(Math.min(width, height) / 200));
   const samples: number[][] = [[], [], []];
@@ -330,12 +384,20 @@ function floodFillBackground(
     return false;
   };
 
+  // The color test over every pixel, separate from reachability: the pixels
+  // that pass it but the border-seeded fill below never reaches are exactly
+  // the enclosed background-colored regions the interior-hole metric counts.
+  const backgroundColored = new Uint8Array(width * height);
+  for (let index = 0; index < width * height; index += 1) {
+    backgroundColored[index] = isBackground(index) ? 1 : 0;
+  }
+
   const background = new Uint8Array(width * height);
   const queue = new Int32Array(width * height);
   let head = 0;
   let tail = 0;
   const visit = (index: number): void => {
-    if (background[index] === 1 || !isBackground(index)) return;
+    if (background[index] === 1 || backgroundColored[index] === 0) return;
     background[index] = 1;
     queue[tail] = index;
     tail += 1;
@@ -358,7 +420,7 @@ function floodFillBackground(
     if (y > 0) visit(index - width);
     if (y < height - 1) visit(index + width);
   }
-  return { background, backgroundRgb };
+  return { background, backgroundColored, backgroundRgb, backgroundLuma };
 }
 
 function subjectBbox(background: Uint8Array, width: number, height: number): Bbox {
@@ -390,46 +452,30 @@ function countSubjectInBbox(background: Uint8Array, width: number, bbox: Bbox): 
 }
 
 /**
- * Enclosed background regions inside the subject bbox that no border-seeded
- * fill reached: evidence that the cut-out hollowed out interior highlights.
+ * Enclosed background-colored regions inside the subject bbox: pixels that
+ * pass the background color test but no border-seeded fill reached, so the
+ * cut-out keeps them opaque. Regions brighter than the background are
+ * excluded — those are specular highlights, genuine subject detail — while a
+ * plugged hole (a donut bead's center, a scratched-out window) shows the
+ * background color or darker.
  */
-function countInteriorHoles(background: Uint8Array, width: number, bbox: Bbox): number {
-  const { width: bw, height: bh } = bbox;
-  const visited = new Uint8Array(bw * bh);
-  const queue = new Int32Array(bw * bh);
-  let head = 0;
-  let tail = 0;
-  const isBackgroundAt = (bx: number, by: number): boolean =>
-    background[(bbox.y + by) * width + (bbox.x + bx)] === 1;
-  const seed = (bx: number, by: number): void => {
-    const index = by * bw + bx;
-    if (visited[index] === 1 || !isBackgroundAt(bx, by)) return;
-    visited[index] = 1;
-    queue[tail] = index;
-    tail += 1;
-  };
-  for (let bx = 0; bx < bw; bx += 1) {
-    seed(bx, 0);
-    seed(bx, bh - 1);
-  }
-  for (let by = 0; by < bh; by += 1) {
-    seed(0, by);
-    seed(bw - 1, by);
-  }
-  while (head < tail) {
-    const index = queue[head]!;
-    head += 1;
-    const bx = index % bw;
-    const by = (index - bx) / bw;
-    if (bx > 0) seed(bx - 1, by);
-    if (bx < bw - 1) seed(bx + 1, by);
-    if (by > 0) seed(bx, by - 1);
-    if (by < bh - 1) seed(bx, by + 1);
-  }
+function countInteriorHoles(
+  working: WorkingImage,
+  background: Uint8Array,
+  backgroundColored: Uint8Array,
+  bbox: Bbox,
+  backgroundLuma: number
+): number {
+  const { data, width } = working;
   let holes = 0;
-  for (let by = 0; by < bh; by += 1) {
-    for (let bx = 0; bx < bw; bx += 1) {
-      if (isBackgroundAt(bx, by) && visited[by * bw + bx] === 0) holes += 1;
+  for (let y = bbox.y; y < bbox.y + bbox.height; y += 1) {
+    for (let x = bbox.x; x < bbox.x + bbox.width; x += 1) {
+      const index = y * width + x;
+      if (backgroundColored[index] !== 1 || background[index] === 1) continue;
+      const offset = index * 4;
+      const luma =
+        0.299 * (data[offset] ?? 0) + 0.587 * (data[offset + 1] ?? 0) + 0.114 * (data[offset + 2] ?? 0);
+      if (luma <= backgroundLuma + 8) holes += 1;
     }
   }
   return holes;
@@ -446,27 +492,56 @@ function grayscale(working: WorkingImage): Float64Array {
   return gray;
 }
 
-/** Peak absolute Laplacian inside the padded subject bbox: low means soft focus. */
-function maxLaplacian(gray: Float64Array, width: number, height: number, bbox: Bbox): number {
-  const pad = Math.round(Math.max(bbox.width, bbox.height) * 0.1);
-  const x0 = clamp(bbox.x - pad, 0, width - 3);
-  const y0 = clamp(bbox.y - pad, 0, height - 3);
-  const x1 = clamp(bbox.x + bbox.width + pad, x0 + 2, width - 1);
-  const y1 = clamp(bbox.y + bbox.height + pad, y0 + 2, height - 1);
-  let peak = 0;
-  for (let y = y0 + 1; y < y1; y += 1) {
-    for (let x = x0 + 1; x < x1; x += 1) {
-      const center = gray[y * width + x]!;
+/**
+ * 90th percentile of the absolute Laplacian over the subject's edge band —
+ * subject pixels within a small radius of a background pixel. Focus shows in
+ * the edge band, and a percentile instead of a single peak makes the score
+ * immune to tiny sharp artifacts such as a dust spot on a defocused frame.
+ */
+function edgeBandBlurScore(
+  gray: Float64Array,
+  width: number,
+  height: number,
+  background: Uint8Array,
+  bbox: Bbox
+): number {
+  const bandRadius = 2;
+  const x0 = clamp(bbox.x, 1, width - 2);
+  const y0 = clamp(bbox.y, 1, height - 2);
+  const x1 = clamp(bbox.x + bbox.width, x0 + 1, width - 1);
+  const y1 = clamp(bbox.y + bbox.height, y0 + 1, height - 1);
+  const values: number[] = [];
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      const index = y * width + x;
+      if (background[index] === 1) continue;
+      let nearBackground = false;
+      for (let dy = -bandRadius; dy <= bandRadius && !nearBackground; dy += 1) {
+        for (let dx = -bandRadius; dx <= bandRadius; dx += 1) {
+          const px = x + dx;
+          const py = y + dy;
+          if (px < 0 || px >= width || py < 0 || py >= height) continue;
+          if (background[py * width + px] === 1) {
+            nearBackground = true;
+            break;
+          }
+        }
+      }
+      if (!nearBackground) continue;
+      const center = gray[index]!;
       const laplacian =
         4 * center -
         gray[(y - 1) * width + x]! -
         gray[(y + 1) * width + x]! -
         gray[y * width + x - 1]! -
         gray[y * width + x + 1]!;
-      peak = Math.max(peak, Math.abs(laplacian));
+      values.push(Math.abs(laplacian));
     }
   }
-  return Math.round(peak * 100) / 100;
+  if (values.length === 0) return 0;
+  values.sort((left, right) => left - right);
+  const percentileIndex = Math.floor(0.9 * (values.length - 1));
+  return Math.round(values[percentileIndex]! * 100) / 100;
 }
 
 function whiteBalanceGains(

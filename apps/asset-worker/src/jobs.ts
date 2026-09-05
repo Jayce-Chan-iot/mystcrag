@@ -10,9 +10,11 @@ import {
   runQualityChecks,
   sha256OfBytes,
   suggestGroups,
+  verifyRasterFullyDecodable,
   type GroupingCandidate,
   type GroupSimilarityEvidence,
-  type GroupSuggestion
+  type GroupSuggestion,
+  type RasterSourceKind
 } from "@mystcrag/asset-pipeline";
 import type {
   AssetJobFailure,
@@ -20,17 +22,86 @@ import type {
   CompleteAssetJobResult
 } from "@mystcrag/database";
 import { PersistenceError } from "@mystcrag/database";
-import { AssetSourceFileKindSchema, Sha256Schema } from "@mystcrag/design-contract";
+import {
+  AssetSourceFileKindSchema,
+  normalizeAssetRelativePath,
+  Sha256Schema
+} from "@mystcrag/design-contract";
 import { z } from "zod";
 
 export const STORAGE_PROVIDER = "local-fs";
 
-const IDENTIFIER = z.string().trim().min(1).max(160);
-const ARCHIVE_KEY = z.string().trim().min(1).max(512);
+const IDENTIFIER = z
+  .string()
+  .min(1)
+  .max(160)
+  .refine((value) => value.trim() === value && !/[\0-\x1f\u007f]/.test(value), {
+    message: "Identifier must not contain surrounding whitespace or control characters"
+  });
+const ARCHIVE_KEY = z
+  .string()
+  .min(1)
+  .max(512)
+  .refine((value) => value.trim() === value, {
+    message: "Archive key must not contain surrounding whitespace"
+  });
 
 // ---------------------------------------------------------------------------
 // Errors and classification
 // ---------------------------------------------------------------------------
+
+/**
+ * The worker's centralized error-code table. Every code a worker can submit
+ * carries exactly one retryability class here, so an operator reading
+ * `failJob` evidence never has to guess whether a code is worth a retry.
+ * JobExecutionError throw sites must use a code from this table; mapping into
+ * the table happens in wrapArchiveError and classifyHandlerError.
+ */
+export const WORKER_ERROR_CODES = [
+  // Deterministic: retrying cannot change the outcome.
+  "PAYLOAD_INVALID",
+  "UNSUPPORTED_FILE_KIND",
+  "UNSUPPORTED_SOURCE_KIND",
+  "CORRUPT_FILE_CONTENT",
+  "CONTENT_KIND_MISMATCH",
+  "STAGING_HASH_MISMATCH",
+  "ARCHIVE_VERIFICATION_FAILED",
+  "ARCHIVE_CONFLICT",
+  "ARCHIVE_ROOT_MISSING",
+  "ARCHIVE_ROOT_INSIDE_REPOSITORY",
+  "REPOSITORY_ROOT_INVALID",
+  "DECODE_FAILED",
+  "NO_SUBJECT",
+  "SEGMENTATION_FAILED",
+  "JOB_LEASE_CONFLICT",
+  // Transient: infrastructure trouble a retry may clear.
+  "STAGING_UNAVAILABLE",
+  "ARCHIVE_READ_FAILED",
+  "ARCHIVE_WRITE_FAILED",
+  "STORAGE_FULL",
+  "PROCESS_FAILED",
+  "QC_FAILED_TO_RUN",
+  "COMPLETION_REJECTED",
+  "UNEXPECTED_HANDLER_ERROR"
+] as const;
+
+export type WorkerErrorCode = (typeof WORKER_ERROR_CODES)[number];
+
+const TRANSIENT_WORKER_ERROR_CODES: ReadonlySet<string> = new Set([
+  "STAGING_UNAVAILABLE",
+  "ARCHIVE_READ_FAILED",
+  "ARCHIVE_WRITE_FAILED",
+  "STORAGE_FULL",
+  "PROCESS_FAILED",
+  "QC_FAILED_TO_RUN",
+  "COMPLETION_REJECTED",
+  "UNEXPECTED_HANDLER_ERROR"
+]);
+
+/** The single retryability class of a worker error code (table-driven). */
+export function isRetryableWorkerErrorCode(code: string): boolean {
+  return TRANSIENT_WORKER_ERROR_CODES.has(code);
+}
 
 export class JobExecutionError extends Error {
   readonly code: string;
@@ -73,13 +144,41 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function wrapArchiveError(error: unknown, fallbackCode: string): JobExecutionError {
+/**
+ * ArchiveStore failures map onto the worker's stable table by store error
+ * code, never by exception text. ENOSPC under a write is surfaced separately
+ * as STORAGE_FULL so an operator sees an actionable disk condition.
+ */
+const ARCHIVE_STORE_ERROR_MAPPING: Record<string, { code: string; retryable: boolean }> = {
+  HASH_MISMATCH: { code: "ARCHIVE_VERIFICATION_FAILED", retryable: false },
+  KEY_EXISTS_CONTENT_MISMATCH: { code: "ARCHIVE_CONFLICT", retryable: false },
+  KEY_INVALID: { code: "PAYLOAD_INVALID", retryable: false },
+  ARCHIVE_ROOT_MISSING: { code: "ARCHIVE_ROOT_MISSING", retryable: false },
+  ARCHIVE_ROOT_INSIDE_REPOSITORY: { code: "ARCHIVE_ROOT_INSIDE_REPOSITORY", retryable: false },
+  REPOSITORY_ROOT_INVALID: { code: "REPOSITORY_ROOT_INVALID", retryable: false },
+  READ_FAILED: { code: "ARCHIVE_READ_FAILED", retryable: true },
+  WRITE_FAILED: { code: "ARCHIVE_WRITE_FAILED", retryable: true }
+};
+
+export function wrapArchiveError(error: unknown, fallbackCode: string): JobExecutionError {
   if (error instanceof JobExecutionError) return error;
   if (error instanceof ArchiveStoreError) {
-    const transient = error.code === "WRITE_FAILED" || error.code === "READ_FAILED";
-    return new JobExecutionError(error.code, error.message, transient, { cause: error });
+    if (error.code === "WRITE_FAILED" && isErrorWithCode(error.cause, "ENOSPC")) {
+      return new JobExecutionError("STORAGE_FULL", "The archive storage is full; freeing space is required", true, {
+        cause: error
+      });
+    }
+    const mapping = ARCHIVE_STORE_ERROR_MAPPING[error.code];
+    if (mapping) {
+      return new JobExecutionError(mapping.code, error.message, mapping.retryable, { cause: error });
+    }
   }
-  return new JobExecutionError(fallbackCode, messageOf(error), true, { cause: error });
+  const retryable = isRetryableWorkerErrorCode(fallbackCode);
+  return new JobExecutionError(fallbackCode, messageOf(error), retryable, { cause: error });
+}
+
+function isErrorWithCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === code;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,25 +201,63 @@ export const ProcessGroupJobFileSchema = z.strictObject({
   sha256: Sha256Schema
 });
 
+// The shared import-session file limit (design contract) also bounds internal
+// job payloads: a session cannot smuggle an unbounded workload past the public
+// API through a queued job.
+export const MAX_JOB_FILES = 500;
+
+// Byte sizes and timestamps must be positive safe integers: a fractional or
+// out-of-range value can never describe a real stored file.
+const POSITIVE_SAFE_INTEGER = z
+  .number()
+  .int()
+  .positive()
+  .refine((value) => Number.isSafeInteger(value), {
+    message: "Value must be a safe integer"
+  });
+
+// Paths arrive pre-normalized from the import backend; a path that the shared
+// normalizer would still rewrite (trailing spaces, "./", traversal, empty
+// segments) is rejected instead of silently repaired.
+const SHARED_NORMALIZED_RELATIVE_PATH = z
+  .string()
+  .min(1)
+  .max(512)
+  .refine((value) => isSharedNormalizedPath(value), {
+    message: "Path must already be a shared-normalized relative path"
+  });
+
+function isSharedNormalizedPath(value: string): boolean {
+  try {
+    return normalizeAssetRelativePath(value) === value;
+  } catch {
+    return false;
+  }
+}
+
 export const ProcessGroupJobPayloadSchema = z.strictObject({
   groupId: IDENTIFIER,
-  processingVersion: z.number().int().positive(),
-  files: z.array(ProcessGroupJobFileSchema).min(1)
+  processingVersion: POSITIVE_SAFE_INTEGER,
+  // The human-confirmed primary (Task 4 puts the reviewed group.primaryFileId
+  // here). Optional only for ARW-only groups, which have no raster to process;
+  // parseProcessGroupPayload enforces presence whenever the group holds one.
+  primaryFileId: IDENTIFIER.optional(),
+  files: z.array(ProcessGroupJobFileSchema).min(1).max(MAX_JOB_FILES)
 });
 
 export const GroupSessionJobFileSchema = z.strictObject({
   fileId: IDENTIFIER,
   clientFileId: IDENTIFIER,
-  relativePath: z.string().trim().min(1).max(512),
+  relativePath: SHARED_NORMALIZED_RELATIVE_PATH,
   sha256: Sha256Schema,
   archiveKey: ARCHIVE_KEY,
-  byteSize: z.number().int().nonnegative(),
-  lastModifiedMs: z.number().int().nonnegative(),
+  byteSize: POSITIVE_SAFE_INTEGER,
+  lastModifiedMs: POSITIVE_SAFE_INTEGER,
   kind: AssetSourceFileKindSchema
 });
 
 export const GroupSessionJobPayloadSchema = z.strictObject({
-  files: z.array(GroupSessionJobFileSchema).min(1)
+  files: z.array(GroupSessionJobFileSchema).min(1).max(MAX_JOB_FILES)
 });
 
 export type ArchiveFileJobPayload = z.infer<typeof ArchiveFileJobPayloadSchema>;
@@ -190,6 +327,14 @@ const RAW_KEY_EXTENSIONS_BY_KIND: Record<string, readonly string[]> = {
   WEBP: ["webp"]
 };
 
+/** The raster kind a raw-key extension declares (undefined for .arw). */
+function rasterKindOfRawKeyExtension(extension: string): RasterSourceKind | undefined {
+  if (extension === "jpeg" || extension === "jpg") return "JPEG";
+  if (extension === "png") return "PNG";
+  if (extension === "webp") return "WEBP";
+  return undefined;
+}
+
 export type ParsedRawKey = {
   sessionId: string;
   digest: string;
@@ -228,7 +373,42 @@ export function parseArchiveFilePayload(job: ClaimedAssetJob): ArchiveFileJobPay
 
 export function parseGroupSessionPayload(job: ClaimedAssetJob): GroupSessionJobPayload {
   const payload = parsePayload(GroupSessionJobPayloadSchema, job.payload, "GROUP_SESSION");
+  const fileIds = new Set<string>();
+  const clientFileIds = new Set<string>();
+  const relativePaths = new Set<string>();
+  // One digest describes one content blob; a second declaration under a
+  // different kind is a torn write or a forgery and is rejected up front.
+  const kindBySha = new Map<string, string>();
   for (const file of payload.files) {
+    if (fileIds.has(file.fileId)) {
+      throw new JobExecutionError("PAYLOAD_INVALID", `GROUP_SESSION declares fileId ${file.fileId} twice`, false);
+    }
+    fileIds.add(file.fileId);
+    if (clientFileIds.has(file.clientFileId)) {
+      throw new JobExecutionError(
+        "PAYLOAD_INVALID",
+        `GROUP_SESSION declares clientFileId ${file.clientFileId} twice`,
+        false
+      );
+    }
+    clientFileIds.add(file.clientFileId);
+    if (relativePaths.has(file.relativePath)) {
+      throw new JobExecutionError(
+        "PAYLOAD_INVALID",
+        `GROUP_SESSION declares relativePath ${file.relativePath} twice`,
+        false
+      );
+    }
+    relativePaths.add(file.relativePath);
+    const knownKind = kindBySha.get(file.sha256);
+    if (knownKind !== undefined && knownKind !== file.kind) {
+      throw new JobExecutionError(
+        "PAYLOAD_INVALID",
+        `GROUP_SESSION declares the same SHA-256 under two kinds (${knownKind} and ${file.kind})`,
+        false
+      );
+    }
+    kindBySha.set(file.sha256, file.kind);
     const context = `GROUP_SESSION file ${file.fileId}`;
     const parsed = requireRawKeyForSession(file.archiveKey, job.sessionId, context);
     if (parsed.digest !== file.sha256) {
@@ -261,7 +441,16 @@ export function parseProcessGroupPayload(job: ClaimedAssetJob): ProcessGroupJobP
       false
     );
   }
+  const fileIds = new Set<string>();
   for (const entry of payload.files) {
+    if (fileIds.has(entry.fileId)) {
+      throw new JobExecutionError(
+        "PAYLOAD_INVALID",
+        `PROCESS_GROUP declares fileId ${entry.fileId} twice`,
+        false
+      );
+    }
+    fileIds.add(entry.fileId);
     const context = `PROCESS_GROUP file ${entry.fileId}`;
     const parsed = requireRawKeyForSession(entry.archiveKey, job.sessionId, context);
     if (parsed.digest !== entry.sha256) {
@@ -272,7 +461,50 @@ export function parseProcessGroupPayload(job: ClaimedAssetJob): ProcessGroupJobP
       );
     }
   }
+  validateProcessGroupPrimary(payload);
   return payload;
+}
+
+/**
+ * The primary contract: PROCESS_GROUP may only process the file a human
+ * confirmed. The worker never guesses — without a primary over a group that
+ * holds a raster the job is rejected before a single byte is read, so neither
+ * clientFileId order nor array order can pick the source by accident. Only an
+ * ARW-only group may omit the primary, and it has nothing to process.
+ */
+function validateProcessGroupPrimary(payload: ProcessGroupJobPayload): void {
+  const primary = payload.primaryFileId === undefined
+    ? undefined
+    : payload.files.find((entry) => entry.fileId === payload.primaryFileId);
+  if (payload.primaryFileId !== undefined && primary === undefined) {
+    throw new JobExecutionError(
+      "PAYLOAD_INVALID",
+      `PROCESS_GROUP primaryFileId ${payload.primaryFileId} is not a member of the group`,
+      false
+    );
+  }
+  if (primary === undefined) {
+    const groupHoldsRaster = payload.files.some((entry) => {
+      const parsed = parseRawKey(entry.archiveKey, "PROCESS_GROUP");
+      return parsed.extension !== "arw";
+    });
+    if (groupHoldsRaster) {
+      throw new JobExecutionError(
+        "PAYLOAD_INVALID",
+        "PROCESS_GROUP over a group holding a raster requires the human-confirmed primaryFileId; array order must never pick the source",
+        false
+      );
+    }
+    return;
+  }
+  const parsed = parseRawKey(primary.archiveKey, "PROCESS_GROUP primary");
+  if (parsed.extension === "arw") {
+    throw new JobExecutionError(
+      "PAYLOAD_INVALID",
+      "PROCESS_GROUP primaryFileId must name a JPEG/PNG/WebP original; ARW originals are archived only",
+      false
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -298,8 +530,12 @@ export type ArchiveFileHooks = {
 export async function handleArchiveFile(
   store: ArchiveStore,
   payload: ArchiveFileJobPayload,
-  hooks: ArchiveFileHooks = {}
+  hooks: ArchiveFileHooks = {},
+  context: JobRunContext = NEVER_LOST_LEASE
 ): Promise<ArchiveFileJobResult> {
+  // Recovery-safe reads are fine on a lost lease, but no new work may start:
+  // the guard runs before every expensive step and every side effect.
+  context.throwIfLeaseLost();
   let bytes: Uint8Array;
   try {
     bytes = await store.read(payload.stagingKey);
@@ -325,10 +561,33 @@ export async function handleArchiveFile(
   const kind = detectAssetSourceKind(bytes);
   if (!kind) {
     throw new JobExecutionError(
-      "CONTENT_TYPE_UNKNOWN",
+      "UNSUPPORTED_FILE_KIND",
       `The staged upload for file ${payload.fileId} is not an ARW/JPEG/PNG/WebP payload`,
       false
     );
+  }
+  // A magic-byte sniff is never archiving evidence on its own: JPEG/PNG/WebP
+  // originals must fully decode (container parse plus a pixel walk) before
+  // anything is archived or recorded, so 3-byte JPEG stubs and truncated
+  // rasters fail here instead of entering raw/. ARW needs no Sharp decode —
+  // its sensor data is beyond Sharp, the structural ARW check already ran in
+  // detectAssetSourceKind.
+  if (kind !== "ARW") {
+    const verification = await verifyRasterFullyDecodable(bytes, kind as RasterSourceKind);
+    if (!verification.ok) {
+      if (verification.reason === "kind-mismatch") {
+        throw new JobExecutionError(
+          "CONTENT_KIND_MISMATCH",
+          `The staged upload for file ${payload.fileId} ${verification.detail}`,
+          false
+        );
+      }
+      throw new JobExecutionError(
+        "CORRUPT_FILE_CONTENT",
+        `The staged upload for file ${payload.fileId} cannot be decoded as a ${kind} image (${verification.detail})`,
+        false
+      );
+    }
   }
   const extension = ORIGINAL_EXTENSIONS[kind];
   if (!extension) {
@@ -336,6 +595,10 @@ export async function handleArchiveFile(
   }
 
   let put: ArchivePutResult;
+  // putOriginal is a storage side effect: once the lease is known lost the
+  // worker must not start it. A put that already finished is content-addressed
+  // and idempotent — it may safely remain for the reclaiming worker to reuse.
+  context.throwIfLeaseLost();
   try {
     put = await store.putOriginal({
       sessionId: sessionOfArchiveKey(payload.stagingKey),
@@ -347,6 +610,10 @@ export async function handleArchiveFile(
     throw wrapArchiveError(error, "ARCHIVE_WRITE_FAILED");
   }
 
+  // onArchived runs the business write (recordUploadedFile): the last boundary
+  // where a lost lease must stop the handler instead of writing rows a new
+  // lease holder will conflict with.
+  context.throwIfLeaseLost();
   await hooks.onArchived?.({ sha256: actual, archiveKey: put.archiveKey });
 
   // The staging entry is deliberately NOT removed here. It is the recovery
@@ -362,28 +629,69 @@ export async function handleArchiveFile(
 
 export async function handleGroupSession(
   store: ArchiveStore,
-  payload: GroupSessionJobPayload
+  payload: GroupSessionJobPayload,
+  context: JobRunContext = NEVER_LOST_LEASE
 ): Promise<GroupSessionJobResult> {
   const fileIdByClientFileId = new Map(payload.files.map((file) => [file.clientFileId, file.fileId]));
+  const kindByClientFileId = new Map(payload.files.map((file) => [file.clientFileId, file.kind]));
   const toFileId = (clientFileId: string): string =>
     fileIdByClientFileId.get(clientFileId) ?? clientFileId;
 
   const candidates: GroupingCandidate[] = [];
   for (const file of payload.files) {
+    // Verified reads and decodes are the expensive steps of this job; with the
+    // lease gone there is no point walking the remaining files.
+    context.throwIfLeaseLost();
     let bytes: Uint8Array;
     try {
       bytes = await store.verifiedRead(file.archiveKey, file.sha256);
     } catch (error) {
       throw wrapArchiveError(error, "ARCHIVE_READ_FAILED");
     }
+    if (bytes.byteLength !== file.byteSize) {
+      throw new JobExecutionError(
+        "PAYLOAD_INVALID",
+        `File ${file.fileId} byteSize does not match its verified archived content`,
+        false
+      );
+    }
+    // The payload's declared kind is cross-checked against the archived
+    // content: a real JPEG archived under a .png key passes the key grammar
+    // but the sniff sees JPEG. Only after the kinds agree may the declared
+    // raster participate; a declared raster that cannot decode fails the job
+    // instead of silently grouping on non-visual signals. ARW is the only
+    // kind allowed to carry no visual features (Sharp cannot decode sensor
+    // data), so it skips the decode gate.
+    const actualKind = detectAssetSourceKind(bytes);
+    if (actualKind !== file.kind) {
+      throw new JobExecutionError(
+        "CONTENT_KIND_MISMATCH",
+        `File ${file.fileId} is declared ${file.kind} but its archived content is ${
+          actualKind ?? "not a recognizable image"
+        }`,
+        false
+      );
+    }
     let dHash: string | null = null;
     let histogram: number[] | null = null;
-    try {
+    if (file.kind !== "ARW") {
+      const verification = await verifyRasterFullyDecodable(bytes, file.kind as RasterSourceKind);
+      if (!verification.ok) {
+        if (verification.reason === "kind-mismatch") {
+          throw new JobExecutionError(
+            "CONTENT_KIND_MISMATCH",
+            `File ${file.fileId} ${verification.detail}`,
+            false
+          );
+        }
+        throw new JobExecutionError(
+          "CORRUPT_FILE_CONTENT",
+          `File ${file.fileId} cannot be decoded as a ${file.kind} image (${verification.detail})`,
+          false
+        );
+      }
       dHash = await computeDHash(bytes);
       histogram = await computeColorHistogram(bytes);
-    } catch {
-      // ARW and undecodable originals still participate in grouping through
-      // their non-visual signals (exact digest, stem pairing, capture order).
     }
     candidates.push({
       clientFileId: file.clientFileId,
@@ -404,12 +712,30 @@ export async function handleGroupSession(
     exactDuplicateOf: evidence.exactDuplicateOf === null ? null : toFileId(evidence.exactDuplicateOf),
     stemPairedWith: evidence.stemPairedWith === null ? null : toFileId(evidence.stemPairedWith)
   });
-  const toGroup = (suggestion: GroupSuggestion, groupId: string) => ({
-    groupId,
-    memberFileIds: suggestion.memberFileIds.map(toFileId),
-    primaryFileId: toFileId(suggestion.memberFileIds[0] ?? ""),
-    similarityEvidence: suggestion.evidence.map(remapEvidence)
-  });
+  const toGroup = (suggestion: GroupSuggestion, groupId: string) => {
+    // The suggested primary is a deterministic hint for the human review
+    // (first raster member in member order), never a worker decision: an
+    // ARW-only group offers no suggestion because only the human can pick,
+    // skip, or re-shoot. Task 4 is what copies a human-confirmed primary into
+    // PROCESS_GROUP payloads.
+    const suggestedPrimaryClient = suggestion.memberFileIds.find(
+      (clientFileId) => kindByClientFileId.get(clientFileId) !== "ARW"
+    );
+    const group: {
+      groupId: string;
+      memberFileIds: string[];
+      primaryFileId?: string;
+      similarityEvidence: GroupSimilarityEvidence[];
+    } = {
+      groupId,
+      memberFileIds: suggestion.memberFileIds.map(toFileId),
+      similarityEvidence: suggestion.evidence.map(remapEvidence)
+    };
+    if (suggestedPrimaryClient !== undefined) {
+      group.primaryFileId = toFileId(suggestedPrimaryClient);
+    }
+    return group;
+  };
 
   return {
     kind: "GROUP_SESSION",
@@ -426,25 +752,20 @@ export async function handleGroupSession(
 
 export async function handleProcessGroup(
   store: ArchiveStore,
-  payload: ProcessGroupJobPayload
+  payload: ProcessGroupJobPayload,
+  context: JobRunContext = NEVER_LOST_LEASE
 ): Promise<ProcessGroupJobResult> {
   const sessionId = sessionOfArchiveKey(payload.files[0]?.archiveKey ?? "");
 
-  let chosen: { fileId: string; bytes: Uint8Array } | null = null;
-  for (const entry of payload.files) {
-    if (entry.archiveKey.endsWith(".arw")) continue;
-    let bytes: Uint8Array;
-    try {
-      bytes = await store.verifiedRead(entry.archiveKey, entry.sha256);
-    } catch (error) {
-      throw wrapArchiveError(error, "ARCHIVE_READ_FAILED");
-    }
-    const kind = detectAssetSourceKind(bytes);
-    if (kind === null || kind === "ARW") continue;
-    chosen = { fileId: entry.fileId, bytes };
-    break;
-  }
-  if (!chosen) {
+  // Only the human-confirmed primary is processed. parseProcessGroupPayload
+  // has already proven the primary is a group member with a raster key (or
+  // the group is ARW-only and has nothing to process), so array order has no
+  // influence on the source: reversing `files` cannot move the source or
+  // change the output bytes.
+  const primaryEntry = payload.primaryFileId === undefined
+    ? undefined
+    : payload.files.find((entry) => entry.fileId === payload.primaryFileId);
+  if (!primaryEntry) {
     throw new JobExecutionError(
       "UNSUPPORTED_SOURCE_KIND",
       "The group holds no decodable raster source (ARW originals are archived only)",
@@ -452,7 +773,57 @@ export async function handleProcessGroup(
     );
   }
 
+  let bytes: Uint8Array;
+  try {
+    bytes = await store.verifiedRead(primaryEntry.archiveKey, primaryEntry.sha256);
+  } catch (error) {
+    throw wrapArchiveError(error, "ARCHIVE_READ_FAILED");
+  }
+  // The primary's actual content is re-checked against its raw key: a real
+  // PNG archived under a .jpg key is structurally consistent (digest matches
+  // the key) but the processed source must never disagree with the kind the
+  // key declares.
+  const declaredKind = rasterKindOfRawKeyExtension(
+    parseRawKey(primaryEntry.archiveKey, "PROCESS_GROUP primary").extension
+  );
+  if (declaredKind === undefined) {
+    throw new JobExecutionError(
+      "CONTENT_KIND_MISMATCH",
+      `The confirmed primary ${primaryEntry.fileId} does not sit on a JPEG/PNG/WebP raw key`,
+      false
+    );
+  }
+  const actualKind = detectAssetSourceKind(bytes);
+  if (actualKind !== declaredKind) {
+    throw new JobExecutionError(
+      "CONTENT_KIND_MISMATCH",
+      `The confirmed primary ${primaryEntry.fileId} is stored on a ${declaredKind} key but its content is ${
+        actualKind ?? "not a recognizable image"
+      }`,
+      false
+    );
+  }
+  const verification = await verifyRasterFullyDecodable(bytes, declaredKind);
+  if (!verification.ok) {
+    if (verification.reason === "kind-mismatch") {
+      throw new JobExecutionError(
+        "CONTENT_KIND_MISMATCH",
+        `The confirmed primary ${primaryEntry.fileId} ${verification.detail}`,
+        false
+      );
+    }
+    throw new JobExecutionError(
+      "CORRUPT_FILE_CONTENT",
+      `The confirmed primary ${primaryEntry.fileId} cannot be decoded as a ${declaredKind} image (${verification.detail})`,
+      false
+    );
+  }
+  const chosen = { fileId: primaryEntry.fileId, bytes };
+
   let processed;
+  // processBeadImage is the expensive step (full decode, segmentation, encode);
+  // it must not start once the lease is known lost.
+  context.throwIfLeaseLost();
   try {
     processed = await processBeadImage({ bytes: chosen.bytes });
   } catch (error) {
@@ -463,6 +834,9 @@ export async function handleProcessGroup(
   }
 
   const putVariant = async (fileName: "bead-512.webp" | "thumb-256.webp", bytes: Uint8Array) => {
+    // Content-addressed processed outputs are idempotent, but a new write must
+    // not start after the lease loss; the reclaiming worker reuses what landed.
+    context.throwIfLeaseLost();
     try {
       return await store.putProcessed({
         sessionId,
@@ -544,7 +918,25 @@ export type JobHandlerOutcome = {
   afterCommit?: () => Promise<void>;
 };
 
-export type JobHandler = (job: ClaimedAssetJob) => Promise<JobHandlerOutcome>;
+/**
+ * The runtime's live view of the lease while a handler runs. `signal` aborts
+ * the moment a heartbeat reports the lease lost, so a handler can stop before
+ * its next side effect instead of writing storage or business rows a new
+ * lease holder will conflict with. `throwIfLeaseLost` converts the same state
+ * into the stable JOB_LEASE_CONFLICT error for call sites that prefer throws.
+ */
+export type JobRunContext = {
+  readonly signal: AbortSignal;
+  throwIfLeaseLost(): void;
+};
+
+/** A guard for callers with no lease to watch: never aborts, never throws. */
+const NEVER_LOST_LEASE: JobRunContext = {
+  signal: new AbortController().signal,
+  throwIfLeaseLost: () => {}
+};
+
+export type JobHandler = (job: ClaimedAssetJob, context: JobRunContext) => Promise<JobHandlerOutcome>;
 
 export type JobHandlers = {
   ARCHIVE_FILE: JobHandler;
@@ -558,15 +950,20 @@ export function createJobHandlers(deps: {
 }): JobHandlers {
   const { store, repository } = deps;
   return {
-    ARCHIVE_FILE: async (job) => {
+    ARCHIVE_FILE: async (job, context) => {
       const payload = parseArchiveFilePayload(job);
-      const result = await handleArchiveFile(store, payload, {
-        onArchived: async (archived) => {
-          await repository.recordUploadedFile(payload.fileId, archived.sha256, archived.archiveKey, {
-            storageProvider: STORAGE_PROVIDER
-          });
-        }
-      });
+      const result = await handleArchiveFile(
+        store,
+        payload,
+        {
+          onArchived: async (archived) => {
+            await repository.recordUploadedFile(payload.fileId, archived.sha256, archived.archiveKey, {
+              storageProvider: STORAGE_PROVIDER
+            });
+          }
+        },
+        context
+      );
       return {
         result,
         afterCommit: async () => {
@@ -578,7 +975,11 @@ export function createJobHandlers(deps: {
         }
       };
     },
-    GROUP_SESSION: async (job) => ({ result: await handleGroupSession(store, parseGroupSessionPayload(job)) }),
-    PROCESS_GROUP: async (job) => ({ result: await handleProcessGroup(store, parseProcessGroupPayload(job)) })
+    GROUP_SESSION: async (job, context) => ({
+      result: await handleGroupSession(store, parseGroupSessionPayload(job), context)
+    }),
+    PROCESS_GROUP: async (job, context) => ({
+      result: await handleProcessGroup(store, parseProcessGroupPayload(job), context)
+    })
   };
 }

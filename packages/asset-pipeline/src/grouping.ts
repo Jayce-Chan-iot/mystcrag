@@ -58,6 +58,7 @@ export type GroupSimilarityEvidence = {
   histogramDistance: number | null;
   captureGapMs: number | null;
   sameDirectory: boolean;
+  confidence: "high" | "low";
 };
 
 export type GroupSuggestion = {
@@ -200,6 +201,7 @@ export function suggestGroups(
   }
 
   const seen = new Set<string>();
+  const shaKinds = new Map<string, string>();
   for (const candidate of candidates) {
     if (typeof candidate.clientFileId !== "string" || candidate.clientFileId.length === 0) {
       throw new Error("Grouping candidates require a non-empty clientFileId");
@@ -212,6 +214,13 @@ export function suggestGroups(
     if (!KINDS.includes(candidate.kind)) {
       throw new Error(`Grouping candidate ${candidate.clientFileId} has an invalid kind: ${String(candidate.kind)}`);
     }
+    const knownKind = shaKinds.get(candidate.sha256);
+    if (knownKind !== undefined && knownKind !== candidate.kind) {
+      throw new Error(
+        `One SHA-256 digest cannot belong to two different kinds: ${candidate.sha256} appears as both ${knownKind} and ${candidate.kind}`
+      );
+    }
+    shaKinds.set(candidate.sha256, candidate.kind);
     if (candidate.dHash !== null) assertDHash(candidate.dHash);
     if (candidate.histogram !== null) assertHistogram(candidate.histogram);
     if (candidate.capturedAtMs !== null && (!Number.isFinite(candidate.capturedAtMs) || candidate.capturedAtMs < 0)) {
@@ -227,6 +236,7 @@ export function suggestGroups(
   }
 
   const sorted = [...candidates].sort((left, right) => compareByCodeUnits(left.clientFileId, right.clientFileId));
+  const n = sorted.length;
   const parent = sorted.map((_, index) => index);
 
   const find = (index: number): number => {
@@ -240,6 +250,60 @@ export function suggestGroups(
     }
   };
 
+  // Stem buckets are counted on the ORIGINAL candidates before any merge:
+  // exact duplicates fold into one component, so component counts would
+  // falsely report "one ARW" for two identical ARWs and let a stem edge
+  // smuggle their JPEG into the duplicate group. A stem is ambiguous when it
+  // holds more than one original ARW candidate or more than one original
+  // JPEG candidate — repeated camera filenames must not fuse unrelated shots.
+  const stemBuckets = new Map<string, { raws: number[]; jpegs: number[] }>();
+  for (let index = 0; index < n; index += 1) {
+    const candidateAt = sorted[index]!;
+    if (candidateAt.kind !== "ARW" && candidateAt.kind !== "JPEG") continue;
+    const stem = stemOf(candidateAt.relativePath);
+    const bucket = stemBuckets.get(stem) ?? { raws: [], jpegs: [] };
+    if (candidateAt.kind === "ARW") bucket.raws.push(index);
+    else bucket.jpegs.push(index);
+    stemBuckets.set(stem, bucket);
+  }
+  const isAmbiguousStem = (relativePath: string): boolean => {
+    const bucket = stemBuckets.get(stemOf(relativePath));
+    if (bucket === undefined) return false;
+    return bucket.raws.length > 1 || bucket.jpegs.length > 1;
+  };
+
+  // Component ambiguity flags, aggregated at the component root. An ARW (or
+  // JPEG) whose stem bucket is ambiguous may never share a component with the
+  // opposite kind: its true counterpart is undecided, so ANY opposite-kind
+  // member — same stem or bridged through a different stem — would smuggle a
+  // pairing decision the stem stage refused to make.
+  const FLAG_HAS_ARW = 1;
+  const FLAG_HAS_JPEG = 2;
+  const FLAG_ARW_AMBIGUOUS_STEM = 4;
+  const FLAG_JPEG_AMBIGUOUS_STEM = 8;
+  const memberFlags = sorted.map((candidate) => {
+    if (candidate.kind === "ARW") {
+      return isAmbiguousStem(candidate.relativePath) ? FLAG_HAS_ARW | FLAG_ARW_AMBIGUOUS_STEM : FLAG_HAS_ARW;
+    }
+    if (candidate.kind === "JPEG") {
+      return isAmbiguousStem(candidate.relativePath) ? FLAG_HAS_JPEG | FLAG_JPEG_AMBIGUOUS_STEM : FLAG_HAS_JPEG;
+    }
+    return 0;
+  });
+  const compFlags = [...memberFlags];
+  const compMembers: number[][] = sorted.map((_, index) => [index]);
+
+  const forbiddenUnion = (leftRoot: number, rightRoot: number): boolean => {
+    const a = compFlags[leftRoot] ?? 0;
+    const b = compFlags[rightRoot] ?? 0;
+    return (
+      ((a & FLAG_ARW_AMBIGUOUS_STEM) !== 0 && (b & FLAG_HAS_JPEG) !== 0) ||
+      ((a & FLAG_JPEG_AMBIGUOUS_STEM) !== 0 && (b & FLAG_HAS_ARW) !== 0) ||
+      ((b & FLAG_ARW_AMBIGUOUS_STEM) !== 0 && (a & FLAG_HAS_JPEG) !== 0) ||
+      ((b & FLAG_JPEG_AMBIGUOUS_STEM) !== 0 && (a & FLAG_HAS_ARW) !== 0)
+    );
+  };
+
   const evidenceByFileId = new Map<string, GroupSimilarityEvidence[]>();
   const record = (evidence: GroupSimilarityEvidence): void => {
     const list = evidenceByFileId.get(evidence.fileId) ?? [];
@@ -247,20 +311,27 @@ export function suggestGroups(
     evidenceByFileId.set(evidence.fileId, list);
   };
 
-  const union = (leftIndex: number, rightIndex: number, evidence: GroupSimilarityEvidence): void => {
+  const union = (leftIndex: number, rightIndex: number, evidence: GroupSimilarityEvidence): boolean => {
     const leftRoot = find(leftIndex);
     const rightRoot = find(rightIndex);
-    if (leftRoot === rightRoot) return;
+    if (leftRoot === rightRoot) return false;
     parent[rightRoot] = leftRoot;
+    compFlags[leftRoot] = (compFlags[leftRoot] ?? 0) | (compFlags[rightRoot] ?? 0);
+    for (const member of compMembers[rightRoot] ?? []) {
+      compMembers[leftRoot]!.push(member);
+    }
     record(evidence);
+    return true;
   };
 
   const sameDirectory = (left: GroupingCandidate, right: GroupingCandidate): boolean =>
     directoryOf(left.relativePath) === directoryOf(right.relativePath);
 
-  // 1. Exact duplicates collapse.
-  for (let left = 0; left < sorted.length; left += 1) {
-    for (let right = left + 1; right < sorted.length; right += 1) {
+  // 1. Exact duplicates collapse. Identical bytes always decode to one kind,
+  // so a digest seen under two different kinds is a data integrity error,
+  // never a merge — the archive would store one payload under two kinds.
+  for (let left = 0; left < n; left += 1) {
+    for (let right = left + 1; right < n; right += 1) {
       const a = sorted[left]!;
       const b = sorted[right]!;
       if (a.sha256 !== b.sha256 || find(left) === find(right)) continue;
@@ -272,7 +343,8 @@ export function suggestGroups(
         dHashDistance: null,
         histogramDistance: null,
         captureGapMs: null,
-        sameDirectory: sameDirectory(a, b)
+        sameDirectory: sameDirectory(a, b),
+        confidence: "high"
       });
     }
   }
@@ -280,115 +352,105 @@ export function suggestGroups(
   // 2. Same-stem RAW/JPEG pairing (different digests only). A Sony burst
   // stores the ARW and its in-camera JPEG under one stem, so a stem pairs
   // ONLY when the ORIGINAL candidate set holds exactly one original ARW
-  // candidate and one original JPEG candidate — anything else (2 ARW + 1
-  // JPEG, 1 + 2, 2 + 2, …) is ambiguous: repeated camera filenames must not
-  // fuse unrelated shots, so no stem-based merge happens and the members stay
-  // independent unless the visual thresholds below prove a merge. Counting is
-  // deliberately done on raws/jpegs, not on collapsed components: exact
-  // duplicates fold into one root, so two identical ARWs would collapse to a
-  // single root and let the stem edge smuggle their JPEG into the duplicate
-  // group. This is deliberately stricter than pairRawAndJpeg (pairing.ts),
-  // which resolves ambiguity by deterministically picking a winner: grouping
-  // must never silently choose, so the one-pairing rule is enforced here on
-  // its own.
-  const stemBuckets = new Map<string, { raws: number[]; jpegs: number[] }>();
-  for (let index = 0; index < sorted.length; index += 1) {
-    const candidateAt = sorted[index]!;
-    if (candidateAt.kind !== "ARW" && candidateAt.kind !== "JPEG") continue;
-    const stem = stemOf(candidateAt.relativePath);
-    const bucket = stemBuckets.get(stem) ?? { raws: [], jpegs: [] };
-    if (candidateAt.kind === "ARW") bucket.raws.push(index);
-    else bucket.jpegs.push(index);
-    stemBuckets.set(stem, bucket);
-  }
-  // An ARW/JPEG pair of the same stem belongs to an ambiguous set when that
-  // stem holds more than one original ARW candidate or more than one
-  // original JPEG candidate. The stem stage already refused to pick a
-  // winner there, so the visual stage must not smuggle one side into the
-  // other's component either — identical visual features on an ambiguous
-  // stem are exactly what repeated camera filenames look like.
-  const ambiguousSameStemCrossKind = (a: GroupingCandidate, b: GroupingCandidate): boolean => {
-    if (a.kind === b.kind) return false;
-    if (a.kind !== "ARW" && a.kind !== "JPEG") return false;
-    if (b.kind !== "ARW" && b.kind !== "JPEG") return false;
-    const stem = stemOf(a.relativePath);
-    if (stem !== stemOf(b.relativePath)) return false;
-    const bucket = stemBuckets.get(stem);
-    if (bucket === undefined) return false;
-    return bucket.raws.length > 1 || bucket.jpegs.length > 1;
-  };
+  // candidate and one original JPEG candidate — the same conservative 1+1
+  // rule pairRawAndJpeg enforces. Both members of a 1+1 bucket are singletons
+  // at this stage, so this merge can never introduce an ambiguity violation.
   for (const { raws, jpegs } of stemBuckets.values()) {
-    if (raws.length === 0 || jpegs.length === 0) continue;
-    // Exactly one original ARW candidate and one original JPEG candidate may
-    // pair, counted on the original candidates: identical duplicates already
-    // collapsed into one component, so component counts would falsely report
-    // "one ARW" for two identical ARWs and wrongly attach the JPEG.
     if (raws.length !== 1 || jpegs.length !== 1) continue;
 
-    const jpegRepIndex = jpegs[0]!;
-    const jpegRep = sorted[jpegRepIndex]!;
-    const jpegRoot = find(jpegRepIndex);
-    for (const rawIndex of raws) {
-      if (find(rawIndex) === jpegRoot) continue; // already linked by a duplicate chain
-      record({
-        fileId: sorted[rawIndex]!.clientFileId,
-        relatedFileId: jpegRep.clientFileId,
-        exactDuplicateOf: null,
-        stemPairedWith: jpegRep.clientFileId,
-        dHashDistance: null,
-        histogramDistance: null,
-        captureGapMs: null,
-        sameDirectory: sameDirectory(sorted[rawIndex]!, jpegRep)
-      });
-      parent[find(rawIndex)] = jpegRoot;
-    }
+    const jpegIndex = jpegs[0]!;
+    const rawIndex = raws[0]!;
+    union(rawIndex, jpegIndex, {
+      fileId: sorted[rawIndex]!.clientFileId,
+      relatedFileId: sorted[jpegIndex]!.clientFileId,
+      exactDuplicateOf: null,
+      stemPairedWith: sorted[jpegIndex]!.clientFileId,
+      dHashDistance: null,
+      histogramDistance: null,
+      captureGapMs: null,
+      sameDirectory: sameDirectory(sorted[rawIndex]!, sorted[jpegIndex]!),
+      confidence: "high"
+    });
   }
 
-  // 3a. Confident merges need both visual thresholds and capture proximity.
-  // A cross-kind pair from an ambiguous same-stem set never merges here: the
-  // stem stage refused to pick a winner, so the visual stage must not let the
-  // JPEG (or ARW) re-enter the duplicate component through near-identical
-  // features — the members stay independent or surface for human review.
-  for (let left = 0; left < sorted.length; left += 1) {
-    for (let right = left + 1; right < sorted.length; right += 1) {
-      const a = sorted[left]!;
-      const b = sorted[right]!;
-      if (find(left) === find(right)) continue;
-      if (a.dHash === null || b.dHash === null || a.histogram === null || b.histogram === null) continue;
-      if (ambiguousSameStemCrossKind(a, b)) continue;
+  // 3a. Confident visual merges: complete-link clustering over precomputed
+  // confident pairs. A cross-kind pair from an ambiguous same-stem set never
+  // merges here — on either side of the pair — and neither does any merge
+  // that would place an ambiguous-stem ARW (or JPEG) into a component holding
+  // the opposite kind. Every pair across the two components must itself be
+  // confident, so A–B and B–C confident edges never fuse a group whose A–C
+  // edge disagrees. The scan repeats until a full pass merges nothing, which
+  // makes the fixed candidate order the only input to the outcome.
+  const ambiguousCrossKind = (a: GroupingCandidate, b: GroupingCandidate): boolean => {
+    const aRawJpeg = a.kind === "ARW" || a.kind === "JPEG";
+    const bRawJpeg = b.kind === "ARW" || b.kind === "JPEG";
+    if (!aRawJpeg || !bRawJpeg || a.kind === b.kind) return false;
+    return isAmbiguousStem(a.relativePath) || isAmbiguousStem(b.relativePath);
+  };
 
-      const dHashDistance = hammingDistance(a.dHash, b.dHash);
-      const histogramDelta = histogramDistance(a.histogram, b.histogram);
+  const confidentPair: boolean[][] = Array.from({ length: n }, () => new Array<boolean>(n).fill(false));
+  for (let left = 0; left < n; left += 1) {
+    const a = sorted[left]!;
+    for (let right = left + 1; right < n; right += 1) {
+      const b = sorted[right]!;
+      if (a.dHash === null || b.dHash === null || a.histogram === null || b.histogram === null) continue;
+      if (ambiguousCrossKind(a, b)) continue;
+      if (hammingDistance(a.dHash, b.dHash) > thresholds.dHashConfident) continue;
+      if (histogramDistance(a.histogram, b.histogram) > thresholds.histogramConfident) continue;
       const captureGapMs =
         a.capturedAtMs !== null && b.capturedAtMs !== null
           ? Math.abs(a.capturedAtMs - b.capturedAtMs)
           : null;
+      if (captureGapMs === null || captureGapMs > thresholds.captureGapConfidentMs) continue;
+      confidentPair[left]![right] = true;
+    }
+  }
 
-      const confident =
-        dHashDistance <= thresholds.dHashConfident &&
-        histogramDelta <= thresholds.histogramConfident &&
-        captureGapMs !== null &&
-        captureGapMs <= thresholds.captureGapConfidentMs;
-      if (!confident) continue;
+  const pairIsConfident = (x: number, y: number): boolean =>
+    x === y || (x < y ? confidentPair[x]![y]! : confidentPair[y]![x]!);
 
-      union(left, right, {
-        fileId: b.clientFileId,
-        relatedFileId: a.clientFileId,
-        exactDuplicateOf: null,
-        stemPairedWith: null,
-        dHashDistance,
-        histogramDistance: histogramDelta,
-        captureGapMs,
-        sameDirectory: sameDirectory(a, b)
-      });
+  const completeLinkAllows = (leftRoot: number, rightRoot: number): boolean => {
+    for (const x of compMembers[leftRoot] ?? []) {
+      for (const y of compMembers[rightRoot] ?? []) {
+        if (!pairIsConfident(x, y)) return false;
+      }
+    }
+    return true;
+  };
+
+  for (let mergedInPass = true; mergedInPass; ) {
+    mergedInPass = false;
+    for (let left = 0; left < n; left += 1) {
+      for (let right = left + 1; right < n; right += 1) {
+        if (!confidentPair[left]![right]) continue;
+        const leftRoot = find(left);
+        const rightRoot = find(right);
+        if (leftRoot === rightRoot) continue;
+        if (forbiddenUnion(leftRoot, rightRoot)) continue;
+        if (!completeLinkAllows(leftRoot, rightRoot)) continue;
+        union(left, right, {
+          fileId: sorted[right]!.clientFileId,
+          relatedFileId: sorted[left]!.clientFileId,
+          exactDuplicateOf: null,
+          stemPairedWith: null,
+          dHashDistance: hammingDistance(sorted[left]!.dHash!, sorted[right]!.dHash!),
+          histogramDistance: histogramDistance(sorted[left]!.histogram!, sorted[right]!.histogram!),
+          captureGapMs: Math.abs(sorted[left]!.capturedAtMs! - sorted[right]!.capturedAtMs!),
+          sameDirectory: sameDirectory(sorted[left]!, sorted[right]!),
+          confidence: "high"
+        });
+        mergedInPass = true;
+      }
     }
   }
 
   // 3b. Borderline pairs: visually near, but signals did not all agree.
   // Only items that are still singletons participate, so confident groups
-  // never leak into review suggestions.
+  // never leak into review suggestions. Each review group keeps a spanning
+  // tree of explanation edges — one edge recorded per actual merge — so
+  // evidence grows linearly with the number of files instead of quadratically.
   const componentSizes = new Map<number, number>();
-  for (let index = 0; index < sorted.length; index += 1) {
+  for (let index = 0; index < n; index += 1) {
     const root = find(index);
     componentSizes.set(root, (componentSizes.get(root) ?? 0) + 1);
   }
@@ -411,8 +473,8 @@ export function suggestGroups(
     reviewEvidenceByFileId.set(evidence.fileId, list);
   };
 
-  for (let left = 0; left < sorted.length; left += 1) {
-    for (let right = left + 1; right < sorted.length; right += 1) {
+  for (let left = 0; left < n; left += 1) {
+    for (let right = left + 1; right < n; right += 1) {
       const a = sorted[left]!;
       const b = sorted[right]!;
       if ((componentSizes.get(find(left)) ?? 0) !== 1) continue;
@@ -430,6 +492,10 @@ export function suggestGroups(
         dHashDistance <= thresholds.dHashReview && histogramDelta <= thresholds.histogramReview;
       if (!borderline) continue;
 
+      const leftRoot = reviewRoot(left);
+      const rightRoot = reviewRoot(right);
+      if (leftRoot === rightRoot) continue;
+
       recordReview({
         fileId: b.clientFileId,
         relatedFileId: a.clientFileId,
@@ -438,14 +504,10 @@ export function suggestGroups(
         dHashDistance,
         histogramDistance: histogramDelta,
         captureGapMs,
-        sameDirectory: sameDirectory(a, b)
+        sameDirectory: sameDirectory(a, b),
+        confidence: "low"
       });
-
-      const leftRoot = reviewRoot(left);
-      const rightRoot = reviewRoot(right);
-      if (leftRoot !== rightRoot) {
-        reviewParent.set(rightRoot, leftRoot);
-      }
+      reviewParent.set(rightRoot, leftRoot);
     }
   }
 

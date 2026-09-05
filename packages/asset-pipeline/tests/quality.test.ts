@@ -70,6 +70,50 @@ test("heavily blurred input fails the blur check and suggests re-shooting instea
   assert.ok(failedChecks(outcome).includes("blur"));
 });
 
+test("a sharp 3x3 black dot cannot rescue a defocused subject's blur score", async () => {
+  // The blur metric must measure the subject edge band, not a single peak
+  // Laplacian: one tiny sharp dot on a severely defocused bead must not
+  // flip the blur verdict to pass.
+  const defocused = await renderBeadPng({ blurSigma: 12 });
+  const dot = await sharp(
+    Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800">
+      <rect x="398" y="398" width="3" height="3" fill="#000000"/>
+    </svg>`)
+  )
+    .png()
+    .toBuffer();
+  const bytes = await sharp(defocused).composite([{ input: dot }]).png().toBuffer();
+  const processed = await processBeadImage({ bytes });
+  const outcome = await runQualityChecks({
+    measurements: processed.measurements,
+    main: processed.main,
+    thumb: processed.thumb
+  });
+
+  assert.equal(outcome.passed, false);
+  assert.ok(failedChecks(outcome).includes("blur"), `failed checks: ${failedChecks(outcome).join(", ")}`);
+});
+
+test("a donut-shaped subject fails the interior-hollowing check", async () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800">
+    <rect width="800" height="800" fill="#f0f0f0"/>
+    <circle cx="400" cy="400" r="300" fill="#c0392b"/>
+    <circle cx="400" cy="400" r="150" fill="#f0f0f0"/>
+  </svg>`;
+  const processed = await processBeadImage({ bytes: await sharp(Buffer.from(svg)).png().toBuffer() });
+  const outcome = await runQualityChecks({
+    measurements: processed.measurements,
+    main: processed.main,
+    thumb: processed.thumb
+  });
+
+  assert.equal(outcome.passed, false);
+  assert.ok(
+    failedChecks(outcome).includes("interior-hollowing"),
+    `failed checks: ${failedChecks(outcome).join(", ")}`
+  );
+});
+
 test("border-clipped subjects fail only the subject-clipping check", async () => {
   const processed = await goodPipeline();
   const outcome = await runQualityChecks({
@@ -131,6 +175,65 @@ test("oversized encoded outputs fail the output-file-size check via thresholds",
   });
   assert.equal(outcome.passed, false);
   assert.deepEqual(failedChecks(outcome), ["output-file-size"]);
+});
+
+test("a main variant off the fixed 512px canvas fails output-webp-decode", async () => {
+  // The canvas contract is fixed: main is 512x512 and thumb is 256x256 WebP.
+  // A self-consistent but off-canvas declaration (bytes, byteSize and
+  // widthPx/heightPx all agreeing on 400x400) must still fail.
+  const processed = await goodPipeline();
+  const offCanvas = await sharp(processed.main.bytes).resize(400, 400, { fit: "fill" }).webp().toBuffer();
+  const outcome = await runQualityChecks({
+    measurements: processed.measurements,
+    main: {
+      ...processed.main,
+      bytes: new Uint8Array(offCanvas),
+      byteSize: offCanvas.byteLength,
+      widthPx: 400,
+      heightPx: 400
+    },
+    thumb: processed.thumb
+  });
+  assert.equal(outcome.passed, false);
+  assert.ok(
+    failedChecks(outcome).includes("output-webp-decode"),
+    `failed checks: ${failedChecks(outcome).join(", ")}`
+  );
+});
+
+test("a thumb variant off the fixed 256px canvas fails output-webp-decode", async () => {
+  const processed = await goodPipeline();
+  const offCanvas = await sharp(processed.thumb.bytes).resize(300, 300, { fit: "fill" }).webp().toBuffer();
+  const outcome = await runQualityChecks({
+    measurements: processed.measurements,
+    main: processed.main,
+    thumb: {
+      ...processed.thumb,
+      bytes: new Uint8Array(offCanvas),
+      byteSize: offCanvas.byteLength,
+      widthPx: 300,
+      heightPx: 300
+    }
+  });
+  assert.equal(outcome.passed, false);
+  assert.ok(
+    failedChecks(outcome).includes("output-webp-decode"),
+    `failed checks: ${failedChecks(outcome).join(", ")}`
+  );
+});
+
+test("a declared byteSize that disagrees with the actual bytes fails output-file-size", async () => {
+  const processed = await goodPipeline();
+  const outcome = await runQualityChecks({
+    measurements: processed.measurements,
+    main: { ...processed.main, byteSize: processed.main.byteSize + 1 },
+    thumb: processed.thumb
+  });
+  assert.equal(outcome.passed, false);
+  assert.ok(
+    failedChecks(outcome).includes("output-file-size"),
+    `failed checks: ${failedChecks(outcome).join(", ")}`
+  );
 });
 
 test("a corrupted main variant fails the output decode checks instead of passing silently", async () => {

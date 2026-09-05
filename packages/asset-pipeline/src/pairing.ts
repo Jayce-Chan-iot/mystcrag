@@ -14,12 +14,39 @@ export type RawJpegPair = {
   alternatives: string[];
 };
 
+/**
+ * A stem that holds RAW and JPEG candidates but not exactly one of each:
+ * no pair is invented and the bucket is surfaced so a human can resolve it.
+ */
+export type AmbiguousRawJpegBucket = {
+  stem: string;
+  jpegs: PairableSourceFile[];
+  raws: PairableSourceFile[];
+};
+
 export type PairingOutcome = {
   pairs: RawJpegPair[];
   unpairedJpeg: PairableSourceFile[];
   unpairedRaw: PairableSourceFile[];
   nonPairable: PairableSourceFile[];
+  ambiguousBuckets: AmbiguousRawJpegBucket[];
 };
+
+const PAIRABLE_KINDS: readonly string[] = ["ARW", "JPEG", "PNG", "WEBP"];
+
+/**
+ * Deterministic UTF-16 code-unit comparison. relativePath accepts arbitrary
+ * Unicode, and localeCompare collates "z" and "ä" together in most locales,
+ * which would make pair winners and output order depend on the runtime
+ * environment. Code-unit order is fixed for every environment.
+ */
+function compareByCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+const byRelativePathThenId = (left: PairableSourceFile, right: PairableSourceFile): number =>
+  compareByCodeUnits(left.relativePath, right.relativePath) ||
+  compareByCodeUnits(left.clientFileId, right.clientFileId);
 
 function stemOf(relativePath: string): string {
   const lastSegment = relativePath.split("/").at(-1) ?? "";
@@ -41,6 +68,9 @@ function validateFile(file: PairableSourceFile): void {
   if (typeof file.relativePath !== "string" || file.relativePath.length === 0) {
     throw new Error(`Pairing requires a relative path for file ${file.clientFileId}`);
   }
+  if (!PAIRABLE_KINDS.includes(file.kind)) {
+    throw new Error(`File ${file.clientFileId} has an invalid kind: ${String(file.kind)}`);
+  }
   try {
     normalizeAssetRelativePath(file.relativePath);
   } catch (error) {
@@ -53,66 +83,94 @@ function validateFile(file: PairableSourceFile): void {
 
 /**
  * Conservative RAW/JPEG pairing on the file stem (spec §12.3: `ZDX01535` in
- * different numbered directories still pairs). A same-directory RAW always
- * beats cross-directory candidates; remaining ties resolve to the
- * lexicographically smallest path so the outcome never depends on input
- * order. Losing candidates are surfaced as alternatives instead of being
- * silently dropped, and ambiguous data never invents a pair.
+ * different numbered directories still pairs). A stem pairs ONLY when the
+ * candidate set holds exactly one JPEG and exactly one ARW — the same
+ * one-pairing rule grouping enforces. Anything else with both sides present
+ * (1 JPEG + 2 ARW, 2 + 1, 2 + 2, …) is an explicit ambiguous bucket for human
+ * review: repeated camera filenames must never produce a silently chosen
+ * winner, a raw occupied by two pairs, or a same-directory favorite that
+ * steals the pairing. Every file belongs to at most one pair, and every
+ * output list is ordered by the `relativePath → clientFileId` code-unit
+ * comparator so the outcome is identical for every input permutation and
+ * every runtime locale.
  */
 export function pairRawAndJpeg(files: readonly PairableSourceFile[]): PairingOutcome {
   if (files.length === 0) {
     throw new Error("Pairing requires at least one file");
   }
-  const validated = files.map((file) => {
-    validateFile(file);
-    return file;
-  });
 
-  const jpegs: PairableSourceFile[] = [];
-  const raws: PairableSourceFile[] = [];
+  const seenClientIds = new Set<string>();
+  for (const file of files) {
+    validateFile(file);
+    if (seenClientIds.has(file.clientFileId)) {
+      throw new Error(`clientFileId ${file.clientFileId} must be unique`);
+    }
+    seenClientIds.add(file.clientFileId);
+  }
+
   const nonPairable: PairableSourceFile[] = [];
-  for (const file of validated) {
-    if (file.kind === "JPEG") jpegs.push(file);
-    else if (file.kind === "ARW") raws.push(file);
-    else nonPairable.push(file);
+  const stemBuckets = new Map<string, { jpegs: PairableSourceFile[]; raws: PairableSourceFile[] }>();
+  for (const file of files) {
+    if (file.kind === "PNG" || file.kind === "WEBP") {
+      nonPairable.push(file);
+      continue;
+    }
+    const stem = stemOf(file.relativePath);
+    const bucket = stemBuckets.get(stem) ?? { jpegs: [], raws: [] };
+    if (file.kind === "JPEG") bucket.jpegs.push(file);
+    else bucket.raws.push(file);
+    stemBuckets.set(stem, bucket);
   }
 
   const pairs: RawJpegPair[] = [];
   const unpairedJpeg: PairableSourceFile[] = [];
+  const unpairedRaw: PairableSourceFile[] = [];
+  const ambiguousBuckets: AmbiguousRawJpegBucket[] = [];
 
-  for (const jpeg of jpegs) {
-    const stem = stemOf(jpeg.relativePath);
-    const candidates = raws.filter((raw) => stemOf(raw.relativePath) === stem);
-    if (candidates.length === 0) {
-      unpairedJpeg.push(jpeg);
+  for (const [stem, bucket] of stemBuckets) {
+    if (bucket.jpegs.length === 0 && bucket.raws.length === 0) continue;
+    if (bucket.jpegs.length === 0) {
+      unpairedRaw.push(...bucket.raws);
+      continue;
+    }
+    if (bucket.raws.length === 0) {
+      unpairedJpeg.push(...bucket.jpegs);
+      continue;
+    }
+    if (bucket.jpegs.length !== 1 || bucket.raws.length !== 1) {
+      ambiguousBuckets.push({
+        stem,
+        jpegs: [...bucket.jpegs].sort(byRelativePathThenId),
+        raws: [...bucket.raws].sort(byRelativePathThenId)
+      });
       continue;
     }
 
-    const jpegDirectory = directoryOf(jpeg.relativePath);
-    const sameDirectory = candidates.filter((raw) => directoryOf(raw.relativePath) === jpegDirectory);
-    const pool = sameDirectory.length > 0 ? sameDirectory : candidates;
-    pool.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
-    const winner = pool[0]!;
-    const losers = candidates.filter((raw) => raw !== winner);
-
+    const jpeg = bucket.jpegs[0]!;
+    const raw = bucket.raws[0]!;
     pairs.push({
       stem,
       jpeg,
-      raw: winner,
-      pairingBasis: sameDirectory.length > 0 ? "same-directory" : "cross-directory",
-      alternatives: losers.map((raw) => raw.relativePath).sort((left, right) => left.localeCompare(right))
+      raw,
+      pairingBasis:
+        directoryOf(jpeg.relativePath) === directoryOf(raw.relativePath)
+          ? "same-directory"
+          : "cross-directory",
+      alternatives: []
     });
   }
 
-  const pairedRaws = new Set(pairs.map((pair) => pair.raw));
-  const unpairedRaw = raws.filter((raw) => !pairedRaws.has(raw));
-
-  const byRelativePath = (left: PairableSourceFile, right: PairableSourceFile) =>
-    left.relativePath.localeCompare(right.relativePath);
   return {
-    pairs: pairs.sort((left, right) => left.stem.localeCompare(right.stem)),
-    unpairedJpeg: [...unpairedJpeg].sort(byRelativePath),
-    unpairedRaw: [...unpairedRaw].sort(byRelativePath),
-    nonPairable: [...nonPairable].sort(byRelativePath)
+    pairs: pairs.sort(
+      (left, right) =>
+        compareByCodeUnits(left.stem, right.stem) ||
+        byRelativePathThenId(left.jpeg, right.jpeg)
+    ),
+    unpairedJpeg: unpairedJpeg.sort(byRelativePathThenId),
+    unpairedRaw: unpairedRaw.sort(byRelativePathThenId),
+    nonPairable: nonPairable.sort(byRelativePathThenId),
+    ambiguousBuckets: ambiguousBuckets.sort((left, right) =>
+      compareByCodeUnits(left.stem, right.stem)
+    )
   };
 }

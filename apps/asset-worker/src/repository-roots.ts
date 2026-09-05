@@ -1,14 +1,18 @@
 import { execFile } from "node:child_process";
-import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
-import type { Dirent } from "node:fs";
+import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+
+import { readRegularFileSync } from "@mystcrag/asset-pipeline";
 
 const execFileAsync = promisify(execFile);
 
 const GIT_COMMAND_TIMEOUT_MS = 5_000;
 const GITDIR_POINTER = /^gitdir:\s*(.+)$/;
+/** Control files written by git are tiny; anything larger is not one of them. */
+const CONTROL_FILE_MAX_BYTES = 1 << 20;
 
 export type GitWorktreeCommand = (args: string[], cwd: string) => Promise<string>;
 
@@ -100,14 +104,34 @@ function parseGitWorktreeList(output: string): PorcelainWorktree[] {
   return entries.filter((entry) => entry.path.length > 0);
 }
 
-function readGitdirPointer(dotGitFile: string): string {
-  let content: string;
+/**
+ * Reads a git control file through the shared same-descriptor safe read: the
+ * file is opened with O_NOFOLLOW, verified regular by fstat on that very
+ * descriptor, and read from it — never lstat'd first and then re-resolved by
+ * path. Returns null only when the file verifiably does not exist (ENOENT).
+ */
+function readControlFile(path: string, description: string): string | null {
+  let outcome;
   try {
-    content = readFileSync(dotGitFile, "utf8");
+    outcome = readRegularFileSync(path, { maxBytes: CONTROL_FILE_MAX_BYTES });
   } catch (error) {
-    throw new RepositoryRootsError(`Cannot read the .git file at ${dotGitFile}: ${(error as Error).message}`, {
+    throw new RepositoryRootsError(`Cannot read ${description} at ${path}: ${(error as Error).message}`, {
       cause: error
     });
+  }
+  if (outcome.status === "missing") return null;
+  if (outcome.status === "not-regular") {
+    throw new RepositoryRootsError(
+      `${description} at ${path} is not a plain file; cannot prove the repository layout through it`
+    );
+  }
+  return Buffer.from(outcome.bytes).toString("utf8");
+}
+
+function readGitdirPointer(dotGitFile: string): string {
+  const content = readControlFile(dotGitFile, "the .git file");
+  if (content === null) {
+    throw new RepositoryRootsError(`The .git file at ${dotGitFile} is missing; cannot locate the repository`);
   }
   const match = GITDIR_POINTER.exec(content.trim());
   if (match === null) {
@@ -125,17 +149,7 @@ function readGitdirPointer(dotGitFile: string): string {
  * submodule checkout uses its gitdir as the common dir directly.
  */
 function commonGitDirOf(gitdirPath: string): string {
-  let commondir: string | null = null;
-  try {
-    commondir = readFileSync(join(gitdirPath, "commondir"), "utf8");
-  } catch (error) {
-    if (errnoCode(error) !== "ENOENT") {
-      throw new RepositoryRootsError(
-        `Cannot read the commondir file at ${join(gitdirPath, "commondir")}: ${(error as Error).message}`,
-        { cause: error }
-      );
-    }
-  }
+  const commondir = readControlFile(join(gitdirPath, "commondir"), "the commondir file");
   if (commondir !== null) {
     const trimmed = commondir.trim();
     if (trimmed.length === 0) {
@@ -154,38 +168,16 @@ function commonGitDirOf(gitdirPath: string): string {
  * Verifies the bidirectional registration of a linked worktree. The registry
  * entry's gitdir file points at `<worktree>/.git`; that entry must itself be a
  * plain file (never a directory or a symlink) carrying a valid `gitdir:`
- * pointer back to exactly this registry directory. A missing, unreadable,
+ * pointer back to exactly this registry directory — all established through
+ * the same descriptor the content is read from. A missing, unreadable,
  * mistyped, malformed, or cross-wired registration fails closed: the guard
  * can no longer prove the archive root is outside every repository.
  */
 function verifyWorktreeRegistration(name: string, dotGitFile: string, registryDir: string): void {
-  let stats;
-  try {
-    stats = lstatSync(dotGitFile);
-  } catch (error) {
+  const content = readControlFile(dotGitFile, `the .git entry of registered worktree ${name}`);
+  if (content === null) {
     throw new RepositoryRootsError(
-      `The .git entry of registered worktree ${name} at ${dotGitFile} is missing or cannot be inspected: ${(error as Error).message}`,
-      { cause: error }
-    );
-  }
-  if (stats.isSymbolicLink()) {
-    throw new RepositoryRootsError(
-      `The .git entry of registered worktree ${name} at ${dotGitFile} is a symbolic link; cannot prove the archive root is outside the repository`
-    );
-  }
-  if (!stats.isFile()) {
-    throw new RepositoryRootsError(
-      `The .git entry of registered worktree ${name} at ${dotGitFile} is not a plain file; cannot prove the archive root is outside the repository`
-    );
-  }
-
-  let content: string;
-  try {
-    content = readFileSync(dotGitFile, "utf8");
-  } catch (error) {
-    throw new RepositoryRootsError(
-      `Cannot read the .git file of registered worktree ${name} at ${dotGitFile}: ${(error as Error).message}`,
-      { cause: error }
+      `The .git entry of registered worktree ${name} at ${dotGitFile} is missing or cannot be inspected`
     );
   }
   const match = GITDIR_POINTER.exec(content.trim());
@@ -229,25 +221,37 @@ export function discoverRepositoryRootsFromFilesystem(startDir: string): string[
   let dir = resolve(startDir);
   let currentRoot: string | null = null;
   let dotGitPath: string | null = null;
+  let dotGitInfo: Stats | null = null;
   for (;;) {
     const candidate = join(dir, ".git");
+    let info: Stats;
     try {
-      statSync(candidate);
-      currentRoot = dir;
-      dotGitPath = candidate;
-      break;
+      info = lstatSync(candidate);
     } catch (error) {
       if (errnoCode(error) !== "ENOENT") {
         throw new RepositoryRootsError(`Cannot inspect ${candidate}: ${(error as Error).message}`, {
           cause: error
         });
       }
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+      continue;
     }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
+    // A symlinked .git would resolve the repository through a link: the guard
+    // would protect whatever the link happens to target (or silently shrink to
+    // the worktree alone), so it must refuse to prove anything here.
+    if (info.isSymbolicLink()) {
+      throw new RepositoryRootsError(
+        `The .git entry at ${candidate} is a symbolic link; cannot prove which repository surrounds this directory`
+      );
+    }
+    currentRoot = dir;
+    dotGitPath = candidate;
+    dotGitInfo = info;
+    break;
   }
-  if (currentRoot === null || dotGitPath === null) {
+  if (currentRoot === null || dotGitPath === null || dotGitInfo === null) {
     throw new RepositoryRootsError(`No Git repository root found above ${startDir}`);
   }
 
@@ -257,17 +261,9 @@ export function discoverRepositoryRootsFromFilesystem(startDir: string): string[
   }
   const roots = new Set<string>([currentReal]);
 
-  let dotGitStats;
-  try {
-    dotGitStats = statSync(dotGitPath);
-  } catch (error) {
-    throw new RepositoryRootsError(`Cannot inspect ${dotGitPath}: ${(error as Error).message}`, {
-      cause: error
-    });
-  }
-  const commonDir = dotGitStats.isDirectory()
+  const commonDir = dotGitInfo.isDirectory()
     ? dotGitPath
-    : dotGitStats.isFile()
+    : dotGitInfo.isFile()
       ? commonGitDirOf(readGitdirPointer(dotGitPath))
       : null;
   if (commonDir === null) {
@@ -309,13 +305,10 @@ export function discoverRepositoryRootsFromFilesystem(startDir: string): string[
     }
     const worktreeDir = join(worktreesDir, entry.name);
     const gitdirFile = join(worktreeDir, "gitdir");
-    let content: string;
-    try {
-      content = readFileSync(gitdirFile, "utf8");
-    } catch (error) {
+    const content = readControlFile(gitdirFile, `the gitdir file of registered worktree ${entry.name}`);
+    if (content === null) {
       throw new RepositoryRootsError(
-        `Cannot read the gitdir file of registered worktree ${entry.name}: ${(error as Error).message}`,
-        { cause: error }
+        `The gitdir file of registered worktree ${entry.name} is missing; cannot resolve its worktree`
       );
     }
     const recordedPath = content.trim();

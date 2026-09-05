@@ -201,7 +201,7 @@ test(
         const other = await pngBytes("#8a2be2");
         const otherSha = sha256OfBytes(other);
 
-        const archiveEntries: Array<{ fileId: string; archiveKey: string; sha256: string }> = [];
+        const archiveEntries: Array<{ fileId: string; archiveKey: string; sha256: string; byteSize: number }> = [];
         for (const [index, entry] of [
           { fileId: fileIds[0]!, bytes: identical, sha256: identicalSha },
           { fileId: fileIds[1]!, bytes: identical, sha256: identicalSha },
@@ -215,7 +215,12 @@ test(
               extension: "png"
             })
           ).archiveKey;
-          archiveEntries.push({ fileId: entry.fileId, archiveKey, sha256: entry.sha256 });
+          archiveEntries.push({
+            fileId: entry.fileId,
+            archiveKey,
+            sha256: entry.sha256,
+            byteSize: entry.bytes.byteLength
+          });
           void index;
         }
 
@@ -231,7 +236,7 @@ test(
                 relativePath: `imports/grouping/bead-${index + 1}.png`,
                 sha256: entry.sha256,
                 archiveKey: entry.archiveKey,
-                byteSize: 4096,
+                byteSize: entry.byteSize,
                 lastModifiedMs: 1_750_000_000_000 + index,
                 kind: "PNG"
               }))
@@ -287,6 +292,7 @@ test(
             payload: {
               groupId: group.id,
               processingVersion: 1,
+              primaryFileId: fileIds[0]!,
               files: [{ fileId: fileIds[0]!, archiveKey, sha256 }]
             },
             maxRetries: 3
@@ -456,6 +462,7 @@ test(
             payload: {
               groupId: group.id,
               processingVersion: 1,
+              primaryFileId: fileIds[0]!,
               files: [{ fileId: fileIds[0]!, archiveKey, sha256 }]
             },
             maxRetries: 3

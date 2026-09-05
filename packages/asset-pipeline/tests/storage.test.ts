@@ -435,3 +435,228 @@ test("removeStaging consumes staging entries idempotently but refuses raw and pr
     await rm(repositoryRoot, { recursive: true, force: true });
   }
 });
+
+test("fails closed when a supplied repository root cannot be resolved", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    assert.throws(
+      () => store(root, "/definitely/not/an/existing/repository"),
+      (error: unknown) =>
+        error instanceof ArchiveStoreError && error.code === "REPOSITORY_ROOT_INVALID",
+      "a supplied repository root that cannot be resolved must fail closed instead of being skipped"
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("read() reports READ_FAILED instead of KEY_INVALID when the directory denies search", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const bytes = Buffer.from("archived content");
+    const sha256 = sha256OfBytes(bytes);
+    const put = await archive.putOriginal({ sessionId: "sess-1", bytes, sha256, extension: "jpg" });
+
+    // The key exists and holds the right content; only the directory's
+    // permissions block access. The read must open the file through one
+    // verified descriptor and surface the permission failure as READ_FAILED —
+    // reporting KEY_INVALID would claim the archived file does not exist.
+    const rawDir = join(root, "imports", "sess-1", "raw");
+    await chmod(rawDir, 0o000);
+    try {
+      await assert.rejects(
+        archive.read(put.archiveKey),
+        (error: unknown) => error instanceof ArchiveStoreError && error.code === "READ_FAILED",
+        "an unreadable directory must surface as READ_FAILED, not as a missing key"
+      );
+    } finally {
+      await chmod(rawDir, 0o700);
+    }
+
+    assert.deepEqual(Buffer.from(await archive.read(put.archiveKey)), bytes);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("removeStaging rejects malformed staging keys through the strict staging key parser", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const validUuid = "00000000-0000-4000-8000-000000000000";
+    const malformed = [
+      "imports/sess-1/staging/not-a-uuid",
+      "imports/sess-1/staging/00000000-0000-4000-8000-00000000000g",
+      "imports/sess-1/staging/00000000-0000-4000-8000-00000000000A",
+      "imports/sess-1/staging/00000000-0000-4000-8000-000000000000/extra",
+      "imports/sess-1/raw/00000000-0000-4000-8000-000000000000"
+    ];
+    for (const key of malformed) {
+      await assert.rejects(
+        archive.removeStaging(key),
+        (error: unknown) => error instanceof ArchiveStoreError && error.code === "KEY_INVALID",
+        `${key} must be rejected by the strict staging key parser`
+      );
+    }
+    // A well-formed staging key that simply does not exist stays an idempotent no-op.
+    await archive.removeStaging(`imports/sess-1/staging/${validUuid}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("removeStaging treats only ENOENT as an idempotent missing entry", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    await archive.putStaging({ sessionId: "sess-1", bytes: Buffer.from("staged") });
+    const stagingDir = join(root, "imports", "sess-1", "staging");
+    await chmod(stagingDir, 0o000);
+    try {
+      await assert.rejects(
+        archive.removeStaging("imports/sess-1/staging/00000000-0000-4000-8000-000000000000"),
+        (error: unknown) =>
+          error instanceof ArchiveStoreError && error.code === "WRITE_FAILED",
+        "an unreadable staging directory is an error, not a silent missing entry"
+      );
+    } finally {
+      await chmod(stagingDir, 0o700);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("listSessionFiles fails closed on an unreadable session directory", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const bytes = Buffer.from("listed content");
+    await archive.putOriginal({
+      sessionId: "sess-1",
+      bytes,
+      sha256: sha256OfBytes(bytes),
+      extension: "jpg"
+    });
+
+    const sessionDir = join(root, "imports", "sess-1");
+    await chmod(sessionDir, 0o000);
+    try {
+      await assert.rejects(
+        archive.listSessionFiles("sess-1"),
+        (error: unknown) =>
+          error instanceof ArchiveStoreError && error.code === "READ_FAILED",
+        "an unreadable session directory must not silently report an empty listing"
+      );
+    } finally {
+      await chmod(sessionDir, 0o700);
+    }
+
+    // An unknown session has no directory at all and stays an empty listing.
+    assert.deepEqual(await archive.listSessionFiles("sess-unknown"), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("listSessionFiles reports regular files only and never follows or lists symlinks", async () => {
+  const base = await mkdtemp(join(tmpdir(), "asset-pipeline-storage-"));
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const bytes = Buffer.from("listed content");
+    const sha256 = sha256OfBytes(bytes);
+    await archive.putOriginal({ sessionId: "sess-1", bytes, sha256, extension: "jpg" });
+
+    const outside = join(base, "outside");
+    await mkdir(join(outside, "deep"), { recursive: true });
+    await writeFile(join(outside, "secret.bin"), "secret");
+    await writeFile(join(outside, "deep", "nested.bin"), "nested");
+    await symlink(outside, join(root, "imports", "sess-1", "raw", "escape-link"), "dir");
+
+    const files = await archive.listSessionFiles("sess-1");
+    assert.ok(files.includes(`imports/sess-1/raw/${sha256}.jpg`), "the real archived file is listed");
+    assert.ok(
+      !files.includes("imports/sess-1/raw/escape-link"),
+      "a symlink must not be reported as an archived file"
+    );
+    assert.ok(
+      files.every((key) => !key.includes("secret") && !key.includes("nested")),
+      "the listing must never follow a symlink into another tree"
+    );
+  } finally {
+    await rm(base, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("putOriginal rejects a regular file used as an archive path ancestor", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    await writeFile(join(root, "imports"), "not a directory");
+    const bytes = Buffer.from("archived content");
+    await assert.rejects(
+      store(root, repositoryRoot).putOriginal({
+        sessionId: "sess-1",
+        bytes,
+        sha256: sha256OfBytes(bytes),
+        extension: "jpg"
+      }),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "KEY_INVALID",
+      "every existing intermediate archive segment must be a real directory"
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("putOriginal wraps archive-path permission failures in the stable WRITE_FAILED code", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  const importsDir = join(root, "imports");
+  try {
+    await mkdir(importsDir);
+    await chmod(importsDir, 0o000);
+    const bytes = Buffer.from("archived content");
+    await assert.rejects(
+      store(root, repositoryRoot).putOriginal({
+        sessionId: "sess-1",
+        bytes,
+        sha256: sha256OfBytes(bytes),
+        extension: "jpg"
+      }),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "WRITE_FAILED",
+      "filesystem errno values must not escape the ArchiveStore error contract"
+    );
+  } finally {
+    await chmod(importsDir, 0o700).catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("putProcessed rejects unsafe processing versions", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    await assert.rejects(
+      store(root, repositoryRoot).putProcessed({
+        sessionId: "sess-1",
+        groupId: "group-1",
+        processingVersion: Number.MAX_SAFE_INTEGER + 1,
+        fileName: "bead-512.webp",
+        bytes: Buffer.from("webp")
+      }),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "KEY_INVALID"
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});

@@ -102,6 +102,30 @@ test("filesystem discovery fails closed when no .git exists above the start dire
   }
 });
 
+test("filesystem discovery fails closed when the discovered .git entry is a symlink", () => {
+  const layout = makeSyntheticWorktrees();
+  try {
+    // Replace the linked worktree's plain-file .git pointer with a symlink at
+    // the same location. Following it (stat) silently scopes the guard to the
+    // worktree alone and drops the main checkout, so the discovery must
+    // refuse to prove anything through a symlinked .git.
+    rmSync(join(layout.worktree, ".git"));
+    symlinkSync(join(layout.main, ".git", "worktrees", "wt"), join(layout.worktree, ".git"));
+
+    assert.throws(
+      () => discoverRepositoryRootsFromFilesystem(join(layout.worktree, "apps", "worker", "src")),
+      (error: unknown) => {
+        assert.ok(error instanceof RepositoryRootsError);
+        assert.match(error.message, /symbolic link/i);
+        return true;
+      },
+      "a symlinked .git entry must fail closed; the guard may not follow it and lose the main checkout"
+    );
+  } finally {
+    rmSync(layout.base, { recursive: true, force: true });
+  }
+});
+
 test("git worktree listing keeps existing worktrees and drops prunable entries", async () => {
   const existingA = makeTempDir();
   const existingB = makeTempDir();

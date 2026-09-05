@@ -3,8 +3,13 @@ import test from "node:test";
 
 import { PersistenceError, type ClaimedAssetJob } from "@mystcrag/database";
 
-import { JobExecutionError, type JobHandlerOutcome, type JobHandlerResult } from "../src/jobs.js";
-import { AssetWorker, type WorkerRepository } from "../src/runtime.js";
+import {
+  JobExecutionError,
+  type JobHandlerOutcome,
+  type JobHandlerResult,
+  type JobRunContext
+} from "../src/jobs.js";
+import { AssetWorker, formatErrorForLog, type WorkerRepository } from "../src/runtime.js";
 
 const SESSION = "session-runtime-test";
 
@@ -105,19 +110,22 @@ function makeWorker(
   repository: WorkerRepository,
   options: {
     jobs?: ClaimedAssetJob[];
-    handler?: (job: ClaimedAssetJob) => Promise<JobHandlerOutcome>;
+    handler?: (job: ClaimedAssetJob, context: JobRunContext) => Promise<JobHandlerOutcome>;
     leaseMs?: number;
     transientRetryDelayMs?: number;
+    logger?: { info(message: string): void; error(message: string, detail?: string): void };
+    workerId?: string;
   } = {}
 ): AssetWorker {
   return new AssetWorker({
     repository,
-    workerId: "worker-under-test",
+    workerId: options.workerId ?? "worker-under-test",
     leaseMs: options.leaseMs ?? 60_000,
     heartbeatMs: 5,
     pollMs: 1,
     shutdownGraceMs: 5_000,
     transientRetryDelayMs: options.transientRetryDelayMs ?? 45_000,
+    logger: options.logger,
     handlers: {
       ARCHIVE_FILE: options.handler ?? (async () => ({ result: groupSessionResult })),
       GROUP_SESSION: options.handler ?? (async () => ({ result: groupSessionResult })),
@@ -163,6 +171,7 @@ test("a failed heartbeat abandons the job: no completion, no failure, no further
 test("a lease lost at completion time abandons the job instead of failing it", async () => {
   const repository = new FakeRepository({
     jobs: [queuedJob()],
+    heartbeatResult: () => false, // the probe confirms a real takeover
     completeBehavior: () => {
       throw new PersistenceError("CONFLICT", "lease expired");
     }
@@ -305,6 +314,7 @@ test("a lost lease at completion time skips the post-commit cleanup", async () =
   const cleanups: string[] = [];
   const repository = new FakeRepository({
     jobs: [queuedJob()],
+    heartbeatResult: () => false, // the probe confirms a real takeover
     completeBehavior: () => {
       throw new PersistenceError("CONFLICT", "lease expired");
     }
@@ -356,4 +366,164 @@ test("a failing post-commit cleanup cannot turn the completed job into a failure
   assert.deepEqual(cleanups, ["attempted"]);
   assert.equal(repository.callsOf("completeJob").length, 1, "the completion stays committed");
   assert.equal(repository.callsOf("failJob").length, 0, "a completed job is never flipped to failed");
+});
+
+// ---------------------------------------------------------------------------
+// Round 5 H: a lost lease must reach the handler as an abort signal before
+// its next side effect, and a completion CONFLICT must be disambiguated by
+// probing the lease instead of assuming a takeover.
+// ---------------------------------------------------------------------------
+
+test("a completion CONFLICT with the lease still held is a data conflict, not a takeover", async () => {
+  const repository = new FakeRepository({
+    jobs: [queuedJob()],
+    // the lease probe succeeds: the conflict is about the result data
+    completeBehavior: () => {
+      throw new PersistenceError("CONFLICT", "result contract violation");
+    }
+  });
+  const worker = makeWorker(repository);
+
+  const outcome = await worker.runOnce();
+
+  assert.equal(outcome, "failed", "a held lease means the completion data was rejected, not the worker");
+  const failures = repository.callsOf("failJob");
+  assert.equal(failures.length, 1, "the job records a bounded retry for a rejected result");
+  assert.equal((failures[0]!.args[1] as { code: string }).code, "COMPLETION_REJECTED");
+  assert.ok(repository.callsOf("heartbeatJob").length >= 1, "the probe distinguishes the conflict kind");
+});
+
+test("a lost lease aborts the handler before its next side effect", async () => {
+  const events: string[] = [];
+  let beats = 0;
+  const repository = new FakeRepository({
+    jobs: [queuedJob()],
+    heartbeatResult: () => (beats += 1) <= 1 // the first beat holds, the next loses
+  });
+  const worker = makeWorker(repository, {
+    handler: async (job, context) => {
+      events.push("handler-started");
+      assert.ok(context, "the runtime passes a run context carrying the lease signal");
+      assert.equal(context.signal.aborted, false, "the signal starts clear");
+      await new Promise((resolve) => setTimeout(resolve, 40)); // the heartbeat fires here
+      if (context.signal.aborted) {
+        events.push("aborted-before-side-effect");
+        return { result: groupSessionResult };
+      }
+      events.push("side-effect");
+      return { result: groupSessionResult };
+    }
+  });
+
+  const outcome = await worker.runOnce();
+
+  assert.equal(outcome, "abandoned");
+  assert.deepEqual(
+    events,
+    ["handler-started", "aborted-before-side-effect"],
+    "the handler can observe the abort and no side effect starts after it"
+  );
+  assert.equal(repository.callsOf("completeJob").length, 0);
+  assert.equal(repository.callsOf("failJob").length, 0);
+});
+
+test("throwIfLeaseLost aborts the handler with the stable JOB_LEASE_CONFLICT code", async () => {
+  let beats = 0;
+  const repository = new FakeRepository({
+    jobs: [queuedJob()],
+    heartbeatResult: () => (beats += 1) <= 1
+  });
+  let caught: unknown;
+  const worker = makeWorker(repository, {
+    handler: async (job, context) => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      try {
+        context.throwIfLeaseLost();
+      } catch (error) {
+        caught = error;
+        throw error;
+      }
+      return { result: groupSessionResult };
+    }
+  });
+
+  assert.equal(await worker.runOnce(), "abandoned");
+  assert.ok(caught instanceof JobExecutionError, "the abort surfaces as a JobExecutionError");
+  assert.equal((caught as JobExecutionError).code, "JOB_LEASE_CONFLICT");
+  assert.equal(repository.callsOf("failJob").length, 0, "a lost lease never records a bogus failure");
+  assert.equal(repository.callsOf("completeJob").length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Round 5 I: logs carry safe context only — never raw error objects and
+// never credential-bearing values.
+// ---------------------------------------------------------------------------
+
+test("worker error logs are redacted strings and never leak secrets", async () => {
+  const logged: Array<{ message: string; detail?: string }> = [];
+  const logger = {
+    info: (message: string) => logged.push({ message }),
+    error: (message: string, detail?: string) => logged.push({ message, detail })
+  };
+  const repository = new FakeRepository({ jobs: [queuedJob()] });
+  const worker = makeWorker(repository, {
+    logger,
+    handler: async () => {
+      throw new Error(
+        "connect failed: postgresql://asset:supersecret@db.internal:5432/mystcrag?password=hunter2"
+      );
+    }
+  });
+
+  assert.equal(await worker.runOnce(), "failed");
+
+  const errorLogs = logged.filter((entry) => entry.message.includes("job job-1"));
+  assert.ok(errorLogs.length > 0, "the failure is logged with safe context");
+  for (const entry of errorLogs) {
+    assert.equal(typeof entry.detail, "string", "the detail is a formatted string, never a raw Error");
+    assert.ok(!entry.detail!.includes("supersecret"), "the credential must not survive redaction");
+    assert.ok(!entry.detail!.includes("hunter2"), "the password must not survive redaction");
+    assert.ok(!entry.detail!.includes("postgresql://"), "connection strings must not survive redaction");
+  }
+});
+
+test("formatErrorForLog strips credential-bearing values from any message", () => {
+  const formatted = formatErrorForLog(
+    new Error(
+      "boom postgresql://user:pass@host:5432/db password=hunter2 token=abc123 at /Users/operator/private/archive\nforged-line"
+    )
+  );
+  assert.ok(!formatted.includes("pass@host"));
+  assert.ok(!formatted.includes("hunter2"));
+  assert.ok(!formatted.includes("abc123"));
+  assert.ok(!formatted.includes("/Users/operator/private/archive"));
+  assert.ok(!formatted.includes("\n"), "a diagnostic must stay on one log line");
+  assert.match(formatted, /boom/);
+  assert.equal(typeof formatErrorForLog("plain string failure"), "string");
+  assert.equal(formatErrorForLog(undefined), "unknown error");
+});
+
+test("AssetWorker rejects control characters in workerId even when constructed without the env loader", () => {
+  const repository = new FakeRepository();
+  for (const workerId of ["evil\nworker", "evil\rworker", "bad\tworker", "bad\x00worker", "bad\x7fworker"]) {
+    assert.throws(
+      () => makeWorker(repository, { workerId }),
+      /control characters/i,
+      `direct construction must reject ${JSON.stringify(workerId)}`
+    );
+  }
+});
+
+test("persisted failure diagnostics are redacted before failJob receives them", async () => {
+  const repository = new FakeRepository({ jobs: [queuedJob()] });
+  const worker = makeWorker(repository, {
+    handler: async () => {
+      throw new Error("postgresql://asset:supersecret@db.internal:5432/mystcrag at /Users/operator/archive");
+    }
+  });
+
+  assert.equal(await worker.runOnce(), "failed");
+  const failure = repository.callsOf("failJob")[0]!.args[1] as { message: string };
+  assert.ok(!failure.message.includes("supersecret"));
+  assert.ok(!failure.message.includes("/Users/operator/archive"));
 });

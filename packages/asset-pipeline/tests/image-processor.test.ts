@@ -181,6 +181,24 @@ test("removes border-connected background and shadows but keeps interior highlig
   assert.ok(result.measurements.holeRatio < 0.02, `hole ratio ${result.measurements.holeRatio} must stay near zero`);
 });
 
+test("reports a meaningful interior hole ratio for a donut-shaped subject", async () => {
+  // A ring-shaped bead plugs its own hole: the flood-fill keeps the enclosed
+  // background-colored disc opaque, so the only honest signal that the output
+  // carries a plugged hole is a non-zero interior hole ratio. The metric must
+  // not be structurally dead.
+  const bytes = await renderSvg(
+    beadSceneSvg({
+      bead: { color: "#c0392b", cx: 400, cy: 400, r: 300 },
+      interiorWindow: { cx: 400, cy: 400, r: 150 }
+    })
+  );
+  const result = await processBeadImage({ bytes });
+  assert.ok(
+    result.measurements.holeRatio > 0.05,
+    `a donut subject must report an interior hole ratio above the 0.05 QC cap, got ${result.measurements.holeRatio}`
+  );
+});
+
 test("keeps subject color faithful and centered at roughly 80 percent of the canvas", async () => {
   const bytes = await renderSvg(beadSceneSvg({ bead: { color: "#c0392b", cx: 400, cy: 400, r: 300 } }));
   const result = await processBeadImage({ bytes });
@@ -208,6 +226,23 @@ test("keeps subject color faithful and centered at roughly 80 percent of the can
   assert.equal(result.measurements.clipped, false);
   assert.equal(result.measurements.upscaleRequired, false);
   assert.ok(result.measurements.subjectEffectiveEdgePx >= 410, "a 600px subject must not require upscaling");
+});
+
+test("subjectCanvasRatio stays scale-consistent for large sources", async () => {
+  // Same scene geometry as the 800px fixture (bead covering 75% of the frame
+  // edge) rendered at 3200px: the ratio must stay near the 80% target
+  // footprint instead of collapsing when working-resolution pixel counts get
+  // mixed with full-resolution region coordinates.
+  const size = 3200;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
+    <rect width="${size}" height="${size}" fill="#f0f0f0"/>
+    <circle cx="1600" cy="1600" r="1200" fill="#c0392b"/>
+  </svg>`;
+  const result = await processBeadImage({ bytes: await renderSvg(svg) });
+  assert.ok(
+    result.measurements.subjectCanvasRatio >= 0.4 && result.measurements.subjectCanvasRatio <= 0.6,
+    `subject canvas ratio ${result.measurements.subjectCanvasRatio} must match the 800px scene geometry`
+  );
 });
 
 test("does not upscale a small subject and reports insufficient effective resolution", async () => {

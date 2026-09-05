@@ -7,7 +7,14 @@ import type {
   FailAssetJobOutcome
 } from "@mystcrag/database";
 
-import { classifyHandlerError, type ClassifiedJobError, type JobHandlerOutcome, type JobHandlers } from "./jobs.js";
+import {
+  classifyHandlerError,
+  JobExecutionError,
+  type ClassifiedJobError,
+  type JobHandlerOutcome,
+  type JobHandlers,
+  type JobRunContext
+} from "./jobs.js";
 
 export type WorkerRepository = {
   claimNextJob(workerId: string, leaseUntil: Date): Promise<ClaimedAssetJob | null>;
@@ -29,7 +36,7 @@ export type WorkerRunOutcome = "completed" | "idle" | "failed" | "abandoned";
 
 export type AssetWorkerLogger = {
   info(message: string): void;
-  error(message: string, error?: unknown): void;
+  error(message: string, detail?: string): void;
 };
 
 export type AssetWorkerOptions = {
@@ -45,6 +52,42 @@ export type AssetWorkerOptions = {
 };
 
 const MAX_WORKER_ID_LENGTH = 160;
+const CONTROL_CHARACTER_PATTERN = /[\0-\x1f\u007f]/;
+
+// Redaction patterns for anything a failure detail might carry. Logs receive
+// formatted strings only — never raw Error objects — and credential-bearing
+// values (connection strings, passwords, tokens) are stripped before a line
+// ever reaches an operator or a log shipper.
+const URL_WITH_CREDENTIALS_PATTERN = /[a-z][a-z0-9+.-]*:\/\/[^\s@/"']+:[^\s@/"']*@[^\s]+/gi;
+const SECRET_ASSIGNMENT_PATTERN = /\b(password|passwd|secret|token|api[_-]?key|access[_-]?key|refresh[_-]?token|credential)s?\b\s*[=:]\s*[^\s,;&"']+/gi;
+const POSIX_ABSOLUTE_PATH_PATTERN = /(^|[\s("'=])\/(?:[^/\s"'(),;]+\/)*[^/\s"'(),;]+/g;
+const WINDOWS_ABSOLUTE_PATH_PATTERN = /(^|[\s("'=])[A-Za-z]:\\(?:[^\\\s"'(),;]+\\)*[^\\\s"'(),;]+/g;
+const LOG_CONTROL_CHARACTERS_PATTERN = /[\0-\x1f\u007f]+/g;
+
+function redactSecrets(text: string): string {
+  return text
+    .replace(URL_WITH_CREDENTIALS_PATTERN, "[REDACTED-URL]")
+    .replace(SECRET_ASSIGNMENT_PATTERN, (match) => `${match.split(/[=:]/)[0]!.trim()}=[REDACTED]`)
+    .replace(POSIX_ABSOLUTE_PATH_PATTERN, (_match, prefix: string) => `${prefix}[REDACTED-PATH]`)
+    .replace(WINDOWS_ABSOLUTE_PATH_PATTERN, (_match, prefix: string) => `${prefix}[REDACTED-PATH]`)
+    .replace(LOG_CONTROL_CHARACTERS_PATTERN, " ")
+    .trim();
+}
+
+/**
+ * Formats any thrown value into a safe single log detail line: a plain
+ * message string with credentials redacted. Raw Error objects are never
+ * handed to a logger, so stack traces, causes and nested properties (which
+ * may carry connection strings) cannot leak into log storage.
+ */
+export function formatErrorForLog(error: unknown): string {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
+  if (message === undefined || message === "") {
+    return "unknown error";
+  }
+  return redactSecrets(message);
+}
 
 /**
  * Lease-driven job loop over the asset processing queue. Every state change
@@ -66,7 +109,14 @@ export class AssetWorker {
   private resolveShutdown!: () => void;
 
   constructor(options: AssetWorkerOptions) {
-    if (typeof options.workerId !== "string" || options.workerId.length === 0 || options.workerId.length > MAX_WORKER_ID_LENGTH) {
+    if (typeof options.workerId === "string" && CONTROL_CHARACTER_PATTERN.test(options.workerId)) {
+      throw new Error("workerId must not contain control characters or newlines");
+    }
+    if (
+      typeof options.workerId !== "string" ||
+      options.workerId.length === 0 ||
+      options.workerId.length > MAX_WORKER_ID_LENGTH
+    ) {
       throw new Error("workerId must be a non-empty string of at most 160 characters");
     }
     for (const [field, value] of Object.entries({
@@ -76,9 +126,12 @@ export class AssetWorker {
       shutdownGraceMs: options.shutdownGraceMs,
       transientRetryDelayMs: options.transientRetryDelayMs
     })) {
-      if (!Number.isFinite(value) || value <= 0) {
-        throw new Error(`AssetWorker option ${field} must be a positive number`);
+      if (!Number.isSafeInteger(value) || value <= 0) {
+        throw new Error(`AssetWorker option ${field} must be a positive safe integer`);
       }
+    }
+    if (options.heartbeatMs >= options.leaseMs) {
+      throw new Error("AssetWorker heartbeatMs must stay strictly below leaseMs");
     }
     this.repository = options.repository;
     this.handlers = options.handlers;
@@ -89,7 +142,7 @@ export class AssetWorker {
     this.transientRetryDelayMs = options.transientRetryDelayMs;
     this.logger = options.logger ?? {
       info: (message) => console.log(`[asset-worker ${this.workerId}] ${message}`),
-      error: (message, error) => console.error(`[asset-worker ${this.workerId}] ${message}`, error ?? "")
+      error: (message, detail) => console.error(`[asset-worker ${this.workerId}] ${message}`, detail ?? "")
     };
     this.shutdownSignal = new Promise((resolve) => {
       this.resolveShutdown = resolve;
@@ -122,7 +175,7 @@ export class AssetWorker {
       try {
         outcome = await this.runOnce();
       } catch (error) {
-        this.logger.error("claiming the next job failed", error);
+        this.logger.error("claiming the next job failed", formatErrorForLog(error));
         await this.waitFor(this.pollMs);
         continue;
       }
@@ -156,18 +209,40 @@ export class AssetWorker {
     if (!leaseHeld) return "abandoned";
 
     let leaseLost = false;
+    // The abort signal reaches the handler as its lease guard: the moment a
+    // heartbeat reports the lease lost, the signal aborts and the handler can
+    // stop before its next side effect instead of writing storage or business
+    // rows that a new lease holder will conflict with.
+    const leaseController = new AbortController();
+    const runContext: JobRunContext = {
+      signal: leaseController.signal,
+      throwIfLeaseLost: () => {
+        if (leaseController.signal.aborted) {
+          throw new JobExecutionError(
+            "JOB_LEASE_CONFLICT",
+            "The job lease was lost while the handler was running; the job must be reclaimed, not retried here",
+            false
+          );
+        }
+      }
+    };
     const heartbeat = this.startHeartbeat(job, () => {
       leaseLost = true;
+      leaseController.abort();
     });
 
     try {
       let outcome: JobHandlerOutcome;
       try {
-        outcome = await this.handlers[job.jobType](job);
+        outcome = await this.handlers[job.jobType](job, runContext);
       } catch (error) {
         heartbeat.stop();
         if (leaseLost) return "abandoned";
         const classified = classifyHandlerError(error);
+        this.logger.error(
+          `job ${job.jobId} failed (${classified.code})`,
+          formatErrorForLog(error)
+        );
         if (!options.submit) return "failed";
         return this.submitFailure(job, classified);
       }
@@ -178,10 +253,25 @@ export class AssetWorker {
       try {
         await this.repository.completeJob(job.jobId, outcome.result, job.lease);
       } catch (error) {
-        // A lost lease means another worker owns the job now: no cleanup may
-        // run, the new holder still needs the staging entries.
-        if (isLeaseConflict(error)) return "abandoned";
-        this.logger.error(`completing job ${job.jobId} was rejected`, error);
+        // A CONFLICT at completion is ambiguous on its own: it may be a real
+        // lease takeover (another worker owns the job now, nothing more may
+        // happen here) or the result data itself was rejected. One lease probe
+        // with the same token disambiguates: a held lease means the result was
+        // rejected and deserves a bounded retry; a lost lease means abandon.
+        if (isLeaseConflict(error)) {
+          const stillHeld = await this.beat(job);
+          if (!stillHeld) return "abandoned";
+          this.logger.error(
+            `completing job ${job.jobId} was rejected while the lease is held`,
+            formatErrorForLog(error)
+          );
+          return this.submitFailure(job, {
+            code: "COMPLETION_REJECTED",
+            message: `The completion result was rejected: ${errorMessage(error)}`,
+            retryable: true
+          });
+        }
+        this.logger.error(`completing job ${job.jobId} was rejected`, formatErrorForLog(error));
         // The result was rejected for a non-lease reason (e.g. a result
         // contract violation). Record a bounded retry instead of letting the
         // job ping-pong between reclaim cycles forever.
@@ -198,7 +288,10 @@ export class AssetWorker {
       try {
         await outcome.afterCommit?.();
       } catch (error) {
-        this.logger.error(`post-commit cleanup for job ${job.jobId} failed; a staging entry may remain`, error);
+        this.logger.error(
+          `post-commit cleanup for job ${job.jobId} failed; a staging entry may remain`,
+          formatErrorForLog(error)
+        );
       }
       return "completed";
     } finally {
@@ -214,14 +307,17 @@ export class AssetWorker {
     try {
       await this.repository.failJob(
         job.jobId,
-        { code: classified.code, message: classified.message },
+        { code: classified.code, message: formatErrorForLog(classified.message) },
         retryAt,
         job.lease
       );
       return "failed";
     } catch (error) {
       if (isLeaseConflict(error)) return "abandoned";
-      this.logger.error(`recording the failure of job ${job.jobId} failed`, error);
+      this.logger.error(
+        `recording the failure of job ${job.jobId} failed`,
+        formatErrorForLog(error)
+      );
       // The lease is left to expire; the reclaimer re-runs the job.
       return "abandoned";
     }
@@ -235,7 +331,7 @@ export class AssetWorker {
     try {
       return await this.repository.heartbeatJob(job.jobId, job.lease, this.nextLeaseUntil());
     } catch (error) {
-      this.logger.error(`heartbeating job ${job.jobId} failed`, error);
+      this.logger.error(`heartbeating job ${job.jobId} failed`, formatErrorForLog(error));
       return false;
     }
   }

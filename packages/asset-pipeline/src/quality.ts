@@ -158,13 +158,17 @@ export async function runQualityChecks(input: QualityCheckInput): Promise<AssetQ
       passed:
         mainScan.decodeOk &&
         thumbScan.decodeOk &&
-        mainScan.width === input.main.widthPx &&
-        mainScan.height === input.main.heightPx &&
-        thumbScan.width === input.thumb.widthPx &&
-        thumbScan.height === input.thumb.heightPx,
+        mainScan.width === MAIN_CANVAS_PX &&
+        mainScan.height === MAIN_CANVAS_PX &&
+        thumbScan.width === THUMB_CANVAS_PX &&
+        thumbScan.height === THUMB_CANVAS_PX &&
+        input.main.widthPx === MAIN_CANVAS_PX &&
+        input.main.heightPx === MAIN_CANVAS_PX &&
+        input.thumb.widthPx === THUMB_CANVAS_PX &&
+        input.thumb.heightPx === THUMB_CANVAS_PX,
       detail:
         mainScan.decodeOk && thumbScan.decodeOk
-          ? `Main decodes as ${mainScan.width}×${mainScan.height} and thumb as ${thumbScan.width}×${thumbScan.height} WebP`
+          ? `Main decodes as ${mainScan.width}×${mainScan.height} and thumb as ${thumbScan.width}×${thumbScan.height} WebP; the fixed canvases are ${MAIN_CANVAS_PX}×${MAIN_CANVAS_PX} and ${THUMB_CANVAS_PX}×${THUMB_CANVAS_PX} and declared dimensions must match them exactly`
           : "The processed output does not decode as a WebP image with the expected dimensions"
     },
     {
@@ -178,8 +182,14 @@ export async function runQualityChecks(input: QualityCheckInput): Promise<AssetQ
     {
       id: "output-file-size",
       passed:
-        input.main.byteSize <= thresholds.maxMainBytes && input.thumb.byteSize <= thresholds.maxThumbBytes,
-      detail: `Main is ${input.main.byteSize} bytes and thumb ${input.thumb.byteSize} bytes; caps are ${thresholds.maxMainBytes} and ${thresholds.maxThumbBytes}`
+        input.main.byteSize === input.main.bytes.byteLength &&
+        input.thumb.byteSize === input.thumb.bytes.byteLength &&
+        input.main.byteSize <= thresholds.maxMainBytes &&
+        input.thumb.byteSize <= thresholds.maxThumbBytes,
+      detail:
+        input.main.byteSize === input.main.bytes.byteLength && input.thumb.byteSize === input.thumb.bytes.byteLength
+          ? `Main is ${input.main.byteSize} bytes and thumb ${input.thumb.byteSize} bytes; caps are ${thresholds.maxMainBytes} and ${thresholds.maxThumbBytes}`
+          : "The declared byteSize must equal the actual encoded byte length of each variant"
     }
   ];
 

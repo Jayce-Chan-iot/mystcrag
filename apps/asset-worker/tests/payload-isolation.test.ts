@@ -4,7 +4,11 @@ import test from "node:test";
 import type { ArchiveStore } from "@mystcrag/asset-pipeline";
 import type { ClaimedAssetJob } from "@mystcrag/database";
 
-import { createJobHandlers, JobExecutionError, type JobHandlers } from "../src/jobs.js";
+import {
+  createJobHandlers,
+  JobExecutionError,
+  type JobRunContext
+} from "../src/jobs.js";
 
 const SESSION = "session-payload-isolation";
 const FOREIGN_SESSION = "session-attacker";
@@ -40,8 +44,24 @@ const refusingRepository = {
   }
 };
 
-function makeHandlers(): JobHandlers {
-  return createJobHandlers({ store: refusingStore(), repository: refusingRepository });
+/**
+ * A lease context that never aborts: these tests isolate payload validation,
+ * which must reject before the handler ever consults the lease guard.
+ */
+const NEVER_LOST: JobRunContext = {
+  signal: new AbortController().signal,
+  throwIfLeaseLost: () => {}
+};
+
+type SingleArgHandler = (job: ClaimedAssetJob) => Promise<{ result: unknown; afterCommit?: () => Promise<void> }>;
+
+function makeHandlers(): Record<"ARCHIVE_FILE" | "GROUP_SESSION" | "PROCESS_GROUP", SingleArgHandler> {
+  const handlers = createJobHandlers({ store: refusingStore(), repository: refusingRepository });
+  return {
+    ARCHIVE_FILE: (job) => handlers.ARCHIVE_FILE(job, NEVER_LOST),
+    GROUP_SESSION: (job) => handlers.GROUP_SESSION(job, NEVER_LOST),
+    PROCESS_GROUP: (job) => handlers.PROCESS_GROUP(job, NEVER_LOST)
+  };
 }
 
 function job(overrides: Partial<ClaimedAssetJob> = {}): ClaimedAssetJob {
@@ -168,7 +188,7 @@ test("PROCESS_GROUP rejects a payload groupId that does not match the job's grou
         job({
           jobType: "PROCESS_GROUP",
           groupId: "group-1",
-          payload: { groupId: "group-evil", processingVersion: 1, files }
+          payload: { groupId: "group-evil", processingVersion: 1, primaryFileId: "file-1", files }
         })
       ),
     "payload group differs from the job's group"
@@ -180,7 +200,7 @@ test("PROCESS_GROUP rejects a payload groupId that does not match the job's grou
         job({
           jobType: "PROCESS_GROUP",
           groupId: null,
-          payload: { groupId: "group-1", processingVersion: 1, files }
+          payload: { groupId: "group-1", processingVersion: 1, primaryFileId: "file-1", files }
         })
       ),
     "job without a group id"
@@ -204,7 +224,7 @@ test("PROCESS_GROUP rejects later file entries from another session or a non-raw
           job({
             jobType: "PROCESS_GROUP",
             groupId: "group-1",
-            payload: { groupId: "group-1", processingVersion: 1, files: [goodFile, evilFile] }
+            payload: { groupId: "group-1", processingVersion: 1, primaryFileId: "file-1", files: [goodFile, evilFile] }
           })
         ),
       `PROCESS_GROUP archive key ${archiveKey}`
@@ -295,6 +315,7 @@ test("PROCESS_GROUP rejects an archive key whose digest contradicts the entry's 
           payload: {
             groupId: "group-1",
             processingVersion: 1,
+            primaryFileId: "file-1",
             files: [{ fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_B}.jpg`, sha256: SHA_A }]
           }
         })
@@ -317,4 +338,322 @@ test("GROUP_SESSION accepts a consistent .jpeg key for a JPEG file and reaches t
     /VERIFIED_READ_WAS_CALLED/,
     "a consistent .jpeg key must pass validation and reach verifiedRead"
   );
+});
+
+// ---------------------------------------------------------------------------
+// Round 5: deep payload validation — shared 500-file limit, identity and key
+// uniqueness, safe-integer ranges, normalized paths, and digest/kind
+// consistency, all rejected before any store access.
+// ---------------------------------------------------------------------------
+
+function distinctSha(index: number): string {
+  return index.toString(16).padStart(64, "0");
+}
+
+test("GROUP_SESSION rejects more than the shared 500-file limit before any store access", async () => {
+  const handlers = makeHandlers();
+  const files = Array.from({ length: 501 }, (_, index) =>
+    rawKeyFile({ fileId: `file-${index}`, sha256: distinctSha(index) })
+  );
+  await assertRejectedBeforeStoreAccess(
+    () => handlers.GROUP_SESSION(job({ jobType: "GROUP_SESSION", payload: { files } })),
+    "GROUP_SESSION over the shared 500-file limit"
+  );
+});
+
+test("GROUP_SESSION accepts exactly the shared 500-file limit and reaches the store", async () => {
+  const handlers = makeHandlers();
+  const files = Array.from({ length: 500 }, (_, index) =>
+    rawKeyFile({ fileId: `file-${index}`, sha256: distinctSha(index) })
+  );
+  await assert.rejects(
+    handlers.GROUP_SESSION(job({ jobType: "GROUP_SESSION", payload: { files } })),
+    /VERIFIED_READ_WAS_CALLED/,
+    "exactly 500 files must pass the limit and reach the store"
+  );
+});
+
+test("PROCESS_GROUP rejects more than the shared 500-file limit before any store access", async () => {
+  const handlers = makeHandlers();
+  const files = Array.from({ length: 501 }, (_, index) => ({
+    fileId: `file-${index}`,
+    archiveKey: `imports/${SESSION}/raw/${distinctSha(index)}.jpg`,
+    sha256: distinctSha(index)
+  }));
+  await assertRejectedBeforeStoreAccess(
+    () =>
+      handlers.PROCESS_GROUP(
+        job({
+          jobType: "PROCESS_GROUP",
+          groupId: "group-1",
+          payload: { groupId: "group-1", processingVersion: 1, primaryFileId: "file-0", files }
+        })
+      ),
+    "PROCESS_GROUP over the shared 500-file limit"
+  );
+});
+
+test("GROUP_SESSION rejects duplicate fileId, clientFileId and relativePath", async () => {
+  const handlers = makeHandlers();
+  const duplicates: Array<{
+    description: string;
+    mutate: (second: Record<string, unknown>) => void;
+  }> = [
+    {
+      description: "duplicate fileId",
+      mutate: (second) => {
+        second.fileId = "file-1";
+      }
+    },
+    {
+      description: "duplicate clientFileId",
+      mutate: (second) => {
+        second.clientFileId = "cf-file-1";
+      }
+    },
+    {
+      description: "duplicate relativePath",
+      mutate: (second) => {
+        second.relativePath = "dir/bead-file-1.jpg";
+      }
+    }
+  ];
+  for (const { description, mutate } of duplicates) {
+    const second = rawKeyFile({ fileId: "file-2", sha256: SHA_B }) as unknown as Record<string, unknown>;
+    mutate(second);
+    await assertRejectedBeforeStoreAccess(
+      () =>
+        handlers.GROUP_SESSION(
+          job({ jobType: "GROUP_SESSION", payload: { files: [rawKeyFile(), second] } })
+        ),
+      `GROUP_SESSION ${description}`
+    );
+  }
+});
+
+test("GROUP_SESSION accepts content-addressed duplicates that share one archive key", async () => {
+  const handlers = makeHandlers();
+  // Two distinct identities pointing at the same raw key is the normal shape
+  // of an exact-duplicate upload: content-addressed keys collapse, identities
+  // do not. The payload must reach the store, not be rejected as a duplicate.
+  const first = rawKeyFile({ fileId: "file-1", sha256: SHA_A });
+  const second = rawKeyFile({ fileId: "file-2", sha256: SHA_A });
+  await assert.rejects(
+    handlers.GROUP_SESSION(job({ jobType: "GROUP_SESSION", payload: { files: [first, second] } })),
+    /VERIFIED_READ_WAS_CALLED/,
+    "content-addressed duplicates must pass validation and reach the store"
+  );
+});
+
+test("PROCESS_GROUP rejects a duplicate fileId but accepts content-addressed duplicates", async () => {
+  const handlers = makeHandlers();
+  await assertRejectedBeforeStoreAccess(
+    () =>
+      handlers.PROCESS_GROUP(
+        job({
+          jobType: "PROCESS_GROUP",
+          groupId: "group-1",
+          payload: {
+            groupId: "group-1",
+            processingVersion: 1,
+            primaryFileId: "file-1",
+            files: [
+              { fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_A}.jpg`, sha256: SHA_A },
+              { fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_B}.jpg`, sha256: SHA_B }
+            ]
+          }
+        })
+      ),
+    "PROCESS_GROUP duplicate fileId"
+  );
+  await assert.rejects(
+    handlers.PROCESS_GROUP(
+      job({
+        jobType: "PROCESS_GROUP",
+        groupId: "group-1",
+        payload: {
+          groupId: "group-1",
+          processingVersion: 1,
+          primaryFileId: "file-1",
+          files: [
+            { fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_A}.jpg`, sha256: SHA_A },
+            { fileId: "file-2", archiveKey: `imports/${SESSION}/raw/${SHA_A}.jpg`, sha256: SHA_A }
+          ]
+        }
+      })
+    ),
+    /VERIFIED_READ_WAS_CALLED/,
+    "content-addressed duplicates in one group must reach the store"
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Round 5 F: PROCESS_GROUP must obey a human-confirmed primaryFileId. Array
+// order may never pick the processed source, and the primary must be a
+// decodable raster member of the group.
+// ---------------------------------------------------------------------------
+
+test("PROCESS_GROUP without a primaryFileId over a group holding a raster is rejected before the store", async () => {
+  const handlers = makeHandlers();
+  const files = [
+    { fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_A}.jpg`, sha256: SHA_A },
+    { fileId: "file-arw", archiveKey: `imports/${SESSION}/raw/${SHA_B}.arw`, sha256: SHA_B }
+  ];
+  await assertRejectedBeforeStoreAccess(
+    () =>
+      handlers.PROCESS_GROUP(
+        job({ jobType: "PROCESS_GROUP", groupId: "group-1", payload: { groupId: "group-1", processingVersion: 1, files } })
+      ),
+    "PROCESS_GROUP without a primary over a raster group — array order must never pick the source"
+  );
+});
+
+test("PROCESS_GROUP rejects a primaryFileId that is not a member of the group", async () => {
+  const handlers = makeHandlers();
+  const files = [{ fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_A}.jpg`, sha256: SHA_A }];
+  await assertRejectedBeforeStoreAccess(
+    () =>
+      handlers.PROCESS_GROUP(
+        job({
+          jobType: "PROCESS_GROUP",
+          groupId: "group-1",
+          payload: { groupId: "group-1", processingVersion: 1, primaryFileId: "file-elsewhere", files }
+        })
+      ),
+    "PROCESS_GROUP primaryFileId outside the member set"
+  );
+});
+
+test("PROCESS_GROUP rejects a primaryFileId that points at an ARW original", async () => {
+  const handlers = makeHandlers();
+  const files = [
+    { fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_A}.jpg`, sha256: SHA_A },
+    { fileId: "file-arw", archiveKey: `imports/${SESSION}/raw/${SHA_B}.arw`, sha256: SHA_B }
+  ];
+  await assertRejectedBeforeStoreAccess(
+    () =>
+      handlers.PROCESS_GROUP(
+        job({
+          jobType: "PROCESS_GROUP",
+          groupId: "group-1",
+          payload: { groupId: "group-1", processingVersion: 1, primaryFileId: "file-arw", files }
+        })
+      ),
+    "PROCESS_GROUP primaryFileId pointing at an ARW original"
+  );
+});
+
+test("an ARW-only group without a primaryFileId is structurally legal and fails deterministically before the store", async () => {
+  const handlers = makeHandlers();
+  await assert.rejects(
+    handlers.PROCESS_GROUP(
+      job({
+        jobType: "PROCESS_GROUP",
+        groupId: "group-1",
+        payload: {
+          groupId: "group-1",
+          processingVersion: 1,
+          files: [{ fileId: "file-arw", archiveKey: `imports/${SESSION}/raw/${SHA_B}.arw`, sha256: SHA_B }]
+        }
+      })
+    ),
+    (error: unknown) => {
+      // The worker never guesses a primary from file order: an ARW-only group
+      // has nothing to process and no file is ever read.
+      assert.ok(error instanceof JobExecutionError);
+      assert.equal(error.code, "UNSUPPORTED_SOURCE_KIND");
+      assert.equal(error.retryable, false);
+      assert.ok(!error.message.includes("WAS_CALLED"), "no store method may run");
+      return true;
+    },
+    "an ARW-only group fails deterministically without touching the store"
+  );
+});
+
+test("GROUP_SESSION rejects byteSize and lastModifiedMs outside safe integer ranges", async () => {
+  const handlers = makeHandlers();
+  const invalidNumbers: Array<{ field: "byteSize" | "lastModifiedMs"; value: number }> = [
+    { field: "byteSize", value: 0 },
+    { field: "byteSize", value: -1 },
+    { field: "byteSize", value: 1.5 },
+    { field: "byteSize", value: 1e21 },
+    { field: "lastModifiedMs", value: 0 },
+    { field: "lastModifiedMs", value: -1 },
+    { field: "lastModifiedMs", value: 1.5 },
+    { field: "lastModifiedMs", value: 1e21 }
+  ];
+  for (const { field, value } of invalidNumbers) {
+    const file = rawKeyFile() as Record<string, unknown>;
+    file[field] = value;
+    await assertRejectedBeforeStoreAccess(
+      () => handlers.GROUP_SESSION(job({ jobType: "GROUP_SESSION", payload: { files: [file] } })),
+      `GROUP_SESSION ${field}=${value}`
+    );
+  }
+});
+
+test("GROUP_SESSION rejects relativePath values that are not shared-normalized paths", async () => {
+  const handlers = makeHandlers();
+  const nonNormalized = ["./x.jpg", "a/../b.jpg", "a//b.jpg", "a\\b.jpg", "/abs.jpg", " dir/x.jpg "];
+  for (const relativePath of nonNormalized) {
+    const file = rawKeyFile() as Record<string, unknown>;
+    file.relativePath = relativePath;
+    await assertRejectedBeforeStoreAccess(
+      () => handlers.GROUP_SESSION(job({ jobType: "GROUP_SESSION", payload: { files: [file] } })),
+      `GROUP_SESSION relativePath ${JSON.stringify(relativePath)}`
+    );
+  }
+});
+
+test("GROUP_SESSION rejects the same SHA-256 declared under two different kinds", async () => {
+  const handlers = makeHandlers();
+  const files = [
+    rawKeyFile({ fileId: "file-1", sha256: SHA_A, extension: "jpg", kind: "JPEG" }),
+    rawKeyFile({ fileId: "file-2", sha256: SHA_A, extension: "arw", kind: "ARW" })
+  ];
+  await assertRejectedBeforeStoreAccess(
+    () => handlers.GROUP_SESSION(job({ jobType: "GROUP_SESSION", payload: { files } })),
+    "GROUP_SESSION same digest under two kinds"
+  );
+});
+
+test("job payload identifiers and archive keys are never silently trimmed", async () => {
+  const handlers = makeHandlers();
+  const groupFile = rawKeyFile() as Record<string, unknown>;
+  groupFile.fileId = " file-1 ";
+  await assertRejectedBeforeStoreAccess(
+    () => handlers.GROUP_SESSION(job({ jobType: "GROUP_SESSION", payload: { files: [groupFile] } })),
+    "GROUP_SESSION whitespace-padded fileId"
+  );
+
+  await assertRejectedBeforeStoreAccess(
+    () =>
+      handlers.ARCHIVE_FILE(
+        job({
+          jobType: "ARCHIVE_FILE",
+          payload: { fileId: "file-1", stagingKey: ` ${`imports/${SESSION}/staging/${UUID}`} `, sha256: SHA_A }
+        })
+      ),
+    "ARCHIVE_FILE whitespace-padded staging key"
+  );
+});
+
+test("PROCESS_GROUP rejects an unsafe processingVersion before store access", async () => {
+  const handlers = makeHandlers();
+  const files = [
+    { fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_A}.jpg`, sha256: SHA_A }
+  ];
+  for (const processingVersion of [1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    await assertRejectedBeforeStoreAccess(
+      () =>
+        handlers.PROCESS_GROUP(
+          job({
+            jobType: "PROCESS_GROUP",
+            groupId: "group-1",
+            payload: { groupId: "group-1", processingVersion, primaryFileId: "file-1", files }
+          })
+        ),
+      `PROCESS_GROUP processingVersion=${processingVersion}`
+    );
+  }
 });

@@ -15,7 +15,8 @@ TASK-ASSET-WORKER-001 的模块接口、存储布局、配置与交付记录。�
 | SOL 第 2 轮修复提交 | `ca480bf`(§10.4,基于 `9ea6fc4`) |
 | SOL 第 3 轮修复提交 | `f5b5d97`(§10.5,基于 `4414c3b`) |
 | SOL 第 4 轮修复提交 | `9ca2a92`(§10.6,基于 `c091a9d`) |
-| 当前状态 | REVIEW:SOL 验收第 1 轮 5 项 + 第 2 轮 4 项 + 第 3 轮 4 项 + 第 4 轮 2 项问题已修复(§10.3–§10.6) |
+| 第 5 轮接管修复提交 | 待提交(§10.7,基于 `ec11bd5`;GLM 因 TraeWork CN 额度中断后由 Codex 按用户指令接管) |
+| 当前状态 | REVIEW:SOL 验收第 1–4 轮及第 5 轮 A–J 验收项已修复(§10.3–§10.7);未推送、未合并、未开始 Task 4 |
 
 ## 2. 模块与接口
 
@@ -371,6 +372,51 @@ SOL 第 4 轮验收提出 2 项问题,全部以"先补失败测试、再修复"�
 | 图片/二进制/网络/生成式图片依赖 | 变更集仅 4 个文本源文件,`git diff --numstat` 全部为文本行统计(无二进制);diff 中无任何 URL/`fetch`/`axios`/`undici`/`text_to_image` 等引用,fixture 全部为合成字节 |
 
 变更文件(相对 `c091a9d`,共 4 个 + 文档):`apps/asset-worker/src/repository-roots.ts`、`apps/asset-worker/tests/archive-root-guard.test.ts`、`packages/asset-pipeline/src/grouping.ts`、`packages/asset-pipeline/tests/grouping.test.ts`(提交 `9ca2a92`),以及本文件与 `docs/tasks/TASK_REGISTRY.md`(文档提交)。无数据库/Prisma/共享 Contract/后台/前端/知识库改动,无新增运行时依赖。G5(§7)保持登记不变。
+
+### 2026-09-05 SOL 验收第 5 轮接管修复(基线 `ec11bd5`,分支 `task/asset-worker-001-local-pipeline`,worktree `.worktrees/asset-worker-001`)
+
+GLM 已在 TraeWork CN 中完成第 5 轮大部分实现与测试,但因积分不足中断于文档、真实数据库复验、全仓门禁和提交之前。Codex 按用户指令接管,先复核未提交差异,再以新增失败测试补齐遗漏问题,最后完成真实空库与全仓验收。任务保持 REVIEW;未推送、未合并、未开始 Task 4、未处理 A7/Batch B。
+
+本轮 A–J 验收范围与结果:
+
+| 类别 | 完成内容 |
+| --- | --- |
+| A 内容识别 | ARW 只接受结构完整的 SONY TIFF RAW 证据;SHORT 值严格按 count=1 读取;DNG 与 NUL/伪造 Make 被拒;全部 SubIFD 指针均须有效,不再只验证命中的指针 |
+| B RAW/JPEG 配对 | 只接受恰好 1 ARW + 1 JPEG;1+N/N+1/N+N 进入显式歧义桶;输入 ID 必须唯一;所有输出排序使用确定性 UTF-16 代码单元顺序 |
+| C 归档与分组入口 | JPEG/PNG/WebP 必须完整解码且实际内容类型与声明一致;魔数字节桩被拒;归档声明 `byteSize` 必须等于实际已验证字节长度 |
+| D 分组 | 保留跨类型歧义隔离;高置信聚类采用 complete-link 约束,避免传递式误并;同一 SHA-256 不得声明成不同 kind;复核 evidence 线性生成且每条 evidence 带明确置信度 |
+| E 扣图与 QC | 内部空洞按有意义面积计;边缘带清晰度避免极小锐点掩盖整体失焦;主体覆盖率跨分辨率一致;MAIN/THUMB 固定为 512/256;输出实际字节数、完整解码和损坏输出均纳入 fail-closed QC |
+| F 主图选择 | `PROCESS_GROUP` 必须使用人工确认的 `primaryFileId`,不再按数组顺序猜测;主图实际内容与 raw key/kind 再校验;纯 ARW 组确定性拒绝处理 |
+| G 输入与配置 | payload 上限 500,ID/路径唯一性、安全整数、路径规范化、键值精确性均深度校验且不静默 trim;Worker 数值环境变量有整数/范围/相互关系约束;workerId 长度及控制字符在环境入口和直接构造两层拒绝 |
+| H 租约 | handler 获得可查询的中止上下文,丢失租约后在下一副作用前退出;完成阶段 `CONFLICT` 会再探测租约,区分接管与仍持租约的数据冲突 |
+| I 错误与日志 | 错误码表统一 retryability;日志只写净化后的字符串;凭据 URL、绝对本机路径和控制字符被遮蔽;`failJob` 持久诊断与顶层 fatal catch 使用同一净化入口 |
+| J 文件系统与存储 | descriptor 上执行 `O_NOFOLLOW`/`fstat` 并从同一 fd 读取;仓库根登记损坏 fail-closed;staging key 严格解析;不可读目录不冒充空目录;列表跳过符号链接;原子写入后同步目录元数据;中间路径为普通文件、权限失败和不安全 processingVersion 均映射为稳定错误 |
+
+Codex 接管后新增的红灯证据(旧实现 + 新测试,随后均已修复):
+
+- Worker 定向测试:69 tests,64 pass,**fail 5**——归档 byteSize 不一致、payload 静默 trim、绝对路径/换行日志泄漏、直接构造非法 workerId、持久化失败诊断泄漏。
+- Storage 定向测试:24 tests,21 pass,**fail 3**——中间普通文件透出 ENOTDIR、权限失败透出 EACCES、不安全 processingVersion 被接受。
+- 首次真库 Worker 联调在 `mystcrag_assetworker001_r5_test_20260905` 暴露旧 fixture 将实际图片声明为 4096 bytes;实现正确拒绝。fixture 改为实际 `entry.bytes.byteLength` 后,在第二个全新空库复验通过。
+
+真库环境与测试库(真实创建,均全新空库,migrate 后执行;PostgreSQL 17.10,Homebrew;磁盘与 `_prisma_migrations` 均为 14 个迁移,最新为 `20260831_add_bead_asset_import`):
+
+- Worker 联调成功库:`mystcrag_assetworker001_r5fix_test_20260905`
+- 数据库测试成功库:`mystcrag_assetworker001_r5_dbtest_20260905`
+- 首轮红灯联调库:`mystcrag_assetworker001_r5_test_20260905`(仅保留为失败证据,未作为成功结果)
+
+本阶段真实执行记录:
+
+| 检查 | 结果 |
+| --- | --- |
+| `pnpm --filter @mystcrag/asset-pipeline lint` / `typecheck` / `test` | 通过;122/122(0 fail,0 skipped) |
+| `pnpm --filter @mystcrag/asset-worker lint` / `typecheck` | 通过(`tsc --noEmit`) |
+| 无数据库 Worker 测试(`env -u DATABASE_URL -u MYSTCRAG_ASSET_ARCHIVE_ROOT`) | 108 tests:107 pass + 1 个按设计跳过的真库联调用例,0 fail |
+| Worker 联调(全新空库 `mystcrag_assetworker001_r5fix_test_20260905`,先执行全部迁移) | 119/119 通过,0 fail,0 skipped |
+| `pnpm db:test`(全新空库 `mystcrag_assetworker001_r5_dbtest_20260905`) | 178/178 通过,0 fail,0 skipped |
+| `pnpm install --frozen-lockfile && pnpm validate` | 通过;install lockfile 未变化;lint/typecheck/test/build 各 17/17 成功;架构测试 20/20;Pipeline 122/122;Worker 107 pass + 1 env-gated skip;前端 production build 成功 |
+| 变更边界 | 仅 `packages/asset-pipeline/**`、`apps/asset-worker/**`、本文件及 TASK 精确行;无数据库/Prisma/共享 Contract/后台/前端/知识库业务代码改动;无图片/二进制、原始珠子照片、生成输出、网络/生成式图片服务 |
+
+G5(§7)仍是 TASK-ASSET-BE-001 的接口责任,本任务没有越界实现人工批准、发布或 HTTP API。
 
 ## 11. 操作
 
