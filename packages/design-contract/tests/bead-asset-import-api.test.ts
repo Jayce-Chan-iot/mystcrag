@@ -191,6 +191,93 @@ const transportEnvelope = (overrides: Record<string, unknown> = {}) => ({
   error: { code: "VALIDATION_ERROR", message: "请求形状不合法", requestId: "req-2", ...overrides }
 });
 
+const humanDecisionValues: Record<string, unknown> = {
+  rightsHolder: "玄矶工作室",
+  usagePermission: "OWNED",
+  isAuthenticPhotograph: true,
+  allowAiTraining: true,
+  allowCommercialUse: true,
+  allowPublicDisplay: true,
+  allowAiRecommendation: true
+};
+
+const approveReviewRequest = (overrides: Record<string, unknown> = {}) => ({
+  idempotencyKey: "review-asset-1",
+  expectedGroupRevision: 4,
+  processedAssetId: "asset-1",
+  action: "APPROVE",
+  reviewNote: "边缘干净，内部亮部保留，可进入发布审核",
+  rightsHolder: "玄矶工作室",
+  usagePermission: "GRANTED",
+  isAuthenticPhotograph: true,
+  allowAiTraining: false,
+  allowCommercialUse: true,
+  allowPublicDisplay: true,
+  allowAiRecommendation: false,
+  ...overrides
+});
+
+const rejectReviewRequest = (overrides: Record<string, unknown> = {}) => ({
+  idempotencyKey: "review-asset-2",
+  expectedGroupRevision: 4,
+  processedAssetId: "asset-2",
+  action: "REJECT",
+  reviewNote: "主体边缘存在白边，需重新扣图后再审",
+  ...overrides
+});
+
+const reviewResponse = (overrides: Record<string, unknown> = {}) => ({
+  groupId: "group-1",
+  processedAssetId: "asset-1",
+  reviewAction: "APPROVE",
+  state: "APPROVED",
+  revision: 5,
+  reviewedAt: now,
+  ...overrides
+});
+
+const qcResult = (overrides: Record<string, unknown> = {}) => ({
+  processedAssetId: "asset-1",
+  processingVersion: 2,
+  qcPassed: true,
+  ...overrides
+});
+
+const curationRequest = (overrides: Record<string, unknown> = {}) => ({
+  idempotencyKey: "curation-draft-1",
+  expectedRevision: 2,
+  nameCn: "紫水晶",
+  nameEn: "Amethyst",
+  mineralName: "Quartz",
+  colorTags: ["紫色", "浅紫"],
+  visualTags: ["透明", "玻璃光泽"],
+  styleTags: ["简约", "日系"],
+  priceLevel: 3,
+  complianceNote: "仅作文化象征与装饰用途说明，不构成科学或医疗结论",
+  ...overrides
+});
+
+const fullCurationDraft = (): Record<string, unknown> => ({
+  nameCn: "紫水晶",
+  nameEn: "Amethyst",
+  mineralName: "Quartz",
+  colorTags: ["紫色"],
+  visualTags: ["透明"],
+  styleTags: ["简约"],
+  priceLevel: 3,
+  complianceNote: "仅作文化象征说明"
+});
+
+const curationResponse = (overrides: Record<string, unknown> = {}) => ({
+  crystalDraftId: "draft-1",
+  revision: 3,
+  curationComplete: true,
+  missingFields: [],
+  promotionEligible: true,
+  updatedAt: now,
+  ...overrides
+});
+
 test("session state enum exposes exactly the canonical states including CANCELLED", () => {
   for (const state of sessionStates) {
     accepts(asset.AssetImportSessionStateSchema, state, `session state ${state}`);
@@ -398,7 +485,15 @@ test("every object schema rejects unknown keys", () => {
     ["AssetImportErrorDetail", asset.AssetImportErrorDetailSchema, { ...errorDetail(), bogus: 1 }],
     ["AssetTransportErrorEnvelope", asset.AssetTransportErrorEnvelopeSchema, { error: { code: "VALIDATION_ERROR", message: "请求形状不合法", requestId: "req-2", bogus: 1 } }],
     ["AssetBusinessErrorEnvelope", asset.AssetBusinessErrorEnvelopeSchema, { error: { code: "INTERNAL_ERROR", ...errorDetail(), requestId: "req-1", bogus: 1 } }],
-    ["AssetImportErrorEnvelope", asset.AssetImportErrorEnvelopeSchema, { error: { code: "INTERNAL_ERROR", ...errorDetail(), requestId: "req-1", bogus: 1 } }]
+    ["AssetImportErrorEnvelope", asset.AssetImportErrorEnvelopeSchema, { error: { code: "INTERNAL_ERROR", ...errorDetail(), requestId: "req-1", bogus: 1 } }],
+    ["ReviewProcessedAssetParams", asset.ReviewProcessedAssetParamsSchema, { groupId: "group-1", processedAssetId: "asset-1", bogus: 1 }],
+    ["ReviewProcessedAssetApprove", asset.ReviewProcessedAssetRequestSchema, { ...approveReviewRequest(), bogus: 1 }],
+    ["ReviewProcessedAssetReject", asset.ReviewProcessedAssetRequestSchema, { ...rejectReviewRequest(), bogus: 1 }],
+    ["ReviewProcessedAssetResponse", asset.ReviewProcessedAssetResponseSchema, { ...reviewResponse(), bogus: 1 }],
+    ["ProcessedAssetQcResult", asset.ProcessedAssetQcResultSchema, { ...qcResult(), bogus: 1 }],
+    ["UpdateCrystalDraftCurationParams", asset.UpdateCrystalDraftCurationParamsSchema, { crystalDraftId: "draft-1", bogus: 1 }],
+    ["UpdateCrystalDraftCurationRequest", asset.UpdateCrystalDraftCurationRequestSchema, { ...curationRequest(), bogus: 1 }],
+    ["UpdateCrystalDraftCurationResponse", asset.UpdateCrystalDraftCurationResponseSchema, { ...curationResponse(), bogus: 1 }]
   ];
   for (const [name, schema, value] of cases) {
     rejects(schema, value, `${name} with unknown key`);
@@ -1496,4 +1591,329 @@ test("asset import errors keep transport codes separate from asset codes", () =>
     errorEnvelope({ recoveryAction: "IGNORE" }),
     "envelope recovery action disagreeing with the catalog"
   );
+});
+
+test("human processed-asset review is an explicit admin decision, never a QC outcome", () => {
+  assert.deepEqual([...asset.PROCESSED_ASSET_REVIEW_ACTIONS].sort(), ["APPROVE", "REJECT"]);
+  accepts(asset.ProcessedAssetReviewActionSchema, "APPROVE", "approve action");
+  accepts(asset.ProcessedAssetReviewActionSchema, "REJECT", "reject action");
+  rejects(asset.ProcessedAssetReviewActionSchema, "AUTO_APPROVE", "automatic approval action");
+  rejects(asset.ProcessedAssetReviewActionSchema, "approve", "lowercase review action");
+
+  assert.deepEqual([...asset.ASSET_HUMAN_REVIEW_FIELDS].sort(), [
+    "allowAiRecommendation",
+    "allowAiTraining",
+    "allowCommercialUse",
+    "allowPublicDisplay",
+    "isAuthenticPhotograph",
+    "rightsHolder",
+    "usagePermission"
+  ]);
+
+  accepts(
+    asset.ReviewProcessedAssetParamsSchema,
+    { groupId: "group-1", processedAssetId: "asset-1" },
+    "review params name the group and the processed asset"
+  );
+  rejects(asset.ReviewProcessedAssetParamsSchema, { groupId: "group-1" }, "review params without processedAssetId");
+
+  accepts(asset.ReviewProcessedAssetRequestSchema, approveReviewRequest(), "complete approve review request");
+  for (const field of asset.ASSET_HUMAN_REVIEW_FIELDS) {
+    const request: Record<string, unknown> = { ...approveReviewRequest() };
+    delete request[field];
+    rejects(asset.ReviewProcessedAssetRequestSchema, request, `approve review missing the human decision ${field}`);
+  }
+  rejects(
+    asset.ReviewProcessedAssetRequestSchema,
+    approveReviewRequest({ usagePermission: "UNKNOWN" }),
+    "approve with an UNKNOWN usage permission"
+  );
+  rejects(
+    asset.ReviewProcessedAssetRequestSchema,
+    approveReviewRequest({ usagePermission: "PROHIBITED" }),
+    "approve with a PROHIBITED usage permission"
+  );
+  accepts(
+    asset.ReviewProcessedAssetRequestSchema,
+    approveReviewRequest({ usagePermission: "OWNED" }),
+    "approve with an OWNED usage permission"
+  );
+  accepts(
+    asset.ReviewProcessedAssetRequestSchema,
+    approveReviewRequest({
+      allowAiTraining: false,
+      allowCommercialUse: false,
+      allowPublicDisplay: false,
+      allowAiRecommendation: false
+    }),
+    "approve may explicitly deny AI, commercial and public consent"
+  );
+  rejects(asset.ReviewProcessedAssetRequestSchema, approveReviewRequest({ rightsHolder: "   " }), "approve with a blank rights holder");
+  rejects(asset.ReviewProcessedAssetRequestSchema, approveReviewRequest({ reviewNote: "   " }), "approve with a blank review note");
+  rejects(asset.ReviewProcessedAssetRequestSchema, approveReviewRequest({ expectedGroupRevision: 0 }), "non-positive expected group revision");
+  rejects(asset.ReviewProcessedAssetRequestSchema, approveReviewRequest({ idempotencyKey: "" }), "empty review idempotency key");
+  rejects(asset.ReviewProcessedAssetRequestSchema, approveReviewRequest({ action: "MAYBE" }), "non-canonical review action");
+
+  accepts(asset.ReviewProcessedAssetRequestSchema, rejectReviewRequest(), "reject review request carrying a human reason");
+  rejects(asset.ReviewProcessedAssetRequestSchema, rejectReviewRequest({ reviewNote: "  " }), "reject without a human reason");
+  rejects(asset.ReviewProcessedAssetRequestSchema, { ...rejectReviewRequest(), reviewNote: undefined }, "reject without a review note");
+  for (const field of asset.ASSET_HUMAN_REVIEW_FIELDS) {
+    rejects(
+      asset.ReviewProcessedAssetRequestSchema,
+      { ...rejectReviewRequest(), [field]: humanDecisionValues[field] },
+      `reject review carrying the human decision ${field}`
+    );
+  }
+  rejects(
+    asset.ReviewProcessedAssetRequestSchema,
+    { ...approveReviewRequest(), action: "REJECT" },
+    "reject action carrying approve-only permission grants"
+  );
+
+  for (const field of ["relativePath", "absolutePath", "archiveKey", "storageKey", "outputPath"]) {
+    rejects(
+      asset.ReviewProcessedAssetRequestSchema,
+      approveReviewRequest({ [field]: "imports/session-1/raw/a3f5.webp" }),
+      `approve review carrying the path field ${field}`
+    );
+    rejects(
+      asset.ReviewProcessedAssetRequestSchema,
+      rejectReviewRequest({ [field]: "/Users/operator/photos/01/DSC0001.JPG" }),
+      `reject review carrying the path field ${field}`
+    );
+  }
+  rejects(
+    asset.ReviewProcessedAssetRequestSchema,
+    approveReviewRequest({ textureAssetKey: `approved:${"a".repeat(64)}` }),
+    "review assigning a public approved asset key"
+  );
+  for (const field of ["qcPassed", "qcIssues", "inferredMineralName", "detectedQuality", "suggestedPriceLevel"]) {
+    rejects(
+      asset.ReviewProcessedAssetRequestSchema,
+      approveReviewRequest({ [field]: field === "qcPassed" ? true : "紫水晶" }),
+      `approve review carrying the worker or inference field ${field}`
+    );
+  }
+
+  assert.deepEqual(Object.keys(asset.PROCESSED_ASSET_REVIEW_ELIGIBILITY).sort(), [
+    "APPROVED",
+    "DRAFT",
+    "QC_FAILED",
+    "QC_PENDING",
+    "RETIRED"
+  ]);
+  assert.deepEqual(asset.PROCESSED_ASSET_REVIEW_ELIGIBILITY.QC_PENDING, ["APPROVE", "REJECT"]);
+  assert.deepEqual(asset.PROCESSED_ASSET_REVIEW_ELIGIBILITY.QC_FAILED, ["REJECT"]);
+  assert.equal(asset.canReviewProcessedAsset("QC_PENDING", "APPROVE"), true);
+  assert.equal(asset.canReviewProcessedAsset("QC_PENDING", "REJECT"), true);
+  assert.equal(asset.canReviewProcessedAsset("QC_FAILED", "APPROVE"), false, "a QC-failed asset can never be approved");
+  assert.equal(asset.canReviewProcessedAsset("QC_FAILED", "REJECT"), true);
+  assert.equal(asset.canReviewProcessedAsset("DRAFT", "APPROVE"), false, "an unprocessed asset is not reviewable");
+  assert.equal(asset.canReviewProcessedAsset("APPROVED", "APPROVE"), false, "an approved asset is not re-approved in place");
+  assert.equal(asset.canReviewProcessedAsset("RETIRED", "REJECT"), false);
+
+  accepts(asset.ReviewProcessedAssetResponseSchema, reviewResponse(), "approve response reports the approved state");
+  accepts(
+    asset.ReviewProcessedAssetResponseSchema,
+    reviewResponse({ processedAssetId: "asset-2", reviewAction: "REJECT", state: "RETIRED" }),
+    "reject response reports the retired state"
+  );
+  rejects(
+    asset.ReviewProcessedAssetResponseSchema,
+    reviewResponse({ reviewAction: "REJECT" }),
+    "reject response reporting an approved state"
+  );
+  rejects(
+    asset.ReviewProcessedAssetResponseSchema,
+    reviewResponse({ state: "QC_PENDING" }),
+    "approve response leaving the asset awaiting review"
+  );
+  rejects(asset.ReviewProcessedAssetResponseSchema, reviewResponse({ state: "QC_FAILED" }), "review response reporting a QC state");
+  rejects(asset.ReviewProcessedAssetResponseSchema, reviewResponse({ revision: 0 }), "non-positive reviewed revision");
+});
+
+test("worker QC output never carries or decides human permission fields", () => {
+  accepts(asset.ProcessedAssetQcResultSchema, qcResult(), "machine-only QC result");
+  accepts(
+    asset.ProcessedAssetQcResultSchema,
+    qcResult({ qcPassed: false, qcIssues: ["主体边缘存在白边", "透明区被误挖空"] }),
+    "failed QC result naming its issues"
+  );
+  rejects(asset.ProcessedAssetQcResultSchema, qcResult({ qcPassed: false }), "failed QC result without issues");
+  rejects(asset.ProcessedAssetQcResultSchema, qcResult({ qcIssues: [] }), "empty QC issue list");
+  rejects(asset.ProcessedAssetQcResultSchema, qcResult({ processingVersion: 0 }), "non-positive processing version");
+  for (const field of asset.ASSET_HUMAN_REVIEW_FIELDS) {
+    rejects(
+      asset.ProcessedAssetQcResultSchema,
+      { ...qcResult(), [field]: humanDecisionValues[field] },
+      `QC result carrying the human decision ${field}`
+    );
+  }
+  rejects(asset.ProcessedAssetQcResultSchema, { ...qcResult(), reviewAction: "APPROVE" }, "QC result deciding the review action");
+  rejects(asset.ProcessedAssetQcResultSchema, { ...qcResult(), state: "APPROVED" }, "QC result promoting the processed-asset state");
+  rejects(
+    asset.ProcessedAssetQcResultSchema,
+    qcResult({ archiveKey: "imports/session-1/raw/a3f5.webp" }),
+    "QC result carrying a private archive key"
+  );
+  rejects(
+    asset.ProcessedAssetQcResultSchema,
+    qcResult({ outputPath: "/Users/operator/out.webp" }),
+    "QC result carrying an absolute output path"
+  );
+
+  assert.equal(asset.processedAssetStateAfterQc(true), "QC_PENDING", "automatic QC success only queues human review");
+  assert.equal(asset.processedAssetStateAfterQc(false), "QC_FAILED");
+  assert.notEqual(asset.processedAssetStateAfterQc(true), "APPROVED");
+});
+
+test("crystal draft curation accepts only complete human-authored material data", () => {
+  assert.deepEqual([...asset.CRYSTAL_DRAFT_CURATION_FIELDS].sort(), [
+    "COLOR_TAGS",
+    "COMPLIANCE_NOTE",
+    "MINERAL_NAME",
+    "NAME_CN",
+    "NAME_EN",
+    "PRICE_LEVEL",
+    "STYLE_TAGS",
+    "VISUAL_TAGS"
+  ]);
+  assert.deepEqual(Object.values(asset.CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS).sort(), [...asset.CRYSTAL_DRAFT_CURATION_FIELDS].sort());
+  assert.equal(
+    new Set(Object.values(asset.CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS)).size,
+    asset.CRYSTAL_DRAFT_CURATION_FIELDS.length,
+    "each human curation input maps onto exactly one completeness field"
+  );
+  assert.deepEqual(asset.CRYSTAL_DRAFT_TAG_LIMITS, { colorTags: 20, visualTags: 30, styleTags: 30 });
+  assert.deepEqual(asset.CRYSTAL_PRICE_LEVEL_RANGE, { min: 1, max: 5 });
+
+  accepts(asset.UpdateCrystalDraftCurationParamsSchema, { crystalDraftId: "draft-1" }, "curation params");
+
+  accepts(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest(), "full human curation request");
+  accepts(
+    asset.UpdateCrystalDraftCurationRequestSchema,
+    { idempotencyKey: "curation-draft-1", expectedRevision: 1, nameCn: "白水晶" },
+    "partial curation records progressive human input"
+  );
+  rejects(
+    asset.UpdateCrystalDraftCurationRequestSchema,
+    { idempotencyKey: "curation-draft-1", expectedRevision: 1 },
+    "curation without any material field"
+  );
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ expectedRevision: 0 }), "non-positive expected curation revision");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ idempotencyKey: "" }), "empty curation idempotency key");
+
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ nameCn: "UNSPECIFIED" }), "placeholder Chinese name");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ nameEn: "unknown" }), "placeholder English name");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ mineralName: "待补充" }), "placeholder mineral name");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ nameCn: "   " }), "blank Chinese name");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ complianceNote: "无" }), "placeholder compliance note");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ complianceNote: "N/A" }), "placeholder compliance note N/A");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ complianceNote: "同上" }), "placeholder compliance note referring elsewhere");
+
+  accepts(asset.CrystalPriceLevelSchema, asset.CRYSTAL_PRICE_LEVEL_RANGE.min, "lowest crystal price level");
+  accepts(asset.CrystalPriceLevelSchema, asset.CRYSTAL_PRICE_LEVEL_RANGE.max, "highest crystal price level");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ priceLevel: 0 }), "price level below the crystal range");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ priceLevel: 6 }), "price level above the crystal range");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ priceLevel: 2.5 }), "non-integer price level");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ priceLevel: "3" }), "price level supplied as text");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ suggestedPriceLevel: 3 }), "image-suggested price level");
+
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ colorTags: [] }), "empty color tags");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ colorTags: ["紫色", "紫色"] }), "duplicate color tags");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ visualTags: ["  "] }), "blank visual tag");
+  rejects(asset.UpdateCrystalDraftCurationRequestSchema, curationRequest({ styleTags: ["UNSPECIFIED"] }), "placeholder style tag");
+  rejects(
+    asset.UpdateCrystalDraftCurationRequestSchema,
+    curationRequest({ colorTags: Array.from({ length: asset.CRYSTAL_DRAFT_TAG_LIMITS.colorTags + 1 }, (_, index) => `color-${index}`) }),
+    "color tags above the catalog limit"
+  );
+  rejects(
+    asset.UpdateCrystalDraftCurationRequestSchema,
+    curationRequest({ visualTags: Array.from({ length: asset.CRYSTAL_DRAFT_TAG_LIMITS.visualTags + 1 }, (_, index) => `visual-${index}`) }),
+    "visual tags above the catalog limit"
+  );
+
+  for (const field of ["relativePath", "absolutePath", "archiveKey", "storageKey", "imageReference"]) {
+    rejects(
+      asset.UpdateCrystalDraftCurationRequestSchema,
+      curationRequest({ [field]: "imports/session-1/raw/a3f5.webp" }),
+      `curation carrying the path field ${field}`
+    );
+  }
+  for (const field of ["inferredMineralName", "detectedQuality", "autoPriceLevel", "qcPassed", "segmentationConfidence"]) {
+    rejects(
+      asset.UpdateCrystalDraftCurationRequestSchema,
+      curationRequest({ [field]: "紫水晶" }),
+      `curation carrying the image-inference field ${field}`
+    );
+  }
+  for (const field of asset.ASSET_HUMAN_REVIEW_FIELDS) {
+    rejects(
+      asset.UpdateCrystalDraftCurationRequestSchema,
+      curationRequest({ [field]: humanDecisionValues[field] }),
+      `curation carrying the asset review decision ${field}`
+    );
+  }
+
+  assert.deepEqual(asset.missingCrystalDraftCurationFields(fullCurationDraft()), [], "fully curated draft is complete");
+  assert.deepEqual(asset.missingCrystalDraftCurationFields({}), [...asset.CRYSTAL_DRAFT_CURATION_FIELDS], "empty draft misses every human field");
+  for (const [inputField, completenessField] of Object.entries(asset.CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS)) {
+    const draft = fullCurationDraft();
+    delete draft[inputField];
+    assert.deepEqual(asset.missingCrystalDraftCurationFields(draft), [completenessField], `draft missing ${inputField}`);
+  }
+  assert.deepEqual(
+    asset.missingCrystalDraftCurationFields({ ...fullCurationDraft(), colorTags: [] }),
+    ["COLOR_TAGS"],
+    "empty tag array is not curated data"
+  );
+  assert.deepEqual(
+    asset.missingCrystalDraftCurationFields({ ...fullCurationDraft(), complianceNote: "   " }),
+    ["COMPLIANCE_NOTE"],
+    "blank compliance note is not curated data"
+  );
+  assert.deepEqual(
+    asset.missingCrystalDraftCurationFields({ ...fullCurationDraft(), nameCn: "UNSPECIFIED" }),
+    ["NAME_CN"],
+    "placeholder name is not curated data"
+  );
+  assert.deepEqual(
+    asset.missingCrystalDraftCurationFields({ ...fullCurationDraft(), priceLevel: 9 }),
+    ["PRICE_LEVEL"],
+    "out-of-range price level is not curated data"
+  );
+  assert.deepEqual(
+    asset.missingCrystalDraftCurationFields({ ...fullCurationDraft(), styleTags: "简约" }),
+    ["STYLE_TAGS"],
+    "a bare string is not a curated tag list"
+  );
+
+  accepts(asset.UpdateCrystalDraftCurationResponseSchema, curationResponse(), "complete curation response");
+  accepts(
+    asset.UpdateCrystalDraftCurationResponseSchema,
+    curationResponse({ curationComplete: false, missingFields: ["PRICE_LEVEL", "COMPLIANCE_NOTE"], promotionEligible: false }),
+    "incomplete curation response"
+  );
+  rejects(
+    asset.UpdateCrystalDraftCurationResponseSchema,
+    curationResponse({ missingFields: ["PRICE_LEVEL"] }),
+    "complete flag disagreeing with the missing fields"
+  );
+  rejects(
+    asset.UpdateCrystalDraftCurationResponseSchema,
+    curationResponse({ curationComplete: false, missingFields: ["PRICE_LEVEL"], promotionEligible: true }),
+    "promotion eligibility without complete curation"
+  );
+  rejects(
+    asset.UpdateCrystalDraftCurationResponseSchema,
+    curationResponse({ curationComplete: false, missingFields: ["NAME_CN", "NAME_CN"] }),
+    "duplicated missing curation fields"
+  );
+  rejects(
+    asset.UpdateCrystalDraftCurationResponseSchema,
+    curationResponse({ missingFields: ["MINERAL_IDENTIFIED_BY_IMAGE"] }),
+    "non-canonical curation completeness field"
+  );
+  rejects(asset.UpdateCrystalDraftCurationResponseSchema, curationResponse({ revision: 0 }), "non-positive curation revision");
 });
