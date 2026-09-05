@@ -231,23 +231,23 @@ model ExternalIdentity {
 }
 
 model Crystal {
-  id                 String            @id @default(cuid())
-  nameCn             String            @map("name_cn")
-  nameEn             String            @map("name_en")
-  mineralName        String            @map("mineral_name")
-  gemologicalInfo    Json              @map("gemological_info")
-  colorTags          String[]          @map("color_tags")
-  visualTags         String[]          @map("visual_tags")
-  styleTags          String[]          @map("style_tags")
-  emotionTags        String[]          @map("emotion_tags")
-  cultureTags        String[]          @map("culture_tags")
-  priceLevel         Int               @map("price_level")
-  marketAvailability String?           @map("market_availability")
-  costRange          Json?             @map("cost_range")
-  imageReference     String?           @map("image_reference")
-  complianceNote     String            @map("compliance_note")
-  createdAt          DateTime            @default(now()) @map("created_at")
-  updatedAt          DateTime            @updatedAt @map("updated_at")
+  id                 String                 @id @default(cuid())
+  nameCn             String                 @map("name_cn")
+  nameEn             String                 @map("name_en")
+  mineralName        String                 @map("mineral_name")
+  gemologicalInfo    Json                   @map("gemological_info")
+  colorTags          String[]               @map("color_tags")
+  visualTags         String[]               @map("visual_tags")
+  styleTags          String[]               @map("style_tags")
+  emotionTags        String[]               @map("emotion_tags")
+  cultureTags        String[]               @map("culture_tags")
+  priceLevel         Int                    @map("price_level")
+  marketAvailability String?                @map("market_availability")
+  costRange          Json?                  @map("cost_range")
+  imageReference     String?                @map("image_reference")
+  complianceNote     String                 @map("compliance_note")
+  createdAt          DateTime               @default(now()) @map("created_at")
+  updatedAt          DateTime               @updatedAt @map("updated_at")
   materialProducts   MaterialProduct[]
   assetImportGroups  BeadImageGroup[]
   promotedDrafts     CrystalDraft[]
@@ -413,26 +413,26 @@ model OrderDesignSnapshot {
 }
 
 model MaterialProduct {
-  id                  String   @id
-  crystalId           String   @map("crystal_id")
-  sku                 String   @unique
+  id                  String                 @id
+  crystalId           String                 @map("crystal_id")
+  sku                 String                 @unique
   name                String
   shape               String
-  diameterMm          Float    @map("diameter_mm")
-  lengthAlongStringMm Float?   @map("length_along_string_mm")
-  holeDiameterMm      Float?   @map("hole_diameter_mm")
+  diameterMm          Float                  @map("diameter_mm")
+  lengthAlongStringMm Float?                 @map("length_along_string_mm")
+  holeDiameterMm      Float?                 @map("hole_diameter_mm")
   grade               String?
-  visualProfile       Json?    @map("visual_profile")
-  materialKey         String   @map("material_key")
-  modelAssetKey       String?  @map("model_asset_key")
-  textureAssetKey     String?  @map("texture_asset_key")
+  visualProfile       Json?                  @map("visual_profile")
+  materialKey         String                 @map("material_key")
+  modelAssetKey       String?                @map("model_asset_key")
+  textureAssetKey     String?                @map("texture_asset_key")
   currency            Currency
-  unitPriceMinor      BigInt   @map("unit_price_minor")
-  unitCostMinor       BigInt   @map("unit_cost_minor")
-  active              Boolean  @default(true)
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
-  crystal             Crystal  @relation(fields: [crystalId], references: [id], onDelete: Restrict)
+  unitPriceMinor      BigInt                 @map("unit_price_minor")
+  unitCostMinor       BigInt                 @map("unit_cost_minor")
+  active              Boolean                @default(true)
+  createdAt           DateTime               @default(now()) @map("created_at")
+  updatedAt           DateTime               @updatedAt @map("updated_at")
+  crystal             Crystal                @relation(fields: [crystalId], references: [id], onDelete: Restrict)
   assetBindings       ProductAssetBinding[]
   beadPublications    BeadGroupPublication[]
 
@@ -658,20 +658,20 @@ model TarotDesignRecommendation {
 /// (never `failedFileCount`), and `failedFileCount` is reserved for real
 /// upload failures.
 model AssetImportSession {
-  id                     String                 @id @default(cuid())
-  idempotencyKey         String                 @unique @map("idempotency_key")
+  id                     String                  @id @default(cuid())
+  idempotencyKey         String                  @unique @map("idempotency_key")
   state                  AssetImportSessionState @default(CREATED)
-  lastVerifiedCheckpoint AssetImportCheckpoint? @map("last_verified_checkpoint")
-  declaredFileCount      Int                    @default(0) @map("declared_file_count")
-  archivedFileCount      Int                    @default(0) @map("archived_file_count")
-  failedFileCount        Int                    @default(0) @map("failed_file_count")
-  skippedFileCount       Int                    @default(0) @map("skipped_file_count")
-  declaredBytes          BigInt                 @default(0) @map("declared_bytes")
-  uploadedBytes          BigInt                 @default(0) @map("uploaded_bytes")
-  manifestIdempotencyKey String?                @map("manifest_idempotency_key")
-  manifestFingerprint    String?                @map("manifest_fingerprint")
-  createdAt              DateTime               @default(now()) @map("created_at")
-  updatedAt              DateTime               @updatedAt @map("updated_at")
+  lastVerifiedCheckpoint AssetImportCheckpoint?  @map("last_verified_checkpoint")
+  declaredFileCount      Int                     @default(0) @map("declared_file_count")
+  archivedFileCount      Int                     @default(0) @map("archived_file_count")
+  failedFileCount        Int                     @default(0) @map("failed_file_count")
+  skippedFileCount       Int                     @default(0) @map("skipped_file_count")
+  declaredBytes          BigInt                  @default(0) @map("declared_bytes")
+  uploadedBytes          BigInt                  @default(0) @map("uploaded_bytes")
+  manifestIdempotencyKey String?                 @map("manifest_idempotency_key")
+  manifestFingerprint    String?                 @map("manifest_fingerprint")
+  createdAt              DateTime                @default(now()) @map("created_at")
+  updatedAt              DateTime                @updatedAt @map("updated_at")
   sourceFiles            AssetSourceFile[]
   groups                 BeadImageGroup[]
   jobs                   AssetProcessingJob[]
@@ -688,26 +688,26 @@ model AssetImportSession {
 /// A SKIPPED_DUPLICATE row counts toward `skippedFileCount` on the session,
 /// never toward `failedFileCount`.
 model AssetSourceFile {
-  id              String              @id @default(cuid())
-  sessionId       String              @map("session_id")
-  clientFileId    String              @map("client_file_id")
-  relativePath    String              @map("relative_path")
-  byteSize        BigInt              @map("byte_size")
-  lastModifiedMs  BigInt?             @map("last_modified_ms")
+  id              String               @id @default(cuid())
+  sessionId       String               @map("session_id")
+  clientFileId    String               @map("client_file_id")
+  relativePath    String               @map("relative_path")
+  byteSize        BigInt               @map("byte_size")
+  lastModifiedMs  BigInt?              @map("last_modified_ms")
   kind            AssetSourceFileKind
   state           AssetSourceFileState @default(PENDING)
   sha256          String?
-  archiveKey      String?             @map("archive_key")
-  storageProvider String?             @map("storage_provider")
-  duplicateOfId   String?             @map("duplicate_of_id")
-  duplicateOf     AssetSourceFile?    @relation("AssetSourceFileDuplicate", fields: [duplicateOfId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  duplicates      AssetSourceFile[]   @relation("AssetSourceFileDuplicate")
-  groupId         String?             @map("group_id")
-  group           BeadImageGroup?     @relation(fields: [groupId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  archivedAt      DateTime?           @map("archived_at")
-  createdAt       DateTime            @default(now()) @map("created_at")
-  updatedAt       DateTime            @updatedAt @map("updated_at")
-  session         AssetImportSession  @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  archiveKey      String?              @map("archive_key")
+  storageProvider String?              @map("storage_provider")
+  duplicateOfId   String?              @map("duplicate_of_id")
+  duplicateOf     AssetSourceFile?     @relation("AssetSourceFileDuplicate", fields: [duplicateOfId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  duplicates      AssetSourceFile[]    @relation("AssetSourceFileDuplicate")
+  groupId         String?              @map("group_id")
+  group           BeadImageGroup?      @relation(fields: [groupId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  archivedAt      DateTime?            @map("archived_at")
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+  session         AssetImportSession   @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   processedAssets ProcessedAsset[]
 
   @@unique([sessionId, clientFileId])
@@ -719,25 +719,25 @@ model AssetSourceFile {
 /// A reviewable cluster of bead photos. `revision` is the compare-and-set
 /// guard for every operator edit (draft save, publish).
 model BeadImageGroup {
-  id                String             @id @default(cuid())
-  sessionId         String             @map("session_id")
-  state             BeadImageGroupState @default(SUGGESTED)
-  revision          Int                @default(1)
-  crystalName       String?            @map("crystal_name")
-  primaryFileId     String?            @map("primary_file_id")
-  similarityEvidence Json?             @map("similarity_evidence")
-  crystalId         String?            @map("crystal_id")
-  crystal           Crystal?           @relation(fields: [crystalId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  crystalDraftId    String?            @map("crystal_draft_id")
-  crystalDraft      CrystalDraft?      @relation(fields: [crystalDraftId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  createdAt         DateTime           @default(now()) @map("created_at")
-  updatedAt         DateTime           @updatedAt @map("updated_at")
-  session           AssetImportSession @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  files             AssetSourceFile[]
-  assets            ProcessedAsset[]
-  jobs              AssetProcessingJob[]
-  productDraft      MaterialProductDraft?
-  publications      BeadGroupPublication[]
+  id                 String                 @id @default(cuid())
+  sessionId          String                 @map("session_id")
+  state              BeadImageGroupState    @default(SUGGESTED)
+  revision           Int                    @default(1)
+  crystalName        String?                @map("crystal_name")
+  primaryFileId      String?                @map("primary_file_id")
+  similarityEvidence Json?                  @map("similarity_evidence")
+  crystalId          String?                @map("crystal_id")
+  crystal            Crystal?               @relation(fields: [crystalId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  crystalDraftId     String?                @map("crystal_draft_id")
+  crystalDraft       CrystalDraft?          @relation(fields: [crystalDraftId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdAt          DateTime               @default(now()) @map("created_at")
+  updatedAt          DateTime               @updatedAt @map("updated_at")
+  session            AssetImportSession     @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  files              AssetSourceFile[]
+  assets             ProcessedAsset[]
+  jobs               AssetProcessingJob[]
+  productDraft       MaterialProductDraft?
+  publications       BeadGroupPublication[]
 
   @@index([sessionId, state])
   @@index([state, updatedAt])
@@ -756,6 +756,7 @@ model BeadImageGroup {
 /// unpromotable until the contract is revised.
 model CrystalDraft {
   id                String           @id @default(cuid())
+  revision          Int              @default(1)
   nameCn            String           @map("name_cn")
   nameEn            String?          @map("name_en")
   mineralName       String           @map("mineral_name")
@@ -768,8 +769,8 @@ model CrystalDraft {
   promotedCrystalId String?          @map("promoted_crystal_id")
   promotedCrystal   Crystal?         @relation(fields: [promotedCrystalId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   promotedAt        DateTime?        @map("promoted_at")
-  createdAt         DateTime           @default(now()) @map("created_at")
-  updatedAt         DateTime           @updatedAt @map("updated_at")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
   groups            BeadImageGroup[]
 
   @@map("crystal_drafts")
@@ -778,36 +779,36 @@ model CrystalDraft {
 /// Operator-editable draft fields for one group; one row per group. Drafts are
 /// never visible through approved-only public asset queries.
 model MaterialProductDraft {
-  id                   String               @id @default(cuid())
-  groupId              String               @unique @map("group_id")
-  crystalName          String?              @map("crystal_name")
-  crystalId            String?              @map("crystal_id")
-  crystalDraftId       String?              @map("crystal_draft_id")
-  displayName          String?              @map("display_name")
-  sku                  String?              @map("sku")
-  materialKey          String?              @map("material_key")
-  shape                String?
-  diameterMm           Float?               @map("diameter_mm")
-  lengthAlongStringMm  Float?               @map("length_along_string_mm")
-  currency             Currency?
-  unitPriceMinor       BigInt?              @map("unit_price_minor")
-  costMinor            BigInt?              @map("cost_minor")
-  availableQuantity    Int?                 @map("available_quantity")
-  qualityStatement     String?              @map("quality_statement")
-  qualitySource        String?              @map("quality_source")
-  textureAssetKey      String?              @map("texture_asset_key")
-  modelAssetKey        String?              @map("model_asset_key")
-  rightsHolder         String?              @map("rights_holder")
-  usagePermission      AssetUsagePermission? @map("usage_permission")
-  isAuthenticPhotograph Boolean?            @map("is_authentic_photograph")
-  allowAiTraining      Boolean?             @map("allow_ai_training")
-  allowCommercialUse   Boolean?             @map("allow_commercial_use")
-  allowPublicDisplay   Boolean?             @map("allow_public_display")
-  allowAiRecommendation Boolean?            @map("allow_ai_recommendation")
-  draftSavedAt         DateTime             @default(now()) @map("draft_saved_at")
-  createdAt            DateTime             @default(now()) @map("created_at")
-  updatedAt            DateTime             @updatedAt @map("updated_at")
-  group                BeadImageGroup       @relation(fields: [groupId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id                    String                @id @default(cuid())
+  groupId               String                @unique @map("group_id")
+  crystalName           String?               @map("crystal_name")
+  crystalId             String?               @map("crystal_id")
+  crystalDraftId        String?               @map("crystal_draft_id")
+  displayName           String?               @map("display_name")
+  sku                   String?               @map("sku")
+  materialKey           String?               @map("material_key")
+  shape                 String?
+  diameterMm            Float?                @map("diameter_mm")
+  lengthAlongStringMm   Float?                @map("length_along_string_mm")
+  currency              Currency?
+  unitPriceMinor        BigInt?               @map("unit_price_minor")
+  costMinor             BigInt?               @map("cost_minor")
+  availableQuantity     Int?                  @map("available_quantity")
+  qualityStatement      String?               @map("quality_statement")
+  qualitySource         String?               @map("quality_source")
+  textureAssetKey       String?               @map("texture_asset_key")
+  modelAssetKey         String?               @map("model_asset_key")
+  rightsHolder          String?               @map("rights_holder")
+  usagePermission       AssetUsagePermission? @map("usage_permission")
+  isAuthenticPhotograph Boolean?              @map("is_authentic_photograph")
+  allowAiTraining       Boolean?              @map("allow_ai_training")
+  allowCommercialUse    Boolean?              @map("allow_commercial_use")
+  allowPublicDisplay    Boolean?              @map("allow_public_display")
+  allowAiRecommendation Boolean?              @map("allow_ai_recommendation")
+  draftSavedAt          DateTime              @default(now()) @map("draft_saved_at")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
+  group                 BeadImageGroup        @relation(fields: [groupId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@map("material_product_drafts")
 }
@@ -821,37 +822,37 @@ model MaterialProductDraft {
 /// `(group_id, purpose) WHERE is_current_version` (migration SQL) keeps
 /// exactly one current version per purpose.
 model ProcessedAsset {
-  id                    String               @id @default(cuid())
-  sourceFileId          String               @map("source_file_id")
-  groupId               String               @map("group_id")
+  id                    String                @id @default(cuid())
+  sourceFileId          String                @map("source_file_id")
+  groupId               String                @map("group_id")
   purpose               ProcessedAssetPurpose
-  processingVersion     Int                  @map("processing_version")
-  state                 ProcessedAssetState  @default(QC_PENDING)
-  storageProvider       String               @map("storage_provider")
-  storageKey            String               @map("storage_key")
-  assetKey              String?              @unique @map("asset_key")
-  outputSha256          String               @map("output_sha256")
-  outputBytes           BigInt               @map("output_bytes")
-  outputContentType     String               @map("output_content_type")
-  widthPx               Int?                 @map("width_px")
-  heightPx              Int?                 @map("height_px")
-  processorVersion      String               @map("processor_version")
-  parameters            Json                 @default("{}")
-  qcResult              Json                 @map("qc_result")
-  qcPassedAt            DateTime?            @map("qc_passed_at")
-  approvedAt            DateTime?            @map("approved_at")
-  usagePermission       AssetUsagePermission @default(UNKNOWN) @map("usage_permission")
-  rightsHolder          String?              @map("rights_holder")
-  isAuthenticPhotograph Boolean              @default(false) @map("is_authentic_photograph")
-  allowCommercialUse    Boolean              @default(false) @map("allow_commercial_use")
-  allowPublicDisplay    Boolean              @default(false) @map("allow_public_display")
-  allowAiTraining       Boolean?             @map("allow_ai_training")
-  allowAiRecommendation Boolean?             @map("allow_ai_recommendation")
-  isCurrentVersion      Boolean              @default(false) @map("is_current_version")
-  createdAt             DateTime             @default(now()) @map("created_at")
-  updatedAt             DateTime             @updatedAt @map("updated_at")
-  sourceFile            AssetSourceFile      @relation(fields: [sourceFileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  group                 BeadImageGroup       @relation(fields: [groupId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  processingVersion     Int                   @map("processing_version")
+  state                 ProcessedAssetState   @default(QC_PENDING)
+  storageProvider       String                @map("storage_provider")
+  storageKey            String                @map("storage_key")
+  assetKey              String?               @unique @map("asset_key")
+  outputSha256          String                @map("output_sha256")
+  outputBytes           BigInt                @map("output_bytes")
+  outputContentType     String                @map("output_content_type")
+  widthPx               Int?                  @map("width_px")
+  heightPx              Int?                  @map("height_px")
+  processorVersion      String                @map("processor_version")
+  parameters            Json                  @default("{}")
+  qcResult              Json                  @map("qc_result")
+  qcPassedAt            DateTime?             @map("qc_passed_at")
+  approvedAt            DateTime?             @map("approved_at")
+  usagePermission       AssetUsagePermission  @default(UNKNOWN) @map("usage_permission")
+  rightsHolder          String?               @map("rights_holder")
+  isAuthenticPhotograph Boolean               @default(false) @map("is_authentic_photograph")
+  allowCommercialUse    Boolean               @default(false) @map("allow_commercial_use")
+  allowPublicDisplay    Boolean               @default(false) @map("allow_public_display")
+  allowAiTraining       Boolean?              @map("allow_ai_training")
+  allowAiRecommendation Boolean?              @map("allow_ai_recommendation")
+  isCurrentVersion      Boolean               @default(false) @map("is_current_version")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
+  sourceFile            AssetSourceFile       @relation(fields: [sourceFileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  group                 BeadImageGroup        @relation(fields: [groupId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   bindings              ProductAssetBinding[]
 
   @@unique([groupId, purpose, processingVersion])
@@ -868,28 +869,28 @@ model ProcessedAsset {
 /// overwrite the new owner's outcome. PROCESS_GROUP result application runs
 /// inside the same protected transaction as the completing CAS.
 model AssetProcessingJob {
-  id              String                  @id @default(cuid())
-  sessionId       String                  @map("session_id")
-  groupId         String?                 @map("group_id")
-  jobType         AssetProcessingJobType  @map("job_type")
-  state           AssetProcessingJobState @default(QUEUED)
-  payload         Json                    @default("{}")
-  result          Json?
-  retryCount      Int                     @default(0) @map("retry_count")
-  maxRetries      Int                     @default(3) @map("max_retries")
-  workerId        String?                 @map("worker_id")
-  leaseToken      String?                 @map("lease_token")
-  leaseUntil      DateTime?               @map("lease_until")
-  claimedAt       DateTime?               @map("claimed_at")
-  nextAttemptAt   DateTime?               @map("next_attempt_at")
-  errorCode       String?                 @map("error_code")
-  errorMessage    String?                 @map("error_message")
-  completedAt     DateTime?               @map("completed_at")
-  failedAt        DateTime?               @map("failed_at")
-  createdAt       DateTime                @default(now()) @map("created_at")
-  updatedAt       DateTime                @updatedAt @map("updated_at")
-  session         AssetImportSession      @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  group           BeadImageGroup?         @relation(fields: [groupId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id            String                  @id @default(cuid())
+  sessionId     String                  @map("session_id")
+  groupId       String?                 @map("group_id")
+  jobType       AssetProcessingJobType  @map("job_type")
+  state         AssetProcessingJobState @default(QUEUED)
+  payload       Json                    @default("{}")
+  result        Json?
+  retryCount    Int                     @default(0) @map("retry_count")
+  maxRetries    Int                     @default(3) @map("max_retries")
+  workerId      String?                 @map("worker_id")
+  leaseToken    String?                 @map("lease_token")
+  leaseUntil    DateTime?               @map("lease_until")
+  claimedAt     DateTime?               @map("claimed_at")
+  nextAttemptAt DateTime?               @map("next_attempt_at")
+  errorCode     String?                 @map("error_code")
+  errorMessage  String?                 @map("error_message")
+  completedAt   DateTime?               @map("completed_at")
+  failedAt      DateTime?               @map("failed_at")
+  createdAt     DateTime                @default(now()) @map("created_at")
+  updatedAt     DateTime                @updatedAt @map("updated_at")
+  session       AssetImportSession      @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  group         BeadImageGroup?         @relation(fields: [groupId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([state, nextAttemptAt, createdAt])
   @@index([state, leaseUntil])
@@ -897,24 +898,47 @@ model AssetProcessingJob {
   @@map("asset_processing_jobs")
 }
 
+/// Immutable idempotency and audit record for retryable backend orchestration
+/// operations. `requestPayload` is the validated, storage-path-safe business
+/// request; `resultPayload` is the exact replay projection. Human review and
+/// curation operations also record the authenticated actor and review note.
+/// Keys are scoped by operation type so clients may safely reuse a key for a
+/// different endpoint while divergent retries of the same operation conflict.
+model AssetImportOperation {
+  id                 String   @id @default(cuid())
+  operationType      String   @map("operation_type")
+  idempotencyKey     String   @map("idempotency_key")
+  aggregateId        String   @map("aggregate_id")
+  payloadFingerprint String   @map("payload_fingerprint")
+  requestPayload     Json     @map("request_payload")
+  resultPayload      Json     @map("result_payload")
+  actorId            String?  @map("actor_id")
+  reviewNote         String?  @map("review_note")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  @@unique([operationType, idempotencyKey])
+  @@index([aggregateId, operationType, createdAt], map: "asset_import_ops_aggregate_type_created_idx")
+  @@map("asset_import_operations")
+}
+
 /// Approved asset attached to a formal product. The partial unique index on
 /// `material_product_id WHERE binding_status = 'APPROVED'` (migration SQL)
 /// guarantees at most one active binding per product.
 model ProductAssetBinding {
-  id                 String                   @id @default(cuid())
-  materialProductId  String                   @map("material_product_id")
-  processedAssetId   String                   @map("processed_asset_id")
-  assetKey           String                   @map("asset_key")
+  id                 String                    @id @default(cuid())
+  materialProductId  String                    @map("material_product_id")
+  processedAssetId   String                    @map("processed_asset_id")
+  assetKey           String                    @map("asset_key")
   purpose            ProcessedAssetPurpose
   bindingStatus      ProductAssetBindingStatus @default(DRAFT) @map("binding_status")
-  allowPublicDisplay Boolean                  @default(false) @map("allow_public_display")
-  allowCommercialUse Boolean                  @default(false) @map("allow_commercial_use")
-  approvedAt         DateTime?                @map("approved_at")
-  retiredAt          DateTime?                @map("retired_at")
-  createdAt          DateTime                 @default(now()) @map("created_at")
-  updatedAt          DateTime                 @updatedAt @map("updated_at")
-  product            MaterialProduct          @relation(fields: [materialProductId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  asset              ProcessedAsset           @relation(fields: [processedAssetId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  allowPublicDisplay Boolean                   @default(false) @map("allow_public_display")
+  allowCommercialUse Boolean                   @default(false) @map("allow_commercial_use")
+  approvedAt         DateTime?                 @map("approved_at")
+  retiredAt          DateTime?                 @map("retired_at")
+  createdAt          DateTime                  @default(now()) @map("created_at")
+  updatedAt          DateTime                  @updatedAt @map("updated_at")
+  product            MaterialProduct           @relation(fields: [materialProductId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  asset              ProcessedAsset            @relation(fields: [processedAssetId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([materialProductId, bindingStatus])
   @@index([assetKey, bindingStatus])

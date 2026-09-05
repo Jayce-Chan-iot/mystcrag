@@ -176,6 +176,13 @@ class MemoryTable {
     }
     return { count: affected.length };
   }
+
+  async deleteMany({ where }: { where?: Record<string, unknown> }): Promise<{ count: number }> {
+    const retained = this.rows.filter((row) => !this.matches(row, where));
+    const count = this.rows.length - retained.length;
+    this.rows.splice(0, this.rows.length, ...retained);
+    return { count };
+  }
 }
 
 class PrismaDouble {
@@ -218,6 +225,12 @@ class PrismaDouble {
     { name: "bead_group_publications_group_id_key", fields: ["groupId"] }
   ]);
   readonly assetProcessingJob = new MemoryTable();
+  readonly assetImportOperation = new MemoryTable([
+    {
+      name: "asset_import_operations_operation_type_idempotency_key_key",
+      fields: ["operationType", "idempotencyKey"]
+    }
+  ]);
   readonly crystal = new MemoryTable();
   readonly materialProduct = new MemoryTable([{ name: "material_products_sku_key", fields: ["sku"] }]);
   readonly inventorySnapshot = new MemoryTable([
@@ -238,6 +251,7 @@ class PrismaDouble {
       this.productAssetBinding,
       this.beadGroupPublication,
       this.assetProcessingJob,
+      this.assetImportOperation,
       this.crystal,
       this.materialProduct,
       this.inventorySnapshot
@@ -1036,8 +1050,18 @@ function processResult(overrides: Record<string, unknown> = {}): CompleteAssetJo
   } as CompleteAssetJobResult;
 }
 
-function reviewDecision(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+let reviewRequestSequence = 0;
+
+function reviewDecision(
+  processedAssetId: string,
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
   return {
+    idempotencyKey: `review-${processedAssetId}-${++reviewRequestSequence}`,
+    expectedGroupRevision: 1,
+    processedAssetId,
+    action: "APPROVE",
+    reviewNote: "Operator reviewed image quality and rights evidence",
     usagePermission: "OWNED",
     rightsHolder: "Mystcrag Studio",
     isAuthenticPhotograph: true,
@@ -1114,12 +1138,14 @@ test("reviewProcessedAsset approves the current QC-passed version with operator 
   const pending = await prisma.processedAsset.findFirst({ where: { groupId } });
   assert.ok(pending);
   const review = await repository.reviewProcessedAsset(
+    groupId,
     pending!.id as string,
-    reviewDecision() as never
+    reviewDecision(pending!.id as string) as never,
+    "admin-user-1"
   );
   assert.equal(review.state, "APPROVED");
-  assert.equal(review.assetKey, `approved:${VALID_SHA}`);
-  assert.ok(review.approvedAt);
+  assert.equal(review.reviewAction, "APPROVE");
+  assert.ok(review.reviewedAt);
   const approved = await prisma.processedAsset.findUnique({ where: { id: pending!.id as string } });
   assert.equal(approved?.state, "APPROVED");
   assert.equal(approved?.assetKey, `approved:${VALID_SHA}`);
@@ -1146,13 +1172,28 @@ test("reviewProcessedAsset refuses assets outside the pending-review window", as
   const pending = (await prisma.processedAsset.findFirst({ where: { groupId } }))!;
 
   await assert.rejects(
-    () => repository.reviewProcessedAsset("asset-does-not-exist", reviewDecision() as never),
+    () => repository.reviewProcessedAsset(
+      groupId,
+      "asset-does-not-exist",
+      reviewDecision("asset-does-not-exist") as never,
+      "admin-user-1"
+    ),
     (error: unknown) => error instanceof PersistenceError && error.code === "NOT_FOUND"
   );
 
-  await repository.reviewProcessedAsset(pending!.id as string, reviewDecision() as never);
+  await repository.reviewProcessedAsset(
+    groupId,
+    pending!.id as string,
+    reviewDecision(pending!.id as string) as never,
+    "admin-user-1"
+  );
   await assert.rejects(
-    () => repository.reviewProcessedAsset(pending!.id as string, reviewDecision() as never),
+    () => repository.reviewProcessedAsset(
+      groupId,
+      pending!.id as string,
+      reviewDecision(pending!.id as string, { expectedGroupRevision: 2 }) as never,
+      "admin-user-1"
+    ),
     (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT",
     "double review of the same asset must conflict"
   );
@@ -1173,7 +1214,12 @@ test("reviewProcessedAsset refuses assets outside the pending-review window", as
     where: { groupId: failedFixture.groupId }
   }))!;
   await assert.rejects(
-    () => repositoryFailed.reviewProcessedAsset(failedAsset!.id as string, reviewDecision() as never),
+    () => repositoryFailed.reviewProcessedAsset(
+      failedFixture.groupId,
+      failedAsset!.id as string,
+      reviewDecision(failedAsset!.id as string) as never,
+      "admin-user-1"
+    ),
     (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT",
     "a QC-failed asset can never be human-approved"
   );
@@ -1204,7 +1250,12 @@ test("reviewProcessedAsset refuses assets outside the pending-review window", as
   }))!;
   await assert.rejects(
     () =>
-      repositoryStale.reviewProcessedAsset(neverQcAsset!.id as string, reviewDecision() as never),
+      repositoryStale.reviewProcessedAsset(
+        staleGroupId,
+        neverQcAsset!.id as string,
+        reviewDecision(neverQcAsset!.id as string) as never,
+        "admin-user-1"
+      ),
     (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT",
     "an asset that never passed automatic QC cannot be approved"
   );
@@ -1234,7 +1285,12 @@ test("reviewProcessedAsset refuses assets outside the pending-review window", as
     where: { groupId: oldGroupId }
   }))!;
   await assert.rejects(
-    () => repositoryOld.reviewProcessedAsset(oldAsset!.id as string, reviewDecision() as never),
+    () => repositoryOld.reviewProcessedAsset(
+      oldGroupId,
+      oldAsset!.id as string,
+      reviewDecision(oldAsset!.id as string) as never,
+      "admin-user-1"
+    ),
     (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT",
     "only the current version of a purpose can be human-approved"
   );
@@ -1243,17 +1299,36 @@ test("reviewProcessedAsset refuses assets outside the pending-review window", as
 test("reviewProcessedAsset validates the operator decision before database access", async () => {
   const repository = new AssetImportRepository(untouchableClient);
   await expectValidationError(
-    () => repository.reviewProcessedAsset("asset-1", {} as never),
+    () => repository.reviewProcessedAsset("group-1", "asset-1", {} as never, "admin-user-1"),
+    "action"
+  );
+  await expectValidationError(
+    () => repository.reviewProcessedAsset(
+      "group-1",
+      "asset-1",
+      reviewDecision("asset-1", { rightsHolder: "   " }) as never,
+      "admin-user-1"
+    ),
     "rightsHolder"
   );
   await expectValidationError(
     () =>
-      repository.reviewProcessedAsset("asset-1", reviewDecision({ usagePermission: "GUESSING" }) as never),
+      repository.reviewProcessedAsset(
+        "group-1",
+        "asset-1",
+        reviewDecision("asset-1", { usagePermission: "GUESSING" }) as never,
+        "admin-user-1"
+      ),
     "usagePermission"
   );
-  await expectValidationError(
-    () => repository.reviewProcessedAsset("asset-1", reviewDecision({ rightsHolder: "   " }) as never),
-    "rightsHolder"
+  await assert.rejects(
+    () => repository.reviewProcessedAsset(
+      "group-1",
+      "asset-1",
+      reviewDecision("different-asset") as never,
+      "admin-user-1"
+    ),
+    (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT"
   );
 });
 
@@ -1292,8 +1367,16 @@ test("publishGroup fails closed until the QC-passed asset is human-approved", as
   assert.equal((await prisma.materialProduct.findMany({ where: {} })).length, 0);
   assert.equal((await prisma.beadGroupPublication.findMany({ where: {} })).length, 0);
 
-  await repository.reviewProcessedAsset(pending!.id as string, reviewDecision() as never);
-  const published = await repository.publishGroup(groupId, publishInput());
+  await repository.reviewProcessedAsset(
+    groupId,
+    pending!.id as string,
+    reviewDecision(pending!.id as string) as never,
+    "admin-user-1"
+  );
+  const published = await repository.publishGroup(
+    groupId,
+    publishInput({ expectedGroupRevision: 2 })
+  );
   assert.equal(published.state, "PUBLISHED");
   assert.deepEqual(published.publishedAssetKeys, [`approved:${VALID_SHA}`]);
 });
@@ -2350,4 +2433,242 @@ test("findApprovedPublicAsset resolves an asset bound to an active public produc
   assert.ok(resolved);
   assert.equal(resolved.assetKey, `approved:${VALID_SHA}`);
   assert.equal(resolved.outputSha256, VALID_SHA);
+});
+
+// ---------------------------------------------------------------------------
+// TASK-ASSET-DB-002 backend orchestration prerequisites (red-first)
+// ---------------------------------------------------------------------------
+
+test("resolveUploadTarget proves session ownership, declared size and mutable state", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const first = await createSessionWithFiles(prisma, { clientFileIds: ["upload-1"] });
+  const second = await createSessionWithFiles(prisma, { clientFileIds: ["upload-2"] });
+
+  await assert.rejects(
+    () => repository.resolveUploadTarget({
+      sessionId: second.sessionId,
+      fileId: first.fileIds[0]!,
+      contentLengthBytes: 1024
+    }),
+    (error: unknown) => error instanceof PersistenceError && error.code === "NOT_FOUND"
+  );
+  await assert.rejects(
+    () => repository.resolveUploadTarget({
+      sessionId: first.sessionId,
+      fileId: first.fileIds[0]!,
+      contentLengthBytes: 2048
+    }),
+    (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT"
+  );
+
+  const target = await repository.resolveUploadTarget({
+    sessionId: first.sessionId,
+    fileId: first.fileIds[0]!,
+    contentLengthBytes: 1024
+  });
+  assert.equal(target.sessionId, first.sessionId);
+  assert.equal(target.fileId, first.fileIds[0]);
+  assert.equal(target.kind, "JPEG");
+  assert.equal(target.byteSize, 1024);
+  assert.equal(target.state, "UPLOADING");
+});
+
+test("GROUP_SESSION completion materializes authoritative groups and file membership atomically", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const fixture = await createSessionWithFiles(prisma, { clientFileIds: ["group-1", "group-2"] });
+  await repository.recordUploadedFile(
+    fixture.fileIds[0]!,
+    VALID_SHA,
+    "imports/group-session/raw/first.jpg",
+    { storageProvider: "local-fs" }
+  );
+  await repository.recordUploadedFile(
+    fixture.fileIds[1]!,
+    OTHER_SHA,
+    "imports/group-session/raw/second.jpg",
+    { storageProvider: "local-fs" }
+  );
+  await prisma.assetImportSession.update({
+    where: { id: fixture.sessionId },
+    data: { state: "PROCESSING" }
+  });
+  const leaseUntil = new Date(Date.now() + 60_000);
+  const lease = { workerId: "group-worker", leaseToken: "group-lease" };
+  const job = await prisma.assetProcessingJob.create({
+    data: {
+      sessionId: fixture.sessionId,
+      groupId: null,
+      jobType: "GROUP_SESSION",
+      state: "RUNNING",
+      payload: {},
+      retryCount: 0,
+      maxRetries: 3,
+      workerId: lease.workerId,
+      leaseToken: lease.leaseToken,
+      leaseUntil
+    }
+  });
+
+  await repository.completeJob(
+    job.id as string,
+    {
+      kind: "GROUP_SESSION",
+      groups: [
+        {
+          groupId: "suggested-group-1",
+          memberFileIds: [...fixture.fileIds],
+          primaryFileId: fixture.fileIds[0],
+          similarityEvidence: { confidence: "HIGH" }
+        }
+      ]
+    },
+    lease
+  );
+
+  const group = await prisma.beadImageGroup.findUnique({ where: { id: "suggested-group-1" } });
+  assert.ok(group);
+  assert.equal(group.sessionId, fixture.sessionId);
+  assert.equal(group.primaryFileId, fixture.fileIds[0]);
+  for (const fileId of fixture.fileIds) {
+    const file = await prisma.assetSourceFile.findUnique({ where: { id: fileId } });
+    assert.equal(file?.groupId, "suggested-group-1");
+  }
+  const session = await prisma.assetImportSession.findUnique({ where: { id: fixture.sessionId } });
+  assert.equal(session?.state, "NEEDS_REVIEW");
+  assert.equal(session?.lastVerifiedCheckpoint, "GROUPED");
+});
+
+test("reviewProcessedAsset uses the shared contract, records actor evidence and replays idempotently", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const { groupId } = await createGroupFixture(prisma);
+  const file = await prisma.assetSourceFile.findFirst({ where: { groupId } });
+  const asset = await prisma.processedAsset.create({
+    data: {
+      sourceFileId: file!.id,
+      groupId,
+      purpose: "MAIN",
+      processingVersion: 1,
+      state: "QC_PENDING",
+      storageProvider: "local-fs",
+      storageKey: "imports/session/processed/group/v1/bead-512.webp",
+      assetKey: null,
+      outputSha256: VALID_SHA,
+      outputBytes: 1024n,
+      outputContentType: "image/webp",
+      qcResult: { passed: true, checks: [] },
+      qcPassedAt: new Date(),
+      usagePermission: "UNKNOWN",
+      isAuthenticPhotograph: false,
+      allowCommercialUse: false,
+      allowPublicDisplay: false,
+      isCurrentVersion: true
+    }
+  });
+  const request = {
+    idempotencyKey: "review-shared-1",
+    expectedGroupRevision: 1,
+    processedAssetId: asset.id as string,
+    action: "APPROVE" as const,
+    reviewNote: "人工复核边缘与颜色后批准",
+    rightsHolder: "玄矶工作室",
+    usagePermission: "OWNED" as const,
+    isAuthenticPhotograph: true,
+    allowAiTraining: false,
+    allowCommercialUse: true,
+    allowPublicDisplay: true,
+    allowAiRecommendation: true
+  };
+
+  const first = await repository.reviewProcessedAsset(groupId, asset.id as string, request, "admin-user-1");
+  const replay = await repository.reviewProcessedAsset(groupId, asset.id as string, request, "admin-user-1");
+  assert.deepEqual(replay, first);
+  assert.equal(first.reviewAction, "APPROVE");
+  assert.equal(first.state, "APPROVED");
+  assert.equal(first.revision, 2);
+  const operation = await prisma.assetImportOperation.findUnique({ where: { idempotencyKey: request.idempotencyKey } });
+  assert.equal(operation?.actorId, "admin-user-1");
+  assert.equal(operation?.reviewNote, request.reviewNote);
+});
+
+test("CrystalDraft curation has its own revision and durable retry fingerprint", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const draft = await prisma.crystalDraft.create({
+    data: {
+      nameCn: "待补充水晶",
+      nameEn: null,
+      mineralName: "UNSPECIFIED",
+      colorTags: [],
+      visualTags: [],
+      styleTags: [],
+      priceLevel: null,
+      gemologicalInfo: {},
+      complianceNote: "Pending manual curation.",
+      promotedCrystalId: null,
+      revision: 1
+    }
+  });
+  const request = {
+    idempotencyKey: "curate-draft-1",
+    expectedRevision: 1,
+    nameCn: "紫水晶",
+    nameEn: "Amethyst",
+    mineralName: "Quartz",
+    colorTags: ["紫色"],
+    visualTags: ["透明"],
+    styleTags: ["简约"],
+    priceLevel: 3,
+    complianceNote: "仅作材质与装饰说明，不构成医疗或功效结论"
+  };
+  const first = await repository.updateCrystalDraft(draft.id as string, request, "admin-user-1");
+  const replay = await repository.updateCrystalDraft(draft.id as string, request, "admin-user-1");
+  assert.deepEqual(replay, first);
+  assert.equal(first.revision, 2);
+  assert.equal(first.curationComplete, true);
+  assert.deepEqual(first.missingFields, []);
+  assert.equal(first.promotionEligible, true);
+
+  await assert.rejects(
+    () => repository.updateCrystalDraft(
+      draft.id as string,
+      { ...request, nameEn: "Different", idempotencyKey: request.idempotencyKey },
+      "admin-user-1"
+    ),
+    (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT"
+  );
+});
+
+test("cancelSession and orchestration starts are durable and never duplicate jobs", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const grouping = await createSessionWithFiles(prisma, { clientFileIds: ["orchestrate-1"] });
+  await repository.recordUploadedFile(
+    grouping.fileIds[0]!,
+    VALID_SHA,
+    "imports/session-orchestration/raw/file.jpg",
+    { storageProvider: "local-fs" }
+  );
+
+  const started = await repository.startGrouping(grouping.sessionId, { idempotencyKey: "start-grouping-1" });
+  const replay = await repository.startGrouping(grouping.sessionId, { idempotencyKey: "start-grouping-1" });
+  assert.deepEqual(replay, started);
+  assert.equal(started.queuedJobCount, 1);
+  assert.equal(prisma.assetProcessingJob.rows.length, 1);
+
+  const cancellable = await repository.createSession({ idempotencyKey: "cancel-session-create" });
+  const cancelled = await repository.cancelSession(
+    cancellable.sessionId,
+    { idempotencyKey: "cancel-session-1" },
+    "admin-user-1"
+  );
+  const cancelReplay = await repository.cancelSession(
+    cancellable.sessionId,
+    { idempotencyKey: "cancel-session-1" },
+    "admin-user-1"
+  );
+  assert.deepEqual(cancelReplay, cancelled);
+  assert.equal(cancelled.state, "CANCELLED");
 });
