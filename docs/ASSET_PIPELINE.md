@@ -16,7 +16,7 @@ TASK-ASSET-WORKER-001 的模块接口、存储布局、配置与交付记录。�
 | SOL 第 3 轮修复提交 | `f5b5d97`(§10.5,基于 `4414c3b`) |
 | SOL 第 4 轮修复提交 | `9ca2a92`(§10.6,基于 `c091a9d`) |
 | 第 5 轮接管修复提交 | `e31629f`(§10.7,基于 `ec11bd5`;GLM 因 TraeWork CN 额度中断后由 Codex 按用户指令接管) |
-| 当前状态 | REVIEW:SOL 验收第 1–4 轮及第 5 轮 A–J 验收项已修复(§10.3–§10.7);未推送、未合并、未开始 Task 4 |
+| 当前状态 | DONE:SOL 验收第 1–4 轮及第 5 轮 A–J 验收项已修复(§10.3–§10.7);本地 `main` 已快进至 `b23f991` 并复验通过;未推送、未开始 Task 4 |
 
 ## 2. 模块与接口
 
@@ -417,6 +417,8 @@ Codex 接管后新增的红灯证据(旧实现 + 新测试,随后均已修复):
 | 变更边界 | 仅 `packages/asset-pipeline/**`、`apps/asset-worker/**`、本文件及 TASK 精确行;无数据库/Prisma/共享 Contract/后台/前端/知识库业务代码改动;无图片/二进制、原始珠子照片、生成输出、网络/生成式图片服务 |
 
 G5(§7)仍是 TASK-ASSET-BE-001 的接口责任,本任务没有越界实现人工批准、发布或 HTTP API。
+
+本地集成记录:2026-09-05 用户选择本地合并;确认 `main` 与 `origin/main` 均为 `5d29f17`,且 `main` 是本任务分支祖先后,将 `main` 快进至 `b23f991`。合并态再次执行 `pnpm install --frozen-lockfile && pnpm validate`,冻结安装通过,lint/typecheck/test/build 各 17/17、架构测试 20/20。TASK-ASSET-WORKER-001 因此转为 DONE;本地 `main` 尚未推送。
 
 ## 11. 操作
 
