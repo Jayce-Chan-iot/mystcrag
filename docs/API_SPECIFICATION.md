@@ -175,11 +175,17 @@ Recovery checkpoints are a separate ordered enum (`AssetImportCheckpointSchema`)
 | `PATCH /api/admin/bead-import/groups/:groupId` | `UpdateBeadImageGroupRequestSchema` | `UpdateBeadImageGroupResponseSchema` | Review actions: `SET_NAME`, `MERGE_GROUPS`, `SPLIT_GROUP`, `MOVE_FILES`, `SET_PRIMARY`, `IGNORE_FILES`. Every action requires `expectedGroupRevision`; responses return the incremented `revision`. `SET_PRIMARY` carries only `primaryFileId` — authoritative membership is checked server-side from `groupId` + `expectedGroupRevision`, never from a client-supplied member list. |
 | `POST /api/admin/bead-import/groups/:groupId/reprocess` | `ReprocessBeadImageGroupRequestSchema` | `ReprocessBeadImageGroupResponseSchema` | Queues a new processing version. Only bounded settings are accepted (`maskThreshold` 0–1, `edgeFeatherPx` 0–8); no model choice, no output path. |
 | `POST /api/admin/bead-import/groups/:groupId/processed-version` | `SelectProcessedVersionRequestSchema` | `SelectProcessedVersionResponseSchema` | Explicitly selects the current processed version for review/publication. New versions never delete old ones; the selection is an explicit reference guarded by `expectedGroupRevision`. |
+| `POST /api/admin/bead-import/groups/:groupId/processed-assets/:processedAssetId/review` | `ReviewProcessedAssetRequestSchema` | `ReviewProcessedAssetResponseSchema` | Records an idempotent human `APPROVE` or `REJECT` decision guarded by `expectedGroupRevision`. Approval requires all seven human rights/consent declarations and is allowed only for the current `QC_PENDING` asset; `QC_FAILED` may only be rejected. The body repeats `processedAssetId` and must match the route parameter. |
+| `PATCH /api/admin/bead-import/crystal-drafts/:crystalDraftId` | `UpdateCrystalDraftCurationRequestSchema` | `UpdateCrystalDraftCurationResponseSchema` | Progressively records human-authored crystal names, mineral name, tags, price level and compliance note using its own optimistic `expectedRevision` and idempotency key. Image inference, asset permission fields, placeholders and storage/path fields are rejected. |
 | `POST /api/admin/bead-import/groups/:groupId/draft` | `SaveBeadProductDraftRequestSchema` | `SaveBeadProductDraftResponseSchema` | Explicit partial product-draft save: at least one product field plus `expectedGroupRevision`. Accepts the full permission vocabulary including `UNKNOWN` and `PROHIBITED` — such drafts persist locally as review-only records. A draft may reference an existing `crystalId` or a `crystalDraftId`, never both. |
 | `GET /api/admin/bead-import/groups/:groupId/draft-completeness` | no body | `CheckBeadProductDraftCompletenessResponseSchema` | Reports `complete` and `missingFields` against the publish-required field list (`DRAFT_COMPLETENESS_FIELDS`, including `SKU`); `PUBLISH_REQUIRED_FIELDS_TO_COMPLETENESS` maps every publish-required business field one-to-one onto those fields. `complete` is true exactly when `missingFields` is empty. |
 | `POST /api/admin/bead-import/groups/:groupId/publish` | `PublishBeadImageGroupRequestSchema` | `PublishBeadImageGroupResponseSchema` (`state` literal `PUBLISHED`, `publishedAssetKeys` ≥1 approved keys) | Transactional publication of one reviewed group into the formal catalog. |
 | `GET /api/admin/bead-import/groups/:groupId/publish-result` | no body | `GetBeadImageGroupPublishResultResponseSchema` | Re-reads the persisted publication result for refresh/recovery. |
 | `GET /api/assets/:assetKey` | `ResolveApprovedAssetParamsSchema` | **Binary image bytes**, never JSON. Success headers are validated by `ApprovedAssetDeliveryHeadersSchema` (`Content-Type`, `Content-Length`, `ETag`, `Cache-Control`); `ApprovedAssetDeliveryMetadataSchema` is the internal resolver/service result only. | Approved-only public delivery (see below). Draft, retired, unpublished, or private assets resolve to `404`. |
+
+Automated QC and human approval are separate boundaries. `ProcessedAssetQcResultSchema` contains only the processed asset/version, `qcPassed`, and optional non-empty QC issues. `processedAssetStateAfterQc(true)` is always `QC_PENDING`, never `APPROVED`; failed QC becomes `QC_FAILED`. Human review is the only transition to `APPROVED`. `PROCESSED_ASSET_REVIEW_ELIGIBILITY` allows `APPROVE`/`REJECT` from `QC_PENDING`, only `REJECT` from `QC_FAILED`, and no in-place review from `DRAFT`, `APPROVED`, or `RETIRED`. An approval body must explicitly decide `rightsHolder`, `usagePermission` (`OWNED`/`GRANTED` only), authentic-photo status, AI-training, commercial-use, public-display and AI-recommendation permissions. A rejection carries only its human reason and cannot grant permissions.
+
+Crystal curation is likewise independent from image processing and asset permission review. `CRYSTAL_DRAFT_CURATION_FIELDS` defines the eight human completeness fields and `missingCrystalDraftCurationFields` checks their canonical mapping. Updates may be partial, but must contain at least one curated material field. Names, mineral name, tags and the compliance note reject blank/placeholder values; tags are non-empty, unique and bounded; `priceLevel` is an integer from 1 through 5. `promotionEligible` is true exactly when no curation fields are missing. Completing curation does not itself promote or publish a Crystal.
 
 Draft save is an explicit boundary (`POST /groups/:groupId/draft`), not the `SET_NAME` review action: `SET_NAME` only records the human bead name during review, while draft save persists product fields across review steps. Drafts never appear in public catalog queries, AI recommendation, or inventory; publication is the only path to the live catalog, and it requires the complete publish request.
 
@@ -278,6 +284,66 @@ Processed-version selection (`POST /groups/:groupId/processed-version`) and resp
 ```json
 { "groupId": "group-1", "state": "PROCESSED", "selectedProcessingVersion": 2, "updatedAt": "2026-09-01T09:15:00+08:00" }
 ```
+
+Human processed-asset approval (`POST /groups/:groupId/processed-assets/:processedAssetId/review`) and response:
+
+```json
+{
+  "idempotencyKey": "review-asset-1",
+  "expectedGroupRevision": 4,
+  "processedAssetId": "asset-1",
+  "action": "APPROVE",
+  "reviewNote": "边缘干净，内部亮部保留，可进入发布审核",
+  "rightsHolder": "玄矶工作室",
+  "usagePermission": "GRANTED",
+  "isAuthenticPhotograph": true,
+  "allowAiTraining": false,
+  "allowCommercialUse": true,
+  "allowPublicDisplay": true,
+  "allowAiRecommendation": false
+}
+```
+
+```json
+{
+  "groupId": "group-1",
+  "processedAssetId": "asset-1",
+  "reviewAction": "APPROVE",
+  "state": "APPROVED",
+  "revision": 5,
+  "reviewedAt": "2026-09-01T09:20:00+08:00"
+}
+```
+
+Crystal draft curation (`PATCH /crystal-drafts/:crystalDraftId`) may carry any non-empty subset of the eight curated fields:
+
+```json
+{
+  "idempotencyKey": "curation-draft-1",
+  "expectedRevision": 2,
+  "nameCn": "紫水晶",
+  "nameEn": "Amethyst",
+  "mineralName": "Quartz",
+  "colorTags": ["紫色", "浅紫"],
+  "visualTags": ["透明", "玻璃光泽"],
+  "styleTags": ["简约", "日系"],
+  "priceLevel": 3,
+  "complianceNote": "仅作文化象征与装饰用途说明，不构成科学或医疗结论"
+}
+```
+
+```json
+{
+  "crystalDraftId": "draft-1",
+  "revision": 3,
+  "curationComplete": true,
+  "missingFields": [],
+  "promotionEligible": true,
+  "updatedAt": "2026-09-01T09:20:00+08:00"
+}
+```
+
+For both mutations, an exact retry of the same idempotency key and fingerprint returns the original result. Reusing the key with different content, a stale expected revision, a route/body processed-asset mismatch, an ineligible QC state, or a non-current processed version returns `409 CONFLICT`; request-shape violations return `400 VALIDATION_ERROR`; unknown ids return `404 NOT_FOUND`.
 
 Draft save example (`POST /groups/:groupId/draft`; any non-empty subset of product fields):
 

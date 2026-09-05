@@ -626,6 +626,275 @@ export type AssetUsagePermission = z.infer<typeof AssetUsagePermissionSchema>;
 export const PublishAssetUsagePermissionSchema = z.enum(["OWNED", "GRANTED"]);
 export type PublishAssetUsagePermission = z.infer<typeof PublishAssetUsagePermissionSchema>;
 
+/**
+ * Automated QC and human approval are deliberately separate boundaries.
+ * A successful worker result can only enter QC_PENDING; only the admin review
+ * contract below can promote the current processed asset to APPROVED.
+ */
+export const PROCESSED_ASSET_REVIEW_ACTIONS = ["APPROVE", "REJECT"] as const;
+export const ProcessedAssetReviewActionSchema = z.enum(PROCESSED_ASSET_REVIEW_ACTIONS);
+export type ProcessedAssetReviewAction = z.infer<typeof ProcessedAssetReviewActionSchema>;
+
+export const ASSET_HUMAN_REVIEW_FIELDS = [
+  "rightsHolder",
+  "usagePermission",
+  "isAuthenticPhotograph",
+  "allowAiTraining",
+  "allowCommercialUse",
+  "allowPublicDisplay",
+  "allowAiRecommendation"
+] as const;
+
+export const PROCESSED_ASSET_REVIEW_ELIGIBILITY: Record<
+  ProcessedAssetState,
+  readonly ProcessedAssetReviewAction[]
+> = {
+  DRAFT: [],
+  QC_PENDING: ["APPROVE", "REJECT"],
+  QC_FAILED: ["REJECT"],
+  APPROVED: [],
+  RETIRED: []
+};
+
+export function canReviewProcessedAsset(
+  state: ProcessedAssetState,
+  action: ProcessedAssetReviewAction
+): boolean {
+  return PROCESSED_ASSET_REVIEW_ELIGIBILITY[state]?.includes(action) ?? false;
+}
+
+export function processedAssetStateAfterQc(qcPassed: boolean): "QC_PENDING" | "QC_FAILED" {
+  return qcPassed ? "QC_PENDING" : "QC_FAILED";
+}
+
+export const ProcessedAssetQcResultSchema = z
+  .strictObject({
+    processedAssetId: IdentifierSchema,
+    processingVersion: PositiveSafeIntegerSchema,
+    qcPassed: z.boolean(),
+    qcIssues: z.array(NonEmptyTextSchema).min(1).max(100).optional()
+  })
+  .superRefine((result, context) => {
+    if (!result.qcPassed && result.qcIssues === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Failed QC must name at least one issue",
+        path: ["qcIssues"]
+      });
+    }
+  });
+export type ProcessedAssetQcResult = z.infer<typeof ProcessedAssetQcResultSchema>;
+
+export const ReviewProcessedAssetParamsSchema = z.strictObject({
+  groupId: IdentifierSchema,
+  processedAssetId: IdentifierSchema
+});
+export type ReviewProcessedAssetParams = z.infer<typeof ReviewProcessedAssetParamsSchema>;
+
+const ReviewProcessedAssetBaseShape = {
+  idempotencyKey: IdempotencyKeySchema,
+  expectedGroupRevision: ExpectedRevisionSchema,
+  processedAssetId: IdentifierSchema,
+  reviewNote: NonEmptyTextSchema
+} as const;
+
+const ReviewProcessedAssetApproveRequestSchema = z.strictObject({
+  ...ReviewProcessedAssetBaseShape,
+  action: z.literal("APPROVE"),
+  rightsHolder: NonEmptyTextSchema,
+  usagePermission: PublishAssetUsagePermissionSchema,
+  isAuthenticPhotograph: z.boolean(),
+  allowAiTraining: z.boolean(),
+  allowCommercialUse: z.boolean(),
+  allowPublicDisplay: z.boolean(),
+  allowAiRecommendation: z.boolean()
+});
+
+const ReviewProcessedAssetRejectRequestSchema = z.strictObject({
+  ...ReviewProcessedAssetBaseShape,
+  action: z.literal("REJECT")
+});
+
+export const ReviewProcessedAssetRequestSchema = z.discriminatedUnion("action", [
+  ReviewProcessedAssetApproveRequestSchema,
+  ReviewProcessedAssetRejectRequestSchema
+]);
+export type ReviewProcessedAssetRequest = z.infer<typeof ReviewProcessedAssetRequestSchema>;
+
+export const ReviewProcessedAssetResponseSchema = z
+  .strictObject({
+    groupId: IdentifierSchema,
+    processedAssetId: IdentifierSchema,
+    reviewAction: ProcessedAssetReviewActionSchema,
+    state: z.enum(["APPROVED", "RETIRED"]),
+    revision: PositiveSafeIntegerSchema,
+    reviewedAt: IsoDateTimeSchema
+  })
+  .superRefine((response, context) => {
+    const expectedState = response.reviewAction === "APPROVE" ? "APPROVED" : "RETIRED";
+    if (response.state !== expectedState) {
+      context.addIssue({
+        code: "custom",
+        message: `${response.reviewAction} review must report ${expectedState}`,
+        path: ["state"]
+      });
+    }
+  });
+export type ReviewProcessedAssetResponse = z.infer<typeof ReviewProcessedAssetResponseSchema>;
+
+export const CRYSTAL_DRAFT_CURATION_FIELDS = [
+  "NAME_CN",
+  "NAME_EN",
+  "MINERAL_NAME",
+  "COLOR_TAGS",
+  "VISUAL_TAGS",
+  "STYLE_TAGS",
+  "PRICE_LEVEL",
+  "COMPLIANCE_NOTE"
+] as const;
+export const CrystalDraftCurationFieldSchema = z.enum(CRYSTAL_DRAFT_CURATION_FIELDS);
+export type CrystalDraftCurationField = z.infer<typeof CrystalDraftCurationFieldSchema>;
+
+export const CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS = {
+  nameCn: "NAME_CN",
+  nameEn: "NAME_EN",
+  mineralName: "MINERAL_NAME",
+  colorTags: "COLOR_TAGS",
+  visualTags: "VISUAL_TAGS",
+  styleTags: "STYLE_TAGS",
+  priceLevel: "PRICE_LEVEL",
+  complianceNote: "COMPLIANCE_NOTE"
+} as const satisfies Record<string, CrystalDraftCurationField>;
+
+export const CRYSTAL_DRAFT_TAG_LIMITS = {
+  colorTags: 20,
+  visualTags: 30,
+  styleTags: 30
+} as const;
+
+export const CRYSTAL_PRICE_LEVEL_RANGE = { min: 1, max: 5 } as const;
+export const CrystalPriceLevelSchema = z
+  .number()
+  .int()
+  .min(CRYSTAL_PRICE_LEVEL_RANGE.min)
+  .max(CRYSTAL_PRICE_LEVEL_RANGE.max);
+export type CrystalPriceLevel = z.infer<typeof CrystalPriceLevelSchema>;
+
+const CRYSTAL_DRAFT_PLACEHOLDERS = new Set([
+  "unspecified",
+  "unknown",
+  "n/a",
+  "na",
+  "none",
+  "待补充",
+  "未知",
+  "无",
+  "同上"
+]);
+
+function isHumanCuratedText(value: string): boolean {
+  return !CRYSTAL_DRAFT_PLACEHOLDERS.has(value.trim().toLocaleLowerCase("en-US"));
+}
+
+const HumanCuratedTextSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(4_000)
+  .refine(isHumanCuratedText, { message: "Human curation must not use placeholder text" });
+
+function uniqueHumanTags(max: number) {
+  return z
+    .array(HumanCuratedTextSchema.max(120))
+    .min(1)
+    .max(max)
+    .refine(
+      (tags) => new Set(tags.map((tag) => tag.toLocaleLowerCase("en-US"))).size === tags.length,
+      { message: "Curation tags must be unique" }
+    );
+}
+
+const CrystalDraftCurationShape = {
+  nameCn: HumanCuratedTextSchema.max(120),
+  nameEn: HumanCuratedTextSchema.max(120),
+  mineralName: HumanCuratedTextSchema.max(160),
+  colorTags: uniqueHumanTags(CRYSTAL_DRAFT_TAG_LIMITS.colorTags),
+  visualTags: uniqueHumanTags(CRYSTAL_DRAFT_TAG_LIMITS.visualTags),
+  styleTags: uniqueHumanTags(CRYSTAL_DRAFT_TAG_LIMITS.styleTags),
+  priceLevel: CrystalPriceLevelSchema,
+  complianceNote: HumanCuratedTextSchema
+} as const;
+
+export const UpdateCrystalDraftCurationParamsSchema = z.strictObject({
+  crystalDraftId: IdentifierSchema
+});
+export type UpdateCrystalDraftCurationParams = z.infer<typeof UpdateCrystalDraftCurationParamsSchema>;
+
+export const UpdateCrystalDraftCurationRequestSchema = z
+  .strictObject({
+    idempotencyKey: IdempotencyKeySchema,
+    expectedRevision: ExpectedRevisionSchema,
+    nameCn: CrystalDraftCurationShape.nameCn.optional(),
+    nameEn: CrystalDraftCurationShape.nameEn.optional(),
+    mineralName: CrystalDraftCurationShape.mineralName.optional(),
+    colorTags: CrystalDraftCurationShape.colorTags.optional(),
+    visualTags: CrystalDraftCurationShape.visualTags.optional(),
+    styleTags: CrystalDraftCurationShape.styleTags.optional(),
+    priceLevel: CrystalDraftCurationShape.priceLevel.optional(),
+    complianceNote: CrystalDraftCurationShape.complianceNote.optional()
+  })
+  .refine(
+    (request) =>
+      Object.keys(CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS).some(
+        (field) => request[field as keyof typeof CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS] !== undefined
+      ),
+    { message: "Curation must carry at least one human-authored material field", path: ["expectedRevision"] }
+  );
+export type UpdateCrystalDraftCurationRequest = z.infer<typeof UpdateCrystalDraftCurationRequestSchema>;
+
+export function missingCrystalDraftCurationFields(value: unknown): CrystalDraftCurationField[] {
+  const record = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const missing: CrystalDraftCurationField[] = [];
+  for (const [inputField, completenessField] of Object.entries(CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS)) {
+    const schema = CrystalDraftCurationShape[inputField as keyof typeof CrystalDraftCurationShape];
+    if (!schema.safeParse(record[inputField]).success) missing.push(completenessField);
+  }
+  return missing;
+}
+
+export const UpdateCrystalDraftCurationResponseSchema = z
+  .strictObject({
+    crystalDraftId: IdentifierSchema,
+    revision: PositiveSafeIntegerSchema,
+    curationComplete: z.boolean(),
+    missingFields: z.array(CrystalDraftCurationFieldSchema).max(CRYSTAL_DRAFT_CURATION_FIELDS.length),
+    promotionEligible: z.boolean(),
+    updatedAt: IsoDateTimeSchema
+  })
+  .superRefine((response, context) => {
+    if (new Set(response.missingFields).size !== response.missingFields.length) {
+      context.addIssue({ code: "custom", message: "missingFields must be unique", path: ["missingFields"] });
+    }
+    const complete = response.missingFields.length === 0;
+    if (response.curationComplete !== complete) {
+      context.addIssue({
+        code: "custom",
+        message: "curationComplete must match missingFields",
+        path: ["curationComplete"]
+      });
+    }
+    if (response.promotionEligible !== complete) {
+      context.addIssue({
+        code: "custom",
+        message: "promotionEligible requires complete human curation",
+        path: ["promotionEligible"]
+      });
+    }
+  });
+export type UpdateCrystalDraftCurationResponse = z.infer<
+  typeof UpdateCrystalDraftCurationResponseSchema
+>;
+
 const BEAD_PRODUCT_DRAFT_FIELDS = [
   "crystalName",
   "crystalId",
