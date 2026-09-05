@@ -65,6 +65,8 @@ TASK-ASSET-WORKER-001 的模块接口、存储布局、配置与交付记录。�
 | `MYSTCRAG_ASSET_WORKER_SHUTDOWN_GRACE_MS` | SIGTERM 后等待当前任务完成的宽限 | `30000` |
 | `MYSTCRAG_ASSET_WORKER_TRANSIENT_RETRY_DELAY_MS` | 瞬态失败的退避重试间隔 | `60000` |
 
+档案目录拓扑是受控边界：`MYSTCRAG_ASSET_ARCHIVE_ROOT` 必须是资产服务账户的专用、非 group/world-writable 目录，并且运行期间只允许本项目的 Backend/Worker 创建或删除其文件项；备份、运维脚本或其他同权限进程不得在服务运行时对 `imports/<session>/tmp|staging` 及其父目录执行改名、替换或符号链接切换。Node 核心文件系b API 不暴露 `openat/linkat/unlinkat`，因此实现通过已打开目录描述符的 inode 身份、同步关键区和 `O_NOFOLLOW` 防止本进程来源回调导致的竞态，并对受控边界内发现的拓扑变化 fail-closed；它不声称能对抗一个已拥有档案根写权且故意并发改写目录拓扑的外部 OS 进程。
+
 ## 5. Job 契约与数据流
 
 `ClaimedAssetJob.payload` 为 `unknown`,Worker 用 Zod 严格校验后才消费。payload 是内部处理输入,与公开 HTTP DTO 分离;由后续后台导入 API(TASK-ASSET-BE-001)在创建任务时组装,本任务的联调测试以 fixture 模拟该组装。
@@ -446,6 +448,6 @@ DATABASE_URL=… MYSTCRAG_ASSET_ARCHIVE_ROOT=/archive/outside-repo \
 
 实现只处理一个文件，不接收文件夹或本机路径，也不把整个文件夹/批次放进内存。字节逐块写入会话 `tmp` 临时文件，同时增量计算 SHA-256；完整写入后先 `fsync`，再从文件重新计算长度和摘要，最后通过与现有 `verifiedPut` 相同的无覆盖 `link` 原子落入 `imports/<session>/staging/<server-uuid>`，并同步 staging 目录元数据。成功结果只有 `{ stagingKey, sha256, byteSize }`，不包含档案根或绝对路径。
 
-任何来源异常、写入异常、长度不符、摘要复核失败或落盘失败都会进入同一清理路径。`imports/session/tmp/staging` 按层创建，每个新目录同步自身与父目录；`tmp`/`staging` 保持已验证的目录描述符与 `dev/ino` 身份，临时文件以 `O_NOFOLLOW | O_EXCL` 创建并通过同一文件描述符复核摘要。源流耗尽后，链接、身份复核和删除使用不让出事件循环的同步关键区；若清理回调替换了路径，只会在已锁定的 session 下按 inode 找回原目录，绝不跟随替换路径删除同名外部文件。成功返回前必须删除临时项并同步原目录；若原 inode 已被移出可证明边界或底层文件系统拒绝删除，方法显式返回 `WRITE_FAILED`，并在可安全证明所有权时撤销业务 staging 链接。后续仍由 `ARCHIVE_FILE` Worker 完成内容识别、原片不可变归档、数据库提交，并且只在任务提交成功后删除 staging。这个入口不改变 raw/processed 不可变规则，也不授予发布或人工批准权限。
+任何来源异常、写入异常、长度不符、摘要复核失败或落盘失败都会进入同一清理路径。`imports/session/tmp/staging` 按层创建，每个新目录同步自身与父目录；`tmp`/`staging` 保持已验证的目录描述符与 `dev/ino` 身份，临时文件以 `O_NOFOLLOW | O_EXCL` 创建并通过同一文件描述符复核摘要。在上述目录拓扑受控前提下，源流耗尽后的链接、身份复核和删除使用不让出事件循环的同步关键区；若清理回调替换了路径，只会在已锁定的 session 下按 inode 找回原目录，不跟随已发现的替换路径删除同名外部文件。成功返回前必须删除临时项并同步原目录；若原 inode 已被移出可证明边界或底层文件系统拒绝删除，方法显式返回 `WRITE_FAILED`，并在可安全证明所有权时撤销业务 staging 链接。后续仍由 `ARCHIVE_FILE` Worker 完成内容识别、原片不可变归档、数据库提交，并且只在任务提交成功后删除 staging。这个入口不改变 raw/processed 不可变规则，也不授予发布或人工批准权限。
 
 2026-09-05 红灯与实现验证：首轮新增 5 组定向用例，旧实现均因 `putStagingStream is not a function` 失败；独立审查后又两轮增加 7 组边界回归，覆盖预检取消、`tmp` 越界、清理失败回滚、取消阶段的 `tmp` 目录替换、`staging` 目录替换、非字符串 session ID 和异常 iterator `return` getter。最终检查包括 chunked hash/落盘、声明大于上限的读取前拒绝与取消、读取中/结束时长度不符、来源异常清理、非法 ID/非安全正整数限制、返回值无路径字段、新建目录逐层持久化、不跟随替换路径的 inode 安全清理。完整 Task 验收以任务注册表最终记录为准。

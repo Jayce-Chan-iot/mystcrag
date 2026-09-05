@@ -240,8 +240,9 @@ export class ArchiveStore {
    * incrementally, bounded before every write and hashed as bytes land. A
    * staged key becomes visible only after the complete temp file has been
    * fsynced and independently re-verified. Failed attempts remove only entries
-   * whose original inode ownership can still be proven, and never follow a
-   * replacement path to delete unrelated content.
+   * whose original inode ownership can still be proven. This safety boundary
+   * assumes the archive directory topology is owned exclusively by the asset
+   * service account, as documented in ASSET_PIPELINE.md.
    */
   async putStagingStream(input: {
     sessionId: string;
@@ -344,8 +345,8 @@ export class ArchiveStore {
       fileDescriptor = undefined;
 
       // Source callbacks are exhausted before this synchronous critical
-      // section. Pinned directory identities and file-inode checks prevent a
-      // path replacement from redirecting link/unlink to unrelated content.
+      // section. Under the documented single-owner topology boundary, pinned
+      // directory identities and file-inode checks reject path replacement.
       assertLogicalDirectoryIdentity(directoryContext.tempLogicalPath, directoryContext.temp);
       assertLogicalDirectoryIdentity(
         directoryContext.stagingLogicalPath,
