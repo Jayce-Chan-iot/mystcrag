@@ -126,7 +126,7 @@ const ISSUE_MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
  */
 const UNSAFE_MESSAGE = /(?:^|[\s"'(])(?:\/|[A-Za-z]:[\\/])\S|[\u0000-\u001f]|archiveKey|storageKey/i;
 
-function safeMessage(candidate: string, fallback: string): string {
+export function safeOperatorMessage(candidate: string, fallback: string): string {
   return UNSAFE_MESSAGE.test(candidate) ? fallback : candidate;
 }
 
@@ -252,13 +252,13 @@ function classifyFailure(status: number, body: string): BeadImportApiError {
     return new BeadImportApiError({
       code: error.code,
       status,
-      message: safeMessage(error.message, fallback),
+      message: safeOperatorMessage(error.message, fallback),
       retryable: error.retryable,
       assetCode: error.assetCode,
       recoveryAction: error.recoveryAction,
       fieldErrors: (error.fieldErrors ?? []).map((field) => ({
         fieldPath: field.fieldPath,
-        message: safeMessage(field.message, GENERIC_ISSUE_MESSAGE)
+        message: safeOperatorMessage(field.message, GENERIC_ISSUE_MESSAGE)
       }))
     });
   }
@@ -269,11 +269,11 @@ function classifyFailure(status: number, body: string): BeadImportApiError {
     return new BeadImportApiError({
       code: error.code,
       status,
-      message: safeMessage(error.message, fallback),
+      message: safeOperatorMessage(error.message, fallback),
       retryable: !NON_RETRYABLE_TRANSPORT_CODES.has(error.code),
       fieldErrors: (error.fieldErrors ?? []).map((field) => ({
         fieldPath: field.fieldPath,
-        message: safeMessage(field.message, GENERIC_ISSUE_MESSAGE)
+        message: safeOperatorMessage(field.message, GENERIC_ISSUE_MESSAGE)
       }))
     });
   }
