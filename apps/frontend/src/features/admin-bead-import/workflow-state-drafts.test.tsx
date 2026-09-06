@@ -23,7 +23,10 @@ import {
   canSubmitGroupMutation,
   completenessRecordFor,
   curationEntryFor,
+  curationSubmissionBlocker,
   crystalDraftViewFor,
+  groupIdOfCrystalDraft,
+  groupSubmissionBlocker,
   initialWorkflowState,
   isCompletenessCurrent,
   isCurationDirty,
@@ -641,6 +644,76 @@ test("curation submit authority follows the session, the conflict block and its 
     "a crystal draft the session no longer carries cannot be patched"
   );
   assert.equal(canSubmitCuration(ready, "crystal-draft-missing"), false);
+});
+
+test("a refused submission names which of the four blocks stopped it", () => {
+  const ready = typed(curated(loaded()));
+  assert.equal(groupSubmissionBlocker(ready, "group-1"), null);
+  assert.equal(curationSubmissionBlocker(ready, "crystal-draft-1"), null);
+  assert.equal(groupIdOfCrystalDraft(ready, "crystal-draft-1"), "group-1");
+  assert.equal(groupIdOfCrystalDraft(ready, "crystal-draft-missing"), null);
+
+  const published = typed(
+    curated(loaded({ state: "PUBLISHED", groups: [namedGroup({ state: "PUBLISHED" })] }))
+  );
+  assert.equal(groupSubmissionBlocker(published, "group-1"), "GROUP_LOCKED");
+  assert.equal(curationSubmissionBlocker(published, "crystal-draft-1"), "GROUP_LOCKED");
+
+  const conflicted = workflowReducer(ready, { type: "GROUP_MUTATION_CONFLICT", groupId: "group-1" });
+  assert.equal(groupSubmissionBlocker(conflicted, "group-1"), "CONFLICT_BLOCKED");
+  assert.equal(
+    curationSubmissionBlocker(conflicted, "crystal-draft-1"),
+    "CONFLICT_BLOCKED",
+    "a conflict blocks every revision-bearing submit until the operator confirms"
+  );
+
+  const groupInFlight = workflowReducer(ready, { type: "GROUP_MUTATION_STARTED", groupId: "group-1" });
+  assert.equal(groupSubmissionBlocker(groupInFlight, "group-1"), "IN_FLIGHT");
+  assert.equal(
+    curationSubmissionBlocker(groupInFlight, "crystal-draft-1"),
+    null,
+    "a group save in flight does not lock an unrelated crystal draft"
+  );
+
+  const curationInFlight = workflowReducer(ready, {
+    type: "CURATION_SAVE_STARTED",
+    crystalDraftId: "crystal-draft-1"
+  });
+  assert.equal(curationSubmissionBlocker(curationInFlight, "crystal-draft-1"), "IN_FLIGHT");
+  assert.equal(groupSubmissionBlocker(curationInFlight, "group-1"), null);
+
+  const staleGroup = workflowReducer(typed(loaded()), {
+    type: "SESSION_REFRESHED",
+    session: reviewSession({ groups: [namedGroup({ revision: 9 })] }),
+    syncedAt: RESYNCED_AT
+  });
+  assert.equal(groupSubmissionBlocker(staleGroup, "group-1"), "STALE");
+  assert.equal(curationSubmissionBlocker(staleGroup, "crystal-draft-1"), null);
+
+  const staleCuration = workflowReducer(curated(loaded()), {
+    type: "SESSION_REFRESHED",
+    session: reviewSession({ groups: [namedGroup({ crystalDraft: { ...CRYSTAL_DRAFT, revision: 6 } })] }),
+    syncedAt: RESYNCED_AT
+  });
+  assert.equal(curationSubmissionBlocker(staleCuration, "crystal-draft-1"), "STALE");
+  assert.equal(groupSubmissionBlocker(staleCuration, "group-1"), null);
+
+  const states = [
+    ready,
+    published,
+    conflicted,
+    groupInFlight,
+    curationInFlight,
+    staleGroup,
+    staleCuration
+  ];
+  for (const state of states) {
+    assert.equal(
+      canSubmitGroupMutation(state, "group-1"),
+      groupSubmissionBlocker(state, "group-1") === null,
+      "the authority and its explanation never disagree"
+    );
+  }
 });
 
 test("the draft slice stores no storage path, admin key or inferred crystal identity", () => {

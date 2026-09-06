@@ -9,9 +9,8 @@ import { classifySessionFailure, type AbortHandle, type AbortSignalLike } from "
 import {
   CONFLICT_NOTICE_MESSAGE,
   STALE_GROUP_NOTICE_MESSAGE,
-  canEditGroups,
-  canSubmitGroupMutation,
   groupRevisionFor,
+  groupSubmissionBlocker,
   type BeadImportWorkflowState,
   type WorkflowAction
 } from "./workflow-state";
@@ -127,16 +126,7 @@ function refusalReasonFor(
   if (input.action === "SET_NAME" && input.crystalName.trim() === "") {
     return "EMPTY_NAME";
   }
-  if (!canSubmitGroupMutation(state, groupId)) {
-    if (!canEditGroups(state, groupId)) {
-      return "GROUP_LOCKED";
-    }
-    if (state.blockedByConflict) {
-      return "CONFLICT_BLOCKED";
-    }
-    return state.inFlightGroupIds.includes(groupId) ? "IN_FLIGHT" : "STALE";
-  }
-  return null;
+  return groupSubmissionBlocker(state, groupId);
 }
 
 export function createGroupLoader(deps: GroupLoaderDeps): GroupLoader {

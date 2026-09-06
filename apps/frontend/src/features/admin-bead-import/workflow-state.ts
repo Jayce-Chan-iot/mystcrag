@@ -239,14 +239,49 @@ export function canEditGroups(state: BeadImportWorkflowState, groupId: string): 
   return group !== undefined && group.state !== "PUBLISHED";
 }
 
-export function canSubmitGroupMutation(state: BeadImportWorkflowState, groupId: string): boolean {
+/**
+ * Why a revision-bearing submission may not go out now, in the order an
+ * operator should hear it: a locked task cannot be edited at all, a conflict
+ * blocks everything until it is confirmed, and only then does one submit
+ * waiting on another or a revision that moved matter.
+ */
+export type SubmissionBlocker = "GROUP_LOCKED" | "CONFLICT_BLOCKED" | "IN_FLIGHT" | "STALE";
+
+export function groupSubmissionBlocker(
+  state: BeadImportWorkflowState,
+  groupId: string
+): SubmissionBlocker | null {
   if (!canEditGroups(state, groupId)) {
-    return false;
+    return "GROUP_LOCKED";
   }
-  if (state.blockedByConflict || state.inFlightGroupIds.includes(groupId)) {
-    return false;
+  if (state.blockedByConflict) {
+    return "CONFLICT_BLOCKED";
   }
-  return !state.staleGroupIds.includes(groupId);
+  if (state.inFlightGroupIds.includes(groupId)) {
+    return "IN_FLIGHT";
+  }
+  return state.staleGroupIds.includes(groupId) ? "STALE" : null;
+}
+
+export function curationSubmissionBlocker(
+  state: BeadImportWorkflowState,
+  crystalDraftId: string
+): SubmissionBlocker | null {
+  const groupId = groupIdOfCrystalDraft(state, crystalDraftId);
+  if (groupId !== null && !canEditGroups(state, groupId)) {
+    return "GROUP_LOCKED";
+  }
+  if (state.blockedByConflict) {
+    return "CONFLICT_BLOCKED";
+  }
+  if (state.inFlightCrystalDraftIds.includes(crystalDraftId)) {
+    return "IN_FLIGHT";
+  }
+  return state.staleCrystalDraftIds.includes(crystalDraftId) ? "STALE" : null;
+}
+
+export function canSubmitGroupMutation(state: BeadImportWorkflowState, groupId: string): boolean {
+  return groupSubmissionBlocker(state, groupId) === null;
 }
 
 export function crystalDraftViewFor(
@@ -254,6 +289,19 @@ export function crystalDraftViewFor(
   groupId: string
 ): AssetImportCrystalDraftView | null {
   return findGroup(state, groupId)?.crystalDraft ?? null;
+}
+
+/** The group a crystal draft belongs to, which is what makes it editable at all. */
+export function groupIdOfCrystalDraft(
+  state: BeadImportWorkflowState,
+  crystalDraftId: string
+): string | null {
+  for (const group of state.session?.groups ?? []) {
+    if (group.crystalDraft?.crystalDraftId === crystalDraftId) {
+      return group.groupId;
+    }
+  }
+  return null;
 }
 
 export function productDraftEntryFor(
@@ -301,14 +349,10 @@ export function isCompletenessCurrent(state: BeadImportWorkflowState, groupId: s
 }
 
 export function canSubmitCuration(state: BeadImportWorkflowState, crystalDraftId: string): boolean {
-  if (state.blockedByConflict || state.inFlightCrystalDraftIds.includes(crystalDraftId)) {
+  if (groupIdOfCrystalDraft(state, crystalDraftId) === null) {
     return false;
   }
-  if (state.staleCrystalDraftIds.includes(crystalDraftId)) {
-    return false;
-  }
-  const groupId = findGroupIdOfCrystalDraft(state, crystalDraftId);
-  return groupId !== null && canEditGroups(state, groupId);
+  return curationSubmissionBlocker(state, crystalDraftId) === null;
 }
 
 function isProductDraftEntryDirty(entry: ProductDraftEntry): boolean {
@@ -330,18 +374,6 @@ function findCrystalDraftView(
   for (const group of state.session?.groups ?? []) {
     if (group.crystalDraft?.crystalDraftId === crystalDraftId) {
       return group.crystalDraft;
-    }
-  }
-  return null;
-}
-
-function findGroupIdOfCrystalDraft(
-  state: BeadImportWorkflowState,
-  crystalDraftId: string
-): string | null {
-  for (const group of state.session?.groups ?? []) {
-    if (group.crystalDraft?.crystalDraftId === crystalDraftId) {
-      return group.groupId;
     }
   }
   return null;

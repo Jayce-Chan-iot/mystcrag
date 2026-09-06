@@ -545,7 +545,7 @@ test("the loader holds no transport detail and no configuration of its own", () 
   }
   assert.equal(source.includes("fetch("), false);
   assert.equal(source.includes("XMLHttpRequest"), false);
-  assert.ok(source.includes("canSubmitGroupMutation"), "the guard must come from the workflow state");
+  assert.ok(source.includes("groupSubmissionBlocker"), "the guard must come from the workflow state");
   assert.ok(source.includes("groupRevisionFor"), "the revision must come from the workflow state");
   assert.ok(source.includes("expectedGroupRevision"));
 });
