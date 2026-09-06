@@ -265,6 +265,29 @@ test("PROCESS_GROUP rejects every non-canonical reserved output key before stora
   }
 });
 
+test("PROCESS_GROUP rejects group ids that are not safe storage path segments before storage access", async () => {
+  const handlers = makeHandlers();
+  const files = [{ fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_A}.jpg`, sha256: SHA_A }];
+  for (const groupId of ["../escape", ".", "group/child"]) {
+    await assertRejectedBeforeStoreAccess(
+      () => handlers.PROCESS_GROUP(
+        job({
+          jobType: "PROCESS_GROUP",
+          groupId,
+          payload: {
+            groupId,
+            processingVersion: 1,
+            primaryFileId: "file-1",
+            files,
+            outputStorageKey: `imports/${SESSION}/processed/${groupId}/v1/bead-512.webp`
+          }
+        })
+      ),
+      `PROCESS_GROUP unsafe storage group id ${groupId}`
+    );
+  }
+});
+
 test("PROCESS_GROUP rejects later file entries from another session or a non-raw area", async () => {
   const handlers = makeHandlers();
   const goodFile = { fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_A}.jpg`, sha256: SHA_A };

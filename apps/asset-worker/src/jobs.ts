@@ -41,6 +41,11 @@ const IDENTIFIER = z
   .refine((value) => value.trim() === value && !/[\0-\x1f\u007f]/.test(value), {
     message: "Identifier must not contain surrounding whitespace or control characters"
   });
+const STORAGE_PATH_SEGMENT = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/, {
+    message: "Storage path segment must contain only letters, digits, underscores, or hyphens"
+  });
 const ARCHIVE_KEY = z
   .string()
   .min(1)
@@ -239,7 +244,7 @@ function isSharedNormalizedPath(value: string): boolean {
 }
 
 export const ProcessGroupJobPayloadSchema = z.strictObject({
-  groupId: IDENTIFIER,
+  groupId: STORAGE_PATH_SEGMENT,
   processingVersion: POSITIVE_SAFE_INTEGER,
   // The human-confirmed primary (Task 4 puts the reviewed group.primaryFileId
   // here). Optional only for ARW-only groups, which have no raster to process;

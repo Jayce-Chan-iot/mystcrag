@@ -468,8 +468,8 @@ DATABASE_URL=… MYSTCRAG_ASSET_ARCHIVE_ROOT=/archive/outside-repo \
 | 检查 | 结果 |
 | --- | --- |
 | Pipeline 完整测试 | 134/134 通过，0 fail，0 skipped |
-| Worker 无数据库测试 | 111 tests：110 通过，1 个真库 E2E 按环境门禁跳过，0 fail |
-| Worker 真库 E2E | 全新空库 `mystcrag_assetworker002_fix4_test_20260906` 应用 15 个迁移；12/12 通过，0 fail，0 skipped |
+| Worker 无数据库测试 | 112 tests：111 通过，1 个真库 E2E 按环境门禁跳过，0 fail |
+| Worker 真库测试 | 全新空库 `mystcrag_assetworker002_fix5_test_20260906` 应用 15 个迁移；完整 Worker 123/123 通过，其中真库 E2E 12/12，0 fail，0 skipped |
 | 数据库完整测试 | 全新空库 `mystcrag_assetworker002_dbtest_20260906` 应用 15 个迁移；222/222 通过，0 fail，0 skipped |
 | `pnpm validate` | lint/typecheck/test/build 各 17/17；架构 20/20；全部退出码 0 |
 | 变更边界 | 仅 Worker、image processor、对应测试、本文件及任务注册精确行；无数据库/Schema/迁移、共享 Contract、Backend、Frontend、原始珠子照片或生成资源改动；未推送、未部署 |
