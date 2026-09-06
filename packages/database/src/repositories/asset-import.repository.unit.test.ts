@@ -2899,6 +2899,16 @@ test("failUploadReservation releases a reservation exactly once and permits a ne
   assert.equal(session?.state, "UPLOADING");
   assert.equal(session?.failedFileCount, 1);
 
+  await prisma.assetImportSession.update({
+    where: { id: sessionId },
+    data: { failedFileCount: 99 }
+  });
+  assert.deepEqual(
+    await repository.failUploadReservation(sessionId, fileId),
+    { sessionId, fileId, state: "FAILED", changed: false }
+  );
+  session = await prisma.assetImportSession.findUnique({ where: { id: sessionId } });
+  assert.equal(session?.failedFileCount, 1);
   assert.deepEqual(
     await repository.failUploadReservation(sessionId, fileId),
     { sessionId, fileId, state: "FAILED", changed: false }

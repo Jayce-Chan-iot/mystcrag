@@ -2985,6 +2985,11 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
           await repository.failUploadReservation(session.sessionId, fileId),
           { sessionId: session.sessionId, fileId, state: "FAILED", changed: true }
         );
+        const sentinelUpdatedAt = new Date("2026-01-04T00:00:00.000Z");
+        await prisma.assetImportSession.update({
+          where: { id: session.sessionId },
+          data: { updatedAt: sentinelUpdatedAt }
+        });
         assert.deepEqual(
           await repository.failUploadReservation(session.sessionId, fileId),
           { sessionId: session.sessionId, fileId, state: "FAILED", changed: false }
@@ -2994,6 +2999,7 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         });
         assert.equal(failedSession.state, sessionState);
         assert.equal(failedSession.failedFileCount, 1);
+        assert.equal(failedSession.updatedAt.toISOString(), sentinelUpdatedAt.toISOString());
 
         await repository.resolveUploadTarget({
           sessionId: session.sessionId,
@@ -3178,6 +3184,54 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         (await prisma.assetSourceFile.findUniqueOrThrow({ where: { id: fileId } })).state,
         "FAILED"
       );
+    });
+
+    await t.test("43. repeated recovery never updates terminal session timestamps", async () => {
+      for (const terminalState of ["CANCELLED", "FAILED", "PUBLISHED"] as const) {
+        const scenario = `terminal-recovery-noop-${terminalState.toLowerCase()}`;
+        const session = await repository.createSession({ idempotencyKey: keyOf(`${scenario}-session`) });
+        const manifest = await repository.registerManifest(session.sessionId, {
+          idempotencyKey: keyOf(`${scenario}-manifest`),
+          files: [{
+            clientFileId: `${scenario}-file`,
+            relativePath: `imports/${scenario}/file.jpg`,
+            byteSize: 2048,
+            lastModifiedMs: 1_750_000_017_000,
+            kind: "JPEG"
+          }]
+        });
+        const fileId = manifest.files[0]!.fileId;
+        await repository.resolveUploadTarget({
+          sessionId: session.sessionId,
+          fileId,
+          contentLengthBytes: 2048
+        });
+        await repository.failUploadReservation(session.sessionId, fileId);
+        if (terminalState === "CANCELLED") {
+          await repository.cancelSession(
+            session.sessionId,
+            { idempotencyKey: keyOf(`${scenario}-cancel`) },
+            "integration-terminal-noop-canceller"
+          );
+        }
+        const sentinelDay = terminalState === "CANCELLED" ? 1 : terminalState === "FAILED" ? 2 : 3;
+        const sentinelUpdatedAt = new Date(`2026-01-0${sentinelDay}T00:00:00.000Z`);
+        await prisma.assetImportSession.update({
+          where: { id: session.sessionId },
+          data: { state: terminalState, failedFileCount: 0, updatedAt: sentinelUpdatedAt }
+        });
+
+        assert.deepEqual(
+          await repository.failUploadReservation(session.sessionId, fileId),
+          { sessionId: session.sessionId, fileId, state: "FAILED", changed: false }
+        );
+        const terminal = await prisma.assetImportSession.findUniqueOrThrow({
+          where: { id: session.sessionId }
+        });
+        assert.equal(terminal.state, terminalState);
+        assert.equal(terminal.failedFileCount, 0);
+        assert.equal(terminal.updatedAt.toISOString(), sentinelUpdatedAt.toISOString());
+      }
     });
   } finally {
     await prisma.$disconnect();

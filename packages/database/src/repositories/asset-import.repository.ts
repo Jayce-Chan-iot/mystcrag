@@ -1374,15 +1374,24 @@ export class AssetImportRepository {
         if (!file) {
           throw new PersistenceError("NOT_FOUND", "The asset source file was not found in this session");
         }
+        const sessionState = assertSessionState(session.state);
+        const retryCapableSession =
+          sessionState === "UPLOADING" ||
+          sessionState === "ARCHIVING" ||
+          sessionState === "PARTIALLY_FAILED";
         const fileState = assertFileState(file.state);
         if (fileState === "FAILED") {
-          const failedFiles = await tx.assetSourceFile.findMany({
-            where: { sessionId, state: "FAILED" }
-          });
-          await tx.assetImportSession.update({
-            where: { id: sessionId },
-            data: { failedFileCount: failedFiles.length }
-          });
+          if (retryCapableSession) {
+            const failedFiles = await tx.assetSourceFile.findMany({
+              where: { sessionId, state: "FAILED" }
+            });
+            if (session.failedFileCount !== failedFiles.length) {
+              await tx.assetImportSession.update({
+                where: { id: sessionId },
+                data: { failedFileCount: failedFiles.length }
+              });
+            }
+          }
           return { sessionId, fileId, state: "FAILED" as const, changed: false };
         }
         if (fileState !== "UPLOADING") {
@@ -1391,12 +1400,7 @@ export class AssetImportRepository {
             `Asset source file ${fileId} is ${fileState}, not an upload reservation`
           );
         }
-        const sessionState = assertSessionState(session.state);
-        if (
-          sessionState !== "UPLOADING" &&
-          sessionState !== "ARCHIVING" &&
-          sessionState !== "PARTIALLY_FAILED"
-        ) {
+        if (!retryCapableSession) {
           throw new PersistenceError(
             "CONFLICT",
             `Upload reservations cannot be released while session ${sessionId} is ${sessionState}`
