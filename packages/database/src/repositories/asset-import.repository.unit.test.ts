@@ -2869,6 +2869,183 @@ test("resolveUploadTarget proves session ownership, declared size and mutable st
   );
 });
 
+// ---------------------------------------------------------------------------
+// TASK-ASSET-DB-003 upload reservation recovery (red-first)
+// ---------------------------------------------------------------------------
+
+test("failUploadReservation validates both identifiers before database access", async () => {
+  const repository = new AssetImportRepository(untouchableClient);
+  await expectValidationError(() => repository.failUploadReservation("", "file-1"), "sessionId");
+  await expectValidationError(() => repository.failUploadReservation("session-1", ""), "fileId");
+  await expectValidationError(
+    () => repository.failUploadReservation("session-1", "x".repeat(161)),
+    "fileId"
+  );
+});
+
+test("failUploadReservation releases a reservation exactly once and permits a new reservation", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const { sessionId, fileIds } = await createSessionWithFiles(prisma, {
+    clientFileIds: ["recovery-1"]
+  });
+  const fileId = fileIds[0]!;
+  await repository.resolveUploadTarget({ sessionId, fileId, contentLengthBytes: 1024 });
+
+  const recovered = await repository.failUploadReservation(sessionId, fileId);
+  assert.deepEqual(recovered, { sessionId, fileId, state: "FAILED", changed: true });
+  assert.equal((await prisma.assetSourceFile.findUnique({ where: { id: fileId } }))?.state, "FAILED");
+  let session = await prisma.assetImportSession.findUnique({ where: { id: sessionId } });
+  assert.equal(session?.state, "UPLOADING");
+  assert.equal(session?.failedFileCount, 1);
+
+  assert.deepEqual(
+    await repository.failUploadReservation(sessionId, fileId),
+    { sessionId, fileId, state: "FAILED", changed: false }
+  );
+  session = await prisma.assetImportSession.findUnique({ where: { id: sessionId } });
+  assert.equal(session?.failedFileCount, 1);
+
+  await repository.resolveUploadTarget({ sessionId, fileId, contentLengthBytes: 1024 });
+  assert.equal((await prisma.assetSourceFile.findUnique({ where: { id: fileId } }))?.state, "UPLOADING");
+  session = await prisma.assetImportSession.findUnique({ where: { id: sessionId } });
+  assert.equal(session?.failedFileCount, 0);
+});
+
+test("failUploadReservation preserves every retry-capable session state", async () => {
+  for (const sessionState of ["UPLOADING", "ARCHIVING", "PARTIALLY_FAILED"] as const) {
+    const prisma = newDouble();
+    const repository = new AssetImportRepository(prisma as never);
+    const { sessionId, fileIds } = await createSessionWithFiles(prisma, {
+      clientFileIds: [`state-${sessionState}`]
+    });
+    const fileId = fileIds[0]!;
+    await repository.resolveUploadTarget({ sessionId, fileId, contentLengthBytes: 1024 });
+    await prisma.assetImportSession.update({ where: { id: sessionId }, data: { state: sessionState } });
+
+    await repository.failUploadReservation(sessionId, fileId);
+
+    const session = await prisma.assetImportSession.findUnique({ where: { id: sessionId } });
+    assert.equal(session?.state, sessionState);
+    assert.equal(session?.failedFileCount, 1);
+  }
+});
+
+test("failUploadReservation hides ownership and rejects non-reserved file states", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const first = await createSessionWithFiles(prisma, {
+    clientFileIds: ["pending", "archived", "duplicate"]
+  });
+  const second = await createSessionWithFiles(prisma, { clientFileIds: ["other"] });
+  const [pendingId, archivedId, duplicateId] = first.fileIds;
+  assert.ok(pendingId && archivedId && duplicateId);
+
+  await assert.rejects(
+    () => repository.failUploadReservation(second.sessionId, pendingId),
+    (error: unknown) => error instanceof PersistenceError && error.code === "NOT_FOUND"
+  );
+  await assert.rejects(
+    () => repository.failUploadReservation(first.sessionId, "missing-file"),
+    (error: unknown) => error instanceof PersistenceError && error.code === "NOT_FOUND"
+  );
+  await prisma.assetSourceFile.update({ where: { id: archivedId }, data: { state: "ARCHIVED" } });
+  await prisma.assetSourceFile.update({
+    where: { id: duplicateId },
+    data: { state: "SKIPPED_DUPLICATE" }
+  });
+
+  for (const fileId of [pendingId, archivedId, duplicateId]) {
+    await assert.rejects(
+      () => repository.failUploadReservation(first.sessionId, fileId),
+      (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT"
+    );
+  }
+});
+
+test("failUploadReservation is cancellation-safe and refuses an active archive job", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const cancellable = await createSessionWithFiles(prisma, { clientFileIds: ["cancelled"] });
+  const cancelledFileId = cancellable.fileIds[0]!;
+  await repository.resolveUploadTarget({
+    sessionId: cancellable.sessionId,
+    fileId: cancelledFileId,
+    contentLengthBytes: 1024
+  });
+  await repository.cancelSession(
+    cancellable.sessionId,
+    { idempotencyKey: "cancel-upload-recovery" },
+    "unit-canceller"
+  );
+
+  assert.deepEqual(
+    await repository.failUploadReservation(cancellable.sessionId, cancelledFileId),
+    { sessionId: cancellable.sessionId, fileId: cancelledFileId, state: "FAILED", changed: false }
+  );
+  const cancelledSession = await prisma.assetImportSession.findUnique({
+    where: { id: cancellable.sessionId }
+  });
+  assert.equal(cancelledSession?.state, "CANCELLED");
+  assert.equal(cancelledSession?.failedFileCount, 1);
+
+  const active = await createSessionWithFiles(prisma, { clientFileIds: ["active-job"] });
+  const activeFileId = active.fileIds[0]!;
+  await repository.resolveUploadTarget({
+    sessionId: active.sessionId,
+    fileId: activeFileId,
+    contentLengthBytes: 1024
+  });
+  await prisma.assetProcessingJob.create({
+    data: {
+      sessionId: active.sessionId,
+      groupId: null,
+      jobType: "ARCHIVE_FILE",
+      state: "QUEUED",
+      payload: {
+        fileId: activeFileId,
+        stagingKey: `imports/${active.sessionId}/staging/00000000-0000-4000-8000-000000000003`,
+        sha256: VALID_SHA
+      },
+      retryCount: 0,
+      maxRetries: 3
+    }
+  });
+
+  await assert.rejects(
+    () => repository.failUploadReservation(active.sessionId, activeFileId),
+    (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT"
+  );
+  assert.equal(
+    (await prisma.assetSourceFile.findUnique({ where: { id: activeFileId } }))?.state,
+    "UPLOADING"
+  );
+
+  const terminal = await createSessionWithFiles(prisma, { clientFileIds: ["terminal"] });
+  const terminalFileId = terminal.fileIds[0]!;
+  await repository.resolveUploadTarget({
+    sessionId: terminal.sessionId,
+    fileId: terminalFileId,
+    contentLengthBytes: 1024
+  });
+  await prisma.assetImportSession.update({
+    where: { id: terminal.sessionId },
+    data: { state: "FAILED" }
+  });
+  await assert.rejects(
+    () => repository.failUploadReservation(terminal.sessionId, terminalFileId),
+    (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT"
+  );
+  assert.equal(
+    (await prisma.assetSourceFile.findUnique({ where: { id: terminalFileId } }))?.state,
+    "UPLOADING"
+  );
+  assert.equal(
+    (await prisma.assetImportSession.findUnique({ where: { id: terminal.sessionId } }))?.state,
+    "FAILED"
+  );
+});
+
 test("cancelled sessions cannot reserve or record further uploads", async () => {
   const prisma = newDouble();
   const repository = new AssetImportRepository(prisma as never);
