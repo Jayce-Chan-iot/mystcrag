@@ -1,21 +1,20 @@
 import {
-  ASSET_IMPORT_TRANSPORT_STATUS_BY_CODE,
   type CreateAssetImportSessionResponse,
   type ListAssetImportSessionsQuery,
   type ListAssetImportSessionsResponse
 } from "@mystcrag/design-contract";
 
-import { BEAD_IMPORT_CLIENT_ERROR_CODES, safeOperatorMessage } from "./api-client";
-import type { DashboardAction, DashboardError, DashboardState } from "./dashboard-model";
+import type { DashboardAction, DashboardState } from "./dashboard-model";
+import { classifyFailure } from "./failure-copy";
 import type { AbortHandle, AbortSignalLike } from "./session-lifecycle";
 
 /**
  * Owns every side effect of the dashboard: one in-flight list request at a
  * time, cursor paging, session creation and the abort on unmount. Only the
  * newest request may reach the reducer, so a slow page can never overwrite the
- * filter the operator has already moved on from. Failure copy is classified
- * here rather than read off the error, because a raw transport error can name
- * the backend origin.
+ * filter the operator has already moved on from. Failure copy comes from the
+ * shared classifier rather than off the error, because a raw transport error
+ * can name the backend origin.
  */
 
 export type DashboardLoaderAction = DashboardAction;
@@ -49,40 +48,6 @@ export type DashboardLoader = {
   create(): Promise<void>;
   cancel(): void;
 };
-
-const KNOWN_FAILURE_CODES: ReadonlySet<string> = new Set([
-  ...Object.keys(ASSET_IMPORT_TRANSPORT_STATUS_BY_CODE),
-  ...BEAD_IMPORT_CLIENT_ERROR_CODES
-]);
-
-const NON_RETRYABLE_CODES: ReadonlySet<string> = new Set(["UNAUTHORIZED", "NOT_FOUND", "VALIDATION_ERROR"]);
-
-const FALLBACK_MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
-  UNAUTHORIZED: "管理员会话已失效，请重新登录。",
-  NOT_FOUND: "导入任务不存在或已被清理。",
-  NETWORK_ERROR: "无法连接珠子素材导入服务，请稍后重试。"
-};
-const GENERIC_FAILURE_MESSAGE = "珠子素材导入服务暂时不可用，请稍后重试。";
-
-function classifyFailure(error: unknown): DashboardError {
-  const candidate = error as { code?: unknown; message?: unknown; retryable?: unknown } | null | undefined;
-  const rawCode = typeof candidate?.code === "string" ? candidate.code : null;
-  // An error without a known code never came from the contract client, so its
-  // message is untrusted and is dropped instead of being sanitised.
-  const known = rawCode !== null && KNOWN_FAILURE_CODES.has(rawCode);
-  const code = known && rawCode !== null ? rawCode : "NETWORK_ERROR";
-  const fallback = FALLBACK_MESSAGE_BY_CODE[code] ?? GENERIC_FAILURE_MESSAGE;
-  const rawMessage = known ? candidate?.message : undefined;
-  return {
-    code,
-    message:
-      typeof rawMessage === "string" && rawMessage.trim() !== ""
-        ? safeOperatorMessage(rawMessage, fallback)
-        : fallback,
-    retryable:
-      known && typeof candidate?.retryable === "boolean" ? candidate.retryable : !NON_RETRYABLE_CODES.has(code)
-  };
-}
 
 export function createDashboardLoader(deps: DashboardLoaderDeps): DashboardLoader {
   let requestId = 0;
