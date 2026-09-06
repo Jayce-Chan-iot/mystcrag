@@ -5,6 +5,7 @@ import {
   DIRECTORY_UNSUPPORTED_NOTICE,
   readDirectoryDrop,
   readPickedFiles,
+  transferItemsOf,
   type DataTransferItemLike,
   type FileSystemEntryLike
 } from "./folder-picker";
@@ -190,6 +191,41 @@ test("a single dropped file is picked without a directory walk", async () => {
   const pick = await readDirectoryDrop([itemOf(fileEntry("/bead.jpg", made.file))]);
   assert.deepEqual(pathsOf(pick.files), ["bead.jpg"]);
   assert.equal(pick.unreadableCount, 0);
+});
+
+test("every dropped item is resolved to its entry before the walk yields", async () => {
+  let live = true;
+  const first = browserFile("a.jpg");
+  const second = browserFile("b.jpg");
+  const firstEntry: FileSystemEntryLike = {
+    isFile: true,
+    isDirectory: false,
+    name: "a.jpg",
+    fullPath: "/批次/a.jpg",
+    file(success) {
+      // The browser drops the transfer list on the handler's first await.
+      void Promise.resolve().then(() => {
+        live = false;
+      });
+      success(first.file);
+    }
+  };
+  const pick = await readDirectoryDrop([
+    { kind: "file", webkitGetAsEntry: () => (live ? firstEntry : null) },
+    { kind: "file", webkitGetAsEntry: () => (live ? fileEntry("/批次/b.jpg", second.file) : null) }
+  ]);
+
+  assert.deepEqual(pathsOf(pick.files), ["批次/a.jpg", "批次/b.jpg"]);
+  assert.equal(pick.unreadableCount, 0);
+});
+
+test("a drop is read from its item list, and a missing list yields nothing", () => {
+  const item: DataTransferItemLike = { kind: "file" };
+  assert.deepEqual(transferItemsOf({ items: [item] }), [item]);
+  assert.deepEqual(transferItemsOf({ items: { 0: item, length: 1 } }), [item]);
+  assert.deepEqual(transferItemsOf({ items: null }), []);
+  assert.deepEqual(transferItemsOf({}), []);
+  assert.deepEqual(transferItemsOf(null), []);
 });
 
 test("dropped items that are not files are ignored", async () => {

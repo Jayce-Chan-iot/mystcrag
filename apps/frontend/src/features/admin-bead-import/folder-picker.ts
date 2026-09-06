@@ -32,7 +32,27 @@ export type DataTransferItemLike = {
   webkitGetAsEntry?(): FileSystemEntryLike | null;
 };
 
+export type DataTransferLike = {
+  readonly items?: ArrayLike<DataTransferItemLike> | null;
+};
+
 export type DirectoryPick = { files: UploadFileSource[]; unreadableCount: number };
+
+/** A drop event's item list is only valid while its handler runs synchronously. */
+export function transferItemsOf(dataTransfer: DataTransferLike | null): readonly DataTransferItemLike[] {
+  const items = dataTransfer?.items;
+  if (items === undefined || items === null) {
+    return [];
+  }
+  const collected: DataTransferItemLike[] = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (item !== undefined) {
+      collected.push(item);
+    }
+  }
+  return collected;
+}
 
 function relativePathOf(entry: FileSystemEntryLike): string {
   return entry.fullPath.replace(/^\/+/, "");
@@ -78,6 +98,7 @@ function readBatch(reader: FileSystemReaderLike): Promise<readonly FileSystemEnt
 
 export async function readDirectoryDrop(items: readonly DataTransferItemLike[]): Promise<DirectoryPick> {
   const files: UploadFileSource[] = [];
+  const roots: FileSystemEntryLike[] = [];
   let unreadableCount = 0;
 
   async function walk(entry: FileSystemEntryLike): Promise<void> {
@@ -124,7 +145,13 @@ export async function readDirectoryDrop(items: readonly DataTransferItemLike[]):
       unreadableCount += 1;
       continue;
     }
-    await walk(entry);
+    roots.push(entry);
+  }
+
+  // The walk awaits, and the browser has already dropped the transfer list by
+  // then, so every entry is resolved above before the first await happens.
+  for (const root of roots) {
+    await walk(root);
   }
 
   return { files, unreadableCount };
