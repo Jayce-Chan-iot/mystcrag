@@ -112,3 +112,14 @@ Status: REVIEW.
 - Fresh PostgreSQL Backend E2E: all 15 migrations applied to `mystcrag_assetbe001_fix1_test_20260906`; full upload → archive → same-SHA immutable replay → grouping → processing → review → curation → publication → public delivery scenario passed 1/1.
 - `TASK-ASSET-DB-004`: focused unit 2/2, database typecheck, fresh PostgreSQL full database 235/235, `pnpm validate` 17/17 phases plus architecture 20/20; independent review found no Critical/Important and marked Ready to merge.
 - `git diff --check` passed. No push or deployment was performed.
+
+## Final whole-branch review and handoff — 2026-09-06
+
+Status: DONE.
+
+- An independent reviewer inspected the complete `de6033e..a9a8fbb` range against the controlling plan, design specification, API specification, repository governance and registered writable scope.
+- The review found no Critical or Important issue and marked the branch `Ready to merge: Yes`. It confirmed all 17 management routes plus public delivery, independent authentication, strict response projection, streaming upload and recovery, immutable ARCHIVED replay, worktree-root isolation, safe startup, public-byte integrity, lifecycle cleanup and dependency consistency.
+- Reviewer-executed evidence: Backend narrow suites 37/37, database `resolveUploadTarget` narrow suite 2/2, Backend typecheck, and `git diff --check de6033e..a9a8fbb` all passed.
+- Two non-blocking Minor follow-ups remain: add a real Worker terminal-failure → FAILED → same-byte replay → new-job integration scenario; expand ARCHIVED replay coverage across terminal session states and compare full session snapshots. Neither indicates a known runtime defect.
+- Implementer final validation at `a9a8fbb`: `pnpm validate` passed all 17 packages for lint, typecheck, test and build, with architecture 20/20; full Backend passed 210 tests with 3 expected environment-gated skips; fresh PostgreSQL Backend E2E passed 1/1 on `mystcrag_assetbe001_fix1_test_20260906` after all 15 migrations.
+- No source photographs were imported, no generated output was committed, and no push or deployment was performed.
