@@ -95,6 +95,11 @@ function assertClean(value: string, label: string): void {
 test("the panel offers a folder button, a labelled directory input and a drop region", () => {
   const html = render();
   assert.match(html, /<button[^>]*>选择文件夹<\/button>/);
+  assert.equal(
+    /<button[^>]*disabled=""[^>]*>选择文件夹<\/button>/.test(html),
+    false,
+    "a browser that can hand over a folder must not lock the button"
+  );
   assert.match(html, /id="bead-import-folder-input"/);
   assert.match(html, /type="file"/);
   assert.match(html, /webkitdirectory=""/);
@@ -120,7 +125,7 @@ test("a browser without folder support is told so and keeps showing the run", ()
   const notice = html.slice(noticeStart, html.indexOf("</p>", noticeStart));
   assert.equal(/hidden|sr-only/.test(notice), false, "the notice must be visible");
   assert.ok(notice.includes(DIRECTORY_UNSUPPORTED_NOTICE));
-  assert.match(html, /<button[^>]*disabled[^>]*>选择文件夹<\/button>/);
+  assert.match(html, /<button[^>]*disabled=""[^>]*>选择文件夹<\/button>/);
   assert.ok(html.includes("上传失败"), "the run stays readable without folder support");
   assert.ok(html.includes("服务端未确认该文件已归档，请重试。"));
 });
@@ -128,7 +133,9 @@ test("a browser without folder support is told so and keeps showing the run", ()
 test("the drop region is inert and the reason is stated when the session refuses uploads", () => {
   const html = render({ disabled: true, disabledReason: "当前任务状态不允许继续上传。" });
   assert.ok(html.includes("当前任务状态不允许继续上传。"));
-  assert.match(html, /<button[^>]*disabled[^>]*>选择文件夹<\/button>/);
+  assert.match(html, /<button[^>]*disabled=""[^>]*>选择文件夹<\/button>/);
+  assert.match(html, /id="bead-import-folder-input"[^>]*disabled=""/);
+  assert.match(html, /aria-disabled="true"/);
 });
 
 test("progress reports the archived share of the registered files", () => {

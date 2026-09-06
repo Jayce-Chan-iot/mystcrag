@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { BUTTON_CLASS, SECONDARY_BUTTON_CLASS } from "./control-styles";
 import { formatByteSize } from "../console-format";
 import type { DirectoryInputSupport } from "../upload-model";
 import {
@@ -71,12 +72,6 @@ const RUNNING_PHASES: ReadonlySet<UploadQueuePhase> = new Set(["REGISTERING", "U
 
 /** React's input types predate the non-standard folder attributes, so they are spread in. */
 const FOLDER_INPUT_ATTRIBUTES = { webkitdirectory: "", directory: "" };
-
-const BUTTON_CLASS =
-  "inline-flex min-h-11 shrink-0 items-center justify-center rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--accent-deep)] focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60";
-
-const SECONDARY_BUTTON_CLASS =
-  "inline-flex min-h-11 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] px-3 text-sm font-medium text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60";
 
 function FileRow({ file, onRetry }: { file: UploadFileProgress; onRetry: (fileId: string) => void }) {
   const fileId = file.fileId;
