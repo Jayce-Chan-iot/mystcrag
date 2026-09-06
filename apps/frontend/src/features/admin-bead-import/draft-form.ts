@@ -16,11 +16,6 @@ import {
   type UpdateCrystalDraftCurationRequest
 } from "@mystcrag/design-contract";
 
-import {
-  CONFLICT_NOTICE_MESSAGE,
-  STALE_GROUP_NOTICE_MESSAGE
-} from "./workflow-state";
-
 /**
  * The naming and curation step, as pure values. Every bound is judged by the
  * contract itself: a candidate body is parsed, and whatever the parse rejects is
@@ -161,31 +156,6 @@ export const BEAD_SHAPE_LABELS: Readonly<Record<BeadShape, string>> = {
   BAROQUE: "不规则"
 };
 
-export type DraftRefusalReason =
-  | "NO_SESSION"
-  | "UNKNOWN_GROUP"
-  | "GROUP_LOCKED"
-  | "CONFLICT_BLOCKED"
-  | "IN_FLIGHT"
-  | "STALE"
-  | "NOTHING_TO_SAVE"
-  | "INVALID_INPUT"
-  | "NO_CRYSTAL_DRAFT"
-  | "CURATION_IN_FLIGHT";
-
-export const DRAFT_REFUSAL_MESSAGES: Readonly<Record<DraftRefusalReason, string>> = {
-  NO_SESSION: "导入任务尚未载入，无法保存草稿。",
-  UNKNOWN_GROUP: "该分组已不存在或已被合并，请刷新后再试。",
-  GROUP_LOCKED: "导入任务已进入不可编辑阶段，草稿仅供查看。",
-  CONFLICT_BLOCKED: CONFLICT_NOTICE_MESSAGE,
-  IN_FLIGHT: "该分组的草稿正在保存，请等待完成后再试。",
-  STALE: STALE_GROUP_NOTICE_MESSAGE,
-  NOTHING_TO_SAVE: "还没有可保存的内容，请先填写至少一项。",
-  INVALID_INPUT: "有字段未被接受，请先按提示修正后再保存。",
-  NO_CRYSTAL_DRAFT: "该分组还没有水晶资料草稿，请先保存一次商品草稿以建立它。",
-  CURATION_IN_FLIGHT: "水晶资料正在保存，请等待完成后再试。"
-};
-
 export type DraftIssue = { field: string; message: string };
 
 export type DraftCompletenessSnapshot = {
@@ -274,6 +244,56 @@ export function emptyCurationForm(): CurationForm {
     priceLevel: "",
     complianceNote: ""
   };
+}
+
+const CURATION_FORM_FIELDS: readonly (keyof CurationForm)[] = [
+  ...CRYSTAL_CURATION_TEXT_FIELDS,
+  ...CRYSTAL_CURATION_TAG_FIELDS,
+  "priceLevel"
+];
+
+/**
+ * Whether an operator has typed nothing at all. Raw values are compared rather
+ * than trimmed ones, so whitespace still counts as work in progress, and an
+ * answered rights decision counts even when the answer is "no".
+ */
+export function isProductDraftFormEmpty(form: ProductDraftForm): boolean {
+  if (form.shape !== null || form.currency !== null || form.usagePermission !== null) {
+    return false;
+  }
+  for (const field of PRODUCT_DRAFT_TEXT_FIELDS) {
+    if (form.text[field] !== "") {
+      return false;
+    }
+  }
+  return PRODUCT_DRAFT_DECISION_FIELDS.every((field) => form.decisions[field] === null);
+}
+
+export function isCurationFormEmpty(form: CurationForm): boolean {
+  return CURATION_FORM_FIELDS.every((field) => form[field] === "");
+}
+
+/** Field by field, so a reverted edit reads as the saved form again. */
+export function sameProductDraftForm(left: ProductDraftForm, right: ProductDraftForm): boolean {
+  if (
+    left.shape !== right.shape ||
+    left.currency !== right.currency ||
+    left.usagePermission !== right.usagePermission
+  ) {
+    return false;
+  }
+  for (const field of PRODUCT_DRAFT_TEXT_FIELDS) {
+    if (left.text[field] !== right.text[field]) {
+      return false;
+    }
+  }
+  return PRODUCT_DRAFT_DECISION_FIELDS.every(
+    (field) => left.decisions[field] === right.decisions[field]
+  );
+}
+
+export function sameCurationForm(left: CurationForm, right: CurationForm): boolean {
+  return CURATION_FORM_FIELDS.every((field) => left[field] === right[field]);
 }
 
 /**

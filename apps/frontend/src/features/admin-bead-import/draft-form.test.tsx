@@ -15,7 +15,6 @@ import {
 import {
   CRYSTAL_CURATION_LABELS,
   DRAFT_COMPLETENESS_LABELS,
-  DRAFT_REFUSAL_MESSAGES,
   PRODUCT_DRAFT_DECISION_FIELDS,
   PRODUCT_DRAFT_TEXT_FIELDS,
   buildCurationRequest,
@@ -24,12 +23,15 @@ import {
   curationMissingFields,
   emptyCurationForm,
   emptyProductDraftForm,
+  isCurationFormEmpty,
+  isProductDraftFormEmpty,
   isPublishableUsagePermission,
   productDraftIssues,
   publishBlockersFor,
+  sameCurationForm,
+  sameProductDraftForm,
   toMinorUnits,
   type CurationForm,
-  type DraftRefusalReason,
   type ProductDraftForm
 } from "./draft-form";
 
@@ -497,25 +499,47 @@ test("curation refuses to send an empty patch or one that fixes nothing", () => 
   );
 });
 
-test("every refusal the loader can make has copy an operator can act on", () => {
-  const reasons = Object.keys(DRAFT_REFUSAL_MESSAGES).sort() as DraftRefusalReason[];
-  assert.ok(reasons.includes("NO_SESSION"));
-  assert.ok(reasons.includes("UNKNOWN_GROUP"));
-  assert.ok(reasons.includes("NOTHING_TO_SAVE"));
-  assert.ok(reasons.includes("INVALID_INPUT"));
-  assert.ok(reasons.includes("NO_CRYSTAL_DRAFT"));
-  assert.ok(reasons.includes("GROUP_LOCKED"));
-  assert.ok(reasons.includes("CONFLICT_BLOCKED"));
-  assert.ok(reasons.includes("IN_FLIGHT"));
-  assert.ok(reasons.includes("STALE"));
+test("an untouched form is recognised as empty so nothing is reported unsaved", () => {
+  assert.equal(isProductDraftFormEmpty(emptyProductDraftForm()), true);
+  assert.equal(isCurationFormEmpty(emptyCurationForm()), true);
 
-  for (const reason of reasons) {
-    const message = DRAFT_REFUSAL_MESSAGES[reason];
-    assert.ok(message.length >= 6, `${reason} needs a real sentence`);
-    for (const forbidden of [...FORBIDDEN_LEAKS, ...FORBIDDEN_CLAIMS, ...FORBIDDEN_INFERENCE]) {
-      assert.equal(message.includes(forbidden), false, `${reason} must not mention ${forbidden}`);
-    }
-  }
+  const typed = emptyProductDraftForm();
+  typed.text.sku = "MXJ-BEAD-AMETHYST-08";
+  assert.equal(isProductDraftFormEmpty(typed), false);
+
+  const decided = emptyProductDraftForm();
+  decided.decisions.allowAiTraining = false;
+  assert.equal(isProductDraftFormEmpty(decided), false, "an explicit no is not an empty form");
+
+  const curated = emptyCurationForm();
+  curated.nameCn = "紫水晶";
+  assert.equal(isCurationFormEmpty(curated), false);
+});
+
+test("two forms compare field by field, so a reverted edit reads as saved again", () => {
+  const saved = filledProductForm();
+
+  const edited = filledProductForm();
+  edited.text.sku = "MXJ-BEAD-CITRINE-06";
+  assert.equal(sameProductDraftForm(saved, edited), false);
+
+  assert.equal(
+    sameProductDraftForm(saved, filledProductForm()),
+    true,
+    "an edit that is put back reads as the saved form again"
+  );
+
+  const flipped = filledProductForm();
+  flipped.decisions.allowPublicDisplay = false;
+  assert.equal(sameProductDraftForm(saved, flipped), false);
+
+  const recoloured = filledProductForm();
+  recoloured.currency = "TWD";
+  assert.equal(sameProductDraftForm(saved, recoloured), false);
+
+  const savedCuration = filledCurationForm();
+  assert.equal(sameCurationForm(savedCuration, filledCurationForm({ priceLevel: "4" })), false);
+  assert.equal(sameCurationForm(savedCuration, filledCurationForm()), true);
 });
 
 test("the module reasons about values and reaches for no transport of its own", () => {
