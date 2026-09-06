@@ -33,8 +33,11 @@ export type AssetAdminCookieOptions = {
   maxAge: number;
 };
 
-export type AssetAdminCookieStore = {
+export type AssetAdminCookieReader = {
   get(name: string): { name: string; value: string } | undefined;
+};
+
+export type AssetAdminCookieStore = AssetAdminCookieReader & {
   set(name: string, value: string, options: AssetAdminCookieOptions): void;
   delete(name: string): void;
 };
@@ -81,11 +84,14 @@ export function assetAdminCookieOptions(env: AssetAdminEnv = process.env): Asset
   };
 }
 
-export function readAssetAdminSessionToken(store: AssetAdminCookieStore): string | null {
+export function readAssetAdminSessionToken(store: AssetAdminCookieReader): string | null {
   return store.get(ASSET_ADMIN_COOKIE_NAME)?.value ?? null;
 }
 
-export function isAssetAdminAuthenticated(store: AssetAdminCookieStore, env: AssetAdminEnv = process.env): boolean {
+export function isAssetAdminAuthenticated(
+  store: AssetAdminCookieReader,
+  env: AssetAdminEnv = process.env
+): boolean {
   const token = assetAdminSessionToken(env);
   const presented = readAssetAdminSessionToken(store);
   if (token === null || presented === null) {
