@@ -825,16 +825,19 @@ export type ApprovedPublicAsset = {
   heightPx: number | null;
 };
 
-export type ResolvedAssetUploadTarget = {
+type AssetUploadTargetBase = {
   sessionId: string;
   fileId: string;
   clientFileId: string;
   relativePath: string;
   kind: "ARW" | "JPEG" | "PNG" | "WEBP";
   byteSize: number;
-  state: "UPLOADING";
-  declaredSha256: string | null;
 };
+
+export type ResolvedAssetUploadTarget = AssetUploadTargetBase & (
+  | { state: "UPLOADING"; declaredSha256: string | null }
+  | { state: "ARCHIVED"; sha256: string; archiveKey: string; archivedAt: Date }
+);
 
 export type FailedUploadReservationResult = {
   sessionId: string;
@@ -1301,6 +1304,38 @@ export class AssetImportRepository {
         if (!file) {
           throw new PersistenceError("NOT_FOUND", "The asset source file was not found in this session");
         }
+        const state = assertFileState(file.state);
+        const byteSize = toSafeNumber(file.byteSize, "asset source file byteSize");
+        if (request.contentLengthBytes !== byteSize) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Upload length ${request.contentLengthBytes} does not match the declared ${byteSize} bytes`
+          );
+        }
+        const kind = assertEnumValue(file.kind, ["ARW", "JPEG", "PNG", "WEBP"], "asset source file kind");
+        if (state === "ARCHIVED") {
+          if (!file.sha256 || !file.archiveKey || !file.archivedAt) {
+            throw new PersistenceError(
+              "DATA_INTEGRITY_ERROR",
+              `Archived source file ${request.fileId} is missing verified archive metadata`
+            );
+          }
+          if (request.declaredSha256 !== undefined && request.declaredSha256 !== file.sha256) {
+            throw new PersistenceError("CONFLICT", `Archived source file ${request.fileId} has different content`);
+          }
+          return {
+            sessionId: request.sessionId,
+            fileId: file.id,
+            clientFileId: file.clientFileId,
+            relativePath: file.relativePath,
+            kind,
+            byteSize,
+            state: "ARCHIVED" as const,
+            sha256: file.sha256,
+            archiveKey: file.archiveKey,
+            archivedAt: file.archivedAt
+          };
+        }
         const sessionState = assertSessionState(session.state);
         if (
           sessionState !== "UPLOADING" &&
@@ -1312,18 +1347,9 @@ export class AssetImportRepository {
             `Uploads cannot be reserved while session ${request.sessionId} is ${sessionState}`
           );
         }
-        const state = assertFileState(file.state);
         if (state !== "PENDING" && state !== "FAILED") {
           throw new PersistenceError("CONFLICT", `Asset source file ${request.fileId} is ${state}, not mutable`);
         }
-        const byteSize = toSafeNumber(file.byteSize, "asset source file byteSize");
-        if (request.contentLengthBytes !== byteSize) {
-          throw new PersistenceError(
-            "CONFLICT",
-            `Upload length ${request.contentLengthBytes} does not match the declared ${byteSize} bytes`
-          );
-        }
-        const kind = assertEnumValue(file.kind, ["ARW", "JPEG", "PNG", "WEBP"], "asset source file kind");
         const updated = await tx.assetSourceFile.updateMany({
           where: { id: file.id, sessionId: request.sessionId, state },
           data: { state: "UPLOADING" }

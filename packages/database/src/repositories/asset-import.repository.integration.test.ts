@@ -3233,6 +3233,58 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         assert.equal(terminal.updatedAt.toISOString(), sentinelUpdatedAt.toISOString());
       }
     });
+
+    await t.test("44. archived upload replay returns verified metadata without mutation", async () => {
+      const scenario = "archived-upload-replay";
+      const session = await repository.createSession({ idempotencyKey: keyOf(`${scenario}-session`) });
+      const manifest = await repository.registerManifest(session.sessionId, {
+        idempotencyKey: keyOf(`${scenario}-manifest`),
+        files: [{
+          clientFileId: `${scenario}-file`,
+          relativePath: `imports/${scenario}/file.jpg`,
+          byteSize: 2048,
+          lastModifiedMs: 1_750_000_018_000,
+          kind: "JPEG"
+        }]
+      });
+      const fileId = manifest.files[0]!.fileId;
+      const sha256 = shaOf(scenario);
+      const archiveKey = `imports/${session.sessionId}/raw/${sha256}.jpg`;
+      const archivedAt = new Date("2026-09-06T02:03:04.000Z");
+      await prisma.assetSourceFile.update({
+        where: { id: fileId },
+        data: { state: "ARCHIVED", sha256, archiveKey, archivedAt }
+      });
+      await prisma.assetImportSession.update({
+        where: { id: session.sessionId },
+        data: { state: "PROCESSING", archivedFileCount: 1, uploadedBytes: 2048n }
+      });
+
+      const before = await prisma.assetSourceFile.findUniqueOrThrow({ where: { id: fileId } });
+      const target = await repository.resolveUploadTarget({
+        sessionId: session.sessionId,
+        fileId,
+        contentLengthBytes: 2048,
+        declaredSha256: sha256
+      });
+      const after = await prisma.assetSourceFile.findUniqueOrThrow({ where: { id: fileId } });
+
+      assert.equal(target.state, "ARCHIVED");
+      assert.deepEqual(target, {
+        sessionId: session.sessionId,
+        fileId,
+        clientFileId: `${scenario}-file`,
+        relativePath: `imports/${scenario}/file.jpg`,
+        kind: "JPEG",
+        byteSize: 2048,
+        state: "ARCHIVED",
+        sha256,
+        archiveKey,
+        archivedAt
+      });
+      assert.equal(after.updatedAt.toISOString(), before.updatedAt.toISOString());
+      assert.equal(await prisma.assetProcessingJob.count({ where: { sessionId: session.sessionId } }), 0);
+    });
   } finally {
     await prisma.$disconnect();
   }
