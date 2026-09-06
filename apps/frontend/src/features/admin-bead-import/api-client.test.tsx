@@ -590,6 +590,56 @@ test("a business error envelope keeps its catalog retryability and recovery acti
   });
 });
 
+test("a server message that names where the Backend runs is replaced by safe copy", async () => {
+  for (const message of [
+    "upstream http://127.0.0.1:4000 refused the draft",
+    "cannot reach localhost:4000 while saving the group",
+    "backend at https://bead-import.internal.svc rejected the request",
+    "dial tcp 10.24.0.7:5432 timed out",
+    "postgres://writer:secret@db.internal:5432/mystcrag is unreachable",
+    "no such file under /var/lib/mystcrag/archive"
+  ]) {
+    const { client } = makeHarness({
+      status: 422,
+      payload: {
+        error: {
+          code: "UNPROCESSABLE_ENTITY",
+          message,
+          requestId: "req-9",
+          assetCode: "DRAFT_INCOMPLETE",
+          retryable: false,
+          recoveryAction: "COMPLETE_DRAFT_FIELDS",
+          fieldErrors: [{ fieldPath: "sku", message }]
+        }
+      }
+    });
+
+    await assert.rejects(() => client.getDraftCompleteness("group-1"), (error: unknown) => {
+      assert.ok(error instanceof BeadImportApiError);
+      assert.equal(error.code, "UNPROCESSABLE_ENTITY");
+      for (const copy of [error.message, ...error.fieldErrors.map((field) => field.message)]) {
+        assert.notEqual(copy, message, "an unsafe message is replaced, not edited");
+        assert.ok(copy.length >= 6, "the operator still gets a real sentence");
+        for (const leak of [
+          "://",
+          "127.0.0.1",
+          "localhost",
+          "internal.svc",
+          "10.24.0.7",
+          "db.internal",
+          ":4000",
+          ":5432",
+          "/var/lib",
+          "secret"
+        ]) {
+          assert.equal(copy.includes(leak), false, `operator copy must not name ${leak}`);
+        }
+      }
+      return true;
+    });
+  }
+});
+
 test("a conflict envelope is reported as retryable with the server message", async () => {
   const { client } = makeHarness({
     status: 409,

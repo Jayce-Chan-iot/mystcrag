@@ -122,12 +122,27 @@ const ISSUE_MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
 
 /**
  * Rejects anything that looks like an absolute path, a drive letter, a storage
- * key name or a control character before it can reach operator-visible copy.
+ * key name, a service origin or a control character before it can reach
+ * operator-visible copy. A message that trips one of these is replaced whole
+ * rather than edited: an operator does not need to know where the Backend runs
+ * or how it is addressed to know what to do next.
  */
-const UNSAFE_MESSAGE = /(?:^|[\s"'(])(?:\/|[A-Za-z]:[\\/])\S|[\u0000-\u001f]|archiveKey|storageKey/i;
+const UNSAFE_MESSAGE_PATTERNS: readonly RegExp[] = [
+  /(?:^|[\s"'(])(?:\/|[A-Za-z]:[\\/])\S/,
+  /[\u0000-\u001f]/,
+  /archiveKey|storageKey/i,
+  /:\/\//,
+  /localhost|::1/i,
+  /\d{1,3}(?:\.\d{1,3}){3}/,
+  /[\w-]+(?:\.[\w-]+)+:\d+/
+];
+
+function isUnsafeMessage(candidate: string): boolean {
+  return UNSAFE_MESSAGE_PATTERNS.some((pattern) => pattern.test(candidate));
+}
 
 export function safeOperatorMessage(candidate: string, fallback: string): string {
-  return UNSAFE_MESSAGE.test(candidate) ? fallback : candidate;
+  return isUnsafeMessage(candidate) ? fallback : candidate;
 }
 
 type ContractIssue = {
@@ -184,7 +199,7 @@ function contractError(
     fieldErrors: issues.map((issue) => ({
       fieldPath: issue.path.length === 0 ? "(root)" : issue.path.map((segment) => String(segment)).join("."),
       message:
-        issue.code === "custom" && !UNSAFE_MESSAGE.test(issue.message)
+        issue.code === "custom" && !isUnsafeMessage(issue.message)
           ? issue.message
           : (ISSUE_MESSAGE_BY_CODE[issue.code] ?? GENERIC_ISSUE_MESSAGE)
     }))
