@@ -836,6 +836,13 @@ export type ResolvedAssetUploadTarget = {
   declaredSha256: string | null;
 };
 
+export type FailedUploadReservationResult = {
+  sessionId: string;
+  fileId: string;
+  state: "FAILED";
+  changed: boolean;
+};
+
 export type EnqueueArchiveFileInput = z.infer<typeof EnqueueArchiveFileInputSchema>;
 
 export type EnqueuedAssetJob = {
@@ -1340,6 +1347,96 @@ export class AssetImportRepository {
           state: "UPLOADING" as const,
           declaredSha256: request.declaredSha256 ?? null
         };
+      });
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  /**
+   * Releases a pre-enqueue upload reservation after streaming or staging
+   * failed. The session lock serializes this cleanup with cancellation and
+   * archive enqueue; the file lock makes the state change exact and retryable.
+   */
+  async failUploadReservation(
+    sessionId: string,
+    fileId: string
+  ): Promise<FailedUploadReservationResult> {
+    validateIdentifierParam(sessionId, "sessionId");
+    validateIdentifierParam(fileId, "fileId");
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const session = await this.lockSessionForUpdate(tx, sessionId);
+        await tx.$queryRaw`SELECT "id" FROM "asset_source_files" WHERE "id" = ${fileId} AND "session_id" = ${sessionId} FOR UPDATE`;
+        const file = (await tx.assetSourceFile.findFirst({
+          where: { id: fileId, sessionId }
+        })) as unknown as SourceFileRow | null;
+        if (!file) {
+          throw new PersistenceError("NOT_FOUND", "The asset source file was not found in this session");
+        }
+        const sessionState = assertSessionState(session.state);
+        const retryCapableSession =
+          sessionState === "UPLOADING" ||
+          sessionState === "ARCHIVING" ||
+          sessionState === "PARTIALLY_FAILED";
+        const fileState = assertFileState(file.state);
+        if (fileState === "FAILED") {
+          if (retryCapableSession) {
+            const failedFiles = await tx.assetSourceFile.findMany({
+              where: { sessionId, state: "FAILED" }
+            });
+            if (session.failedFileCount !== failedFiles.length) {
+              await tx.assetImportSession.update({
+                where: { id: sessionId },
+                data: { failedFileCount: failedFiles.length }
+              });
+            }
+          }
+          return { sessionId, fileId, state: "FAILED" as const, changed: false };
+        }
+        if (fileState !== "UPLOADING") {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Asset source file ${fileId} is ${fileState}, not an upload reservation`
+          );
+        }
+        if (!retryCapableSession) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Upload reservations cannot be released while session ${sessionId} is ${sessionState}`
+          );
+        }
+        const activeArchiveJobs = await tx.assetProcessingJob.findMany({
+          where: {
+            sessionId,
+            jobType: "ARCHIVE_FILE",
+            state: { in: ["QUEUED", "RUNNING"] }
+          }
+        });
+        if (activeArchiveJobs.some((job) => jobPayloadFileId(job.payload) === fileId)) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Asset source file ${fileId} already has active archival work`
+          );
+        }
+        const updated = await tx.assetSourceFile.updateMany({
+          where: { id: fileId, sessionId, state: "UPLOADING" },
+          data: { state: "FAILED" }
+        });
+        if (updated.count !== 1) {
+          throw new PersistenceError(
+            "CONFLICT",
+            `Asset source file ${fileId} is no longer an upload reservation`
+          );
+        }
+        const failedFiles = await tx.assetSourceFile.findMany({
+          where: { sessionId, state: "FAILED" }
+        });
+        await tx.assetImportSession.update({
+          where: { id: sessionId },
+          data: { failedFileCount: failedFiles.length }
+        });
+        return { sessionId, fileId, state: "FAILED" as const, changed: true };
       });
     } catch (error) {
       rethrowPersistenceError(error);

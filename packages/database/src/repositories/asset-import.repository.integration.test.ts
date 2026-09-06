@@ -2955,6 +2955,284 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
         await removePause();
       }
     });
+
+    await t.test("38. failed upload reservations recover idempotently and can be reserved again", async () => {
+      for (const sessionState of ["UPLOADING", "ARCHIVING", "PARTIALLY_FAILED"] as const) {
+        const scenario = `upload-recovery-${sessionState.toLowerCase()}`;
+        const session = await repository.createSession({ idempotencyKey: keyOf(`${scenario}-session`) });
+        const manifest = await repository.registerManifest(session.sessionId, {
+          idempotencyKey: keyOf(`${scenario}-manifest`),
+          files: [{
+            clientFileId: `${scenario}-file`,
+            relativePath: `imports/${scenario}/file.jpg`,
+            byteSize: 2048,
+            lastModifiedMs: 1_750_000_012_000,
+            kind: "JPEG"
+          }]
+        });
+        const fileId = manifest.files[0]!.fileId;
+        await repository.resolveUploadTarget({
+          sessionId: session.sessionId,
+          fileId,
+          contentLengthBytes: 2048
+        });
+        await prisma.assetImportSession.update({
+          where: { id: session.sessionId },
+          data: { state: sessionState }
+        });
+
+        assert.deepEqual(
+          await repository.failUploadReservation(session.sessionId, fileId),
+          { sessionId: session.sessionId, fileId, state: "FAILED", changed: true }
+        );
+        const sentinelUpdatedAt = new Date("2026-01-04T00:00:00.000Z");
+        await prisma.assetImportSession.update({
+          where: { id: session.sessionId },
+          data: { updatedAt: sentinelUpdatedAt }
+        });
+        assert.deepEqual(
+          await repository.failUploadReservation(session.sessionId, fileId),
+          { sessionId: session.sessionId, fileId, state: "FAILED", changed: false }
+        );
+        const failedSession = await prisma.assetImportSession.findUniqueOrThrow({
+          where: { id: session.sessionId }
+        });
+        assert.equal(failedSession.state, sessionState);
+        assert.equal(failedSession.failedFileCount, 1);
+        assert.equal(failedSession.updatedAt.toISOString(), sentinelUpdatedAt.toISOString());
+
+        await repository.resolveUploadTarget({
+          sessionId: session.sessionId,
+          fileId,
+          contentLengthBytes: 2048
+        });
+        assert.equal(
+          (await prisma.assetSourceFile.findUniqueOrThrow({ where: { id: fileId } })).state,
+          "UPLOADING"
+        );
+        assert.equal(
+          (await prisma.assetImportSession.findUniqueOrThrow({ where: { id: session.sessionId } }))
+            .failedFileCount,
+          0
+        );
+      }
+    });
+
+    await t.test("39. upload recovery hides ownership and rejects files without a reservation", async () => {
+      const scenario = "upload-recovery-conflicts";
+      const first = await repository.createSession({ idempotencyKey: keyOf(`${scenario}-first`) });
+      const second = await repository.createSession({ idempotencyKey: keyOf(`${scenario}-second`) });
+      const manifest = await repository.registerManifest(first.sessionId, {
+        idempotencyKey: keyOf(`${scenario}-manifest`),
+        files: ["pending", "archived", "duplicate"].map((label, index) => ({
+          clientFileId: `${scenario}-${label}`,
+          relativePath: `imports/${scenario}/${label}.jpg`,
+          byteSize: 2048,
+          lastModifiedMs: 1_750_000_013_000 + index,
+          kind: "JPEG" as const
+        }))
+      });
+      const [pending, archived, duplicate] = manifest.files;
+      assert.ok(pending && archived && duplicate);
+      await assert.rejects(
+        () => repository.failUploadReservation(second.sessionId, pending.fileId),
+        expectCode("NOT_FOUND")
+      );
+      await assert.rejects(
+        () => repository.failUploadReservation(first.sessionId, "missing-file"),
+        expectCode("NOT_FOUND")
+      );
+      await prisma.assetSourceFile.update({ where: { id: archived.fileId }, data: { state: "ARCHIVED" } });
+      await prisma.assetSourceFile.update({
+        where: { id: duplicate.fileId },
+        data: { state: "SKIPPED_DUPLICATE" }
+      });
+      for (const fileId of [pending.fileId, archived.fileId, duplicate.fileId]) {
+        await assert.rejects(
+          () => repository.failUploadReservation(first.sessionId, fileId),
+          expectCode("CONFLICT")
+        );
+      }
+    });
+
+    await t.test("40. upload recovery preserves a reservation with active archive work", async () => {
+      const scenario = "upload-recovery-active-job";
+      const session = await repository.createSession({ idempotencyKey: keyOf(`${scenario}-session`) });
+      const manifest = await repository.registerManifest(session.sessionId, {
+        idempotencyKey: keyOf(`${scenario}-manifest`),
+        files: [{
+          clientFileId: `${scenario}-file`,
+          relativePath: `imports/${scenario}/file.jpg`,
+          byteSize: 2048,
+          lastModifiedMs: 1_750_000_014_000,
+          kind: "JPEG"
+        }]
+      });
+      const fileId = manifest.files[0]!.fileId;
+      await repository.resolveUploadTarget({
+        sessionId: session.sessionId,
+        fileId,
+        contentLengthBytes: 2048
+      });
+      await prisma.assetProcessingJob.create({
+        data: {
+          sessionId: session.sessionId,
+          jobType: "ARCHIVE_FILE",
+          state: "RUNNING",
+          payload: {
+            fileId,
+            stagingKey: `imports/${session.sessionId}/staging/00000000-0000-4000-8000-000000000040`,
+            sha256: shaOf(scenario)
+          },
+          maxRetries: 3,
+          workerId: `worker-${scenario}`,
+          leaseToken: `lease-${scenario}`,
+          leaseUntil: new Date(Date.now() + 60_000)
+        }
+      });
+
+      await assert.rejects(
+        () => repository.failUploadReservation(session.sessionId, fileId),
+        expectCode("CONFLICT")
+      );
+      assert.equal(
+        (await prisma.assetSourceFile.findUniqueOrThrow({ where: { id: fileId } })).state,
+        "UPLOADING"
+      );
+      assert.equal(
+        (await prisma.assetImportSession.findUniqueOrThrow({ where: { id: session.sessionId } }))
+          .failedFileCount,
+        0
+      );
+    });
+
+    await t.test("41. cancellation and upload recovery serialize without reviving the session", async () => {
+      const scenario = "cancel-upload-recovery-race";
+      const session = await repository.createSession({ idempotencyKey: keyOf(`${scenario}-session`) });
+      const manifest = await repository.registerManifest(session.sessionId, {
+        idempotencyKey: keyOf(`${scenario}-manifest`),
+        files: [{
+          clientFileId: `${scenario}-file`,
+          relativePath: `imports/${scenario}/file.jpg`,
+          byteSize: 2048,
+          lastModifiedMs: 1_750_000_015_000,
+          kind: "JPEG"
+        }]
+      });
+      const fileId = manifest.files[0]!.fileId;
+      await repository.resolveUploadTarget({
+        sessionId: session.sessionId,
+        fileId,
+        contentLengthBytes: 2048
+      });
+
+      const outcomes = await Promise.allSettled([
+        repository.failUploadReservation(session.sessionId, fileId),
+        repository.cancelSession(
+          session.sessionId,
+          { idempotencyKey: keyOf(`${scenario}-cancel`) },
+          "integration-recovery-canceller"
+        )
+      ]);
+      assert.equal(outcomes.every((outcome) => outcome.status === "fulfilled"), true);
+      assert.equal(
+        (await prisma.assetImportSession.findUniqueOrThrow({ where: { id: session.sessionId } })).state,
+        "CANCELLED"
+      );
+      assert.equal(
+        (await prisma.assetImportSession.findUniqueOrThrow({ where: { id: session.sessionId } }))
+          .failedFileCount,
+        1
+      );
+      assert.equal(
+        (await prisma.assetSourceFile.findUniqueOrThrow({ where: { id: fileId } })).state,
+        "FAILED"
+      );
+    });
+
+    await t.test("42. concurrent upload recovery changes the file once and keeps an exact count", async () => {
+      const scenario = "double-upload-recovery";
+      const session = await repository.createSession({ idempotencyKey: keyOf(`${scenario}-session`) });
+      const manifest = await repository.registerManifest(session.sessionId, {
+        idempotencyKey: keyOf(`${scenario}-manifest`),
+        files: [{
+          clientFileId: `${scenario}-file`,
+          relativePath: `imports/${scenario}/file.jpg`,
+          byteSize: 2048,
+          lastModifiedMs: 1_750_000_016_000,
+          kind: "JPEG"
+        }]
+      });
+      const fileId = manifest.files[0]!.fileId;
+      await repository.resolveUploadTarget({
+        sessionId: session.sessionId,
+        fileId,
+        contentLengthBytes: 2048
+      });
+
+      const outcomes = await Promise.all([
+        repository.failUploadReservation(session.sessionId, fileId),
+        repository.failUploadReservation(session.sessionId, fileId)
+      ]);
+      assert.deepEqual(outcomes.map((outcome) => outcome.changed).sort(), [false, true]);
+      assert.equal(
+        (await prisma.assetImportSession.findUniqueOrThrow({ where: { id: session.sessionId } }))
+          .failedFileCount,
+        1
+      );
+      assert.equal(
+        (await prisma.assetSourceFile.findUniqueOrThrow({ where: { id: fileId } })).state,
+        "FAILED"
+      );
+    });
+
+    await t.test("43. repeated recovery never updates terminal session timestamps", async () => {
+      for (const terminalState of ["CANCELLED", "FAILED", "PUBLISHED"] as const) {
+        const scenario = `terminal-recovery-noop-${terminalState.toLowerCase()}`;
+        const session = await repository.createSession({ idempotencyKey: keyOf(`${scenario}-session`) });
+        const manifest = await repository.registerManifest(session.sessionId, {
+          idempotencyKey: keyOf(`${scenario}-manifest`),
+          files: [{
+            clientFileId: `${scenario}-file`,
+            relativePath: `imports/${scenario}/file.jpg`,
+            byteSize: 2048,
+            lastModifiedMs: 1_750_000_017_000,
+            kind: "JPEG"
+          }]
+        });
+        const fileId = manifest.files[0]!.fileId;
+        await repository.resolveUploadTarget({
+          sessionId: session.sessionId,
+          fileId,
+          contentLengthBytes: 2048
+        });
+        await repository.failUploadReservation(session.sessionId, fileId);
+        if (terminalState === "CANCELLED") {
+          await repository.cancelSession(
+            session.sessionId,
+            { idempotencyKey: keyOf(`${scenario}-cancel`) },
+            "integration-terminal-noop-canceller"
+          );
+        }
+        const sentinelDay = terminalState === "CANCELLED" ? 1 : terminalState === "FAILED" ? 2 : 3;
+        const sentinelUpdatedAt = new Date(`2026-01-0${sentinelDay}T00:00:00.000Z`);
+        await prisma.assetImportSession.update({
+          where: { id: session.sessionId },
+          data: { state: terminalState, failedFileCount: 0, updatedAt: sentinelUpdatedAt }
+        });
+
+        assert.deepEqual(
+          await repository.failUploadReservation(session.sessionId, fileId),
+          { sessionId: session.sessionId, fileId, state: "FAILED", changed: false }
+        );
+        const terminal = await prisma.assetImportSession.findUniqueOrThrow({
+          where: { id: session.sessionId }
+        });
+        assert.equal(terminal.state, terminalState);
+        assert.equal(terminal.failedFileCount, 0);
+        assert.equal(terminal.updatedAt.toISOString(), sentinelUpdatedAt.toISOString());
+      }
+    });
   } finally {
     await prisma.$disconnect();
   }
