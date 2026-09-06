@@ -21,6 +21,7 @@ test("missing, duplicate and wrong asset admin credentials are generic unauthori
       (error: unknown) => {
         assert.ok(error instanceof AssetImportApiError);
         assert.equal(error.transportCode, "UNAUTHORIZED");
+        assert.equal(error.assetCode, undefined);
         assert.equal(error.message, "A valid asset administrator credential is required.");
         assert.equal(error.message.includes(ADMIN_KEY), false);
         return true;

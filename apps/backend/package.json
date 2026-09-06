@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@mystcrag/ai-agent": "workspace:*",
+    "@mystcrag/asset-pipeline": "workspace:*",
     "@mystcrag/context-resolver": "workspace:*",
     "@mystcrag/database": "workspace:*",
     "@mystcrag/design-contract": "workspace:*",

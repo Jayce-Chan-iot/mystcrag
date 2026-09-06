@@ -54,6 +54,9 @@ importers:
       '@mystcrag/ai-agent':
         specifier: workspace:*
         version: link:../../packages/ai-agent
+      '@mystcrag/asset-pipeline':
+        specifier: workspace:*
+        version: link:../../packages/asset-pipeline
       '@mystcrag/context-resolver':
         specifier: workspace:*
         version: link:../../packages/context-resolver

@@ -16,6 +16,10 @@ import {
 } from "./modules/knowledge-admin/knowledge-admin.routes.js";
 import type { KnowledgeAdminApplicationService } from "./modules/knowledge-admin/knowledge-admin.service.js";
 import { assertAssetAdminApiKeyConfigured } from "./modules/bead-asset-import/bead-asset-import.auth.js";
+import { registerAssetImportRoutes } from "./modules/bead-asset-import/bead-asset-import.routes.js";
+import type { AssetImportApplicationService } from "./modules/bead-asset-import/bead-asset-import.service.js";
+import { registerProductAssetRoutes } from "./modules/product-assets/product-asset.routes.js";
+import type { ProductAssetService } from "./modules/product-assets/product-asset.service.js";
 import { registerTarotRoutes } from "./modules/tarot/tarot.routes.js";
 import type { TarotApiService } from "./modules/tarot/tarot.types.js";
 
@@ -28,10 +32,25 @@ export type CreateAppOptions = {
   readonly knowledgeAdminService?: KnowledgeAdminApplicationService;
   readonly knowledgeAdminApiKey?: string;
   readonly assetImportEnabled?: boolean;
-  readonly assetImportService?: unknown;
-  readonly productAssetService?: unknown;
+  readonly assetImportService?: AssetImportApplicationService;
+  readonly productAssetService?: ProductAssetService;
   readonly assetAdminApiKey?: string;
   readonly logger?: false | { readonly stream: { write(message: string): void } };
+};
+
+const loggerRedaction = {
+  paths: [
+    "req.headers.x-admin-key",
+    "req.headers.authorization",
+    "req.headers.cookie",
+    "headers.x-admin-key",
+    "headers.authorization",
+    "headers.cookie",
+    "req.body",
+    "body",
+    "raw"
+  ],
+  censor: "[Redacted]"
 };
 
 export function createApp(options: CreateAppOptions = {}) {
@@ -39,8 +58,8 @@ export function createApp(options: CreateAppOptions = {}) {
     options.logger === false
       ? { logger: false }
       : options.logger
-        ? { logger: { stream: options.logger.stream } }
-        : { logger: true }
+        ? { logger: { stream: options.logger.stream, redact: loggerRedaction } }
+        : { logger: { redact: loggerRedaction } }
   );
   const registeredModules = options.tarotService
     ? [...backendModules, tarotModule]
@@ -84,6 +103,10 @@ export function createApp(options: CreateAppOptions = {}) {
         "assetImportService and productAssetService are required when asset import is enabled."
       );
     }
+    registerAssetImportRoutes(app, options.assetImportService, options.assetAdminApiKey);
+  }
+  if (options.productAssetService) {
+    registerProductAssetRoutes(app, options.productAssetService);
   }
 
   return app;

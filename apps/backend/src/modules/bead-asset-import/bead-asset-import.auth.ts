@@ -32,8 +32,7 @@ export function authenticateAssetAdminKey(
   ) {
     throw new AssetImportApiError(
       "UNAUTHORIZED",
-      "A valid asset administrator credential is required.",
-      "ADMIN_PERMISSION_EXPIRED"
+      "A valid asset administrator credential is required."
     );
   }
 

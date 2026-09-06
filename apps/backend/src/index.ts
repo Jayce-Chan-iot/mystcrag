@@ -25,6 +25,12 @@ import {
   createRecommendationApplicationService
 } from "./modules/design/design.service.js";
 import { createTarotQuestionEncryptionFromEnvironment } from "./modules/tarot/tarot-question-encryption.js";
+import { fileURLToPath } from "node:url";
+import {
+  createAssetImportRuntime,
+  discoverBackendRepositoryRoots,
+  resolveAssetImportEnabled
+} from "./modules/bead-asset-import/bead-asset-import.runtime.js";
 
 const defaultPort = 4000;
 const configuredPort = Number(process.env.BACKEND_PORT ?? defaultPort);
@@ -34,6 +40,13 @@ const accessTokenVerifier = createAccessTokenVerifierFromEnvironment();
 const tarotQuestionEncryption = createTarotQuestionEncryptionFromEnvironment(process.env);
 const database = createPrismaClient();
 await database.$connect();
+const assetRuntime = createAssetImportRuntime({
+  database,
+  env: process.env,
+  repositoryRoots: resolveAssetImportEnabled(process.env.MYSTCRAG_ASSET_IMPORT_ENABLED)
+    ? discoverBackendRepositoryRoots(fileURLToPath(new URL("../../..", import.meta.url)))
+    : []
+});
 const externalIdentities = new ExternalIdentityRepository(database);
 const authProvider = new AuthenticatedActorProvider({
   provider: accessTokenVerifier,
@@ -85,6 +98,7 @@ const app = createApp({
   }),
   knowledgeAdminService,
   ...(knowledgeAdminApiKey === undefined ? {} : { knowledgeAdminApiKey }),
+  ...(assetRuntime ?? {}),
   authProvider
 });
 app.addHook("onClose", async () => database.$disconnect());

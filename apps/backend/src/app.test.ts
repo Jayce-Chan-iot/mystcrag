@@ -42,3 +42,20 @@ test("asset import management is disabled unless the feature flag is exactly tru
   assert.equal(response.statusCode, 404);
   await app.close();
 });
+
+test("backend logger redacts administrator, authorization, and cookie credentials", async () => {
+  let logs = "";
+  const app = createApp({ logger: { stream: { write: (message) => { logs += message; } } } });
+  app.log.info({
+    headers: {
+      "x-admin-key": "asset-admin-secret-value",
+      authorization: "Bearer private-token",
+      cookie: "session=private-cookie"
+    }
+  }, "redaction probe");
+  await app.close();
+
+  assert.equal(logs.includes("asset-admin-secret-value"), false);
+  assert.equal(logs.includes("private-token"), false);
+  assert.equal(logs.includes("private-cookie"), false);
+});
