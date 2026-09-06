@@ -2869,6 +2869,52 @@ test("resolveUploadTarget proves session ownership, declared size and mutable st
   );
 });
 
+test("resolveUploadTarget returns immutable archived metadata for a matching replay", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+  const { sessionId, fileIds } = await createSessionWithFiles(prisma, {
+    clientFileIds: ["archived-replay"]
+  });
+  const fileId = fileIds[0]!;
+  const archivedAt = new Date("2026-09-06T01:02:03.000Z");
+  const archiveKey = `imports/${sessionId}/raw/archived-replay.jpg`;
+  await prisma.assetSourceFile.update({
+    where: { id: fileId },
+    data: { state: "ARCHIVED", sha256: VALID_SHA, archiveKey, archivedAt }
+  });
+  await prisma.assetImportSession.update({ where: { id: sessionId }, data: { state: "PROCESSING" } });
+
+  const target = await repository.resolveUploadTarget({
+    sessionId,
+    fileId,
+    contentLengthBytes: 1024,
+    declaredSha256: VALID_SHA
+  });
+
+  assert.deepEqual(target, {
+    sessionId,
+    fileId,
+    clientFileId: "archived-replay",
+    relativePath: "folder/archived-replay.jpg",
+    kind: "JPEG",
+    byteSize: 1024,
+    state: "ARCHIVED",
+    sha256: VALID_SHA,
+    archiveKey,
+    archivedAt
+  });
+  assert.equal((await prisma.assetSourceFile.findUnique({ where: { id: fileId } }))?.state, "ARCHIVED");
+  await assert.rejects(
+    () => repository.resolveUploadTarget({
+      sessionId,
+      fileId,
+      contentLengthBytes: 1024,
+      declaredSha256: "b".repeat(64)
+    }),
+    (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT"
+  );
+});
+
 // ---------------------------------------------------------------------------
 // TASK-ASSET-DB-003 upload reservation recovery (red-first)
 // ---------------------------------------------------------------------------
