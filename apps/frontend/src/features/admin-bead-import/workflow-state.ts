@@ -14,6 +14,7 @@ export const STALE_GROUP_NOTICE_MESSAGE = "分组数据已在服务端更新，�
 export const LOAD_ERROR_NOTICE_ID = "session-load-error";
 export const LOAD_ERROR_NOTICE_MESSAGE = "无法载入导入任务，请稍后重试。";
 export const UPLOAD_FAILURE_NOTICE_ID = "upload-failures";
+export const GROUP_MUTATION_FAILURE_NOTICE_PREFIX = "group-mutation-failure:";
 
 export type WorkflowNoticeTone = "info" | "success" | "warning" | "danger";
 
@@ -76,6 +77,7 @@ export type WorkflowAction =
   | { type: "GROUP_MUTATION_STARTED"; groupId: string }
   | { type: "GROUP_MUTATION_APPLIED"; groupId: string; revision: number }
   | { type: "GROUP_MUTATION_CONFLICT"; groupId: string }
+  | { type: "GROUP_MUTATION_FAILED"; groupId: string; message: string }
   | { type: "CONFLICT_ACKNOWLEDGED" }
   | { type: "DISMISS_NOTICE"; noticeId: string };
 
@@ -273,6 +275,11 @@ function withoutGroupId(ids: string[], groupId: string): string[] {
   return ids.filter((id) => id !== groupId);
 }
 
+/** One failure slot per group, so a refusal on one never hides a failure on another. */
+function groupFailureNoticeId(groupId: string): string {
+  return `${GROUP_MUTATION_FAILURE_NOTICE_PREFIX}${groupId}`;
+}
+
 export function workflowReducer(
   state: BeadImportWorkflowState,
   action: WorkflowAction
@@ -374,7 +381,10 @@ export function workflowReducer(
         localEdits,
         inFlightGroupIds: withoutGroupId(state.inFlightGroupIds, action.groupId),
         staleGroupIds,
-        notices: withStaleNotice(state.notices, staleGroupIds)
+        notices: withStaleNotice(
+          withoutNotices(state.notices, groupFailureNoticeId(action.groupId)),
+          staleGroupIds
+        )
       };
     }
     case "GROUP_MUTATION_CONFLICT":
@@ -383,10 +393,20 @@ export function workflowReducer(
         inFlightGroupIds: withoutGroupId(state.inFlightGroupIds, action.groupId),
         blockedByConflict: true,
         refreshRequested: true,
-        notices: withNotice(state.notices, {
+        notices: withNotice(withoutNotices(state.notices, groupFailureNoticeId(action.groupId)), {
           id: CONFLICT_NOTICE_ID,
           tone: "danger",
           message: CONFLICT_NOTICE_MESSAGE
+        })
+      };
+    case "GROUP_MUTATION_FAILED":
+      return {
+        ...state,
+        inFlightGroupIds: withoutGroupId(state.inFlightGroupIds, action.groupId),
+        notices: withNotice(state.notices, {
+          id: groupFailureNoticeId(action.groupId),
+          tone: "danger",
+          message: action.message
         })
       };
     case "CONFLICT_ACKNOWLEDGED": {

@@ -14,6 +14,7 @@ import { resolveWorkflowStep } from "./workflow-model";
 import {
   CONFLICT_NOTICE_ID,
   CONFLICT_NOTICE_MESSAGE,
+  GROUP_MUTATION_FAILURE_NOTICE_PREFIX,
   LOAD_ERROR_NOTICE_ID,
   LOAD_ERROR_NOTICE_MESSAGE,
   STALE_GROUP_NOTICE_ID,
@@ -576,4 +577,52 @@ test("a stale edit re-bases onto the authoritative revision when the operator co
     false
   );
   assert.equal(canSubmitGroupMutation(continued, "group-1"), true);
+});
+
+test("a failed group mutation frees the group again without adopting a revision", () => {
+  const loaded = workflowReducer(initialWorkflowState("session-1"), {
+    type: "SESSION_LOADED",
+    session: groupedSession({ revision: 3 }),
+    syncedAt: SYNCED_AT
+  });
+  const started = workflowReducer(loaded, { type: "GROUP_MUTATION_STARTED", groupId: "group-1" });
+  assert.equal(canSubmitGroupMutation(started, "group-1"), false);
+
+  const failed = workflowReducer(started, {
+    type: "GROUP_MUTATION_FAILED",
+    groupId: "group-1",
+    message: "珠子素材导入服务暂时不可用，请稍后重试。"
+  });
+
+  assert.deepEqual(failed.inFlightGroupIds, []);
+  assert.equal(failed.blockedByConflict, false);
+  assert.equal(failed.refreshRequested, false);
+  assert.equal(groupRevisionFor(failed, "group-1"), 3, "a failure must never adopt a revision");
+  const notice = failed.notices.find(
+    (item) => item.id === `${GROUP_MUTATION_FAILURE_NOTICE_PREFIX}group-1`
+  );
+  assert.ok(notice);
+  assert.equal(notice.tone, "danger");
+  assert.equal(notice.message, "珠子素材导入服务暂时不可用，请稍后重试。");
+  assert.equal(canSubmitGroupMutation(failed, "group-1"), true);
+
+  const retried = workflowReducer(
+    workflowReducer(failed, { type: "GROUP_MUTATION_STARTED", groupId: "group-1" }),
+    { type: "GROUP_MUTATION_APPLIED", groupId: "group-1", revision: 4 }
+  );
+  assert.equal(
+    retried.notices.some((item) => item.id.startsWith(GROUP_MUTATION_FAILURE_NOTICE_PREFIX)),
+    false
+  );
+  assert.equal(groupRevisionFor(retried, "group-1"), 4);
+
+  const conflicted = workflowReducer(
+    workflowReducer(failed, { type: "GROUP_MUTATION_STARTED", groupId: "group-1" }),
+    { type: "GROUP_MUTATION_CONFLICT", groupId: "group-1" }
+  );
+  assert.equal(
+    conflicted.notices.some((item) => item.id.startsWith(GROUP_MUTATION_FAILURE_NOTICE_PREFIX)),
+    false,
+    "a conflict replaces the failure notice rather than stacking on it"
+  );
 });
