@@ -11,3 +11,34 @@ test("health endpoint reports a ready service", async () => {
   assert.deepEqual(response.json(), { status: "ok" });
   await app.close();
 });
+
+test("asset import management fails closed without its independent key", () => {
+  assert.throws(
+    () =>
+      createApp({
+        assetImportEnabled: true,
+        assetImportService: {} as never,
+        productAssetService: {} as never
+      } as never),
+    /assetAdminApiKey/
+  );
+});
+
+test("asset import management is disabled unless the feature flag is exactly true", async () => {
+  const app = createApp({
+    assetImportEnabled: false,
+    assetImportService: {} as never,
+    productAssetService: {} as never,
+    assetAdminApiKey: "asset-admin-test-key-0123456789"
+  } as never);
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/admin/bead-import/sessions",
+    headers: { "x-admin-key": "asset-admin-test-key-0123456789" },
+    payload: { idempotencyKey: "session-create-1" }
+  });
+
+  assert.equal(response.statusCode, 404);
+  await app.close();
+});

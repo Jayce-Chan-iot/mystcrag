@@ -15,6 +15,7 @@ import {
   registerKnowledgeAdminRoutes
 } from "./modules/knowledge-admin/knowledge-admin.routes.js";
 import type { KnowledgeAdminApplicationService } from "./modules/knowledge-admin/knowledge-admin.service.js";
+import { assertAssetAdminApiKeyConfigured } from "./modules/bead-asset-import/bead-asset-import.auth.js";
 import { registerTarotRoutes } from "./modules/tarot/tarot.routes.js";
 import type { TarotApiService } from "./modules/tarot/tarot.types.js";
 
@@ -26,6 +27,10 @@ export type CreateAppOptions = {
   readonly tarotEnabled?: boolean;
   readonly knowledgeAdminService?: KnowledgeAdminApplicationService;
   readonly knowledgeAdminApiKey?: string;
+  readonly assetImportEnabled?: boolean;
+  readonly assetImportService?: unknown;
+  readonly productAssetService?: unknown;
+  readonly assetAdminApiKey?: string;
   readonly logger?: false | { readonly stream: { write(message: string): void } };
 };
 
@@ -71,6 +76,14 @@ export function createApp(options: CreateAppOptions = {}) {
       options.knowledgeAdminService,
       options.knowledgeAdminApiKey
     );
+  }
+  if (options.assetImportEnabled === true) {
+    assertAssetAdminApiKeyConfigured(options.assetAdminApiKey);
+    if (!options.assetImportService || !options.productAssetService) {
+      throw new Error(
+        "assetImportService and productAssetService are required when asset import is enabled."
+      );
+    }
   }
 
   return app;
