@@ -147,15 +147,16 @@ test("malformed JSON is a strict validation response rather than an internal fai
   await app.close();
 });
 
-test("binary upload reaches the application service as a readable stream", async () => {
-  let receivedStream = false;
+test("every upload content type reaches the application service as an unchanged readable stream", async () => {
+  const received: Array<{ isStream: boolean; bytes: Buffer }> = [];
   const app = createApp({
     assetImportEnabled: true,
     assetImportService: {
       ...service(),
       uploadFile: async (_params: unknown, source: unknown) => {
-        receivedStream = source instanceof Readable;
-        for await (const _chunk of source as Readable) void _chunk;
+        let bytes = Buffer.alloc(0);
+        for await (const chunk of source as Readable) bytes = Buffer.concat([bytes, Buffer.from(chunk)]);
+        received.push({ isStream: source instanceof Readable, bytes });
         return { fileId: "file-1", uploadStatus: "UPLOADING", byteSize: 6, sha256: SHA };
       }
     } as never,
@@ -163,13 +164,57 @@ test("binary upload reaches the application service as a readable stream", async
     assetAdminApiKey: ADMIN_KEY,
     logger: false
   });
+  const payload = Buffer.from([0xff, 0xd8, 0xff, 0, 0, 0]);
+  for (const contentType of ["application/octet-stream", "application/json", "text/plain"]) {
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/admin/bead-import/sessions/session-1/files/file-1/content",
+      headers: { "x-admin-key": ADMIN_KEY, "content-type": contentType, "content-length": "6" },
+      payload
+    });
+    assert.equal(response.statusCode, 200, `${contentType}: ${response.body}`);
+  }
+  assert.deepEqual(received, [
+    { isStream: true, bytes: payload },
+    { isStream: true, bytes: payload },
+    { isStream: true, bytes: payload }
+  ]);
+  await app.close();
+});
+
+test("malformed upload headers are rejected before any request body byte is read", async () => {
+  let reads = 0;
+  let serviceCalled = false;
+  const source = new Readable({
+    read() {
+      reads += 1;
+      this.push(Buffer.from([0xff, 0xd8, 0xff, 0, 0, 0]));
+      this.push(null);
+    }
+  });
+  const app = createApp({
+    assetImportEnabled: true,
+    assetImportService: {
+      ...service(),
+      uploadFile: async () => {
+        serviceCalled = true;
+        return { fileId: "file-1", uploadStatus: "UPLOADING", byteSize: 6, sha256: SHA };
+      }
+    } as never,
+    productAssetService: {} as never,
+    assetAdminApiKey: ADMIN_KEY,
+    logger: false
+  });
+
   const response = await app.inject({
     method: "PUT",
     url: "/api/admin/bead-import/sessions/session-1/files/file-1/content",
-    headers: { "x-admin-key": ADMIN_KEY, "content-type": "application/octet-stream", "content-length": "6" },
-    payload: Buffer.from([0xff, 0xd8, 0xff, 0, 0, 0])
+    headers: { "x-admin-key": ADMIN_KEY, "content-type": "application/octet-stream" },
+    payload: source
   });
-  assert.equal(response.statusCode, 200, response.body);
-  assert.equal(receivedStream, true);
+
+  assert.equal(response.statusCode, 400, response.body);
+  assert.equal(serviceCalled, false);
+  assert.equal(reads, 0);
   await app.close();
 });

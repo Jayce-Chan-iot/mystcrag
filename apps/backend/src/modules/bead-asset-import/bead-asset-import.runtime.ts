@@ -8,8 +8,15 @@ import { assertAssetAdminApiKeyConfigured } from "./bead-asset-import.auth.js";
 import { AssetImportApplicationService } from "./bead-asset-import.service.js";
 import { ProductAssetService } from "../product-assets/product-asset.service.js";
 
+export const ASSET_RUNTIME_STARTUP_ERROR_MESSAGE = "Asset archive runtime configuration failed.";
+
 export function resolveAssetImportEnabled(value: string | undefined): boolean {
   return value === "true";
+}
+
+export function assetRuntimeNeedsRepositoryRoots(env: Record<string, string | undefined>): boolean {
+  return resolveAssetImportEnabled(env.MYSTCRAG_ASSET_IMPORT_ENABLED) ||
+    (env.MYSTCRAG_ASSET_ARCHIVE_ROOT !== undefined && env.MYSTCRAG_ASSET_ARCHIVE_ROOT !== "");
 }
 
 export function discoverBackendRepositoryRoots(startDir: string): string[] {
@@ -69,4 +76,26 @@ export function createAssetImportRuntime(options: {
     } : {}),
     productAssetService: new ProductAssetService({ repository, archiveStore })
   };
+}
+
+export async function initializeAssetImportRuntime(options: {
+  database: ConstructorParameters<typeof AssetImportRepository>[0];
+  env: Record<string, string | undefined>;
+  startDir: string;
+  disconnect: () => Promise<unknown>;
+  discoverRepositoryRoots?: (startDir: string) => string[];
+}) {
+  try {
+    const repositoryRoots = assetRuntimeNeedsRepositoryRoots(options.env)
+      ? (options.discoverRepositoryRoots ?? discoverBackendRepositoryRoots)(options.startDir)
+      : [];
+    return createAssetImportRuntime({
+      database: options.database,
+      env: options.env,
+      repositoryRoots
+    });
+  } catch {
+    await options.disconnect().catch(() => undefined);
+    throw new Error(ASSET_RUNTIME_STARTUP_ERROR_MESSAGE);
+  }
 }

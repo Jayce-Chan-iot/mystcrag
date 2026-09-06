@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
 
 import { detectAssetSourceKind, type ArchiveStore } from "@mystcrag/asset-pipeline";
-import type { AssetImportRepository } from "@mystcrag/database";
+import type { AssetImportRepository, ResolvedAssetUploadTarget } from "@mystcrag/database";
 import type {
   CancelAssetImportSessionRequest,
   CreateAssetImportSessionRequest,
@@ -39,15 +39,56 @@ function iso(date: Date): string {
   return date.toISOString();
 }
 
-function uploadIdempotencyKey(sessionId: string, fileId: string, sha256: string): string {
+function uploadIdempotencyKey(sessionId: string, fileId: string, sha256: string, uploadAttemptId: string): string {
   const digest = createHash("sha256")
     .update(sessionId)
     .update("\0")
     .update(fileId)
     .update("\0")
     .update(sha256)
+    .update("\0")
+    .update(uploadAttemptId)
     .digest("hex");
   return `asset-upload-${digest}`;
+}
+
+async function verifyArchivedReplay(
+  target: Extract<ResolvedAssetUploadTarget, { state: "ARCHIVED" }>,
+  source: Readable
+) {
+  const hash = createHash("sha256");
+  const probe: Uint8Array[] = [];
+  let probeBytes = 0;
+  let byteSize = 0;
+  for await (const value of source) {
+    const chunk = value instanceof Uint8Array ? value : Buffer.from(value as never);
+    byteSize += chunk.byteLength;
+    if (byteSize > target.byteSize) {
+      throw new AssetImportApiError("CONFLICT", "The archived file has different content.", "ARCHIVE_CONFLICT");
+    }
+    hash.update(chunk);
+    if (probeBytes < ASSET_UPLOAD_PROBE_MAX_BYTES) {
+      const captured = Buffer.from(chunk.subarray(0, ASSET_UPLOAD_PROBE_MAX_BYTES - probeBytes));
+      probe.push(captured);
+      probeBytes += captured.byteLength;
+    }
+  }
+  const sha256 = hash.digest("hex");
+  if (
+    byteSize !== target.byteSize ||
+    sha256 !== target.sha256 ||
+    detectAssetSourceKind(Buffer.concat(probe)) !== target.kind
+  ) {
+    throw new AssetImportApiError("CONFLICT", "The archived file has different content.", "ARCHIVE_CONFLICT");
+  }
+  return {
+    fileId: target.fileId,
+    uploadStatus: "ARCHIVED" as const,
+    byteSize,
+    sha256,
+    archiveKey: target.archiveKey,
+    archivedAt: iso(target.archivedAt)
+  };
 }
 
 export class AssetImportApplicationService {
@@ -111,7 +152,15 @@ export class AssetImportApplicationService {
   }
 
   async uploadFile(params: UploadAssetFileParams, source: Readable) {
+    const uploadAttemptId = randomUUID();
     const target = await this.deps.repository.resolveUploadTarget(params);
+    if (target.state === "ARCHIVED") {
+      try {
+        return await verifyArchivedReplay(target, source);
+      } catch (error) {
+        throw normalizeAssetImportError(error);
+      }
+    }
     let stagingKey: string | undefined;
     const probe: Uint8Array[] = [];
     let probeBytes = 0;
@@ -152,7 +201,7 @@ export class AssetImportApplicationService {
       await this.deps.repository.enqueueArchiveFile({
         sessionId: target.sessionId,
         fileId: target.fileId,
-        idempotencyKey: uploadIdempotencyKey(target.sessionId, target.fileId, staged.sha256),
+        idempotencyKey: uploadIdempotencyKey(target.sessionId, target.fileId, staged.sha256, uploadAttemptId),
         stagingKey: staged.stagingKey,
         sha256: staged.sha256
       });

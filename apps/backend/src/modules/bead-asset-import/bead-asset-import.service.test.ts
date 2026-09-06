@@ -118,11 +118,117 @@ test("stream upload probes bounded bytes, stages once, and queues archival witho
   assert.deepEqual(enqueued, {
     sessionId: "session-1",
     fileId: "file-1",
-    idempotencyKey: "asset-upload-551653bc10491cc73b7153a742e8f9227afd5a7735c7be6b7e67b5529adcce38",
+    idempotencyKey: (enqueued as { idempotencyKey: string }).idempotencyKey,
     stagingKey: "imports/session-1/staging/123e4567-e89b-42d3-a456-426614174000",
     sha256: SHA
   });
+  assert.match((enqueued as { idempotencyKey: string }).idempotencyKey, /^asset-upload-[a-f0-9]{64}$/);
   assert.equal(ASSET_UPLOAD_PROBE_MAX_BYTES, 8 * 1024 * 1024);
+});
+
+test("same-byte re-upload uses a new archive operation identity after a terminal worker attempt", async () => {
+  const idempotencyKeys: string[] = [];
+  let stagingAttempt = 0;
+  const service = new AssetImportApplicationService({
+    repository: repository({
+      enqueueArchiveFile: async (input: { idempotencyKey: string }) => {
+        idempotencyKeys.push(input.idempotencyKey);
+        return { jobId: `job-${idempotencyKeys.length}`, jobState: "QUEUED" };
+      }
+    }),
+    archiveStore: {
+      putStagingStream: async ({ source }: { source: AsyncIterable<Uint8Array> }) => {
+        for await (const _chunk of source) void _chunk;
+        stagingAttempt += 1;
+        return {
+          stagingKey: `imports/session-1/staging/123e4567-e89b-42d3-a456-42661417400${stagingAttempt}`,
+          sha256: SHA,
+          byteSize: 6
+        };
+      },
+      removeStaging: async () => undefined
+    } as never
+  });
+
+  await service.uploadFile(
+    { sessionId: "session-1", fileId: "file-1", contentLengthBytes: 6 },
+    Readable.from([JPEG])
+  );
+  await service.uploadFile(
+    { sessionId: "session-1", fileId: "file-1", contentLengthBytes: 6 },
+    Readable.from([JPEG])
+  );
+
+  assert.equal(idempotencyKeys.length, 2);
+  assert.notEqual(idempotencyKeys[0], idempotencyKeys[1]);
+});
+
+test("matching archived re-upload verifies the stream and returns the existing archive without side effects", async () => {
+  let mutatingCall = false;
+  const archivedAt = new Date("2026-09-06T03:04:05.000Z");
+  const archivedSha = "fc16d7dcee9cae83ef3923222a81ccd8fe96c9d25fdb7f504d66f1011e0cd870";
+  const service = new AssetImportApplicationService({
+    repository: repository({
+      resolveUploadTarget: async () => ({
+        sessionId: "session-1",
+        fileId: "file-1",
+        clientFileId: "client-1",
+        relativePath: "photo.jpg",
+        kind: "JPEG",
+        byteSize: 6,
+        state: "ARCHIVED",
+        sha256: archivedSha,
+        archiveKey: "imports/session-1/raw/photo.jpg",
+        archivedAt
+      }),
+      enqueueArchiveFile: async () => {
+        mutatingCall = true;
+        throw new Error("must not enqueue");
+      },
+      failUploadReservation: async () => {
+        mutatingCall = true;
+        throw new Error("must not release");
+      }
+    }),
+    archiveStore: {
+      putStagingStream: async () => {
+        mutatingCall = true;
+        throw new Error("must not stage");
+      },
+      removeStaging: async () => {
+        mutatingCall = true;
+      }
+    } as never
+  });
+
+  const result = await service.uploadFile(
+    { sessionId: "session-1", fileId: "file-1", contentLengthBytes: 6, declaredSha256: archivedSha },
+    Readable.from([JPEG])
+  );
+
+  assert.deepEqual(result, {
+    fileId: "file-1",
+    uploadStatus: "ARCHIVED",
+    byteSize: 6,
+    sha256: archivedSha,
+    archiveKey: "imports/session-1/raw/photo.jpg",
+    archivedAt: "2026-09-06T03:04:05.000Z"
+  });
+  assert.equal(mutatingCall, false);
+
+  await assert.rejects(
+    () => service.uploadFile(
+      { sessionId: "session-1", fileId: "file-1", contentLengthBytes: 6 },
+      Readable.from([Buffer.from("wrong!")])
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof AssetImportApiError);
+      assert.equal(error.transportCode, "CONFLICT");
+      assert.equal(error.assetCode, "ARCHIVE_CONFLICT");
+      return true;
+    }
+  );
+  assert.equal(mutatingCall, false);
 });
 
 test("content mismatch removes staging and releases the reservation without masking the client error", async () => {

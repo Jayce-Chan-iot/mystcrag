@@ -78,6 +78,24 @@ test("real backend composes upload, review, curation, publication, and approved 
     }, archiveJob!.lease);
     await archiveStore.removeStaging(archivePayload.stagingKey);
 
+    const archivedReplay = await app.inject({
+      method: "PUT", url: `/api/admin/bead-import/sessions/${sessionId}/files/${fileId}/content`,
+      headers: {
+        ...adminHeaders,
+        "content-type": "application/octet-stream",
+        "content-length": String(JPEG.byteLength),
+        "x-content-sha256": original.sha256
+      },
+      payload: JPEG
+    });
+    assert.equal(archivedReplay.statusCode, 200, archivedReplay.body);
+    assert.equal(archivedReplay.json().uploadStatus, "ARCHIVED");
+    assert.equal(archivedReplay.json().sha256, original.sha256);
+    assert.equal(archivedReplay.json().archiveKey, original.archiveKey);
+    assert.equal(await database.assetProcessingJob.count({
+      where: { sessionId, jobType: "ARCHIVE_FILE" }
+    }), 1);
+
     const groupingStart = await app.inject({
       method: "POST", url: `/api/admin/bead-import/sessions/${sessionId}/grouping/start`, headers: adminHeaders,
       payload: { idempotencyKey: "e2e-grouping" }

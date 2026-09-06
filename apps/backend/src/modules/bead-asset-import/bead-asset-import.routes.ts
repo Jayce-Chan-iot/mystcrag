@@ -62,6 +62,8 @@ import {
 import type { AssetImportApplicationService } from "./bead-asset-import.service.js";
 
 const SessionParamsSchema = z.strictObject({ sessionId: IdentifierSchema });
+const UploadPathParamsSchema = z.strictObject({ sessionId: IdentifierSchema, fileId: IdentifierSchema });
+const validatedUploadParams = new WeakMap<FastifyRequest, z.infer<typeof UploadAssetFileParamsSchema>>();
 
 type DistinctHeaders = Record<string, readonly string[] | undefined>;
 
@@ -245,13 +247,20 @@ export function registerAssetImportRoutes(
     }));
 
     assetApp.register(async (uploadApp) => {
+      uploadApp.removeAllContentTypeParsers();
       uploadApp.addContentTypeParser("*", (_request, payload, done) => done(null, payload));
+      uploadApp.addHook("onRequest", async (request) => {
+        const transport = parseUploadHeaders(distinctRequestHeaders(request));
+        const path = requestData(UploadPathParamsSchema, request.params);
+        validatedUploadParams.set(request, requestData(UploadAssetFileParamsSchema, { ...path, ...transport }));
+      });
       uploadApp.put("/sessions/:sessionId/files/:fileId/content", {
         bodyLimit: ASSET_MANIFEST_LIMITS.maxFileBytes
       }, (request, reply) => handle(request, reply, async () => {
-        const transport = parseUploadHeaders(distinctRequestHeaders(request));
-        const path = requestData(z.strictObject({ sessionId: IdentifierSchema, fileId: IdentifierSchema }), request.params);
-        const params = requestData(UploadAssetFileParamsSchema, { ...path, ...transport });
+        const params = validatedUploadParams.get(request);
+        if (params === undefined) {
+          throw new AssetImportApiError("INTERNAL_ERROR", "Upload request validation did not complete.");
+        }
         return responseData(UploadAssetFileResponseSchema, await service.uploadFile(params, request.body as Readable));
       }));
     });

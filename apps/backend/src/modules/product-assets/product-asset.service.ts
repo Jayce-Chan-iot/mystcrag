@@ -1,4 +1,4 @@
-import { sha256OfBytes, type ArchiveStore } from "@mystcrag/asset-pipeline";
+import { detectAssetSourceKind, sha256OfBytes, type ArchiveStore } from "@mystcrag/asset-pipeline";
 import type { AssetImportRepository } from "@mystcrag/database";
 import {
   APPROVED_ASSET_CACHE_CONTROL,
@@ -23,9 +23,15 @@ export class ProductAssetService {
       const bytes = await this.deps.archiveStore.read(asset.storageKey);
       const byteSize = Number(asset.outputBytes);
       const sha256 = sha256OfBytes(bytes);
+      const expectedKind = {
+        "image/jpeg": "JPEG",
+        "image/png": "PNG",
+        "image/webp": "WEBP"
+      }[asset.outputContentType];
       if (
         !Number.isSafeInteger(byteSize) || byteSize <= 0 || bytes.byteLength !== byteSize ||
-        sha256 !== asset.outputSha256 || asset.assetKey !== `approved:${sha256}`
+        sha256 !== asset.outputSha256 || asset.assetKey !== `approved:${sha256}` ||
+        expectedKind === undefined || detectAssetSourceKind(bytes) !== expectedKind
       ) {
         throw new AssetImportApiError("INTERNAL_ERROR", "Approved asset integrity verification failed.");
       }

@@ -5,8 +5,11 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
+  ASSET_RUNTIME_STARTUP_ERROR_MESSAGE,
+  assetRuntimeNeedsRepositoryRoots,
   createAssetImportRuntime,
   discoverBackendRepositoryRoots,
+  initializeAssetImportRuntime,
   resolveAssetImportEnabled
 } from "./bead-asset-import.runtime.js";
 
@@ -42,6 +45,35 @@ test("disabled import management retains approved public delivery when archive s
     rmSync(archiveRoot, { recursive: true, force: true });
     rmSync(repositoryRoot, { recursive: true, force: true });
   }
+});
+
+test("public-only archive delivery still requires proven repository roots", () => {
+  assert.equal(assetRuntimeNeedsRepositoryRoots({ MYSTCRAG_ASSET_ARCHIVE_ROOT: "/private/archive" }), true);
+  assert.equal(assetRuntimeNeedsRepositoryRoots({ MYSTCRAG_ASSET_IMPORT_ENABLED: "true" }), true);
+  assert.equal(assetRuntimeNeedsRepositoryRoots({}), false);
+});
+
+test("asset runtime startup failure disconnects and exposes only a fixed safe error", async () => {
+  let disconnected = false;
+  await assert.rejects(
+    () => initializeAssetImportRuntime({
+      database: {} as never,
+      env: { MYSTCRAG_ASSET_ARCHIVE_ROOT: "/private/customer/archive" },
+      startDir: "/private/customer/repository",
+      disconnect: async () => { disconnected = true; },
+      discoverRepositoryRoots: () => {
+        throw new Error("cannot inspect /private/customer/repository");
+      }
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, ASSET_RUNTIME_STARTUP_ERROR_MESSAGE);
+      assert.equal(error.message.includes("/private/customer"), false);
+      assert.equal("cause" in error, false);
+      return true;
+    }
+  );
+  assert.equal(disconnected, true);
 });
 
 test("enabled asset import fails closed without its key or archive root", () => {

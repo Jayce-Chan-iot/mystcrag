@@ -87,3 +87,28 @@ Status: REVIEW.
 - New route/service/runtime/test files are under `apps/backend/src/modules/bead-asset-import/` and `apps/backend/src/modules/product-assets/`; composition changes are in `apps/backend/src/app.ts` and `apps/backend/src/index.ts`; configuration/security/dependency updates are `.env.example`, `apps/backend/package.json`, `pnpm-lock.yaml`, and `docs/SECURITY_AND_PRIVACY.md`.
 - Reviewed concern: the E2E database name has an `_undefined` suffix because its first local shell helper did not export a generated suffix before URL construction. It is nevertheless a newly created, dedicated, allowed `mystcrag_*test*` database, was migrated once and retained as required; no connection string or credential was logged. The separately generated full-regression database has a unique suffix.
 - No known implementation blocker remains. No source photographs were imported, no push/deploy/merge was performed, and task registry is now `REVIEW`, not `DONE`.
+
+## Independent review fix round 1 — 2026-09-06
+
+Status: REVIEW.
+
+- Replaced inherited Fastify JSON/text upload parsers inside the isolated upload plugin, and moved strict path/header validation into `onRequest`. Regression tests prove octet-stream, JSON and text media types arrive as unchanged `Readable` byte streams, while malformed headers return before reading one source byte or calling the service.
+- Added a server-generated upload-attempt identity to archive enqueue keys. Identical bytes re-uploaded after a terminal Worker attempt now use a distinct durable operation key, while one service call retains one stable key.
+- Made repository-root discovery mandatory whenever either the admin importer or approved-public archive delivery creates an `ArchiveStore`; the rollout flag controls only the management surface.
+- Added a safe runtime initialization boundary. Archive discovery/configuration failures disconnect the database and expose only the fixed `Asset archive runtime configuration failed.` message without original error, cause, credential or configured path.
+- Public approved delivery now detects the actual JPEG/PNG/WEBP byte signature and requires it to match the persisted MIME type in addition to length, digest and content-addressed key checks.
+- During the acceptance audit, found and closed the controlling API's ARCHIVED re-PUT requirement through the separately registered and independently reviewed `TASK-ASSET-DB-004`. Backend now streams and hashes an already-archived replay, returns its existing verified archive metadata only when the actual bytes match, and performs no staging, enqueue or reservation cleanup mutation; different bytes return `409 ARCHIVE_CONFLICT`.
+- Resolved the review's Minor writable-scope observation by explicitly registering `apps/backend/src/app.test.ts` and this exact report path before the fix-round commit.
+
+### Red/green and verification evidence
+
+- Upload parser regression: initial focused route run failed on `application/json` with `400`; after the isolated parser/onRequest fix, route suite passed 6/6 including zero body reads for malformed headers.
+- Upload-attempt identity regression: initial service run failed because both same-byte attempts reused `asset-upload-551653...`; after the fix, service suite passed with distinct keys.
+- Runtime tests initially failed because the new safe/root-discovery exports were absent; after implementation, runtime suite passed 8/8.
+- MIME regression initially failed with “Missing expected rejection”; after actual-byte detection, product service suite passed 4/4.
+- ARCHIVED replay Backend test initially failed through the staging path; after `TASK-ASSET-DB-004` integration and the streaming replay branch, it passed with zero mutating calls and a mismatched no-header replay returning `ARCHIVE_CONFLICT`.
+- Focused asset Backend suites: 33 passed, 1 environment-gated E2E skipped, 0 failed.
+- Full Backend suite: 210 passed, 3 expected environment-gated skips, 0 failed.
+- Fresh PostgreSQL Backend E2E: all 15 migrations applied to `mystcrag_assetbe001_fix1_test_20260906`; full upload → archive → same-SHA immutable replay → grouping → processing → review → curation → publication → public delivery scenario passed 1/1.
+- `TASK-ASSET-DB-004`: focused unit 2/2, database typecheck, fresh PostgreSQL full database 235/235, `pnpm validate` 17/17 phases plus architecture 20/20; independent review found no Critical/Important and marked Ready to merge.
+- `git diff --check` passed. No push or deployment was performed.

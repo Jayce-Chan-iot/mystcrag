@@ -94,3 +94,29 @@ test("invalid persisted public content type is an internal integrity failure, no
     return true;
   });
 });
+
+test("approved delivery rejects stored bytes whose signature disagrees with the persisted MIME type", async () => {
+  const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x00, 0x00]);
+  const jpegSha = sha256OfBytes(jpegBytes);
+  const service = new ProductAssetService({
+    repository: {
+      findApprovedPublicAsset: async () => ({
+        assetKey: `approved:${jpegSha}`,
+        outputSha256: jpegSha,
+        storageProvider: "local",
+        storageKey: "imports/session-1/processed/group-1/v1/mislabeled.webp",
+        outputContentType: "image/webp",
+        outputBytes: BigInt(jpegBytes.byteLength),
+        widthPx: 1,
+        heightPx: 1
+      })
+    } as never,
+    archiveStore: { read: async () => jpegBytes } as never
+  });
+
+  await assert.rejects(() => service.resolve(`approved:${jpegSha}`), (error: unknown) => {
+    assert.ok(error instanceof AssetImportApiError);
+    assert.equal(error.transportCode, "INTERNAL_ERROR");
+    return true;
+  });
+});

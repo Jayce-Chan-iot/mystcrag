@@ -27,9 +27,8 @@ import {
 import { createTarotQuestionEncryptionFromEnvironment } from "./modules/tarot/tarot-question-encryption.js";
 import { fileURLToPath } from "node:url";
 import {
-  createAssetImportRuntime,
-  discoverBackendRepositoryRoots,
-  resolveAssetImportEnabled
+  ASSET_RUNTIME_STARTUP_ERROR_MESSAGE,
+  initializeAssetImportRuntime
 } from "./modules/bead-asset-import/bead-asset-import.runtime.js";
 
 const defaultPort = 4000;
@@ -40,13 +39,18 @@ const accessTokenVerifier = createAccessTokenVerifierFromEnvironment();
 const tarotQuestionEncryption = createTarotQuestionEncryptionFromEnvironment(process.env);
 const database = createPrismaClient();
 await database.$connect();
-const assetRuntime = createAssetImportRuntime({
-  database,
-  env: process.env,
-  repositoryRoots: resolveAssetImportEnabled(process.env.MYSTCRAG_ASSET_IMPORT_ENABLED)
-    ? discoverBackendRepositoryRoots(fileURLToPath(new URL("../../..", import.meta.url)))
-    : []
-});
+let assetRuntime;
+try {
+  assetRuntime = await initializeAssetImportRuntime({
+    database,
+    env: process.env,
+    startDir: fileURLToPath(new URL("../../..", import.meta.url)),
+    disconnect: () => database.$disconnect()
+  });
+} catch {
+  console.error(ASSET_RUNTIME_STARTUP_ERROR_MESSAGE);
+  process.exit(1);
+}
 const externalIdentities = new ExternalIdentityRepository(database);
 const authProvider = new AuthenticatedActorProvider({
   provider: accessTokenVerifier,
