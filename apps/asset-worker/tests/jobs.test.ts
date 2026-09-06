@@ -84,6 +84,7 @@ function makeStore(): { store: ArchiveStore; cleanup: () => void } {
 }
 
 const SESSION = "session-jobs-test";
+const PROCESS_GROUP_OUTPUT_KEY = `imports/${SESSION}/processed/group-1/v1/bead-512.webp`;
 
 const ARCHIVE_FILE_PAYLOAD = {
   fileId: "file-1",
@@ -94,6 +95,7 @@ const ARCHIVE_FILE_PAYLOAD = {
 const PROCESS_GROUP_PAYLOAD_BASE = {
   groupId: "group-1",
   processingVersion: 1,
+  outputStorageKey: PROCESS_GROUP_OUTPUT_KEY,
   files: [] as Array<{ fileId: string; archiveKey: string; sha256: string }>
 };
 
@@ -122,6 +124,20 @@ test("job payload contracts reject malformed payloads", () => {
   );
 
   assert.equal(ProcessGroupJobPayloadSchema.safeParse({ ...PROCESS_GROUP_PAYLOAD_BASE }).success, false);
+  assert.equal(
+    ProcessGroupJobPayloadSchema.safeParse({
+      ...PROCESS_GROUP_PAYLOAD_BASE,
+      primaryFileId: "file-1",
+      files: [{
+        fileId: "file-1",
+        archiveKey: `imports/${SESSION}/raw/${"a".repeat(64)}.jpg`,
+        sha256: "a".repeat(64)
+      }],
+      settings: { maskThreshold: 0.25, edgeFeatherPx: 0 }
+    }).success,
+    true,
+    "the Worker boundary must accept the database-owned PROCESS_GROUP additions"
+  );
   assert.equal(
     ProcessGroupJobPayloadSchema.safeParse({
       ...PROCESS_GROUP_PAYLOAD_BASE,
@@ -392,10 +408,15 @@ function archiveFileJob(payload: unknown): ClaimedAssetJob {
 
 test("ARCHIVE_FILE composition removes staging only after the job result commits", async () => {
   const { store, cleanup } = makeStore();
-  const recorded: Array<{ fileId: string; sha256: string; archiveKey: string }> = [];
+  const recorded: Array<{
+    fileId: string;
+    sha256: string;
+    archiveKey: string;
+    options: unknown;
+  }> = [];
   const repository = {
-    recordUploadedFile: async (fileId: string, sha256: string, archiveKey: string) => {
-      recorded.push({ fileId, sha256, archiveKey });
+    recordUploadedFile: async (fileId: string, sha256: string, archiveKey: string, options: unknown) => {
+      recorded.push({ fileId, sha256, archiveKey, options });
       return { fileId };
     }
   };
@@ -412,6 +433,11 @@ test("ARCHIVE_FILE composition removes staging only after the job result commits
     // staging entry must survive until the runtime commits the result.
     assert.equal(recorded.length, 1);
     assert.equal(recorded[0]!.archiveKey, `imports/${SESSION}/raw/${sha256}.png`);
+    assert.deepEqual(recorded[0]!.options, {
+      storageProvider: "local-fs",
+      jobId: job.jobId,
+      lease: job.lease
+    });
     assert.equal(sha256OfBytes(await store.read(staging.archiveKey)), sha256);
 
     assert.ok(outcome.afterCommit, "the composition provides the post-commit cleanup");
@@ -526,6 +552,7 @@ test("a lost lease stops PROCESS_GROUP before it writes processed outputs", asyn
       payload: {
         groupId: "group-1",
         processingVersion: 1,
+        outputStorageKey: PROCESS_GROUP_OUTPUT_KEY,
         primaryFileId: "file-1",
         files: [{ fileId: "file-1", archiveKey, sha256 }]
       },
@@ -660,7 +687,7 @@ test("handleProcessGroup produces a MAIN output with QC evidence and lands both 
     assert.equal(result.output.widthPx, 512);
     assert.equal(result.output.heightPx, 512);
     assert.equal(result.output.sourceFileId, "file-1");
-    assert.match(result.output.storageKey, /\/bead-512\.webp$/);
+    assert.equal(result.output.storageKey, PROCESS_GROUP_OUTPUT_KEY);
     assert.equal(result.output.processorVersion, "faithful-v1");
     assert.ok(Array.isArray(result.qc.checks));
     assert.equal(typeof result.qc.passed, "boolean");
@@ -678,6 +705,30 @@ test("handleProcessGroup produces a MAIN output with QC evidence and lands both 
     const thumbMetadata = await sharp(thumbBytes).metadata();
     assert.equal(thumbMetadata.format, "webp");
     assert.equal(thumbMetadata.width, 256);
+  } finally {
+    cleanup();
+  }
+});
+
+test("handleProcessGroup maps bounded reprocess settings into deterministic processor options", async () => {
+  const { store, cleanup } = makeStore();
+  try {
+    const bytes = await renderPng(beadSceneSvg("#20b2aa"));
+    const sha256 = sha256OfBytes(bytes);
+    const archiveKey = (
+      await store.putOriginal({ sessionId: SESSION, bytes, sha256, extension: "png" })
+    ).archiveKey;
+
+    const result = await handleProcessGroup(store, {
+      ...PROCESS_GROUP_PAYLOAD_BASE,
+      primaryFileId: "file-1",
+      files: [{ fileId: "file-1", archiveKey, sha256 }],
+      settings: { maskThreshold: 0.25, edgeFeatherPx: 0 }
+    });
+    const options = (result.output.parameters as { options: Record<string, unknown> }).options;
+
+    assert.equal(options.backgroundTolerance, 15);
+    assert.equal(options.maskFeatherSigma, 0);
   } finally {
     cleanup();
   }

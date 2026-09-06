@@ -77,7 +77,7 @@ TASK-ASSET-WORKER-001 的模块接口、存储布局、配置与交付记录。�
 { "fileId": "<asset_source_files.id>", "stagingKey": "imports/<session>/staging/<uuid>", "sha256": "<64-hex>" }
 ```
 
-流程:payload 校验(staging key 严格为 `imports/<job.sessionId>/staging/<uuid>`,§5.4)→ 从 staging 读字节并校验 SHA-256 → 魔数检测 → `putOriginal` → `recordUploadedFile`(业务写入:ARCHIVED/SKIPPED_DUPLICATE + session 计数)→ `completeJob({ kind, sha256, archiveKey, storageProvider: "local-fs" })` → **提交成功后**才执行 `removeStaging`(`afterCommit` 钩子)。
+流程:payload 校验(staging key 严格为 `imports/<job.sessionId>/staging/<uuid>`,§5.4)→ 从 staging 读字节并校验 SHA-256 → 魔数检测 → `putOriginal` → `recordUploadedFile`(携带当前 `jobId + workerId + leaseToken`,由数据库核对任务 payload 的 file/session/SHA 与未过期租约后写入 ARCHIVED/SKIPPED_DUPLICATE 及 session 计数)→ `completeJob({ kind, sha256, archiveKey, storageProvider: "local-fs" })` → **提交成功后**才执行 `removeStaging`(`afterCommit` 钩子)。
 
 staging 清理与恢复顺序(§6):删除只发生在完成提交成功之后;提交被拒(租约冲突或其他错误)不删除;清理失败只记录错误并留下可回收的 staging 条目,不把已完成的任务改回失败。
 
@@ -87,15 +87,22 @@ staging 清理与恢复顺序(§6):删除只发生在完成提交成功之后;�
 { "files": [{ "fileId", "clientFileId", "relativePath", "sha256", "archiveKey", "byteSize", "lastModifiedMs", "kind" }] }
 ```
 
-流程:逐个 `verifiedRead` 原片 → dHash + 颜色直方图 → `suggestGroups`(保守阈值)→ `completeJob({ kind, groups: [...] })`,groups 含成员、建议主图与相似度证据。
+流程:逐个 `verifiedRead` 原片 → dHash + 颜色直方图 → `suggestGroups`(保守阈值)→ `completeJob({ kind, groups: [...] })`,groups 含成员、建议主图与相似度证据。数据库在同一完成事务中核对结果完整覆盖当前唯一归档文件,再物化 `bead_image_groups` 与文件归属,会话进入 `NEEDS_REVIEW`;Worker 自身不执行人工命名或确认。
 
 ### 5.3 PROCESS_GROUP
 
 ```jsonc
-{ "groupId": "<group>", "processingVersion": 1, "files": [{ "fileId", "archiveKey", "sha256" }] }
+{
+  "groupId": "<group>",
+  "processingVersion": 1,
+  "primaryFileId": "<human-confirmed-raster-file>",
+  "files": [{ "fileId", "archiveKey", "sha256" }],
+  "outputStorageKey": "imports/<session>/processed/<group>/v1/bead-512.webp",
+  "settings": { "maskThreshold": 0.25, "edgeFeatherPx": 0 }
+}
 ```
 
-流程:取组内已归档源图(优先非 ARW)→ `processBeadImage` → `putProcessed`(主图+缩略图)→ `runQualityChecks` → `completeJob({ kind, processingVersion, output, qc })`。仓储在该事务内创建 `processed_assets` 行:QC 通过仅 `QC_PENDING`,usage 权限全部中性,绝不自动 APPROVE/发布。
+`settings` 可省略;提供时沿用共享 Contract 边界:`maskThreshold` 为 0–1、`edgeFeatherPx` 为 0–8。Worker 将前者确定性映射为内部 `backgroundTolerance = maskThreshold * 60`,后者映射为 `maskFeatherSigma`;0 羽化合法且不会调用 Sharp 的 `blur(0)`。流程:只取人工确认的 `primaryFileId`(不按数组顺序猜图;ARW 仅归档不可作为处理主图)→ `processBeadImage` → 严格写入数据库预留的 `outputStorageKey` 及同版本缩略图 → `runQualityChecks` → `completeJob({ kind, processingVersion, output, qc })`。仓储在该事务内创建 `processed_assets` 行:QC 通过仅 `QC_PENDING`,usage 权限全部中性,绝不自动 APPROVE/发布。
 
 ### 5.4 payload 会话与分组隔离(先于任何存储访问)
 
@@ -103,30 +110,28 @@ staging 清理与恢复顺序(§6):删除只发生在完成提交成功之后;�
 
 - ARCHIVE_FILE:`stagingKey` 必须严格匹配 `^imports/<sessionId>/staging/<uuid4>$`,且 `<sessionId>` 必须等于 `job.sessionId`(语法不符或属于其他会话均拒绝)。
 - GROUP_SESSION:每个 `files[i].archiveKey` 必须严格匹配 `^imports/<sessionId>/raw/<64-hex>.(arw|jpeg|jpg|png|webp)$` 且 sessionId 等于 `job.sessionId`,并做跨字段一致性:key 内摘要 === `files[i].sha256`,key 扩展名与声明 kind 对应(arw→ARW、jpg/jpeg→JPEG、png→PNG、webp→WEBP)。逐条校验,不只检查首条。
-- PROCESS_GROUP:先校验 `payload.groupId === job.groupId`(防止输出写入错误 group 路径),再逐条校验每个 `files[i].archiveKey` 的语法、session 归属与 key 内摘要 === `files[i].sha256`。
+- PROCESS_GROUP:先校验 `payload.groupId === job.groupId`(防止输出写入错误 group 路径),再要求 `outputStorageKey` **精确等于** `imports/<job.sessionId>/processed/<payload.groupId>/v<payload.processingVersion>/bead-512.webp`;随后逐条校验每个 `files[i].archiveKey` 的语法、session 归属与 key 内摘要 === `files[i].sha256`,并校验 `primaryFileId` 必须是当前文件列表中的非 ARW 成员。可选 `settings` 在访问存储前按共享 Contract 的数值边界校验。
 - 任何跨会话文件都无法进入 GROUP_SESSION/PROCESS_GROUP 的读取或输出路径。
-
-`fileId` 与 `job.sessionId` 的归属一致性是已知接口缺口 G5(§7),由 Task 4 在组装 payload 时保证。
 
 ## 6. 租约、恢复与幂等语义
 
 - 领取:`claimNextJob` 使用 `FOR UPDATE SKIP LOCKED`,两个 Worker 不会领到同一行;RUNNING 且租约过期的任务可被重领(崩溃 Worker 不阻塞队列)。
 - 隔离:每次领取生成新 `leaseToken`;心跳、完成、失败全部经 `jobId + RUNNING + workerId + leaseToken + 未过期` 的条件更新(Compare-And-Set),过期租约的提交整体回滚并抛 `CONFLICT`。
 - 心跳:处理期间按间隔续租;心跳失败(返回 false 或抛错)立即停止处理并放弃该任务,不提交任何结果。
-- 崩溃窗口(ARCHIVE_FILE):staging 删除只作为 `afterCommit` 钩子在 `completeJob` 成功提交之后执行。归档落盘后、提交前崩溃时 staging 保留,重领任务用同一 staging 恢复为 COMPLETED(`putOriginal` 幂等复用已归档原片,`recordUploadedFile` 对已 ARCHIVED 同哈希行为幂等,session 计数不重复)。`completeJob` 因非租约原因被拒时记 `COMPLETION_REJECTED`(可重试)重新入队,staging 同样保留。租约被新 token 接管后,旧持有者提交得 `CONFLICT` 且不执行清理;清理失败仅记录错误,不把已完成任务改回失败(最多遗留可回收的 staging 条目)。
+- 崩溃窗口(ARCHIVE_FILE):staging 删除只作为 `afterCommit` 钩子在 `completeJob` 成功提交之后执行。归档落盘后、提交前崩溃时 staging 保留,重领任务用同一 staging 恢复为 COMPLETED(`putOriginal` 幂等复用已归档原片,`recordUploadedFile` 对已 ARCHIVED 同哈希行为幂等,session 计数不重复)。每次 `recordUploadedFile` 都携带当前领取的 `jobId + lease`,数据库以 payload 证据核验 file/session/SHA,旧租约不能提交归档状态。`completeJob` 因非租约原因被拒时记 `COMPLETION_REJECTED`(可重试)重新入队,staging 同样保留。租约被新 token 接管后,旧持有者提交得 `CONFLICT` 且不执行清理;清理失败仅记录错误,不把已完成任务改回失败(最多遗留可回收的 staging 条目)。
 - SIGTERM:停止领取新任务,等待当前任务完成或超过宽限;超时直接退出,租约到期后由其他 Worker 重领,不无限持有未过期租约。
 - 重试:`failJob` 递增 `retryCount`,超过 `maxRetries` 转 `FAILED`;瞬态错误(存储读写失败)带退避 `retryAt`,确定性错误(payload 无效、解码失败、主体缺失)不重试风暴。重试任务重新领取时 `putProcessed` 对同 key 同哈希输出幂等复用,不产生重复内容。
 - 权限边界:Worker 只上报输出与 QC;不调用 `reviewProcessedAsset`、`publishGroup`,不写使用权限/公开 key/APPROVED。
 
-## 7. 接口缺口(预检结论,报告 SOL,不在本任务内补洞)
+## 7. 历史接口缺口与当前结论
 
 | 编号 | 缺口 | 处置 |
 | --- | --- | --- |
-| G1 | `@mystcrag/database` 无公开方法读取 session/group 的源文件清单(含 `archiveKey`/`sha256`/`groupId`) | Worker payload 契约承载输入(§5),由 Task 4 后台组装;文档已说明组装责任 |
-| G2 | `completeJob(GROUP_SESSION)` 仅记录 result,不写 `bead_image_groups`/`asset_source_files.group_id` | 设计如此:分组建议作为证据供人工审核流程消费;Worker 不覆盖人工分组 |
-| G3 | 无公开任务创建方法(`asset_processing_jobs` 行) | Task 4 职责;本任务联调测试用 Prisma fixture 代行创建,仅测试支撑,运行时无直连 |
+| G1 | `@mystcrag/database` 无公开方法读取 session/group 的源文件清单(含 `archiveKey`/`sha256`/`groupId`) | **已由 TASK-ASSET-DB-002 关闭**:`startGrouping`/`startProcessing` 在数据库事务内读取权威文件行并构造任务 payload,后台不再自行拼接 |
+| G2 | `completeJob(GROUP_SESSION)` 仅记录 result,不写 `bead_image_groups`/`asset_source_files.group_id` | **已由 TASK-ASSET-DB-002 关闭**:完成事务核对覆盖集合后物化建议分组与文件归属,会话进入 `NEEDS_REVIEW` |
+| G3 | 无公开任务创建方法(`asset_processing_jobs` 行) | **已由 TASK-ASSET-DB-002 关闭**:`enqueueArchiveFile`、`startGrouping`、`startProcessing`、`reprocessGroup` 提供受状态机与幂等账本保护的任务创建入口 |
 | G4 | `completeJob(PROCESS_GROUP)` 的 result 仅接受单个 output | 主图(MAIN)上报建 `processed_assets` 行;缩略图落盘为 `thumb-256.webp` 但不上报,待后续扩展点 |
-| G5 | `@mystcrag/database` 公开 API 无法证明 payload 中的 `fileId` 属于 `job.sessionId`(`recordUploadedFile` 只接受 fileId;无按 session 过滤的文件查询)。Worker 已拒绝所有跨会话的 archiveKey/stagingKey(§5.4),但 `fileId` 的归属只能由组装方保证 | **未完全解决,登记为缺口**。Task 4 组装 payload 时必须只放入该 session 名下的 fileId(经 G1 的清单查询或创建时上下文);建议后续为 `recordUploadedFile`/`completeJob` 增加 `file.sessionId === job.sessionId` 的服务端校验(需数据库任务承接,本任务不得改库) |
+| G5 | `recordUploadedFile` 无法证明 payload 中的 `fileId` 属于 `job.sessionId` | **已由 TASK-ASSET-DB-002 + TASK-ASSET-WORKER-002 关闭**:数据库按 `jobId + 未过期 lease` 绑定并核验任务类型、payload fileId、sessionId、SHA 与 raw key;Worker 现传入领取任务的精确上下文 |
 
 ## 8. 分组与 QC 阈值及依据
 
@@ -451,3 +456,20 @@ DATABASE_URL=… MYSTCRAG_ASSET_ARCHIVE_ROOT=/archive/outside-repo \
 任何来源异常、写入异常、长度不符、摘要复核失败或落盘失败都会进入同一清理路径。`imports/session/tmp/staging` 按层创建，每个新目录同步自身与父目录；`tmp`/`staging` 保持已验证的目录描述符与 `dev/ino` 身份，临时文件以 `O_NOFOLLOW | O_EXCL` 创建并通过同一文件描述符复核摘要。在上述目录拓扑受控前提下，源流耗尽后的链接、身份复核和删除使用不让出事件循环的同步关键区；若清理回调替换了路径，只会在已锁定的 session 下按 inode 找回原目录，不跟随已发现的替换路径删除同名外部文件。成功返回前必须删除临时项并同步原目录；若原 inode 已被移出可证明边界或底层文件系统拒绝删除，方法显式返回 `WRITE_FAILED`，并在可安全证明所有权时撤销业务 staging 链接。后续仍由 `ARCHIVE_FILE` Worker 完成内容识别、原片不可变归档、数据库提交，并且只在任务提交成功后删除 staging。这个入口不改变 raw/processed 不可变规则，也不授予发布或人工批准权限。
 
 2026-09-05 红灯与实现验证：首轮新增 5 组定向用例，旧实现均因 `putStagingStream is not a function` 失败；独立审查后又两轮增加 7 组边界回归，覆盖预检取消、`tmp` 越界、清理失败回滚、取消阶段的 `tmp` 目录替换、`staging` 目录替换、非字符串 session ID 和异常 iterator `return` getter。最终检查包括 chunked hash/落盘、声明大于上限的读取前拒绝与取消、读取中/结束时长度不符、来源异常清理、非法 ID/非安全正整数限制、返回值无路径字段、新建目录逐层持久化、不跟随替换路径的 inode 安全清理。完整 Task 验收以任务注册表最终记录为准。
+
+## 13. TASK-ASSET-WORKER-002：数据库编排兼容
+
+2026-09-06 在 `task/asset-worker-002-orchestration-compat` 完成 TASK-ASSET-DB-002 的下游兼容：PROCESS_GROUP 严格消费数据库预留的 `outputStorageKey`，在任何存储访问前核对 session/group/version/文件名全路径；可选重处理参数沿共享 Contract 进入确定性处理选项，其中 `maskThreshold × 60` 映射到 `backgroundTolerance`、`edgeFeatherPx` 映射到 `maskFeatherSigma`，并支持合法的零羽化；ARCHIVE_FILE 的 `recordUploadedFile` 调用传入领取任务的 `jobId` 与完整 lease，由数据库执行任务 payload 和租约绑定校验。图片处理器新增运行时数值边界，默认输出保持不变。
+
+集成测试不再手工构造与数据库状态机不一致的任务：GROUP_SESSION 通过 `startGrouping` 生成权威 payload，并验证完成后建议分组和文件归属被物化；PROCESS_GROUP 通过 `startProcessing` 和 `reprocessGroup` 验证 v1→v2、预留输出 key、人工主图、重处理参数及 `QC_PENDING` 门禁；租约接管由新持有者实际运行 Worker，证明旧持有者不能提交归档状态。
+
+本阶段真实执行结果：
+
+| 检查 | 结果 |
+| --- | --- |
+| Pipeline 完整测试 | 134/134 通过，0 fail，0 skipped |
+| Worker 无数据库测试 | 111 tests：110 通过，1 个真库 E2E 按环境门禁跳过，0 fail |
+| Worker 真库 E2E | 全新空库 `mystcrag_assetworker002_fix4_test_20260906` 应用 15 个迁移；12/12 通过，0 fail，0 skipped |
+| 数据库完整测试 | 全新空库 `mystcrag_assetworker002_dbtest_20260906` 应用 15 个迁移；222/222 通过，0 fail，0 skipped |
+| `pnpm validate` | lint/typecheck/test/build 各 17/17；架构 20/20；全部退出码 0 |
+| 变更边界 | 仅 Worker、image processor、对应测试、本文件及任务注册精确行；无数据库/Schema/迁移、共享 Contract、Backend、Frontend、原始珠子照片或生成资源改动；未推送、未部署 |

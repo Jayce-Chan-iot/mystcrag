@@ -67,6 +67,21 @@ export async function verifyRasterFullyDecodable(
   return { ok: true, format };
 }
 
+export type ProcessingOptions = {
+  workingMaxEdge: number;
+  fullResMaxEdge: number;
+  backgroundTolerance: number;
+  shadowMaxSaturation: number;
+  shadowMinLuminanceRatio: number;
+  whiteBalanceMaxGain: number;
+  contrastSlope: number;
+  contrastIntercept: number;
+  sharpenSigma: number;
+  maskFeatherSigma: number;
+  webpQuality: number;
+  thumbWebpQuality: number;
+};
+
 export const DEFAULT_PROCESSING_OPTIONS = {
   workingMaxEdge: 1024,
   fullResMaxEdge: 4096,
@@ -80,9 +95,7 @@ export const DEFAULT_PROCESSING_OPTIONS = {
   maskFeatherSigma: 1.2,
   webpQuality: 90,
   thumbWebpQuality: 85
-} as const;
-
-export type ProcessingOptions = typeof DEFAULT_PROCESSING_OPTIONS;
+} as const satisfies ProcessingOptions;
 
 export type ProcessedVariant = {
   fileName: "bead-512.webp" | "thumb-256.webp";
@@ -136,6 +149,8 @@ export async function processBeadImage(input: {
   const options: ProcessingOptions = { ...DEFAULT_PROCESSING_OPTIONS, ...input.options };
   assertPositiveInt(options.workingMaxEdge, "workingMaxEdge");
   assertPositiveInt(options.fullResMaxEdge, "fullResMaxEdge");
+  assertFiniteRange(options.backgroundTolerance, 0, 60, "backgroundTolerance");
+  assertFiniteRange(options.maskFeatherSigma, 0, 8, "maskFeatherSigma");
 
   const bytes = input.bytes;
   if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) {
@@ -678,11 +693,12 @@ async function renderSubjectMask(
   }
   // resize() expands the single-band mask to a 3-band sRGB buffer; squeeze
   // it back to one band so joinChannel receives true alpha samples.
-  const blurred = await sharp(mask, { raw: { width: bbox.width, height: bbox.height, channels: 1 } })
-    .resize(outWidth, outHeight, { fit: "fill", kernel: "mitchell" })
-    .blur(options.maskFeatherSigma)
-    .raw()
-    .toBuffer({ resolveWithObject: true });
+  let maskPipeline = sharp(mask, { raw: { width: bbox.width, height: bbox.height, channels: 1 } })
+    .resize(outWidth, outHeight, { fit: "fill", kernel: "mitchell" });
+  if (options.maskFeatherSigma > 0) {
+    maskPipeline = maskPipeline.blur(options.maskFeatherSigma);
+  }
+  const blurred = await maskPipeline.raw().toBuffer({ resolveWithObject: true });
   const single = Buffer.alloc(outWidth * outHeight);
   for (let index = 0; index < single.length; index += 1) {
     single[index] = blurred.data[index * blurred.info.channels] ?? 0;
@@ -707,6 +723,15 @@ function median(values: readonly number[]): number {
   const sorted = [...values].sort((left, right) => left - right);
   const middle = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0 ? (sorted[middle - 1]! + sorted[middle]!) / 2 : sorted[middle]!;
+}
+
+function assertFiniteRange(value: number, minimum: number, maximum: number, field: string): void {
+  if (!Number.isFinite(value) || value < minimum || value > maximum) {
+    throw new ImageProcessorError(
+      "DECODE_FAILED",
+      `${field} must be a finite number between ${minimum} and ${maximum}`
+    );
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -15,6 +15,11 @@ const FOREIGN_SESSION = "session-attacker";
 const UUID = "00000000-0000-4000-8000-000000000001";
 const SHA_A = "a".repeat(64);
 const SHA_B = "b".repeat(64);
+const PROCESS_GROUP_PAYLOAD_BASE = {
+  groupId: "group-1",
+  processingVersion: 1,
+  outputStorageKey: `imports/${SESSION}/processed/group-1/v1/bead-512.webp`
+};
 
 /**
  * A store that fails loudly on every interaction. Every malicious payload
@@ -188,7 +193,7 @@ test("PROCESS_GROUP rejects a payload groupId that does not match the job's grou
         job({
           jobType: "PROCESS_GROUP",
           groupId: "group-1",
-          payload: { groupId: "group-evil", processingVersion: 1, primaryFileId: "file-1", files }
+          payload: { ...PROCESS_GROUP_PAYLOAD_BASE, groupId: "group-evil", primaryFileId: "file-1", files }
         })
       ),
     "payload group differs from the job's group"
@@ -200,11 +205,64 @@ test("PROCESS_GROUP rejects a payload groupId that does not match the job's grou
         job({
           jobType: "PROCESS_GROUP",
           groupId: null,
-          payload: { groupId: "group-1", processingVersion: 1, primaryFileId: "file-1", files }
+          payload: { ...PROCESS_GROUP_PAYLOAD_BASE, primaryFileId: "file-1", files }
         })
       ),
     "job without a group id"
   );
+});
+
+test("PROCESS_GROUP accepts its exact reserved output key and bounded reprocess settings", async () => {
+  const handlers = makeHandlers();
+  const files = [{ fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_A}.jpg`, sha256: SHA_A }];
+  await assert.rejects(
+    handlers.PROCESS_GROUP(
+      job({
+        jobType: "PROCESS_GROUP",
+        groupId: "group-1",
+        payload: {
+          groupId: "group-1",
+          processingVersion: 1,
+          primaryFileId: "file-1",
+          files,
+          outputStorageKey: `imports/${SESSION}/processed/group-1/v1/bead-512.webp`,
+          settings: { maskThreshold: 0.25, edgeFeatherPx: 0 }
+        }
+      })
+    ),
+    /VERIFIED_READ_WAS_CALLED/,
+    "a valid database-owned payload must reach the first storage read"
+  );
+});
+
+test("PROCESS_GROUP rejects every non-canonical reserved output key before storage access", async () => {
+  const handlers = makeHandlers();
+  const files = [{ fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_A}.jpg`, sha256: SHA_A }];
+  const invalidKeys = [
+    `imports/${FOREIGN_SESSION}/processed/group-1/v1/bead-512.webp`,
+    `imports/${SESSION}/processed/group-2/v1/bead-512.webp`,
+    `imports/${SESSION}/processed/group-1/v2/bead-512.webp`,
+    `imports/${SESSION}/processed/group-1/v1/thumb-256.webp`,
+    `imports/${SESSION}/processed/group-1/v1/../bead-512.webp`
+  ];
+
+  for (const outputStorageKey of invalidKeys) {
+    await assertRejectedBeforeStoreAccess(
+      () => handlers.PROCESS_GROUP(
+        job({
+          jobType: "PROCESS_GROUP",
+          groupId: "group-1",
+          payload: {
+            ...PROCESS_GROUP_PAYLOAD_BASE,
+            primaryFileId: "file-1",
+            files,
+            outputStorageKey
+          }
+        })
+      ),
+      `PROCESS_GROUP reserved output key ${outputStorageKey}`
+    );
+  }
 });
 
 test("PROCESS_GROUP rejects later file entries from another session or a non-raw area", async () => {
@@ -224,7 +282,7 @@ test("PROCESS_GROUP rejects later file entries from another session or a non-raw
           job({
             jobType: "PROCESS_GROUP",
             groupId: "group-1",
-            payload: { groupId: "group-1", processingVersion: 1, primaryFileId: "file-1", files: [goodFile, evilFile] }
+            payload: { ...PROCESS_GROUP_PAYLOAD_BASE, primaryFileId: "file-1", files: [goodFile, evilFile] }
           })
         ),
       `PROCESS_GROUP archive key ${archiveKey}`
@@ -313,8 +371,7 @@ test("PROCESS_GROUP rejects an archive key whose digest contradicts the entry's 
           jobType: "PROCESS_GROUP",
           groupId: "group-1",
           payload: {
-            groupId: "group-1",
-            processingVersion: 1,
+            ...PROCESS_GROUP_PAYLOAD_BASE,
             primaryFileId: "file-1",
             files: [{ fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_B}.jpg`, sha256: SHA_A }]
           }
@@ -386,7 +443,7 @@ test("PROCESS_GROUP rejects more than the shared 500-file limit before any store
         job({
           jobType: "PROCESS_GROUP",
           groupId: "group-1",
-          payload: { groupId: "group-1", processingVersion: 1, primaryFileId: "file-0", files }
+          payload: { ...PROCESS_GROUP_PAYLOAD_BASE, primaryFileId: "file-0", files }
         })
       ),
     "PROCESS_GROUP over the shared 500-file limit"
@@ -454,8 +511,7 @@ test("PROCESS_GROUP rejects a duplicate fileId but accepts content-addressed dup
           jobType: "PROCESS_GROUP",
           groupId: "group-1",
           payload: {
-            groupId: "group-1",
-            processingVersion: 1,
+            ...PROCESS_GROUP_PAYLOAD_BASE,
             primaryFileId: "file-1",
             files: [
               { fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_A}.jpg`, sha256: SHA_A },
@@ -472,8 +528,7 @@ test("PROCESS_GROUP rejects a duplicate fileId but accepts content-addressed dup
         jobType: "PROCESS_GROUP",
         groupId: "group-1",
         payload: {
-          groupId: "group-1",
-          processingVersion: 1,
+          ...PROCESS_GROUP_PAYLOAD_BASE,
           primaryFileId: "file-1",
           files: [
             { fileId: "file-1", archiveKey: `imports/${SESSION}/raw/${SHA_A}.jpg`, sha256: SHA_A },
@@ -502,7 +557,7 @@ test("PROCESS_GROUP without a primaryFileId over a group holding a raster is rej
   await assertRejectedBeforeStoreAccess(
     () =>
       handlers.PROCESS_GROUP(
-        job({ jobType: "PROCESS_GROUP", groupId: "group-1", payload: { groupId: "group-1", processingVersion: 1, files } })
+        job({ jobType: "PROCESS_GROUP", groupId: "group-1", payload: { ...PROCESS_GROUP_PAYLOAD_BASE, files } })
       ),
     "PROCESS_GROUP without a primary over a raster group — array order must never pick the source"
   );
@@ -517,7 +572,7 @@ test("PROCESS_GROUP rejects a primaryFileId that is not a member of the group", 
         job({
           jobType: "PROCESS_GROUP",
           groupId: "group-1",
-          payload: { groupId: "group-1", processingVersion: 1, primaryFileId: "file-elsewhere", files }
+          payload: { ...PROCESS_GROUP_PAYLOAD_BASE, primaryFileId: "file-elsewhere", files }
         })
       ),
     "PROCESS_GROUP primaryFileId outside the member set"
@@ -536,7 +591,7 @@ test("PROCESS_GROUP rejects a primaryFileId that points at an ARW original", asy
         job({
           jobType: "PROCESS_GROUP",
           groupId: "group-1",
-          payload: { groupId: "group-1", processingVersion: 1, primaryFileId: "file-arw", files }
+          payload: { ...PROCESS_GROUP_PAYLOAD_BASE, primaryFileId: "file-arw", files }
         })
       ),
     "PROCESS_GROUP primaryFileId pointing at an ARW original"
@@ -551,8 +606,7 @@ test("an ARW-only group without a primaryFileId is structurally legal and fails 
         jobType: "PROCESS_GROUP",
         groupId: "group-1",
         payload: {
-          groupId: "group-1",
-          processingVersion: 1,
+          ...PROCESS_GROUP_PAYLOAD_BASE,
           files: [{ fileId: "file-arw", archiveKey: `imports/${SESSION}/raw/${SHA_B}.arw`, sha256: SHA_B }]
         }
       })
@@ -650,7 +704,7 @@ test("PROCESS_GROUP rejects an unsafe processingVersion before store access", as
           job({
             jobType: "PROCESS_GROUP",
             groupId: "group-1",
-            payload: { groupId: "group-1", processingVersion, primaryFileId: "file-1", files }
+            payload: { ...PROCESS_GROUP_PAYLOAD_BASE, processingVersion, primaryFileId: "file-1", files }
           })
         ),
       `PROCESS_GROUP processingVersion=${processingVersion}`

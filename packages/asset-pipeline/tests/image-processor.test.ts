@@ -142,6 +142,25 @@ test("produces deterministic 512 main and 256 thumb transparent WebP variants", 
   assert.equal(first.parameters.processorVersion, PROCESSOR_VERSION);
 });
 
+test("a zero feather override produces a harder alpha edge than the default mask", async () => {
+  const bytes = await renderSvg(beadSceneSvg({ bead: { color: "#c0392b", cx: 400, cy: 400, r: 300 } }));
+  const defaultMask = await processBeadImage({ bytes });
+  const hardMask = await processBeadImage({
+    bytes,
+    options: { maskFeatherSigma: 0 }
+  });
+
+  assert.notEqual(
+    hardMask.main.sha256,
+    defaultMask.main.sha256,
+    "disabling edge feathering must affect the rendered alpha mask"
+  );
+  assert.equal(
+    (hardMask.parameters.options as { maskFeatherSigma: number }).maskFeatherSigma,
+    0
+  );
+});
+
 test("removes border-connected background and shadows but keeps interior highlights", async () => {
   const bytes = await renderSvg(
     beadSceneSvg({

@@ -194,17 +194,22 @@ test(
         assert.equal(sessionRow.skippedFileCount, 1);
       });
 
-      await t.test("GROUP_SESSION: suggestions are recorded as job evidence without writing bead_image_groups", async () => {
+      await t.test("GROUP_SESSION: suggestions are materialized for human review", async () => {
         const { sessionId, fileIds } = await seedSessionWithFiles("grouping", 3);
-        const identical = await pngBytes("#20b2aa");
-        const identicalSha = sha256OfBytes(identical);
+        const identicalA = await pngBytes("#20b2aa");
+        const identicalB = new Uint8Array(
+          await sharp(identicalA).png({ compressionLevel: 0 }).toBuffer()
+        );
+        const identicalShaA = sha256OfBytes(identicalA);
+        const identicalShaB = sha256OfBytes(identicalB);
+        assert.notEqual(identicalShaA, identicalShaB, "equivalent frames use distinct source bytes");
         const other = await pngBytes("#8a2be2");
         const otherSha = sha256OfBytes(other);
 
         const archiveEntries: Array<{ fileId: string; archiveKey: string; sha256: string; byteSize: number }> = [];
         for (const [index, entry] of [
-          { fileId: fileIds[0]!, bytes: identical, sha256: identicalSha },
-          { fileId: fileIds[1]!, bytes: identical, sha256: identicalSha },
+          { fileId: fileIds[0]!, bytes: identicalA, sha256: identicalShaA },
+          { fileId: fileIds[1]!, bytes: identicalB, sha256: identicalShaB },
           { fileId: fileIds[2]!, bytes: other, sha256: otherSha }
         ].entries()) {
           const archiveKey = (
@@ -221,34 +226,40 @@ test(
             sha256: entry.sha256,
             byteSize: entry.bytes.byteLength
           });
+          await prisma.assetSourceFile.update({
+            where: { id: entry.fileId },
+            data: {
+              state: "ARCHIVED",
+              sha256: entry.sha256,
+              archiveKey,
+              byteSize: entry.bytes.byteLength,
+              storageProvider: "local-fs",
+              archivedAt: new Date()
+            }
+          });
           void index;
         }
 
-        const job = await prisma.assetProcessingJob.create({
+        await prisma.assetImportSession.update({
+          where: { id: sessionId },
           data: {
-            sessionId,
-            jobType: "GROUP_SESSION",
-            state: "QUEUED",
-            payload: {
-              files: archiveEntries.map((entry, index) => ({
-                fileId: entry.fileId,
-                clientFileId: `grouping-cf-${index + 1}`,
-                relativePath: `imports/grouping/bead-${index + 1}.png`,
-                sha256: entry.sha256,
-                archiveKey: entry.archiveKey,
-                byteSize: entry.byteSize,
-                lastModifiedMs: 1_750_000_000_000 + index,
-                kind: "PNG"
-              }))
-            },
-            maxRetries: 3
+            state: "ARCHIVING",
+            archivedFileCount: archiveEntries.length,
+            uploadedBytes: archiveEntries.reduce((total, entry) => total + BigInt(entry.byteSize), 0n),
+            lastVerifiedCheckpoint: "ARCHIVED"
           }
         });
-        const groupsBefore = await prisma.beadImageGroup.count({ where: { sessionId } });
+        const started = await repository.startGrouping(sessionId, {
+          idempotencyKey: `${prefix}-grouping-start`
+        });
+        assert.equal(started.queuedJobCount, 1);
+        assert.equal(await prisma.beadImageGroup.count({ where: { sessionId } }), 0);
 
         assert.equal(await makeWorker().runOnce(), "completed");
 
-        const row = await prisma.assetProcessingJob.findUniqueOrThrow({ where: { id: job.id } });
+        const row = await prisma.assetProcessingJob.findFirstOrThrow({
+          where: { sessionId, jobType: "GROUP_SESSION" }
+        });
         assert.equal(row.state, "COMPLETED");
         const result = row.result as {
           kind: string;
@@ -257,15 +268,23 @@ test(
         assert.equal(result.kind, "GROUP_SESSION");
         assert.ok(result.groups.length >= 2);
         const merged = result.groups.find((group) => group.memberFileIds.length === 2);
-        assert.ok(merged, "identical frames merge into one suggestion");
+        assert.ok(merged, "visually identical frames merge into one suggestion");
         assert.deepEqual(
           merged!.memberFileIds.slice().sort(),
           [fileIds[0]!, fileIds[1]!].sort()
         );
         assert.ok(merged!.similarityEvidence);
-        // The worker never writes grouping business rows (gap G2): suggestions
-        // stay as job evidence for the human review flow.
-        assert.equal(await prisma.beadImageGroup.count({ where: { sessionId } }), groupsBefore);
+        const materializedGroups = await prisma.beadImageGroup.findMany({
+          where: { sessionId },
+          include: { files: true }
+        });
+        assert.equal(materializedGroups.length, result.groups.length);
+        assert.ok(materializedGroups.every((group) => group.state === "SUGGESTED"));
+        assert.ok(materializedGroups.every((group) => group.similarityEvidence !== null));
+        assert.deepEqual(
+          materializedGroups.flatMap((group) => group.files.map((file) => file.id)).sort(),
+          fileIds.slice().sort()
+        );
       });
 
       await t.test("PROCESS_GROUP: QC pass parks the asset in QC_PENDING, never approved, thumb archived", async () => {
@@ -281,23 +300,27 @@ test(
         });
         await prisma.assetSourceFile.update({
           where: { id: fileIds[0]! },
-          data: { groupId: group.id }
-        });
-        await prisma.assetProcessingJob.create({
           data: {
-            sessionId,
-            groupId: group.id,
-            jobType: "PROCESS_GROUP",
-            state: "QUEUED",
-            payload: {
-              groupId: group.id,
-              processingVersion: 1,
-              primaryFileId: fileIds[0]!,
-              files: [{ fileId: fileIds[0]!, archiveKey, sha256 }]
-            },
-            maxRetries: 3
+            group: { connect: { id: group.id } },
+            state: "ARCHIVED",
+            sha256,
+            archiveKey,
+            storageProvider: "local-fs",
+            archivedAt: new Date()
           }
         });
+        await prisma.beadImageGroup.update({
+          where: { id: group.id },
+          data: { primaryFileId: fileIds[0]! }
+        });
+        await prisma.assetImportSession.update({
+          where: { id: sessionId },
+          data: { state: "NEEDS_REVIEW", lastVerifiedCheckpoint: "GROUPED" }
+        });
+        const processing = await repository.startProcessing(sessionId, {
+          idempotencyKey: `${prefix}-processing-start`
+        });
+        assert.equal(processing.queuedJobCount, 1);
 
         assert.equal(await makeWorker().runOnce(), "completed");
 
@@ -322,6 +345,41 @@ test(
 
         const sessionRow = await prisma.assetImportSession.findUniqueOrThrow({ where: { id: sessionId } });
         assert.equal(sessionRow.lastVerifiedCheckpoint, "PROCESSED");
+
+        const reprocess = await repository.reprocessGroup(group.id, {
+          idempotencyKey: `${prefix}-reprocess-settings`,
+          expectedGroupRevision: 1,
+          settings: { maskThreshold: 0.25, edgeFeatherPx: 0 }
+        });
+        assert.equal(reprocess.processingVersion, 2);
+        const queuedReprocess = await prisma.assetProcessingJob.findUniqueOrThrow({
+          where: { id: reprocess.jobId }
+        });
+        assert.deepEqual(
+          queuedReprocess.payload,
+          {
+            groupId: group.id,
+            processingVersion: 2,
+            primaryFileId: fileIds[0]!,
+            files: [{ fileId: fileIds[0]!, archiveKey, sha256 }],
+            outputStorageKey: `imports/${sessionId}/processed/${group.id}/v2/bead-512.webp`,
+            settings: { maskThreshold: 0.25, edgeFeatherPx: 0 }
+          }
+        );
+
+        assert.equal(await makeWorker(`${prefix}-reprocess-worker`).runOnce(), "completed");
+        const reprocessedAsset = await prisma.processedAsset.findFirstOrThrow({
+          where: { groupId: group.id, processingVersion: 2 }
+        });
+        assert.equal(
+          reprocessedAsset.storageKey,
+          `imports/${sessionId}/processed/${group.id}/v2/bead-512.webp`
+        );
+        const parameters = reprocessedAsset.parameters as {
+          options: { backgroundTolerance: number; maskFeatherSigma: number };
+        };
+        assert.equal(parameters.options.backgroundTolerance, 15);
+        assert.equal(parameters.options.maskFeatherSigma, 0);
       });
 
       await t.test("expired leases are reclaimed with a fresh token; the stale worker cannot submit", async () => {
@@ -384,16 +442,12 @@ test(
           false
         );
 
-        const holder = await repository.completeJob(
-          job.id,
-          {
-            kind: "ARCHIVE_FILE",
-            sha256,
-            archiveKey: `imports/${sessionId}/raw/${sha256}.png`,
-            storageProvider: "local-fs"
-          } satisfies CompleteAssetJobResult,
-          freshLease!.lease
+        const freshWorker = makeWorker(freshWorkerId);
+        assert.equal(
+          await freshWorker.processClaimedJobForTest(freshLease!, { submit: true }),
+          "completed"
         );
+        const holder = await prisma.assetProcessingJob.findUniqueOrThrow({ where: { id: job.id } });
         assert.equal(holder.state, "COMPLETED");
       });
 
@@ -462,6 +516,7 @@ test(
             payload: {
               groupId: group.id,
               processingVersion: 1,
+              outputStorageKey: `imports/${sessionId}/processed/${group.id}/v1/bead-512.webp`,
               primaryFileId: fileIds[0]!,
               files: [{ fileId: fileIds[0]!, archiveKey, sha256 }]
             },

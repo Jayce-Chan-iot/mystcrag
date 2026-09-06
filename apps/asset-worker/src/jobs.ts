@@ -14,17 +14,20 @@ import {
   type GroupingCandidate,
   type GroupSimilarityEvidence,
   type GroupSuggestion,
+  type ProcessingOptions,
   type RasterSourceKind
 } from "@mystcrag/asset-pipeline";
 import type {
   AssetJobFailure,
   ClaimedAssetJob,
-  CompleteAssetJobResult
+  CompleteAssetJobResult,
+  RecordUploadedFileContext
 } from "@mystcrag/database";
 import { PersistenceError } from "@mystcrag/database";
 import {
   AssetSourceFileKindSchema,
   normalizeAssetRelativePath,
+  ReprocessSettingsSchema,
   Sha256Schema
 } from "@mystcrag/design-contract";
 import { z } from "zod";
@@ -242,7 +245,9 @@ export const ProcessGroupJobPayloadSchema = z.strictObject({
   // here). Optional only for ARW-only groups, which have no raster to process;
   // parseProcessGroupPayload enforces presence whenever the group holds one.
   primaryFileId: IDENTIFIER.optional(),
-  files: z.array(ProcessGroupJobFileSchema).min(1).max(MAX_JOB_FILES)
+  files: z.array(ProcessGroupJobFileSchema).min(1).max(MAX_JOB_FILES),
+  outputStorageKey: ARCHIVE_KEY,
+  settings: ReprocessSettingsSchema.optional()
 });
 
 export const GroupSessionJobFileSchema = z.strictObject({
@@ -365,6 +370,22 @@ function requireRawKeyForSession(archiveKey: string, sessionId: string, context:
   return parsed;
 }
 
+function requireReservedMainOutputKey(
+  outputStorageKey: string,
+  sessionId: string,
+  groupId: string,
+  processingVersion: number
+): void {
+  const expected = `imports/${sessionId}/processed/${groupId}/v${processingVersion}/bead-512.webp`;
+  if (outputStorageKey !== expected) {
+    throw new JobExecutionError(
+      "PAYLOAD_INVALID",
+      "PROCESS_GROUP outputStorageKey does not match the database-reserved main output destination",
+      false
+    );
+  }
+}
+
 export function parseArchiveFilePayload(job: ClaimedAssetJob): ArchiveFileJobPayload {
   const payload = parsePayload(ArchiveFileJobPayloadSchema, job.payload, "ARCHIVE_FILE");
   requireStagingKeyForSession(payload.stagingKey, job.sessionId);
@@ -441,6 +462,12 @@ export function parseProcessGroupPayload(job: ClaimedAssetJob): ProcessGroupJobP
       false
     );
   }
+  requireReservedMainOutputKey(
+    payload.outputStorageKey,
+    job.sessionId,
+    payload.groupId,
+    payload.processingVersion
+  );
   const fileIds = new Set<string>();
   for (const entry of payload.files) {
     if (fileIds.has(entry.fileId)) {
@@ -756,6 +783,12 @@ export async function handleProcessGroup(
   context: JobRunContext = NEVER_LOST_LEASE
 ): Promise<ProcessGroupJobResult> {
   const sessionId = sessionOfArchiveKey(payload.files[0]?.archiveKey ?? "");
+  requireReservedMainOutputKey(
+    payload.outputStorageKey,
+    sessionId,
+    payload.groupId,
+    payload.processingVersion
+  );
 
   // Only the human-confirmed primary is processed. parseProcessGroupPayload
   // has already proven the primary is a group member with a raster key (or
@@ -825,7 +858,19 @@ export async function handleProcessGroup(
   // it must not start once the lease is known lost.
   context.throwIfLeaseLost();
   try {
-    processed = await processBeadImage({ bytes: chosen.bytes });
+    const options: Partial<ProcessingOptions> = {};
+    if (payload.settings?.maskThreshold !== undefined) {
+      // The deterministic flood-fill uses a 0..60 RGB-distance window;
+      // 0.5 therefore preserves the established default tolerance of 30.
+      options.backgroundTolerance = payload.settings.maskThreshold * 60;
+    }
+    if (payload.settings?.edgeFeatherPx !== undefined) {
+      options.maskFeatherSigma = payload.settings.edgeFeatherPx;
+    }
+    processed = await processBeadImage({
+      bytes: chosen.bytes,
+      ...(Object.keys(options).length === 0 ? {} : { options })
+    });
   } catch (error) {
     if (error instanceof ImageProcessorError) {
       throw new JobExecutionError(error.code, error.message, false, { cause: error });
@@ -850,6 +895,13 @@ export async function handleProcessGroup(
     }
   };
   const mainPut = await putVariant("bead-512.webp", processed.main.bytes);
+  if (mainPut.archiveKey !== payload.outputStorageKey) {
+    throw new JobExecutionError(
+      "ARCHIVE_CONFLICT",
+      "The processed main output did not land at the database-reserved destination",
+      false
+    );
+  }
   await putVariant("thumb-256.webp", processed.thumb.bytes);
 
   let qc;
@@ -902,7 +954,7 @@ export type AssetBusinessRepository = {
     fileId: string,
     sha256: string,
     archiveKey: string,
-    options?: { storageProvider?: string }
+    options: RecordUploadedFileContext
   ): Promise<unknown>;
 };
 
@@ -958,7 +1010,9 @@ export function createJobHandlers(deps: {
         {
           onArchived: async (archived) => {
             await repository.recordUploadedFile(payload.fileId, archived.sha256, archived.archiveKey, {
-              storageProvider: STORAGE_PROVIDER
+              storageProvider: STORAGE_PROVIDER,
+              jobId: job.jobId,
+              lease: job.lease
             });
           }
         },
