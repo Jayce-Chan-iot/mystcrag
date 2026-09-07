@@ -412,7 +412,7 @@ export function CrystalLibraryPage() {
             <article className="flex flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-white transition hover:border-[var(--accent)]/60 hover:shadow-[0_10px_28px_rgb(57_45_67/0.08)]" data-library-card={group.crystalId} key={group.crystalId}>
               <div className="relative grid aspect-square place-items-center bg-[#f5f4f2] p-5 lg:p-6">
                 <span className="block h-[76%] w-[76%]">
-                  <CrystalBeadImage alt={`${group.nameCn}珠子照片`} materialKey={variant.materialKey} priority={index < 5} sizes="(max-width: 1024px) 45vw, 180px" />
+                  <CrystalBeadImage alt={`${group.nameCn}珠子照片`} materialKey={variant.materialKey} textureAssetKey={variant.textureAssetKey} priority={index < 5} sizes="(max-width: 1024px) 45vw, 180px" />
                 </span>
               </div>
               <div className="flex flex-1 flex-col gap-2 p-3 lg:p-4">
@@ -784,7 +784,7 @@ export function CrystalLibraryPage() {
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {sortedBeads.slice(0, PANEL_THUMBNAIL_LIMIT).map((bead) => (
                       <span className="block h-8 w-8" key={bead.componentId}>
-                        <CrystalBeadImage alt="" materialKey={bead.materialKey} sizes="32px" />
+                        <CrystalBeadImage alt="" materialKey={bead.materialKey} textureAssetKey={bead.textureAssetKey} sizes="32px" />
                       </span>
                     ))}
                     {hiddenBeadCount > 0 ? <span className="grid h-8 w-8 place-items-center rounded-full bg-[var(--surface-soft)] text-[0.6rem] text-[var(--muted)]">+{hiddenBeadCount}</span> : null}
@@ -839,7 +839,7 @@ export function CrystalLibraryPage() {
           <div className="flex min-w-0 items-center gap-1">
             {sortedBeads.slice(0, 5).map((bead) => (
               <span className="block h-6 w-6 shrink-0" key={bead.componentId}>
-                <CrystalBeadImage alt="" materialKey={bead.materialKey} sizes="24px" />
+                <CrystalBeadImage alt="" materialKey={bead.materialKey} textureAssetKey={bead.textureAssetKey} sizes="24px" />
               </span>
             ))}
             {sortedBeads.length > 5 ? <span className="text-xs text-[var(--muted)]">…</span> : null}

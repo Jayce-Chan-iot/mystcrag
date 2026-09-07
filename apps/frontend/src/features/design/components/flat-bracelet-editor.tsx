@@ -399,7 +399,7 @@ export function FlatBraceletEditor({
             type="button"
           >
             {isBead ? (
-              <CrystalBeadImage alt="" materialKey={component.materialKey} priority={index < 8} sizes="(max-width: 640px) 16vw, 92px" />
+              <CrystalBeadImage alt="" materialKey={component.materialKey} textureAssetKey={component.textureAssetKey} priority={index < 8} sizes="(max-width: 640px) 16vw, 92px" />
             ) : (
               <Image
                 alt=""

@@ -104,7 +104,7 @@ function BeadThumbnails({ design, limit, beadClass }: { design: PublicDesignV1; 
     <div className="flex items-center gap-1">
       {beads.map((bead) => (
         <span className={`block shrink-0 ${beadClass}`} key={bead.componentId}>
-          <CrystalBeadImage alt="" materialKey={bead.materialKey} sizes="64px" />
+          <CrystalBeadImage alt="" materialKey={bead.materialKey} textureAssetKey={bead.textureAssetKey} sizes="64px" />
         </span>
       ))}
     </div>
@@ -385,7 +385,7 @@ export function ProfilePage() {
         <div className="mt-3 flex flex-wrap gap-2">
           {favorites.slice(0, 8).map((material) => (
             <span className="block h-10 w-10" key={material.beadProductId} title={material.crystalNameCn}>
-              <CrystalBeadImage alt="" materialKey={material.materialKey} sizes="40px" />
+              <CrystalBeadImage alt="" materialKey={material.materialKey} textureAssetKey={material.textureAssetKey} sizes="40px" />
             </span>
           ))}
           {favorites.length > 8 ? <span className="grid h-10 w-10 place-items-center rounded-full bg-[var(--surface-soft)] text-xs text-[var(--muted)]">+{favorites.length - 8}</span> : null}
@@ -479,7 +479,7 @@ export function ProfilePage() {
           {favorites.map((material) => (
             <article className="flex flex-col gap-2 rounded-2xl border border-[var(--border)] bg-white p-3" data-profile-favorite={material.beadProductId} key={material.beadProductId}>
               <div className="grid aspect-square place-items-center rounded-xl bg-[#f5f4f2] p-3">
-                <span className="block h-[80%] w-[80%]"><CrystalBeadImage alt="" materialKey={material.materialKey} sizes="160px" /></span>
+                <span className="block h-[80%] w-[80%]"><CrystalBeadImage alt="" materialKey={material.materialKey} textureAssetKey={material.textureAssetKey} sizes="160px" /></span>
               </div>
               <h3 className="truncate text-sm font-medium">{material.crystalNameCn}</h3>
               <p className="text-xs text-[var(--muted)]">{material.diameterMm}mm · {formatMinorAmount({ amountMinor: material.unitPriceMinor, currency: material.currency, locale })}</p>

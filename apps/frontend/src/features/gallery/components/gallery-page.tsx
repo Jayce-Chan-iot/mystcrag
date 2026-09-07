@@ -49,7 +49,7 @@ function BeadStrip({
     <div className="flex flex-wrap items-center justify-center gap-1.5">
       {visible.map((bead) => (
         <span className={`block ${beadClass}`} key={bead.componentId}>
-          <CrystalBeadImage alt="" materialKey={bead.materialKey} sizes="96px" />
+          <CrystalBeadImage alt="" materialKey={bead.materialKey} textureAssetKey={bead.textureAssetKey} sizes="96px" />
         </span>
       ))}
       {hidden > 0 ? (
@@ -82,7 +82,7 @@ async function exportDesignCard(entry: GalleryEntry): Promise<string> {
 
   const beads = sortedBeads(entry.design).slice(0, 9);
   const images = await Promise.all(
-    beads.map((bead) => loadExportImage(getBeadVisual(bead.materialKey).src))
+    beads.map((bead) => loadExportImage(getBeadVisual(bead.materialKey, bead.textureAssetKey).src))
   );
   const beadSize = 118;
   const gap = 14;

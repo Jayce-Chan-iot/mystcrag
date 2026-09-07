@@ -348,6 +348,7 @@ export function DiyEditor({ designId }: { designId: string }) {
       summary.set(bead.beadProductId, {
         beadProductId: bead.beadProductId,
         materialKey: bead.materialKey,
+        textureAssetKey: bead.textureAssetKey,
         name: material?.crystalNameCn ?? bead.materialKey,
         diameterMm: bead.diameterMm,
         count: (current?.count ?? 0) + 1,
@@ -357,6 +358,7 @@ export function DiyEditor({ designId }: { designId: string }) {
     }, new Map<string, {
       beadProductId: string;
       materialKey: string;
+      textureAssetKey: string;
       name: string;
       diameterMm: number;
       count: number;
@@ -892,7 +894,7 @@ export function DiyEditor({ designId }: { designId: string }) {
             <div className="mt-4 grid grid-cols-3 gap-1.5" data-desktop-catalog-grid="true">
               {materialOptions.slice(0, 15).map((material, index) => (
                 <button aria-label={`加入 ${material.crystalNameCn}`} className="group min-h-[7.5rem] border border-[var(--border)] bg-white px-1.5 py-2 text-center disabled:opacity-55" disabled={isConflict} key={material.beadProductId} onClick={() => addMaterial(material)} type="button">
-                  <span className="mx-auto block h-12 w-12"><CrystalBeadImage alt="" materialKey={material.materialKey} priority={index < 6} sizes="48px" /></span>
+                  <span className="mx-auto block h-12 w-12"><CrystalBeadImage alt="" materialKey={material.materialKey} textureAssetKey={material.textureAssetKey} priority={index < 6} sizes="48px" /></span>
                   <span className="mt-1 block truncate text-[0.68rem] font-medium">{material.crystalNameCn}</span>
                   <span className="mt-1 block text-[0.6rem] text-[var(--muted)]">{material.diameterMm}mm · {formatMinorAmount({ amountMinor: material.unitPriceMinor, currency: design.currency, locale: design.locale })}</span>
                 </button>
@@ -990,14 +992,14 @@ export function DiyEditor({ designId }: { designId: string }) {
                     onClick={() => setSelectedComponentId(bead.componentId)}
                     type="button"
                   >
-                    <CrystalBeadImage alt="" materialKey={bead.materialKey} sizes="42px" />
+                    <CrystalBeadImage alt="" materialKey={bead.materialKey} textureAssetKey={bead.textureAssetKey} sizes="42px" />
                   </button>
                 ))}
               </div>
               {selectedBead ? (
                 <div className="mt-5 flex items-center gap-4 border-t border-[var(--border)]/70 pt-4">
                   <span className="block h-16 w-16 shrink-0">
-                    <CrystalBeadImage alt="" materialKey={selectedBead.materialKey} sizes="64px" />
+                    <CrystalBeadImage alt="" materialKey={selectedBead.materialKey} textureAssetKey={selectedBead.textureAssetKey} sizes="64px" />
                   </span>
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">{selectedMaterial?.crystalNameCn ?? selectedBead.materialKey}</p>
@@ -1074,7 +1076,7 @@ export function DiyEditor({ designId }: { designId: string }) {
                 {designSummary.map((item) => (
                   <div className="grid grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3" key={item.beadProductId}>
                     <span className="block h-10 w-10">
-                      <CrystalBeadImage alt="" materialKey={item.materialKey} sizes="40px" />
+                      <CrystalBeadImage alt="" materialKey={item.materialKey} textureAssetKey={item.textureAssetKey} sizes="40px" />
                     </span>
                     <div className="min-w-0">
                       <p className="truncate text-xs font-medium">{item.name}</p>
@@ -1148,7 +1150,7 @@ export function DiyEditor({ designId }: { designId: string }) {
                   type="button"
                 >
                   <span className="mx-auto block h-14 w-14 transition-transform group-hover:scale-105">
-                    <CrystalBeadImage alt="" materialKey={material.materialKey} priority={index < 6} sizes="56px" />
+                    <CrystalBeadImage alt="" materialKey={material.materialKey} textureAssetKey={material.textureAssetKey} priority={index < 6} sizes="56px" />
                   </span>
                   <span className="mt-1 block truncate text-sm font-medium">{material.crystalNameCn}</span>
                   <span className="mt-1 block text-xs text-[var(--muted)]">{material.diameterMm}mm</span>
@@ -1261,7 +1263,7 @@ export function DiyEditor({ designId }: { designId: string }) {
                   onClick={() => setSelectedComponentId(bead.componentId)}
                   type="button"
                 >
-                  <CrystalBeadImage alt="" materialKey={bead.materialKey} sizes="44px" />
+                  <CrystalBeadImage alt="" materialKey={bead.materialKey} textureAssetKey={bead.textureAssetKey} sizes="44px" />
                 </button>
               ))}
             </div>
@@ -1332,7 +1334,7 @@ export function DiyEditor({ designId }: { designId: string }) {
                   type="button"
                 >
                   <span className="mx-auto block h-16 w-16 transition-transform group-hover:scale-105 sm:h-20 sm:w-20">
-                    <CrystalBeadImage alt="" materialKey={material.materialKey} priority={index < 6} sizes="80px" />
+                    <CrystalBeadImage alt="" materialKey={material.materialKey} textureAssetKey={material.textureAssetKey} priority={index < 6} sizes="80px" />
                   </span>
                   <span className="mt-1 block truncate text-xs font-medium sm:text-sm">{material.crystalNameCn}</span>
                   <span className="mt-1 block text-[0.68rem] text-[var(--muted)] sm:text-xs">{material.diameterMm}mm</span>
