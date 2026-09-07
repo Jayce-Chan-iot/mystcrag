@@ -1067,3 +1067,82 @@ test("putProcessed rejects unsafe processing versions", async () => {
     await rm(repositoryRoot, { recursive: true, force: true });
   }
 });
+
+test("openRead streams a file in bounded chunks without buffering it whole", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    // 200 KiB: a whole-file read would hold this resident; streaming must not.
+    const bytes = Buffer.alloc(200 * 1024);
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = index % 251;
+    const sha256 = sha256OfBytes(bytes);
+    await archive.putOriginal({ sessionId: "sess-1", bytes, sha256, extension: "jpg" });
+
+    const { stream, byteSize } = await archive.openRead(`imports/sess-1/raw/${sha256}.jpg`);
+    assert.equal(byteSize, bytes.byteLength);
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+    assert.ok(chunks.length > 1, "a 200 KiB file must be read in more than one chunk");
+    for (const chunk of chunks) {
+      assert.ok(chunk.byteLength <= 64 * 1024, "every chunk stays within the read bound");
+    }
+    assert.deepEqual(Buffer.concat(chunks), bytes);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("readDigest streams the SHA-256 and verifies a claimed digest without buffering", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const bytes = Buffer.from("streamed digest payload");
+    const sha256 = sha256OfBytes(bytes);
+    await archive.putOriginal({ sessionId: "sess-1", bytes, sha256, extension: "jpg" });
+    const key = `imports/sess-1/raw/${sha256}.jpg`;
+
+    const verified = await archive.readDigest(key, sha256);
+    assert.equal(verified.sha256, sha256);
+    assert.equal(verified.byteSize, bytes.byteLength);
+
+    await assert.rejects(
+      archive.readDigest(key, "f".repeat(64)),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "HASH_MISMATCH"
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("openRead and readDigest refuse a symlinked final segment", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const bytes = Buffer.from("symlink target payload");
+    const sha256 = sha256OfBytes(bytes);
+    await archive.putOriginal({ sessionId: "sess-1", bytes, sha256, extension: "jpg" });
+
+    const key = `imports/sess-1/raw/${sha256}.jpg`;
+    const targetPath = join(root, key);
+    await unlink(targetPath);
+    const outside = join(root, "..", "outside.bin");
+    await writeFile(outside, bytes);
+    await symlink(outside, targetPath);
+
+    await assert.rejects(
+      archive.openRead(key),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "KEY_INVALID"
+    );
+    await assert.rejects(
+      archive.readDigest(key),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "KEY_INVALID"
+    );
+    await rm(outside, { force: true });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});

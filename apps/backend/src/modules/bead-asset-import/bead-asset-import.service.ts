@@ -36,14 +36,15 @@ type Repository = Pick<AssetImportRepository,
   | "searchCrystals" | "resolveSourceFileRead" | "resolveProcessedAssetRead"
 >;
 
-type Store = Pick<ArchiveStore, "putStagingStream" | "removeStaging" | "read" | "verifiedRead">;
+type Store = Pick<ArchiveStore, "putStagingStream" | "removeStaging" | "openRead" | "readDigest">;
 
 function iso(date: Date): string {
   return date.toISOString();
 }
 
 export type AdminBinaryContent = {
-  bytes: Uint8Array;
+  stream: Readable;
+  byteSize: number;
   contentType: string;
   etag: string;
 };
@@ -297,21 +298,23 @@ export class AssetImportApplicationService {
         "SOURCE_PREVIEW_UNAVAILABLE"
       );
     }
-    const bytes = await this.deps.archiveStore.verifiedRead(file.archiveKey, file.sha256);
-    return { bytes, contentType: SOURCE_CONTENT_TYPES[file.kind], etag: `"${file.sha256}"` };
+    const { byteSize } = await this.deps.archiveStore.readDigest(file.archiveKey, file.sha256);
+    const { stream } = await this.deps.archiveStore.openRead(file.archiveKey);
+    return { stream, byteSize, contentType: SOURCE_CONTENT_TYPES[file.kind], etag: `"${file.sha256}"` };
   }
 
   async readProcessedAsset(processedAssetId: string, rendition: ProcessedAssetRendition): Promise<AdminBinaryContent> {
     const asset = await this.deps.repository.resolveProcessedAssetRead(processedAssetId);
     if (rendition === "main") {
-      const bytes = await this.deps.archiveStore.verifiedRead(asset.storageKey, asset.outputSha256);
-      return { bytes, contentType: asset.outputContentType, etag: `"${asset.outputSha256}"` };
+      const { byteSize } = await this.deps.archiveStore.readDigest(asset.storageKey, asset.outputSha256);
+      const { stream } = await this.deps.archiveStore.openRead(asset.storageKey);
+      return { stream, byteSize, contentType: asset.outputContentType, etag: `"${asset.outputSha256}"` };
     }
     const thumbnailKey = asset.storageKey.endsWith(PROCESSED_MAIN_FILENAME)
       ? `${asset.storageKey.slice(0, -PROCESSED_MAIN_FILENAME.length)}${PROCESSED_THUMBNAIL_FILENAME}`
       : asset.storageKey;
-    const bytes = await this.deps.archiveStore.read(thumbnailKey);
-    const thumbnailSha256 = createHash("sha256").update(bytes).digest("hex");
-    return { bytes, contentType: asset.outputContentType, etag: `"${thumbnailSha256}"` };
+    const { sha256, byteSize } = await this.deps.archiveStore.readDigest(thumbnailKey);
+    const { stream } = await this.deps.archiveStore.openRead(thumbnailKey);
+    return { stream, byteSize, contentType: asset.outputContentType, etag: `"${sha256}"` };
   }
 }

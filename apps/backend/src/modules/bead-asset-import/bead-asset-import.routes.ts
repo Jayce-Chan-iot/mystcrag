@@ -143,17 +143,17 @@ async function handle(
 async function handleBinary(
   request: FastifyRequest,
   reply: FastifyReply,
-  execute: () => Promise<{ bytes: Uint8Array; contentType: string; etag: string }>
+  execute: () => Promise<{ stream: Readable; byteSize: number; contentType: string; etag: string }>
 ): Promise<FastifyReply> {
   try {
     const content = await execute();
     return reply
       .status(200)
       .header("content-type", content.contentType)
-      .header("content-length", String(content.bytes.byteLength))
+      .header("content-length", String(content.byteSize))
       .header("etag", content.etag)
       .header("cache-control", "private, no-store")
-      .send(Buffer.from(content.bytes));
+      .send(content.stream);
   } catch (error) {
     const normalized = normalizeAssetImportError(error);
     assertAssetErrorPair(normalized);

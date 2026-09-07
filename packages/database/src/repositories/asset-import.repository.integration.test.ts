@@ -3388,6 +3388,64 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       assert.equal(group.crystalDraft!.complianceNote, "仅作文化象征说明");
       assert.equal(group.crystalDraft!.curationComplete, true);
     });
+
+    await t.test("38. crystal search keyset pagination covers first/last pages, duplicates, empties and invalid cursors", async () => {
+      const tag = keyOf("crystalpage");
+      const base = {
+        gemologicalInfo: {},
+        colorTags: [],
+        visualTags: [],
+        styleTags: [],
+        emotionTags: [],
+        cultureTags: [],
+        priceLevel: 3,
+        complianceNote: ""
+      };
+      // A deliberately duplicated nameCn exercises the (nameCn, id) tiebreaker.
+      await prisma.crystal.createMany({
+        data: [
+          { id: `${tag}-1`, nameCn: `${tag}-alpha`, nameEn: `${tag}-A`, mineralName: `${tag}-quartz`, ...base },
+          { id: `${tag}-2`, nameCn: `${tag}-alpha`, nameEn: `${tag}-A`, mineralName: `${tag}-quartz`, ...base },
+          { id: `${tag}-3`, nameCn: `${tag}-beta`, nameEn: `${tag}-B`, mineralName: `${tag}-quartz`, ...base },
+          { id: `${tag}-4`, nameCn: `${tag}-gamma`, nameEn: `${tag}-C`, mineralName: `${tag}-quartz`, ...base }
+        ]
+      });
+
+      // Walk every page at a small limit; each id must appear exactly once.
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      for (let pageIndex = 0; pageIndex < 10; pageIndex += 1) {
+        const page: Awaited<ReturnType<typeof repository.searchCrystals>> =
+          cursor === null
+            ? await repository.searchCrystals({ q: `${tag}-`, limit: 2 })
+            : await repository.searchCrystals({ q: `${tag}-`, limit: 2, cursor });
+        seen.push(...page.crystals.map((c) => c.crystalId));
+        cursor = page.nextCursor;
+        if (cursor === null) break;
+      }
+      assert.equal(new Set(seen).size, 4, "duplicate names must not be collapsed or repeated");
+      assert.deepEqual(
+        [...seen].sort(),
+        [`${tag}-1`, `${tag}-2`, `${tag}-3`, `${tag}-4`].sort()
+      );
+
+      const none = await repository.searchCrystals({ q: `${tag}-nonexistent` });
+      assert.deepEqual(none.crystals, []);
+      assert.equal(none.nextCursor, null);
+
+      await assert.rejects(
+        () => repository.searchCrystals({ q: `${tag}-`, cursor: `${tag}-missing` }),
+        expectCode("NOT_FOUND")
+      );
+      await assert.rejects(
+        () => repository.searchCrystals({ q: `${tag}-nonexistent`, cursor: `${tag}-1` }),
+        expectCode("NOT_FOUND")
+      );
+
+      const capped = await repository.searchCrystals({ q: `${tag}-`, limit: 20 });
+      assert.equal(capped.crystals.length, 4);
+      assert.equal(capped.nextCursor, null);
+    });
   } finally {
     await prisma.$disconnect();
   }

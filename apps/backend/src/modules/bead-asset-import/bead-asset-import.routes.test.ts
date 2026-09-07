@@ -41,8 +41,8 @@ function service() {
     publishGroup: async () => ({ groupId: "group-1", state: "PUBLISHED", materialProductId: "product-1", crystalId: "crystal-1", inventorySnapshotId: "inventory-1", publishedAt: NOW, publishedAssetKeys: [`approved:${SHA}`] }),
     getPublishResult: async () => ({ groupId: "group-1", state: "PUBLISHED", materialProductId: "product-1", crystalId: "crystal-1", inventorySnapshotId: "inventory-1", publishedAt: NOW, publishedAssetKeys: [`approved:${SHA}`] }),
     searchCrystals: async () => ({ crystals: [{ crystalId: "crystal-1", nameCn: "紫水晶", nameEn: "Amethyst", mineralName: "Quartz" }], nextCursor: null }),
-    readSourceFile: async () => ({ bytes: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), contentType: "image/jpeg", etag: `"${SHA}"` }),
-    readProcessedAsset: async () => ({ bytes: new Uint8Array([0x52, 0x49, 0x46, 0x46]), contentType: "image/webp", etag: `"${SHA}"` })
+    readSourceFile: async () => ({ stream: Readable.from([Buffer.from([0xff, 0xd8, 0xff, 0xd9])]), byteSize: 4, contentType: "image/jpeg", etag: `"${SHA}"` }),
+    readProcessedAsset: async () => ({ stream: Readable.from([Buffer.from([0x52, 0x49, 0x46, 0x46])]), byteSize: 4, contentType: "image/webp", etag: `"${SHA}"` })
   };
 }
 

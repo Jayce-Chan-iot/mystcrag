@@ -1190,9 +1190,10 @@ export class AssetImportRepository {
         : (await this.prisma.crystalDraft.findMany({
             where: { id: { in: draftIds } }
           })) as unknown as CrystalDraftRow[];
+      const existingCrystalNames = await this.loadCrystalNameSet(this.prisma);
       const draftProjections = new Map<string, AssetImportSessionDetail["groups"][number]["crystalDraft"]>();
       for (const draft of drafts) {
-        draftProjections.set(draft.id, await this.toCrystalDraftProjection(this.prisma, draft));
+        draftProjections.set(draft.id, this.toCrystalDraftProjection(draft, existingCrystalNames));
       }
       const productDraftRows = groups.length === 0
         ? []
@@ -1319,34 +1320,49 @@ export class AssetImportRepository {
    * Dedicated admin Crystal search. Matches nameCn/nameEn/mineralName case-
    * insensitively and returns only the minimal safe identity fields, so an
    * existing Crystal with no published product is still findable and no image
-   * is ever used to infer identity. Ordering is deterministic for stable pages.
+   * is ever used to infer identity. Ordering is done in the database on a
+   * deterministic (nameCn, id) key and paging is a keyset scan over at most
+   * `limit + 1` rows — the full match set is never fetched into Node.js.
    */
   async searchCrystals(query: ListCrystalsQuery): Promise<ListCrystalsResponse> {
     const request = parseContract(ListCrystalsQuerySchema, query, "crystal search query");
+    const limit = request.limit ?? 20;
     try {
-      const rows = (await this.prisma.crystal.findMany({
-        where: {
-          OR: [
-            { nameCn: { contains: request.q, mode: "insensitive" } },
-            { nameEn: { contains: request.q, mode: "insensitive" } },
-            { mineralName: { contains: request.q, mode: "insensitive" } }
-          ]
-        }
-      })) as unknown as Array<{ id: string; nameCn: string; nameEn: string; mineralName: string }>;
-      const sorted = [...rows].sort((left, right) => {
-        const byName = compareStable(left.nameCn, right.nameCn);
-        return byName !== 0 ? byName : compareStable(left.id, right.id);
-      });
-      let start = 0;
+      const searchWhere = crystalSearchWhere(request.q);
+      let cursorNameCn: string | undefined;
       if (request.cursor !== undefined) {
-        const cursorIndex = sorted.findIndex((row) => row.id === request.cursor);
-        if (cursorIndex < 0) {
+        const cursorRow = await this.prisma.crystal.findUnique({
+          where: { id: request.cursor },
+          select: { nameCn: true }
+        });
+        if (!cursorRow) {
           throw new PersistenceError("NOT_FOUND", `Crystal search cursor ${request.cursor} was not found`);
         }
-        start = cursorIndex + 1;
+        const inResult = await this.prisma.crystal.findFirst({
+          where: { AND: [{ id: request.cursor }, searchWhere] },
+          select: { id: true }
+        });
+        if (!inResult) {
+          throw new PersistenceError(
+            "NOT_FOUND",
+            `Crystal search cursor ${request.cursor} does not belong to the current result set`
+          );
+        }
+        cursorNameCn = cursorRow.nameCn;
       }
-      const limit = request.limit ?? 20;
-      const page = sorted.slice(start, start + limit);
+
+      const pageWhere =
+        cursorNameCn === undefined
+          ? searchWhere
+          : { AND: [searchWhere, crystalKeysetAfter(cursorNameCn, request.cursor!)] };
+      const rows = await this.prisma.crystal.findMany({
+        where: pageWhere,
+        select: { id: true, nameCn: true, nameEn: true, mineralName: true },
+        orderBy: [{ nameCn: "asc" }, { id: "asc" }],
+        take: limit + 1
+      });
+      const hasMore = rows.length > limit;
+      const page = rows.slice(0, limit);
       return {
         crystals: page.map((row) => ({
           crystalId: row.id,
@@ -1354,7 +1370,7 @@ export class AssetImportRepository {
           nameEn: row.nameEn.trim() === "" ? null : row.nameEn,
           mineralName: row.mineralName.trim() === "" ? null : row.mineralName
         })),
-        nextCursor: start + limit < sorted.length ? page.at(-1)?.id ?? null : null
+        nextCursor: hasMore ? page.at(-1)?.id ?? null : null
       };
     } catch (error) {
       rethrowPersistenceError(error);
@@ -3051,7 +3067,7 @@ export class AssetImportRepository {
         if (!draft) {
           throw new PersistenceError("DATA_INTEGRITY_ERROR", `Crystal draft ${crystalDraftId} vanished`);
         }
-        const projection = await this.toCrystalDraftProjection(tx, draft);
+        const projection = this.toCrystalDraftProjection(draft, await this.loadCrystalNameSet(tx));
         const value = {
           crystalDraftId: projection.crystalDraftId,
           revision: projection.revision,
@@ -3875,19 +3891,16 @@ export class AssetImportRepository {
     };
   }
 
-  private async toCrystalDraftProjection(
-    db: Db,
-    draft: CrystalDraftRow
-  ): Promise<NonNullable<AssetImportSessionDetail["groups"][number]["crystalDraft"]>> {
+  private toCrystalDraftProjection(
+    draft: CrystalDraftRow,
+    existingCrystalNames: ReadonlySet<string>
+  ): NonNullable<AssetImportSessionDetail["groups"][number]["crystalDraft"]> {
     const missingFields = missingCrystalDraftCurationFields(draft);
     const normalizedNameCn = draft.nameCn.trim().toLocaleLowerCase("en-US");
     const normalizedNameEn = draft.nameEn?.trim().toLocaleLowerCase("en-US") ?? null;
-    const crystals = await db.crystal.findMany({});
-    const duplicate = crystals.some((crystal) => {
-      const nameCn = crystal.nameCn.trim().toLocaleLowerCase("en-US");
-      const nameEn = crystal.nameEn.trim().toLocaleLowerCase("en-US");
-      return nameCn === normalizedNameCn || (normalizedNameEn !== null && nameEn === normalizedNameEn);
-    });
+    const duplicate =
+      existingCrystalNames.has(normalizedNameCn) ||
+      (normalizedNameEn !== null && existingCrystalNames.has(normalizedNameEn));
     const missingSet = new Set<string>(missingFields);
     const filled = (inputField: keyof typeof CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS): boolean =>
       !missingSet.has(CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS[inputField]);
@@ -3907,6 +3920,22 @@ export class AssetImportRepository {
       promotionEligible:
         missingFields.length === 0 && draft.promotedCrystalId == null && !duplicate
     };
+  }
+
+  /**
+   * Loads the single batched set of normalized existing Crystal names used by
+   * every draft's duplicate-name eligibility check. This is called once per
+   * session refresh (and once per single-draft update) so a session with many
+   * drafts never degrades into a full Crystal scan per draft.
+   */
+  private async loadCrystalNameSet(db: Db): Promise<Set<string>> {
+    const crystals = await db.crystal.findMany({ select: { nameCn: true, nameEn: true } });
+    const names = new Set<string>();
+    for (const crystal of crystals) {
+      names.add(crystal.nameCn.trim().toLocaleLowerCase("en-US"));
+      names.add(crystal.nameEn.trim().toLocaleLowerCase("en-US"));
+    }
+    return names;
   }
 
   private async applyGroupSessionResult(
@@ -4130,7 +4159,7 @@ export class AssetImportRepository {
     // Fail closed: only the restored, human-authored Contract fields may
     // promote a draft, and an authoritative duplicate-Crystal match still
     // requires an operator to select the existing Crystal instead.
-    const projection = await this.toCrystalDraftProjection(tx, draft);
+    const projection = this.toCrystalDraftProjection(draft, await this.loadCrystalNameSet(tx));
     const missingFields = projection.missingFields;
     if (missingFields.length > 0) {
       throw new PersistenceError(
@@ -4356,6 +4385,31 @@ function toPublishResult(row: PublicationRow): PublishAssetGroupResult {
 
 function compareStable(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function crystalSearchWhere(q: string) {
+  return {
+    OR: [
+      { nameCn: { contains: q, mode: "insensitive" as const } },
+      { nameEn: { contains: q, mode: "insensitive" as const } },
+      { mineralName: { contains: q, mode: "insensitive" as const } }
+    ]
+  };
+}
+
+/**
+ * Keyset continuation predicate for a `(nameCn ASC, id ASC)` scan: rows after
+ * the cursor are those with a greater nameCn, or an equal nameCn and a greater
+ * id. Both comparisons use the database's own collation, matching `orderBy`,
+ * so consecutive pages neither miss nor repeat a row.
+ */
+function crystalKeysetAfter(nameCn: string, id: string) {
+  return {
+    OR: [
+      { nameCn: { gt: nameCn } },
+      { nameCn, id: { gt: id } }
+    ]
+  };
 }
 
 function toProcessedAssetReviewView(
