@@ -5,7 +5,7 @@
 - **Branch**: `task/asset-api-001-admin-review-surfaces`
 - **Worktree**: `.worktrees/asset-api-001`
 - **Base**: `3225ff4` (local `main`)
-- **Implementation HEAD**: `2ad6d03` (final review-fix round; delivery-document commits are separate)
+- **Implementation HEAD**: `96c433f` (final review-fix round; delivery-document commits are separate)
 
 ## Commit classification
 
@@ -19,7 +19,7 @@
 - **Review-fix commit** — the three Important findings from the review round:
   - `699d741` — fix(asset-api): stream binary reads, paginate crystal search, batch duplicate check
 - **Final review-fix commit** — the remaining Important finding (admin binary-read TOCTOU):
-  - `2ad6d03` — fix(asset-api): close binary-read TOCTOU with one verified descriptor
+  - `96c433f` — fix(asset-api): close binary-read TOCTOU with one verified descriptor
 - **Delivery-document commit** — this report and the `TASK_REGISTRY.md` row only:
   - the commit that introduces this file (not the implementation HEAD)
 
@@ -64,7 +64,7 @@
      placeholder→null semantics are unchanged. A unit test asserts exactly one Crystal query for a session
      with multiple drafts.
 
-## Final review-fix round — binary-read TOCTOU (`2ad6d03`)
+## Final review-fix round — binary-read TOCTOU (`96c433f`)
 
 GLM took over from DeepSeek-V4-Pro with Product Owner authorization. The worktree was handed over with
 uncommitted in-progress changes for exactly this finding inside the task's authorized paths; they were
