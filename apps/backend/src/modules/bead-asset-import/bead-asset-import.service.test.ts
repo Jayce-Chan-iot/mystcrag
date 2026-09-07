@@ -404,8 +404,11 @@ test("audited mutations use only the fixed server-side asset administrator actor
 function makeBinaryStore(overrides: Record<string, unknown> = {}) {
   const bytes = new Uint8Array([1, 2, 3]);
   return {
-    openRead: async () => ({ stream: Readable.from([bytes]), byteSize: bytes.byteLength }),
-    readDigest: async () => ({ sha256: "0".repeat(64), byteSize: bytes.byteLength }),
+    openVerifiedRead: async () => ({
+      stream: Readable.from([bytes]),
+      byteSize: bytes.byteLength,
+      sha256: "0".repeat(64)
+    }),
     ...overrides
   } as never;
 }
@@ -416,14 +419,18 @@ async function collectStream(stream: Readable): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-test("source file read streams verified bytes without buffering and returns a strong etag", async () => {
-  const calls: string[] = [];
+test("source file read streams verified bytes from one atomic open without buffering and returns a strong etag", async () => {
+  const calls: Array<{ key: string; expected?: string }> = [];
   const payload = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
   const service = new AssetImportApplicationService({
     repository: repository(),
     archiveStore: {
-      openRead: async (key: string) => { calls.push(`open:${key}`); return { stream: Readable.from([payload]), byteSize: payload.byteLength }; },
-      readDigest: async (key: string, expected?: string) => { calls.push(`digest:${key}`); return { sha256: expected ?? "0".repeat(64), byteSize: payload.byteLength }; },
+      openVerifiedRead: async (key: string, expected?: string) => {
+        calls.push({ key, expected });
+        return { stream: Readable.from([payload]), byteSize: payload.byteLength, sha256: expected ?? "0".repeat(64) };
+      },
+      openRead: async () => { throw new Error("openRead must not be used"); },
+      readDigest: async () => { throw new Error("readDigest must not be used"); },
       read: async () => { throw new Error("full-buffer read must not be used"); },
       verifiedRead: async () => { throw new Error("full-buffer verifiedRead must not be used"); }
     } as never
@@ -433,10 +440,8 @@ test("source file read streams verified bytes without buffering and returns a st
   assert.equal(result.etag, `"${SHA}"`);
   assert.equal(result.byteSize, payload.byteLength);
   assert.deepEqual(await collectStream(result.stream), payload);
-  assert.deepEqual(calls, [
-    "digest:imports/session-1/raw/photo.jpg",
-    "open:imports/session-1/raw/photo.jpg"
-  ]);
+  // A single atomic open replaces the old verify-then-reopen two-step.
+  assert.deepEqual(calls, [{ key: "imports/session-1/raw/photo.jpg", expected: SHA }]);
 });
 
 test("a raw ARW source is never disguised as a browser image", async () => {
@@ -469,25 +474,28 @@ test("an unarchived source is not readable", async () => {
 });
 
 test("processed main read verifies the stored SHA while the thumbnail derives its own etag", async () => {
-  const calls: string[] = [];
+  const calls: Array<{ key: string; expected?: string }> = [];
   const service = new AssetImportApplicationService({
     repository: repository(),
     archiveStore: {
-      openRead: async (key: string) => { calls.push(`open:${key}`); return { stream: Readable.from([Buffer.from([9])]), byteSize: 1 }; },
-      readDigest: async (key: string, expected?: string) => { calls.push(`digest:${key}`); return { sha256: expected ?? "f".repeat(64), byteSize: 1 }; },
-      read: async () => { throw new Error("full-buffer read must not be used"); },
-      verifiedRead: async () => { throw new Error("full-buffer verifiedRead must not be used"); }
+      openVerifiedRead: async (key: string, expected?: string) => {
+        calls.push({ key, expected });
+        return { stream: Readable.from([Buffer.from([9])]), byteSize: 1, sha256: expected ?? "f".repeat(64) };
+      },
+      openRead: async () => { throw new Error("openRead must not be used"); },
+      readDigest: async () => { throw new Error("readDigest must not be used"); }
     } as never
   });
   const main = await service.readProcessedAsset("asset-1", "main");
   assert.equal(main.etag, `"${SHA}"`);
   assert.deepEqual(calls, [
-    "digest:imports/session-1/processed/group-1/v1/bead-512.webp",
-    "open:imports/session-1/processed/group-1/v1/bead-512.webp"
+    { key: "imports/session-1/processed/group-1/v1/bead-512.webp", expected: SHA }
   ]);
 
   const thumbnail = await service.readProcessedAsset("asset-1", "thumbnail");
-  assert.equal(calls[2], "digest:imports/session-1/processed/group-1/v1/thumb-256.webp");
-  assert.equal(calls[3], "open:imports/session-1/processed/group-1/v1/thumb-256.webp");
+  assert.deepEqual(calls[1], {
+    key: "imports/session-1/processed/group-1/v1/thumb-256.webp",
+    expected: undefined
+  });
   assert.equal(thumbnail.etag, `"${"f".repeat(64)}"`);
 });

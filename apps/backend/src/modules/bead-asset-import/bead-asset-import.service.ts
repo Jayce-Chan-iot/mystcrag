@@ -36,7 +36,7 @@ type Repository = Pick<AssetImportRepository,
   | "searchCrystals" | "resolveSourceFileRead" | "resolveProcessedAssetRead"
 >;
 
-type Store = Pick<ArchiveStore, "putStagingStream" | "removeStaging" | "openRead" | "readDigest">;
+type Store = Pick<ArchiveStore, "putStagingStream" | "removeStaging" | "openVerifiedRead">;
 
 function iso(date: Date): string {
   return date.toISOString();
@@ -298,23 +298,20 @@ export class AssetImportApplicationService {
         "SOURCE_PREVIEW_UNAVAILABLE"
       );
     }
-    const { byteSize } = await this.deps.archiveStore.readDigest(file.archiveKey, file.sha256);
-    const { stream } = await this.deps.archiveStore.openRead(file.archiveKey);
+    const { stream, byteSize } = await this.deps.archiveStore.openVerifiedRead(file.archiveKey, file.sha256);
     return { stream, byteSize, contentType: SOURCE_CONTENT_TYPES[file.kind], etag: `"${file.sha256}"` };
   }
 
   async readProcessedAsset(processedAssetId: string, rendition: ProcessedAssetRendition): Promise<AdminBinaryContent> {
     const asset = await this.deps.repository.resolveProcessedAssetRead(processedAssetId);
     if (rendition === "main") {
-      const { byteSize } = await this.deps.archiveStore.readDigest(asset.storageKey, asset.outputSha256);
-      const { stream } = await this.deps.archiveStore.openRead(asset.storageKey);
+      const { stream, byteSize } = await this.deps.archiveStore.openVerifiedRead(asset.storageKey, asset.outputSha256);
       return { stream, byteSize, contentType: asset.outputContentType, etag: `"${asset.outputSha256}"` };
     }
     const thumbnailKey = asset.storageKey.endsWith(PROCESSED_MAIN_FILENAME)
       ? `${asset.storageKey.slice(0, -PROCESSED_MAIN_FILENAME.length)}${PROCESSED_THUMBNAIL_FILENAME}`
       : asset.storageKey;
-    const { sha256, byteSize } = await this.deps.archiveStore.readDigest(thumbnailKey);
-    const { stream } = await this.deps.archiveStore.openRead(thumbnailKey);
+    const { stream, byteSize, sha256 } = await this.deps.archiveStore.openVerifiedRead(thumbnailKey);
     return { stream, byteSize, contentType: asset.outputContentType, etag: `"${sha256}"` };
   }
 }
