@@ -7,7 +7,9 @@ import {
   AssetSourceFileKindSchema,
   CancelAssetImportSessionRequestSchema,
   CreateAssetImportSessionRequestSchema,
+  CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS,
   ListAssetImportSessionsQuerySchema,
+  ListCrystalsQuerySchema,
   PublishBeadImageGroupRequestSchema,
   ReprocessBeadImageGroupRequestSchema,
   RegisterAssetManifestRequestSchema,
@@ -28,10 +30,13 @@ import {
   type AssetImportManifestFileEntry,
   type AssetImportSessionState,
   type AssetSourceFileState,
+  type BeadProductDraftView,
   type CancelAssetImportSessionRequest,
   type CreateAssetImportSessionRequest,
   type CrystalDraftCurationField,
   type ListAssetImportSessionsQuery,
+  type ListCrystalsQuery,
+  type ListCrystalsResponse,
   type PublishBeadImageGroupRequest,
   type ReprocessBeadImageGroupRequest,
   type RegisterAssetManifestRequest,
@@ -260,6 +265,7 @@ const ProcessedAssetReviewReplaySchema = z.strictObject({
   reviewAction: z.enum(["APPROVE", "REJECT"]),
   state: z.enum(["APPROVED", "RETIRED"]),
   revision: z.number().int().positive(),
+  approvedAssetKey: ApprovedAssetKeySchema.nullable(),
   reviewedAt: z.iso.datetime()
 });
 
@@ -780,6 +786,7 @@ export type ProcessedAssetReviewResult = {
   reviewAction: "APPROVE" | "REJECT";
   state: "APPROVED" | "RETIRED";
   revision: number;
+  approvedAssetKey: string | null;
   reviewedAt: Date;
 };
 
@@ -959,14 +966,24 @@ export type AssetImportSessionDetail = {
       isCurrent: boolean;
       qcPassed: boolean | null;
       qcIssues: string[];
+      approvedAssetKey: string | null;
     }>;
     crystalDraft: {
       crystalDraftId: string;
       revision: number;
+      nameCn: string | null;
+      nameEn: string | null;
+      mineralName: string | null;
+      colorTags: string[] | null;
+      visualTags: string[] | null;
+      styleTags: string[] | null;
+      priceLevel: number | null;
+      complianceNote: string | null;
       curationComplete: boolean;
       missingFields: CrystalDraftCurationField[];
       promotionEligible: boolean;
     } | null;
+    productDraft: BeadProductDraftView | null;
   }>;
   jobs: AssetImportJobView[];
 };
@@ -1173,10 +1190,17 @@ export class AssetImportRepository {
         : (await this.prisma.crystalDraft.findMany({
             where: { id: { in: draftIds } }
           })) as unknown as CrystalDraftRow[];
+      const existingCrystalNames = await this.loadCrystalNameSet(this.prisma);
       const draftProjections = new Map<string, AssetImportSessionDetail["groups"][number]["crystalDraft"]>();
       for (const draft of drafts) {
-        draftProjections.set(draft.id, await this.toCrystalDraftProjection(this.prisma, draft));
+        draftProjections.set(draft.id, this.toCrystalDraftProjection(draft, existingCrystalNames));
       }
+      const productDraftRows = groups.length === 0
+        ? []
+        : (await this.prisma.materialProductDraft.findMany({
+            where: { groupId: { in: groups.map((group) => group.id) } }
+          })) as unknown as ProductDraftRow[];
+      const productDraftByGroup = new Map(productDraftRows.map((draft) => [draft.groupId, draft]));
 
       const sortedFiles = [...files].sort((left, right) => compareStable(left.id, right.id));
       const sortedGroups = [...groups].sort((left, right) => compareStable(left.id, right.id));
@@ -1222,7 +1246,11 @@ export class AssetImportRepository {
             processedAssets: groupAssets.map((asset) => toProcessedAssetReviewView(asset)),
             crystalDraft: group.crystalDraftId === null
               ? null
-              : (draftProjections.get(group.crystalDraftId) ?? null)
+              : (draftProjections.get(group.crystalDraftId) ?? null),
+            productDraft: (() => {
+              const draft = productDraftByGroup.get(group.id);
+              return draft === undefined ? null : toProductDraftProjection(draft);
+            })()
           };
         })),
         jobs: sortedJobs.map((job) => ({
@@ -1282,6 +1310,127 @@ export class AssetImportRepository {
           updatedAt: row.updatedAt
         })),
         nextCursor: start + limit < sorted.length ? page.at(-1)?.id ?? null : null
+      };
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  /**
+   * Dedicated admin Crystal search. Matches nameCn/nameEn/mineralName case-
+   * insensitively and returns only the minimal safe identity fields, so an
+   * existing Crystal with no published product is still findable and no image
+   * is ever used to infer identity. Ordering is done in the database on a
+   * deterministic (nameCn, id) key and paging is a keyset scan over at most
+   * `limit + 1` rows — the full match set is never fetched into Node.js.
+   */
+  async searchCrystals(query: ListCrystalsQuery): Promise<ListCrystalsResponse> {
+    const request = parseContract(ListCrystalsQuerySchema, query, "crystal search query");
+    const limit = request.limit ?? 20;
+    try {
+      const searchWhere = crystalSearchWhere(request.q);
+      let cursorNameCn: string | undefined;
+      if (request.cursor !== undefined) {
+        const cursorRow = await this.prisma.crystal.findUnique({
+          where: { id: request.cursor },
+          select: { nameCn: true }
+        });
+        if (!cursorRow) {
+          throw new PersistenceError("NOT_FOUND", `Crystal search cursor ${request.cursor} was not found`);
+        }
+        const inResult = await this.prisma.crystal.findFirst({
+          where: { AND: [{ id: request.cursor }, searchWhere] },
+          select: { id: true }
+        });
+        if (!inResult) {
+          throw new PersistenceError(
+            "NOT_FOUND",
+            `Crystal search cursor ${request.cursor} does not belong to the current result set`
+          );
+        }
+        cursorNameCn = cursorRow.nameCn;
+      }
+
+      const pageWhere =
+        cursorNameCn === undefined
+          ? searchWhere
+          : { AND: [searchWhere, crystalKeysetAfter(cursorNameCn, request.cursor!)] };
+      const rows = await this.prisma.crystal.findMany({
+        where: pageWhere,
+        select: { id: true, nameCn: true, nameEn: true, mineralName: true },
+        orderBy: [{ nameCn: "asc" }, { id: "asc" }],
+        take: limit + 1
+      });
+      const hasMore = rows.length > limit;
+      const page = rows.slice(0, limit);
+      return {
+        crystals: page.map((row) => ({
+          crystalId: row.id,
+          nameCn: row.nameCn,
+          nameEn: row.nameEn.trim() === "" ? null : row.nameEn,
+          mineralName: row.mineralName.trim() === "" ? null : row.mineralName
+        })),
+        nextCursor: hasMore ? page.at(-1)?.id ?? null : null
+      };
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  /**
+   * Resolves a source file's archive metadata for an admin binary read. The
+   * archive key and digest stay server-side; the Backend uses them to read and
+   * verify bytes and never echoes them to the caller.
+   */
+  async resolveSourceFileRead(fileId: string): Promise<{
+    kind: "ARW" | "JPEG" | "PNG" | "WEBP";
+    state: AssetSourceFileState;
+    archiveKey: string | null;
+    sha256: string | null;
+    byteSize: number;
+  }> {
+    validateIdentifierParam(fileId, "fileId");
+    try {
+      const file = (await this.prisma.assetSourceFile.findUnique({ where: { id: fileId } })) as unknown as SourceFileRow | null;
+      if (!file) {
+        throw new PersistenceError("NOT_FOUND", `Asset source file ${fileId} was not found`);
+      }
+      return {
+        kind: assertEnumValue(file.kind, ["ARW", "JPEG", "PNG", "WEBP"], "asset source file kind"),
+        state: assertFileState(file.state),
+        archiveKey: file.archiveKey,
+        sha256: file.sha256,
+        byteSize: toSafeNumber(file.byteSize, "asset source file byteSize")
+      };
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  /**
+   * Resolves a processed asset's storage metadata for an admin binary read. The
+   * storage key and digest stay server-side; the thumbnail key is derived by the
+   * Backend from this authoritative main key, never from a client path.
+   */
+  async resolveProcessedAssetRead(processedAssetId: string): Promise<{
+    state: (typeof ASSET_STATES)[number];
+    storageKey: string;
+    outputSha256: string;
+    outputContentType: string;
+    outputBytes: number;
+  }> {
+    validateIdentifierParam(processedAssetId, "processedAssetId");
+    try {
+      const asset = (await this.prisma.processedAsset.findUnique({ where: { id: processedAssetId } })) as unknown as ProcessedAssetRow | null;
+      if (!asset) {
+        throw new PersistenceError("NOT_FOUND", `Processed asset ${processedAssetId} was not found`);
+      }
+      return {
+        state: assertAssetState(asset.state),
+        storageKey: asset.storageKey,
+        outputSha256: asset.outputSha256,
+        outputContentType: asset.outputContentType,
+        outputBytes: toSafeNumber(asset.outputBytes, "processed asset outputBytes")
       };
     } catch (error) {
       rethrowPersistenceError(error);
@@ -2270,6 +2419,7 @@ export class AssetImportRepository {
           reviewAction: request.action,
           state: request.action === "APPROVE" ? "APPROVED" as const : "RETIRED" as const,
           revision: request.expectedGroupRevision + 1,
+          approvedAssetKey: request.action === "APPROVE" ? `approved:${asset.outputSha256}` : null,
           reviewedAt
         };
         return {
@@ -2917,8 +3067,15 @@ export class AssetImportRepository {
         if (!draft) {
           throw new PersistenceError("DATA_INTEGRITY_ERROR", `Crystal draft ${crystalDraftId} vanished`);
         }
-        const projection = await this.toCrystalDraftProjection(tx, draft);
-        const value = { ...projection, updatedAt };
+        const projection = this.toCrystalDraftProjection(draft, await this.loadCrystalNameSet(tx));
+        const value = {
+          crystalDraftId: projection.crystalDraftId,
+          revision: projection.revision,
+          curationComplete: projection.curationComplete,
+          missingFields: projection.missingFields,
+          promotionEligible: projection.promotionEligible,
+          updatedAt
+        };
         return { value, persistedResult: { ...value, updatedAt: updatedAt.toISOString() } };
       }
     });
@@ -3734,27 +3891,51 @@ export class AssetImportRepository {
     };
   }
 
-  private async toCrystalDraftProjection(
-    db: Db,
-    draft: CrystalDraftRow
-  ): Promise<NonNullable<AssetImportSessionDetail["groups"][number]["crystalDraft"]>> {
+  private toCrystalDraftProjection(
+    draft: CrystalDraftRow,
+    existingCrystalNames: ReadonlySet<string>
+  ): NonNullable<AssetImportSessionDetail["groups"][number]["crystalDraft"]> {
     const missingFields = missingCrystalDraftCurationFields(draft);
     const normalizedNameCn = draft.nameCn.trim().toLocaleLowerCase("en-US");
     const normalizedNameEn = draft.nameEn?.trim().toLocaleLowerCase("en-US") ?? null;
-    const crystals = await db.crystal.findMany({});
-    const duplicate = crystals.some((crystal) => {
-      const nameCn = crystal.nameCn.trim().toLocaleLowerCase("en-US");
-      const nameEn = crystal.nameEn.trim().toLocaleLowerCase("en-US");
-      return nameCn === normalizedNameCn || (normalizedNameEn !== null && nameEn === normalizedNameEn);
-    });
+    const duplicate =
+      existingCrystalNames.has(normalizedNameCn) ||
+      (normalizedNameEn !== null && existingCrystalNames.has(normalizedNameEn));
+    const missingSet = new Set<string>(missingFields);
+    const filled = (inputField: keyof typeof CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS): boolean =>
+      !missingSet.has(CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS[inputField]);
     return {
       crystalDraftId: draft.id,
       revision: draft.revision,
+      nameCn: filled("nameCn") ? draft.nameCn : null,
+      nameEn: filled("nameEn") ? draft.nameEn : null,
+      mineralName: filled("mineralName") ? draft.mineralName : null,
+      colorTags: filled("colorTags") ? [...draft.colorTags] : null,
+      visualTags: filled("visualTags") ? [...draft.visualTags] : null,
+      styleTags: filled("styleTags") ? [...draft.styleTags] : null,
+      priceLevel: filled("priceLevel") ? draft.priceLevel : null,
+      complianceNote: filled("complianceNote") ? draft.complianceNote : null,
       curationComplete: missingFields.length === 0,
       missingFields,
       promotionEligible:
         missingFields.length === 0 && draft.promotedCrystalId == null && !duplicate
     };
+  }
+
+  /**
+   * Loads the single batched set of normalized existing Crystal names used by
+   * every draft's duplicate-name eligibility check. This is called once per
+   * session refresh (and once per single-draft update) so a session with many
+   * drafts never degrades into a full Crystal scan per draft.
+   */
+  private async loadCrystalNameSet(db: Db): Promise<Set<string>> {
+    const crystals = await db.crystal.findMany({ select: { nameCn: true, nameEn: true } });
+    const names = new Set<string>();
+    for (const crystal of crystals) {
+      names.add(crystal.nameCn.trim().toLocaleLowerCase("en-US"));
+      names.add(crystal.nameEn.trim().toLocaleLowerCase("en-US"));
+    }
+    return names;
   }
 
   private async applyGroupSessionResult(
@@ -3978,7 +4159,7 @@ export class AssetImportRepository {
     // Fail closed: only the restored, human-authored Contract fields may
     // promote a draft, and an authoritative duplicate-Crystal match still
     // requires an operator to select the existing Crystal instead.
-    const projection = await this.toCrystalDraftProjection(tx, draft);
+    const projection = this.toCrystalDraftProjection(draft, await this.loadCrystalNameSet(tx));
     const missingFields = projection.missingFields;
     if (missingFields.length > 0) {
       throw new PersistenceError(
@@ -4206,6 +4387,31 @@ function compareStable(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+function crystalSearchWhere(q: string) {
+  return {
+    OR: [
+      { nameCn: { contains: q, mode: "insensitive" as const } },
+      { nameEn: { contains: q, mode: "insensitive" as const } },
+      { mineralName: { contains: q, mode: "insensitive" as const } }
+    ]
+  };
+}
+
+/**
+ * Keyset continuation predicate for a `(nameCn ASC, id ASC)` scan: rows after
+ * the cursor are those with a greater nameCn, or an equal nameCn and a greater
+ * id. Both comparisons use the database's own collation, matching `orderBy`,
+ * so consecutive pages neither miss nor repeat a row.
+ */
+function crystalKeysetAfter(nameCn: string, id: string) {
+  return {
+    OR: [
+      { nameCn: { gt: nameCn } },
+      { nameCn, id: { gt: id } }
+    ]
+  };
+}
+
 function toProcessedAssetReviewView(
   asset: ProcessedAssetRow
 ): AssetImportSessionDetail["groups"][number]["processedAssets"][number] {
@@ -4227,7 +4433,37 @@ function toProcessedAssetReviewView(
     state,
     isCurrent: asset.isCurrentVersion,
     qcPassed,
-    qcIssues
+    qcIssues,
+    approvedAssetKey: state === "APPROVED" ? asset.assetKey : null
+  };
+}
+
+function toProductDraftProjection(draft: ProductDraftRow): BeadProductDraftView {
+  return {
+    crystalName: draft.crystalName,
+    crystalId: draft.crystalId,
+    crystalDraftId: draft.crystalDraftId,
+    displayName: draft.displayName,
+    sku: draft.sku,
+    materialKey: draft.materialKey,
+    shape: draft.shape === null ? null : assertEnumValue(draft.shape, ["ROUND", "OVAL", "FACETED", "BAROQUE"] as const, "bead shape"),
+    diameterMm: draft.diameterMm,
+    lengthAlongStringMm: draft.lengthAlongStringMm,
+    currency: draft.currency === null ? null : assertCurrency(draft.currency),
+    unitPriceMinor: draft.unitPriceMinor === null ? null : toSafeNumber(draft.unitPriceMinor, "product draft unitPriceMinor"),
+    costMinor: draft.costMinor === null ? null : toSafeNumber(draft.costMinor, "product draft costMinor"),
+    availableQuantity: draft.availableQuantity,
+    qualityStatement: draft.qualityStatement,
+    qualitySource: draft.qualitySource,
+    textureAssetKey: draft.textureAssetKey,
+    modelAssetKey: draft.modelAssetKey,
+    rightsHolder: draft.rightsHolder,
+    usagePermission: draft.usagePermission === null ? null : assertUsagePermission(draft.usagePermission),
+    isAuthenticPhotograph: draft.isAuthenticPhotograph,
+    allowAiTraining: draft.allowAiTraining,
+    allowCommercialUse: draft.allowCommercialUse,
+    allowPublicDisplay: draft.allowPublicDisplay,
+    allowAiRecommendation: draft.allowAiRecommendation
   };
 }
 

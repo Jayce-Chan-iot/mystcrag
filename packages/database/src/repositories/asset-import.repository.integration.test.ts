@@ -1986,6 +1986,7 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
           "integration-admin"
         );
         assert.equal(review.state, "APPROVED");
+        assert.equal(review.approvedAssetKey, `approved:${outputSha256}`, "approval must return the authoritative approved key");
         await assert.rejects(
           () => repository.reviewProcessedAsset(
             group.id,
@@ -3284,6 +3285,166 @@ test("live PostgreSQL bead asset import persistence matrix", { skip: !databaseUr
       });
       assert.equal(after.updatedAt.toISOString(), before.updatedAt.toISOString());
       assert.equal(await prisma.assetProcessingJob.count({ where: { sessionId: session.sessionId } }), 0);
+    });
+
+    await t.test("36. crystal search is case-insensitive, bounded and stably ordered", async () => {
+      const tag = keyOf("crystal");
+      const base = {
+        gemologicalInfo: {},
+        colorTags: [],
+        visualTags: [],
+        styleTags: [],
+        emotionTags: [],
+        cultureTags: [],
+        priceLevel: 3,
+        complianceNote: ""
+      };
+      await prisma.crystal.createMany({
+        data: [
+          { id: `${tag}-beta`, nameCn: `${tag} 白水晶`, nameEn: `${tag} Clear Quartz`, mineralName: `${tag} Quartz`, ...base },
+          { id: `${tag}-alpha`, nameCn: `${tag} 紫水晶`, nameEn: `${tag} Amethyst`, mineralName: `${tag} Quartz`, ...base },
+          { id: `${tag}-gamma`, nameCn: `${tag} 粉晶`, nameEn: "", mineralName: `${tag} Quartz`, ...base }
+        ]
+      });
+
+      const byCn = await repository.searchCrystals({ q: `${tag} 紫水晶` });
+      assert.deepEqual(byCn.crystals.map((c) => c.crystalId), [`${tag}-alpha`]);
+      assert.equal(byCn.crystals[0]!.nameEn, `${tag} Amethyst`);
+      assert.equal(byCn.crystals[0]!.mineralName, `${tag} Quartz`);
+
+      const byMineral = await repository.searchCrystals({ q: `${tag} QUARTZ` });
+      assert.equal(byMineral.crystals.length, 3, "case-insensitive mineral match");
+      assert.deepEqual(
+        new Set(byMineral.crystals.map((c) => c.crystalId)),
+        new Set([`${tag}-beta`, `${tag}-alpha`, `${tag}-gamma`])
+      );
+
+      const page1 = await repository.searchCrystals({ q: tag, limit: 2 });
+      assert.equal(page1.crystals.length, 2);
+      assert.ok(page1.nextCursor !== null, "a bounded page carries a cursor");
+      const page2 = await repository.searchCrystals({ q: tag, limit: 2, cursor: page1.nextCursor });
+      assert.equal(page2.crystals.length, 1);
+      assert.equal(page2.nextCursor, null);
+
+      const gamma = (await repository.searchCrystals({ q: `${tag} 粉晶` })).crystals[0]!;
+      assert.equal(gamma.nameEn, null, "an empty english name hydrates as null, never a placeholder");
+    });
+
+    await t.test("37. session hydration restores the approved key, product draft and crystal curation", async () => {
+      const scenario = "hydration";
+      const fixture = await driveGroupToReady(scenario);
+
+      const draft = await repository.saveGroupDraft(fixture.groupId, {
+        expectedGroupRevision: 2,
+        crystalName: "紫水晶",
+        displayName: "紫水晶 8mm 圆珠",
+        sku: keyOf("sku-hydration"),
+        shape: "ROUND",
+        diameterMm: 8,
+        currency: "CNY",
+        unitPriceMinor: 12800,
+        rightsHolder: "玄矶水晶工作室",
+        usagePermission: "OWNED",
+        qualityStatement: "天然紫水晶，肉眼可见少量棉絮",
+        qualitySource: "到货批次人工目检",
+        isAuthenticPhotograph: true,
+        allowPublicDisplay: true,
+        allowCommercialUse: true,
+        allowAiTraining: false,
+        allowAiRecommendation: true
+      });
+      assert.ok(draft.crystalDraftId, "a saved draft must create a crystal draft");
+      await repository.updateCrystalDraft(
+        draft.crystalDraftId!,
+        {
+          idempotencyKey: keyOf("curation-hydration"),
+          expectedRevision: draft.crystalDraftRevision!,
+          nameCn: "紫水晶",
+          nameEn: "Amethyst",
+          mineralName: "Quartz",
+          colorTags: ["紫色"],
+          visualTags: ["透明"],
+          styleTags: ["简约"],
+          priceLevel: 3,
+          complianceNote: "仅作文化象征说明"
+        },
+        "integration-admin"
+      );
+
+      const detail = await repository.getSession(fixture.sessionId);
+      const group = detail.groups.find((candidate) => candidate.groupId === fixture.groupId)!;
+      assert.equal(group.processedAssets[0]!.approvedAssetKey, fixture.assetKey, "approved key hydrates on refresh");
+      assert.ok(group.productDraft, "the saved product draft hydrates");
+      assert.equal(group.productDraft!.displayName, "紫水晶 8mm 圆珠");
+      assert.equal(group.productDraft!.unitPriceMinor, 12800);
+      assert.equal(group.productDraft!.usagePermission, "OWNED");
+      assert.equal(group.productDraft!.isAuthenticPhotograph, true);
+      assert.ok(group.crystalDraft, "the crystal draft hydrates");
+      assert.equal(group.crystalDraft!.nameCn, "紫水晶");
+      assert.equal(group.crystalDraft!.nameEn, "Amethyst");
+      assert.equal(group.crystalDraft!.mineralName, "Quartz");
+      assert.deepEqual(group.crystalDraft!.colorTags, ["紫色"]);
+      assert.equal(group.crystalDraft!.priceLevel, 3);
+      assert.equal(group.crystalDraft!.complianceNote, "仅作文化象征说明");
+      assert.equal(group.crystalDraft!.curationComplete, true);
+    });
+
+    await t.test("38. crystal search keyset pagination covers first/last pages, duplicates, empties and invalid cursors", async () => {
+      const tag = keyOf("crystalpage");
+      const base = {
+        gemologicalInfo: {},
+        colorTags: [],
+        visualTags: [],
+        styleTags: [],
+        emotionTags: [],
+        cultureTags: [],
+        priceLevel: 3,
+        complianceNote: ""
+      };
+      // A deliberately duplicated nameCn exercises the (nameCn, id) tiebreaker.
+      await prisma.crystal.createMany({
+        data: [
+          { id: `${tag}-1`, nameCn: `${tag}-alpha`, nameEn: `${tag}-A`, mineralName: `${tag}-quartz`, ...base },
+          { id: `${tag}-2`, nameCn: `${tag}-alpha`, nameEn: `${tag}-A`, mineralName: `${tag}-quartz`, ...base },
+          { id: `${tag}-3`, nameCn: `${tag}-beta`, nameEn: `${tag}-B`, mineralName: `${tag}-quartz`, ...base },
+          { id: `${tag}-4`, nameCn: `${tag}-gamma`, nameEn: `${tag}-C`, mineralName: `${tag}-quartz`, ...base }
+        ]
+      });
+
+      // Walk every page at a small limit; each id must appear exactly once.
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      for (let pageIndex = 0; pageIndex < 10; pageIndex += 1) {
+        const page: Awaited<ReturnType<typeof repository.searchCrystals>> =
+          cursor === null
+            ? await repository.searchCrystals({ q: `${tag}-`, limit: 2 })
+            : await repository.searchCrystals({ q: `${tag}-`, limit: 2, cursor });
+        seen.push(...page.crystals.map((c) => c.crystalId));
+        cursor = page.nextCursor;
+        if (cursor === null) break;
+      }
+      assert.equal(new Set(seen).size, 4, "duplicate names must not be collapsed or repeated");
+      assert.deepEqual(
+        [...seen].sort(),
+        [`${tag}-1`, `${tag}-2`, `${tag}-3`, `${tag}-4`].sort()
+      );
+
+      const none = await repository.searchCrystals({ q: `${tag}-nonexistent` });
+      assert.deepEqual(none.crystals, []);
+      assert.equal(none.nextCursor, null);
+
+      await assert.rejects(
+        () => repository.searchCrystals({ q: `${tag}-`, cursor: `${tag}-missing` }),
+        expectCode("NOT_FOUND")
+      );
+      await assert.rejects(
+        () => repository.searchCrystals({ q: `${tag}-nonexistent`, cursor: `${tag}-1` }),
+        expectCode("NOT_FOUND")
+      );
+
+      const capped = await repository.searchCrystals({ q: `${tag}-`, limit: 20 });
+      assert.equal(capped.crystals.length, 4);
+      assert.equal(capped.nextCursor, null);
     });
   } finally {
     await prisma.$disconnect();

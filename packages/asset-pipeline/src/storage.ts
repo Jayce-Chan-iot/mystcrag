@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { type FileHandle, link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
+import { Readable } from "node:stream";
 
 import { normalizeAssetRelativePath } from "@mystcrag/design-contract";
 
@@ -55,6 +56,8 @@ const PROCESSED_FILE_NAMES: ReadonlySet<string> = new Set(PROCESSED_ARCHIVE_FILE
 
 const KEY_PREFIX = "imports";
 
+const READ_CHUNK_BYTES = 64 * 1024;
+
 export type ArchivePutResult = {
   archiveKey: string;
   sha256: string;
@@ -87,6 +90,55 @@ type FileIdentity = {
   dev: number;
   ino: number;
 };
+
+/**
+ * Streams the verified bytes of an already-open, already-verified FileHandle
+ * in fixed chunks via positional reads starting at byte zero. The handle is
+ * owned exclusively by this stream: it is closed exactly once in `_destroy`,
+ * which Node runs on normal completion, on `destroy()` and on read failure —
+ * never via garbage collection — so the served body is always the same
+ * descriptor that produced the digest, even if the path is replaced mid-read.
+ */
+class ArchiveVerifiedReadStream extends Readable {
+  private position = 0;
+
+  constructor(
+    private readonly handle: FileHandle,
+    private readonly size: number,
+    private readonly archiveKey: string
+  ) {
+    super({ highWaterMark: READ_CHUNK_BYTES, autoDestroy: true });
+  }
+
+  override async _read(): Promise<void> {
+    try {
+      if (this.position >= this.size) {
+        this.push(null);
+        return;
+      }
+      const buffer = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, this.size - this.position));
+      const { bytesRead } = await this.handle.read(buffer, 0, buffer.byteLength, this.position);
+      if (this.destroyed) return; // the consumer aborted mid-read; _destroy owns cleanup
+      if (bytesRead <= 0) {
+        throw new ArchiveStoreError("READ_FAILED", `Failed to read ${redactKey(this.archiveKey)}`);
+      }
+      this.position += bytesRead;
+      this.push(buffer.subarray(0, bytesRead));
+    } catch (error) {
+      // _read promise rejections are not converted to stream errors, so the
+      // failure must be delivered to the consumer through destroy() itself.
+      this.destroy(
+        error instanceof ArchiveStoreError
+          ? error
+          : new ArchiveStoreError("READ_FAILED", `Failed to read ${redactKey(this.archiveKey)}`, { cause: error })
+      );
+    }
+  }
+
+  override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
+    this.handle.close().catch(() => undefined).then(() => callback(error));
+  }
+}
 
 /**
  * Immutable local archive below `MYSTCRAG_ASSET_ARCHIVE_ROOT` (spec §5.4).
@@ -535,6 +587,73 @@ export class ArchiveStore {
       );
     }
     return bytes;
+  }
+
+  /**
+   * Opens an immutable archive key exactly once and performs a verified
+   * streaming read on that single descriptor, closing the TOCTOU window where
+   * a verification pass and a response stream would otherwise be served from
+   * two different opens. The file is opened with O_NOFOLLOW after the usual
+   * no-symlink walk, its type and size are confirmed against the opened
+   * handle, and its SHA-256 is streamed over that same handle in fixed chunks
+   * — verified against `expectedSha256` when supplied — before any byte leaves
+   * the method. The returned Readable reads from byte zero of the *same* open
+   * descriptor, so the digest, `byteSize` and response body are all bound to
+   * one inode: replacing the path between verification and streaming cannot
+   * substitute different bytes. Ending, aborting or erroring the stream closes
+   * the descriptor; there is no second open and no second full-size buffer.
+   */
+  async openVerifiedRead(
+    archiveKey: string,
+    expectedSha256?: string
+  ): Promise<{ stream: Readable; byteSize: number; sha256: string }> {
+    if (expectedSha256 !== undefined) assertSha256(expectedSha256);
+    const { handle, size } = await this.openRegularFile(archiveKey);
+    let sha256: string;
+    try {
+      sha256 = await digestDescriptor(handle, size, archiveKey);
+    } catch (error) {
+      await handle.close().catch(() => undefined);
+      throw error;
+    }
+    if (expectedSha256 !== undefined && sha256 !== expectedSha256) {
+      await handle.close().catch(() => undefined);
+      throw new ArchiveStoreError(
+        "HASH_MISMATCH",
+        `Stored content of ${redactKey(archiveKey)} does not match the expected SHA-256`
+      );
+    }
+    // The stream takes exclusive ownership of the already-open descriptor and
+    // closes it in `_destroy`. It never re-opens by path, so the bytes it
+    // serves are the same inode that produced `sha256`.
+    return {
+      stream: new ArchiveVerifiedReadStream(handle, size, archiveKey),
+      byteSize: size,
+      sha256
+    };
+  }
+
+  private async openRegularFile(archiveKey: string): Promise<{ handle: FileHandle; size: number }> {
+    assertArchiveKey(archiveKey);
+    const target = await this.joinUnderRoot(archiveKey);
+    let handle: FileHandle;
+    try {
+      handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    } catch (error) {
+      if (error instanceof ArchiveStoreError) throw error;
+      throw new ArchiveStoreError("READ_FAILED", `Failed to read ${redactKey(archiveKey)}`, { cause: error });
+    }
+    try {
+      const info = await handle.stat();
+      if (!info.isFile()) {
+        throw new ArchiveStoreError("KEY_INVALID", "Archive key does not resolve to a stored file");
+      }
+      return { handle, size: info.size };
+    } catch (error) {
+      await handle.close().catch(() => undefined);
+      if (error instanceof ArchiveStoreError) throw error;
+      throw new ArchiveStoreError("READ_FAILED", `Failed to read ${redactKey(archiveKey)}`, { cause: error });
+    }
   }
 
   async listSessionFiles(sessionId: string): Promise<string[]> {
@@ -1001,6 +1120,33 @@ async function sha256OfDescriptor(
     position += bytesRead;
   }
   return { sha256: hash.digest("hex"), byteSize: info.size };
+}
+
+/**
+ * Streams a SHA-256 over an already-open, already-verified FileHandle using
+ * positional reads from byte zero, so it never buffers the file and never
+ * disturbs the descriptor's current offset. Used by {@link ArchiveStore
+ * #openVerifiedRead} so the digest and the response stream come from the same
+ * open descriptor.
+ */
+async function digestDescriptor(handle: FileHandle, size: number, archiveKey: string): Promise<string> {
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+  let position = 0;
+  while (position < size) {
+    const { bytesRead } = await handle.read(
+      buffer,
+      0,
+      Math.min(buffer.byteLength, size - position),
+      position
+    );
+    if (bytesRead <= 0) {
+      throw new ArchiveStoreError("READ_FAILED", `Failed to read ${redactKey(archiveKey)}`);
+    }
+    hash.update(buffer.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+  return hash.digest("hex");
 }
 
 async function closeDirectoryHandles(handles: readonly FileHandle[]): Promise<unknown[]> {

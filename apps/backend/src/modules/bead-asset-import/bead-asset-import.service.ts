@@ -7,6 +7,8 @@ import type {
   CancelAssetImportSessionRequest,
   CreateAssetImportSessionRequest,
   ListAssetImportSessionsQuery,
+  ListCrystalsQuery,
+  ProcessedAssetRendition,
   PublishBeadImageGroupRequest,
   RegisterAssetManifestRequest,
   ReprocessBeadImageGroupRequest,
@@ -31,13 +33,30 @@ type Repository = Pick<AssetImportRepository,
   | "startGrouping" | "startProcessing" | "updateGroup" | "reprocessGroup"
   | "selectProcessedVersion" | "reviewProcessedAsset" | "updateCrystalDraft"
   | "saveGroupDraft" | "checkGroupDraftCompleteness" | "publishGroup" | "getPublishResult"
+  | "searchCrystals" | "resolveSourceFileRead" | "resolveProcessedAssetRead"
 >;
 
-type Store = Pick<ArchiveStore, "putStagingStream" | "removeStaging">;
+type Store = Pick<ArchiveStore, "putStagingStream" | "removeStaging" | "openVerifiedRead">;
 
 function iso(date: Date): string {
   return date.toISOString();
 }
+
+export type AdminBinaryContent = {
+  stream: Readable;
+  byteSize: number;
+  contentType: string;
+  etag: string;
+};
+
+const SOURCE_CONTENT_TYPES: Readonly<Record<"JPEG" | "PNG" | "WEBP", string>> = {
+  JPEG: "image/jpeg",
+  PNG: "image/png",
+  WEBP: "image/webp"
+};
+
+const PROCESSED_MAIN_FILENAME = "bead-512.webp";
+const PROCESSED_THUMBNAIL_FILENAME = "thumb-256.webp";
 
 function uploadIdempotencyKey(sessionId: string, fileId: string, sha256: string, uploadAttemptId: string): string {
   const digest = createHash("sha256")
@@ -261,5 +280,38 @@ export class AssetImportApplicationService {
   async getPublishResult(groupId: string) {
     const result = await this.deps.repository.getPublishResult(groupId);
     return { ...result, publishedAt: iso(result.publishedAt) };
+  }
+
+  async searchCrystals(query: ListCrystalsQuery) {
+    return this.deps.repository.searchCrystals(query);
+  }
+
+  async readSourceFile(fileId: string): Promise<AdminBinaryContent> {
+    const file = await this.deps.repository.resolveSourceFileRead(fileId);
+    if (file.state !== "ARCHIVED" || file.archiveKey === null || file.sha256 === null) {
+      throw new AssetImportApiError("NOT_FOUND", "The source image is not available for preview.");
+    }
+    if (file.kind === "ARW") {
+      throw new AssetImportApiError(
+        "UNSUPPORTED_MEDIA_TYPE",
+        "Raw camera files cannot be previewed in the browser.",
+        "SOURCE_PREVIEW_UNAVAILABLE"
+      );
+    }
+    const { stream, byteSize } = await this.deps.archiveStore.openVerifiedRead(file.archiveKey, file.sha256);
+    return { stream, byteSize, contentType: SOURCE_CONTENT_TYPES[file.kind], etag: `"${file.sha256}"` };
+  }
+
+  async readProcessedAsset(processedAssetId: string, rendition: ProcessedAssetRendition): Promise<AdminBinaryContent> {
+    const asset = await this.deps.repository.resolveProcessedAssetRead(processedAssetId);
+    if (rendition === "main") {
+      const { stream, byteSize } = await this.deps.archiveStore.openVerifiedRead(asset.storageKey, asset.outputSha256);
+      return { stream, byteSize, contentType: asset.outputContentType, etag: `"${asset.outputSha256}"` };
+    }
+    const thumbnailKey = asset.storageKey.endsWith(PROCESSED_MAIN_FILENAME)
+      ? `${asset.storageKey.slice(0, -PROCESSED_MAIN_FILENAME.length)}${PROCESSED_THUMBNAIL_FILENAME}`
+      : asset.storageKey;
+    const { stream, byteSize, sha256 } = await this.deps.archiveStore.openVerifiedRead(thumbnailKey);
+    return { stream, byteSize, contentType: asset.outputContentType, etag: `"${sha256}"` };
   }
 }

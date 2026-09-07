@@ -107,16 +107,26 @@ const sessionResponse = (overrides: Record<string, unknown> = {}) => ({
           state: "QC_PENDING",
           isCurrent: true,
           qcPassed: true,
-          qcIssues: []
+          qcIssues: [],
+          approvedAssetKey: null
         }
       ],
       crystalDraft: {
         crystalDraftId: "draft-1",
         revision: 2,
+        nameCn: null,
+        nameEn: null,
+        mineralName: null,
+        colorTags: null,
+        visualTags: null,
+        styleTags: null,
+        priceLevel: null,
+        complianceNote: null,
         curationComplete: false,
         missingFields: ["PRICE_LEVEL"],
         promotionEligible: false
-      }
+      },
+      productDraft: null
     }
   ],
   ...overrides
@@ -249,6 +259,7 @@ const reviewResponse = (overrides: Record<string, unknown> = {}) => ({
   reviewAction: "APPROVE",
   state: "APPROVED",
   revision: 5,
+  approvedAssetKey: approvedKey,
   reviewedAt: now,
   ...overrides
 });
@@ -731,7 +742,8 @@ test("session status response projects checkpoint, file and group review state",
           memberFileIds: ["file-1"],
           revision: 1,
           processedAssets: [],
-          crystalDraft: null
+          crystalDraft: null,
+          productDraft: null
         }
       ]
     }),
@@ -754,10 +766,12 @@ test("session status response projects checkpoint, file and group review state",
               isCurrent: true,
               qcPassed: true,
               qcIssues: [],
+              approvedAssetKey: null,
               storageKey: "imports/session-1/processed/group-1/v2/bead-512.webp"
             }
           ],
-          crystalDraft: null
+          crystalDraft: null,
+          productDraft: null
         }
       ]
     }),
@@ -1490,7 +1504,8 @@ test("asset import errors keep transport codes separate from asset codes", () =>
     "MISSING_REFERENCE",
     "SKU_CONFLICT",
     "INVENTORY_VERSION_CONFLICT",
-    "PUBLISH_TRANSACTION_FAILED"
+    "PUBLISH_TRANSACTION_FAILED",
+    "SOURCE_PREVIEW_UNAVAILABLE"
   ] as const;
   assert.deepEqual([...asset.ASSET_IMPORT_ERROR_CODES].sort(), [...expectedAssetCodes].sort());
   for (const code of expectedAssetCodes) {
@@ -1810,12 +1825,12 @@ test("human processed-asset review is an explicit admin decision, never a QC out
   accepts(asset.ReviewProcessedAssetResponseSchema, reviewResponse(), "approve response reports the approved state");
   accepts(
     asset.ReviewProcessedAssetResponseSchema,
-    reviewResponse({ processedAssetId: "asset-2", reviewAction: "REJECT", state: "RETIRED" }),
+    reviewResponse({ processedAssetId: "asset-2", reviewAction: "REJECT", state: "RETIRED", approvedAssetKey: null }),
     "reject response reports the retired state"
   );
   rejects(
     asset.ReviewProcessedAssetResponseSchema,
-    reviewResponse({ reviewAction: "REJECT" }),
+    reviewResponse({ reviewAction: "REJECT", approvedAssetKey: null }),
     "reject response reporting an approved state"
   );
   rejects(
@@ -2029,4 +2044,154 @@ test("crystal draft curation accepts only complete human-authored material data"
     "non-canonical curation completeness field"
   );
   rejects(asset.UpdateCrystalDraftCurationResponseSchema, curationResponse({ revision: 0 }), "non-positive curation revision");
+});
+
+test("admin binary read exposes a strict rendition enum and content query", () => {
+  for (const rendition of asset.PROCESSED_ASSET_RENDITIONS) {
+    accepts(asset.ProcessedAssetRenditionSchema, rendition, `rendition ${rendition}`);
+  }
+  rejects(asset.ProcessedAssetRenditionSchema, "preview", "non-canonical rendition");
+  rejects(asset.ProcessedAssetRenditionSchema, "raw", "source raw rendition is not browser-displayable");
+
+  accepts(asset.ProcessedAssetContentQuerySchema, {}, "content query without a rendition defaults to main");
+  accepts(asset.ProcessedAssetContentQuerySchema, { rendition: "thumbnail" }, "thumbnail content query");
+  rejects(asset.ProcessedAssetContentQuerySchema, { rendition: "preview" }, "unknown rendition in content query");
+  rejects(asset.ProcessedAssetContentQuerySchema, { path: "imports/x/a.webp" }, "content query must not accept a path");
+
+  accepts(asset.AssetFileContentParamsSchema, { fileId: "file-1" }, "source file content params");
+  accepts(asset.ProcessedAssetContentParamsSchema, { processedAssetId: "asset-1" }, "processed asset content params");
+});
+
+test("SOURCE_PREVIEW_UNAVAILABLE is a stable 415 that never reveals a path", () => {
+  assert.equal(asset.ASSET_IMPORT_ERROR_TRANSPORT_CODES.SOURCE_PREVIEW_UNAVAILABLE, "UNSUPPORTED_MEDIA_TYPE");
+  assert.equal(asset.ASSET_IMPORT_TRANSPORT_STATUS_BY_CODE.UNSUPPORTED_MEDIA_TYPE, 415);
+  assert.equal(asset.ASSET_IMPORT_ERROR_CATALOG.SOURCE_PREVIEW_UNAVAILABLE.retryable, false);
+  assert.equal(asset.ASSET_IMPORT_ERROR_CATALOG.SOURCE_PREVIEW_UNAVAILABLE.recoveryAction, "NO_RECOVERY");
+});
+
+test("crystal search query and response are strict, bounded and stable", () => {
+  accepts(asset.ListCrystalsQuerySchema, { q: "紫水晶" }, "minimal crystal search");
+  accepts(asset.ListCrystalsQuerySchema, { q: "amethyst", limit: 20, cursor: "crystal-10" }, "bounded crystal search");
+  rejects(asset.ListCrystalsQuerySchema, {}, "missing query text");
+  rejects(asset.ListCrystalsQuerySchema, { q: "   " }, "blank query text");
+  rejects(asset.ListCrystalsQuerySchema, { q: "x".repeat(201) }, "overlong query text");
+  rejects(asset.ListCrystalsQuerySchema, { q: "紫水晶", limit: 0 }, "zero crystal search limit");
+  rejects(asset.ListCrystalsQuerySchema, { q: "紫水晶", limit: 21 }, "crystal search limit above 20");
+  rejects(asset.ListCrystalsQuerySchema, { q: "紫水晶", unknown: 1 }, "unknown crystal search field");
+
+  accepts(
+    asset.CrystalSearchResultSchema,
+    { crystalId: "crystal-1", nameCn: "紫水晶", nameEn: "Amethyst", mineralName: "Quartz" },
+    "minimal crystal search result"
+  );
+  accepts(
+    asset.CrystalSearchResultSchema,
+    { crystalId: "crystal-2", nameCn: "白水晶", nameEn: null, mineralName: null },
+    "crystal without english or mineral names"
+  );
+  rejects(asset.CrystalSearchResultSchema, { crystalId: "crystal-1", nameCn: "紫水晶", nameEn: null, mineralName: null, storageKey: "x" }, "crystal search result leaking storage");
+
+  accepts(
+    asset.ListCrystalsResponseSchema,
+    {
+      crystals: [{ crystalId: "crystal-1", nameCn: "紫水晶", nameEn: "Amethyst", mineralName: "Quartz" }],
+      nextCursor: "crystal-1"
+    },
+    "crystal search response"
+  );
+  accepts(asset.ListCrystalsResponseSchema, { crystals: [], nextCursor: null }, "empty crystal search response");
+});
+
+const approvedProcessedAsset = (overrides: Record<string, unknown> = {}) => ({
+  processedAssetId: "asset-1",
+  processingVersion: 2,
+  state: "APPROVED",
+  isCurrent: true,
+  qcPassed: true,
+  qcIssues: [],
+  approvedAssetKey: approvedKey,
+  ...overrides
+});
+
+test("approvedAssetKey is authoritative: only APPROVED may expose it, and only via approval", () => {
+  accepts(asset.AssetImportProcessedAssetViewSchema, approvedProcessedAsset(), "approved processed asset exposes its key");
+  rejects(asset.AssetImportProcessedAssetViewSchema, approvedProcessedAsset({ approvedAssetKey: null }), "approved processed asset without its key");
+  rejects(asset.AssetImportProcessedAssetViewSchema, approvedProcessedAsset({ state: "QC_PENDING", approvedAssetKey: approvedKey }), "pending asset must not expose a key");
+  accepts(
+    asset.AssetImportProcessedAssetViewSchema,
+    approvedProcessedAsset({ state: "QC_PENDING", approvedAssetKey: null }),
+    "pending asset keeps a null key"
+  );
+  rejects(asset.AssetImportProcessedAssetViewSchema, approvedProcessedAsset({ approvedAssetKey: "outputSha256" }), "approved key must match the canonical shape");
+
+  rejects(
+    asset.ReviewProcessedAssetResponseSchema,
+    reviewResponse({ approvedAssetKey: null }),
+    "approve response without the authoritative key"
+  );
+  accepts(
+    asset.ReviewProcessedAssetResponseSchema,
+    reviewResponse({ reviewAction: "REJECT", state: "RETIRED", approvedAssetKey: null }),
+    "reject response never carries a key"
+  );
+});
+
+const productDraftView = (overrides: Record<string, unknown> = {}) => ({
+  crystalName: "紫水晶",
+  crystalId: null,
+  crystalDraftId: "draft-1",
+  displayName: "紫水晶 8mm 圆珠",
+  sku: "BEAD-AMETHYST-8",
+  materialKey: "amethyst-round-8",
+  shape: "ROUND",
+  diameterMm: 8,
+  lengthAlongStringMm: null,
+  currency: "CNY",
+  unitPriceMinor: 12_800,
+  costMinor: 4_000,
+  availableQuantity: 100,
+  qualityStatement: "天然紫水晶，肉眼可见少量棉絮",
+  qualitySource: "到货批次人工目检",
+  textureAssetKey: null,
+  modelAssetKey: null,
+  rightsHolder: "玄矶水晶工作室",
+  usagePermission: "OWNED",
+  isAuthenticPhotograph: true,
+  allowAiTraining: false,
+  allowCommercialUse: true,
+  allowPublicDisplay: true,
+  allowAiRecommendation: true,
+  ...overrides
+});
+
+test("product draft hydration uses null for unfilled fields, never empty placeholders", () => {
+  accepts(asset.BeadProductDraftViewSchema, productDraftView(), "fully filled product draft");
+  accepts(asset.BeadProductDraftViewSchema, productDraftView({ crystalId: "crystal-1", crystalDraftId: null }), "draft referencing an existing crystal");
+  rejects(asset.BeadProductDraftViewSchema, productDraftView({ crystalId: "crystal-1", crystalDraftId: "draft-1" }), "draft referencing both a crystal and a crystal draft");
+  rejects(asset.BeadProductDraftViewSchema, productDraftView({ displayName: "" }), "empty display name pretending to be filled");
+  rejects(asset.BeadProductDraftViewSchema, productDraftView({ sku: "" }), "sku empty string pretending to be filled");
+  rejects(asset.BeadProductDraftViewSchema, productDraftView({ diameterMm: 0 }), "non-positive diameter");
+
+  const hydratedCrystalDraft = {
+    crystalDraftId: "draft-1",
+    revision: 2,
+    nameCn: "紫水晶",
+    nameEn: "Amethyst",
+    mineralName: "Quartz",
+    colorTags: ["紫色"],
+    visualTags: ["透明"],
+    styleTags: ["简约"],
+    priceLevel: 3,
+    complianceNote: "仅作文化象征说明",
+    curationComplete: true,
+    missingFields: [],
+    promotionEligible: true
+  };
+  accepts(asset.AssetImportCrystalDraftViewSchema, hydratedCrystalDraft, "fully curated crystal draft hydration");
+  accepts(
+    asset.AssetImportCrystalDraftViewSchema,
+    { ...hydratedCrystalDraft, nameCn: null, nameEn: null, mineralName: null, colorTags: null, visualTags: null, styleTags: null, priceLevel: null, complianceNote: null, curationComplete: false, missingFields: ["NAME_CN"], promotionEligible: false },
+    "uncurated crystal draft hydrates as null fields"
+  );
+  rejects(asset.AssetImportCrystalDraftViewSchema, { ...hydratedCrystalDraft, nameCn: "" }, "empty curation field pretending to be filled");
 });

@@ -34,12 +34,15 @@ function service() {
     updateGroup: async () => ({ groupId: "group-1", state: "NAMED", revision: 2, memberFileIds: ["file-1"], crystalName: "紫水晶" }),
     reprocessGroup: async () => ({ groupId: "group-1", jobId: "job-1", jobState: "QUEUED", processingVersion: 2 }),
     selectProcessedVersion: async () => ({ groupId: "group-1", state: "PROCESSED", selectedProcessingVersion: 1, updatedAt: NOW }),
-    reviewProcessedAsset: async () => ({ groupId: "group-1", processedAssetId: "asset-1", reviewAction: "REJECT", state: "RETIRED", revision: 2, reviewedAt: NOW }),
+    reviewProcessedAsset: async () => ({ groupId: "group-1", processedAssetId: "asset-1", reviewAction: "REJECT", state: "RETIRED", revision: 2, approvedAssetKey: null, reviewedAt: NOW }),
     updateCrystalDraft: async () => ({ crystalDraftId: "draft-1", revision: 2, curationComplete: false, missingFields: ["NAME_EN"], promotionEligible: false, updatedAt: NOW }),
     saveGroupDraft: async () => ({ groupId: "group-1", state: "NAMED", revision: 2, crystalDraftId: "draft-1", crystalDraftRevision: 1, draftSavedAt: NOW }),
     checkGroupDraftCompleteness: async () => ({ groupId: "group-1", state: "NAMED", complete: false, missingFields: ["SKU"], checkedAt: NOW }),
     publishGroup: async () => ({ groupId: "group-1", state: "PUBLISHED", materialProductId: "product-1", crystalId: "crystal-1", inventorySnapshotId: "inventory-1", publishedAt: NOW, publishedAssetKeys: [`approved:${SHA}`] }),
-    getPublishResult: async () => ({ groupId: "group-1", state: "PUBLISHED", materialProductId: "product-1", crystalId: "crystal-1", inventorySnapshotId: "inventory-1", publishedAt: NOW, publishedAssetKeys: [`approved:${SHA}`] })
+    getPublishResult: async () => ({ groupId: "group-1", state: "PUBLISHED", materialProductId: "product-1", crystalId: "crystal-1", inventorySnapshotId: "inventory-1", publishedAt: NOW, publishedAssetKeys: [`approved:${SHA}`] }),
+    searchCrystals: async () => ({ crystals: [{ crystalId: "crystal-1", nameCn: "紫水晶", nameEn: "Amethyst", mineralName: "Quartz" }], nextCursor: null }),
+    readSourceFile: async () => ({ stream: Readable.from([Buffer.from([0xff, 0xd8, 0xff, 0xd9])]), byteSize: 4, contentType: "image/jpeg", etag: `"${SHA}"` }),
+    readProcessedAsset: async () => ({ stream: Readable.from([Buffer.from([0x52, 0x49, 0x46, 0x46])]), byteSize: 4, contentType: "image/webp", etag: `"${SHA}"` })
   };
 }
 
@@ -60,10 +63,13 @@ const routes = [
   { method: "POST", url: "/api/admin/bead-import/groups/group-1/draft", payload: { expectedGroupRevision: 1, crystalName: "紫水晶" } },
   { method: "GET", url: "/api/admin/bead-import/groups/group-1/draft-completeness" },
   { method: "POST", url: "/api/admin/bead-import/groups/group-1/publish", payload: { idempotencyKey: "publish-1", expectedGroupRevision: 1, crystalId: "crystal-1", crystalName: "紫水晶", crystalNameConfirmedByOperator: true, displayName: "紫水晶 8mm", sku: "SKU-1", materialKey: "amethyst-8", shape: "ROUND", diameterMm: 8, qualityStatement: "人工目检", qualitySource: "批次检查", textureAssetKey: `approved:${SHA}`, currency: "CNY", unitPriceMinor: 100, costMinor: 50, availableQuantity: 1, allowPublicDisplay: true, allowAiRecommendation: false, allowAiTraining: false, allowCommercialUse: true, rightsHolder: "玄矶", usagePermission: "OWNED", isAuthenticPhotograph: true } },
-  { method: "GET", url: "/api/admin/bead-import/groups/group-1/publish-result" }
+  { method: "GET", url: "/api/admin/bead-import/groups/group-1/publish-result" },
+  { method: "GET", url: "/api/admin/bead-import/files/file-1/content" },
+  { method: "GET", url: "/api/admin/bead-import/processed-assets/asset-1/content?rendition=main" },
+  { method: "GET", url: "/api/admin/bead-import/crystals?q=%E7%B4%AB%E6%B0%B4%E6%99%B6" }
 ] as const;
 
-test("all seventeen admin routes are registered, authenticated, and schema-valid", async () => {
+test("all twenty admin routes are registered, authenticated, and schema-valid", async () => {
   const app = createApp({
     assetImportEnabled: true,
     assetImportService: service() as never,

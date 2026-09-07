@@ -168,6 +168,31 @@ test("real backend composes upload, review, curation, publication, and approved 
     });
     assert.equal(reviewed.statusCode, 200, reviewed.body);
     const approvedKey = `approved:${sha256OfBytes(WEBP)}`;
+    assert.equal(reviewed.json().approvedAssetKey, approvedKey, "approval returns the authoritative approved key, never a client-computed one");
+
+    // Gap 1: admin binary read of unpublished source and processed images.
+    const sourceRead = await app.inject({ method: "GET", url: `/api/admin/bead-import/files/${fileId}/content`, headers: adminHeaders });
+    assert.equal(sourceRead.statusCode, 200, sourceRead.body);
+    assert.deepEqual(sourceRead.rawPayload, JPEG);
+    assert.equal(sourceRead.headers["cache-control"], "private, no-store");
+
+    const processedRead = await app.inject({ method: "GET", url: `/api/admin/bead-import/processed-assets/${processedAssetId}/content?rendition=main`, headers: adminHeaders });
+    assert.equal(processedRead.statusCode, 200, processedRead.body);
+    assert.deepEqual(processedRead.rawPayload, WEBP);
+
+    // Gap 4: a session refresh restores the approved key, product draft and crystal curation.
+    const hydratedSession = await app.inject({ method: "GET", url: `/api/admin/bead-import/sessions/${sessionId}`, headers: adminHeaders });
+    assert.equal(hydratedSession.statusCode, 200, hydratedSession.body);
+    const hydratedGroup = hydratedSession.json().groups.find((candidate: { groupId: string }) => candidate.groupId === groupId);
+    assert.ok(hydratedGroup.productDraft, "the saved product draft hydrates");
+    assert.equal(hydratedGroup.productDraft.crystalName, "紫水晶");
+    assert.ok(hydratedGroup.crystalDraft, "the crystal draft hydrates");
+    assert.equal(hydratedGroup.crystalDraft.nameCn, "紫水晶");
+    assert.equal(hydratedGroup.crystalDraft.nameEn, "Amethyst");
+    assert.equal(hydratedGroup.crystalDraft.mineralName, "Quartz");
+    assert.deepEqual(hydratedGroup.crystalDraft.colorTags, ["purple"]);
+    assert.equal(hydratedGroup.crystalDraft.priceLevel, 3);
+    assert.equal(hydratedGroup.processedAssets[0].approvedAssetKey, approvedKey);
 
     const published = await app.inject({
       method: "POST", url: `/api/admin/bead-import/groups/${groupId}/publish`, headers: adminHeaders,
@@ -184,6 +209,11 @@ test("real backend composes upload, review, curation, publication, and approved 
     });
     assert.equal(published.statusCode, 200, published.body);
     assert.deepEqual(published.json().publishedAssetKeys, [approvedKey]);
+
+    // Gap 2: dedicated admin Crystal search finds the promoted crystal by name.
+    const crystalSearch = await app.inject({ method: "GET", url: `/api/admin/bead-import/crystals?q=${encodeURIComponent("紫水晶")}`, headers: adminHeaders });
+    assert.equal(crystalSearch.statusCode, 200, crystalSearch.body);
+    assert.ok(crystalSearch.json().crystals.some((candidate: { nameCn: string }) => candidate.nameCn === "紫水晶"));
 
     const reread = await app.inject({ method: "GET", url: `/api/admin/bead-import/groups/${groupId}/publish-result`, headers: adminHeaders });
     assert.equal(reread.statusCode, 200, reread.body);

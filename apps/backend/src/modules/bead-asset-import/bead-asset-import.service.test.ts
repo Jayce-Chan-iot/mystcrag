@@ -63,6 +63,21 @@ function repository(overrides: Record<string, unknown> = {}) {
       state: "FAILED",
       changed: true
     }),
+    searchCrystals: async () => ({ crystals: [], nextCursor: null }),
+    resolveSourceFileRead: async () => ({
+      kind: "JPEG",
+      state: "ARCHIVED",
+      archiveKey: "imports/session-1/raw/photo.jpg",
+      sha256: SHA,
+      byteSize: JPEG.byteLength
+    }),
+    resolveProcessedAssetRead: async () => ({
+      state: "APPROVED",
+      storageKey: "imports/session-1/processed/group-1/v1/bead-512.webp",
+      outputSha256: SHA,
+      outputContentType: "image/webp",
+      outputBytes: 4
+    }),
     ...overrides
   } as never;
 }
@@ -384,4 +399,103 @@ test("audited mutations use only the fixed server-side asset administrator actor
   await service.publishGroup("group-1", {} as never);
 
   assert.deepEqual(actors, Array(6).fill("asset-admin-local-operator"));
+});
+
+function makeBinaryStore(overrides: Record<string, unknown> = {}) {
+  const bytes = new Uint8Array([1, 2, 3]);
+  return {
+    openVerifiedRead: async () => ({
+      stream: Readable.from([bytes]),
+      byteSize: bytes.byteLength,
+      sha256: "0".repeat(64)
+    }),
+    ...overrides
+  } as never;
+}
+
+async function collectStream(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
+test("source file read streams verified bytes from one atomic open without buffering and returns a strong etag", async () => {
+  const calls: Array<{ key: string; expected?: string }> = [];
+  const payload = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+  const service = new AssetImportApplicationService({
+    repository: repository(),
+    archiveStore: {
+      openVerifiedRead: async (key: string, expected?: string) => {
+        calls.push({ key, expected });
+        return { stream: Readable.from([payload]), byteSize: payload.byteLength, sha256: expected ?? "0".repeat(64) };
+      },
+      openRead: async () => { throw new Error("openRead must not be used"); },
+      readDigest: async () => { throw new Error("readDigest must not be used"); },
+      read: async () => { throw new Error("full-buffer read must not be used"); },
+      verifiedRead: async () => { throw new Error("full-buffer verifiedRead must not be used"); }
+    } as never
+  });
+  const result = await service.readSourceFile("file-1");
+  assert.equal(result.contentType, "image/jpeg");
+  assert.equal(result.etag, `"${SHA}"`);
+  assert.equal(result.byteSize, payload.byteLength);
+  assert.deepEqual(await collectStream(result.stream), payload);
+  // A single atomic open replaces the old verify-then-reopen two-step.
+  assert.deepEqual(calls, [{ key: "imports/session-1/raw/photo.jpg", expected: SHA }]);
+});
+
+test("a raw ARW source is never disguised as a browser image", async () => {
+  const service = new AssetImportApplicationService({
+    repository: repository({
+      resolveSourceFileRead: async () => ({ kind: "ARW", state: "ARCHIVED", archiveKey: "x", sha256: SHA, byteSize: 6 })
+    }),
+    archiveStore: makeBinaryStore()
+  });
+  await assert.rejects(() => service.readSourceFile("file-1"), (error) => {
+    assert.ok(error instanceof AssetImportApiError);
+    assert.equal(error.transportCode, "UNSUPPORTED_MEDIA_TYPE");
+    assert.equal(error.assetCode, "SOURCE_PREVIEW_UNAVAILABLE");
+    return true;
+  });
+});
+
+test("an unarchived source is not readable", async () => {
+  const service = new AssetImportApplicationService({
+    repository: repository({
+      resolveSourceFileRead: async () => ({ kind: "JPEG", state: "PENDING", archiveKey: null, sha256: null, byteSize: 6 })
+    }),
+    archiveStore: makeBinaryStore()
+  });
+  await assert.rejects(() => service.readSourceFile("file-1"), (error) => {
+    assert.ok(error instanceof AssetImportApiError);
+    assert.equal(error.transportCode, "NOT_FOUND");
+    return true;
+  });
+});
+
+test("processed main read verifies the stored SHA while the thumbnail derives its own etag", async () => {
+  const calls: Array<{ key: string; expected?: string }> = [];
+  const service = new AssetImportApplicationService({
+    repository: repository(),
+    archiveStore: {
+      openVerifiedRead: async (key: string, expected?: string) => {
+        calls.push({ key, expected });
+        return { stream: Readable.from([Buffer.from([9])]), byteSize: 1, sha256: expected ?? "f".repeat(64) };
+      },
+      openRead: async () => { throw new Error("openRead must not be used"); },
+      readDigest: async () => { throw new Error("readDigest must not be used"); }
+    } as never
+  });
+  const main = await service.readProcessedAsset("asset-1", "main");
+  assert.equal(main.etag, `"${SHA}"`);
+  assert.deepEqual(calls, [
+    { key: "imports/session-1/processed/group-1/v1/bead-512.webp", expected: SHA }
+  ]);
+
+  const thumbnail = await service.readProcessedAsset("asset-1", "thumbnail");
+  assert.deepEqual(calls[1], {
+    key: "imports/session-1/processed/group-1/v1/thumb-256.webp",
+    expected: undefined
+  });
+  assert.equal(thumbnail.etag, `"${"f".repeat(64)}"`);
 });

@@ -3563,3 +3563,64 @@ test("cancelSession and orchestration starts are durable and never duplicate job
   assert.deepEqual(cancelReplay, cancelled);
   assert.equal(cancelled.state, "CANCELLED");
 });
+
+test("session refresh batches the duplicate-name check into a single crystal query", async () => {
+  const prisma = newDouble();
+  const repository = new AssetImportRepository(prisma as never);
+
+  await prisma.assetImportSession.create({
+    data: {
+      id: "session-1",
+      state: "NEEDS_REVIEW",
+      lastVerifiedCheckpoint: null,
+      declaredFileCount: 0,
+      archivedFileCount: 0,
+      failedFileCount: 0,
+      skippedFileCount: 0,
+      declaredBytes: 0n,
+      uploadedBytes: 0n,
+      createdAt: new Date("2026-09-07T00:00:00.000Z"),
+      updatedAt: new Date("2026-09-07T00:00:00.000Z")
+    }
+  });
+
+  const draft1 = await prisma.crystalDraft.create({
+    data: {
+      nameCn: "紫水晶", nameEn: "Amethyst", mineralName: "Quartz",
+      colorTags: ["紫色"], visualTags: ["透明"], styleTags: ["简约"],
+      priceLevel: 3, gemologicalInfo: {}, complianceNote: "仅作装饰说明",
+      promotedCrystalId: null, revision: 1
+    }
+  });
+  const draft2 = await prisma.crystalDraft.create({
+    data: {
+      nameCn: "海蓝宝", nameEn: "Aquamarine", mineralName: "Beryl",
+      colorTags: ["蓝色"], visualTags: ["透明"], styleTags: ["简约"],
+      priceLevel: 3, gemologicalInfo: {}, complianceNote: "仅作装饰说明",
+      promotedCrystalId: null, revision: 1
+    }
+  });
+
+  await prisma.beadImageGroup.create({
+    data: { id: "group-1", sessionId: "session-1", state: "NAMED", revision: 1, crystalDraftId: draft1.id as string, primaryFileId: null, crystalName: null }
+  });
+  await prisma.beadImageGroup.create({
+    data: { id: "group-2", sessionId: "session-1", state: "NAMED", revision: 1, crystalDraftId: draft2.id as string, primaryFileId: null, crystalName: null }
+  });
+
+  let crystalFindManyCalls = 0;
+  const crystalTable = prisma.crystal;
+  const originalFindMany = crystalTable.findMany.bind(crystalTable);
+  crystalTable.findMany = async (input: { where?: Record<string, unknown> }) => {
+    crystalFindManyCalls += 1;
+    return originalFindMany(input);
+  };
+
+  const detail = await repository.getSession("session-1");
+  assert.equal(detail.groups.length, 2);
+  assert.equal(
+    crystalFindManyCalls,
+    1,
+    "two drafts must share one batched Crystal lookup, never one full scan per draft"
+  );
+});

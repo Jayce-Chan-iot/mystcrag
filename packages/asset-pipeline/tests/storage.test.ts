@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readdirSync } from "node:fs";
 import {
   chmod,
   mkdir,
@@ -8,15 +9,32 @@ import {
   rm,
   stat,
   symlink,
+  truncate,
   unlink,
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import test from "node:test";
 
 import { sha256OfBytes } from "../src/hash.js";
 import { ArchiveStore, ArchiveStoreError } from "../src/storage.js";
+
+function countOpenFileDescriptors(): number {
+  return readdirSync("/dev/fd").filter((name) => /^[0-9]+$/.test(name)).length;
+}
+
+async function waitForClose(stream: Readable): Promise<void> {
+  if (stream.closed) return;
+  await new Promise<void>((resolve) => stream.once("close", resolve));
+}
+
+async function collectStream(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
 
 async function createArchiveRoot(): Promise<{ root: string; repositoryRoot: string }> {
   const base = await mkdtemp(join(tmpdir(), "asset-pipeline-storage-"));
@@ -1062,6 +1080,215 @@ test("putProcessed rejects unsafe processing versions", async () => {
       }),
       (error: unknown) => error instanceof ArchiveStoreError && error.code === "KEY_INVALID"
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("openVerifiedRead streams verified bytes in bounded chunks from a single descriptor", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    // 200 KiB: a whole-file read would hold this resident; streaming must not.
+    const bytes = Buffer.alloc(200 * 1024);
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = index % 251;
+    const sha256 = sha256OfBytes(bytes);
+    await archive.putOriginal({ sessionId: "sess-1", bytes, sha256, extension: "jpg" });
+
+    const { stream, byteSize, sha256: digest } = await archive.openVerifiedRead(
+      `imports/sess-1/raw/${sha256}.jpg`,
+      sha256
+    );
+    assert.equal(byteSize, bytes.byteLength);
+    assert.equal(digest, sha256);
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+    assert.ok(chunks.length > 1, "a 200 KiB file must be read in more than one chunk");
+    for (const chunk of chunks) {
+      assert.ok(chunk.byteLength <= 64 * 1024, "every chunk stays within the read bound");
+    }
+    assert.deepEqual(Buffer.concat(chunks), bytes);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("openVerifiedRead verifies a claimed digest and rejects a mismatch", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const bytes = Buffer.from("streamed digest payload");
+    const sha256 = sha256OfBytes(bytes);
+    await archive.putOriginal({ sessionId: "sess-1", bytes, sha256, extension: "jpg" });
+    const key = `imports/sess-1/raw/${sha256}.jpg`;
+
+    const verified = await archive.openVerifiedRead(key, sha256);
+    assert.equal(verified.sha256, sha256);
+    assert.equal(verified.byteSize, bytes.byteLength);
+    assert.deepEqual(await collectStream(verified.stream), bytes);
+
+    await assert.rejects(
+      archive.openVerifiedRead(key, "f".repeat(64)),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "HASH_MISMATCH"
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("openVerifiedRead refuses a symlinked final segment", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const bytes = Buffer.from("symlink target payload");
+    const sha256 = sha256OfBytes(bytes);
+    await archive.putOriginal({ sessionId: "sess-1", bytes, sha256, extension: "jpg" });
+
+    const key = `imports/sess-1/raw/${sha256}.jpg`;
+    const targetPath = join(root, key);
+    await unlink(targetPath);
+    const outside = join(root, "..", "outside.bin");
+    await writeFile(outside, bytes);
+    await symlink(outside, targetPath);
+
+    await assert.rejects(
+      archive.openVerifiedRead(key, sha256),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "KEY_INVALID"
+    );
+    await rm(outside, { force: true });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("openVerifiedRead serves the originally opened inode when the path is replaced after verification", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const bytes = Buffer.from("the verified original bytes");
+    const sha256 = sha256OfBytes(bytes);
+    await archive.putOriginal({ sessionId: "sess-1", bytes, sha256, extension: "jpg" });
+    const key = `imports/sess-1/raw/${sha256}.jpg`;
+    const targetPath = join(root, key);
+
+    // Verification happens against one open descriptor; the stream must read
+    // the same inode. Replace the path *after* openVerifiedRead returns.
+    const { stream } = await archive.openVerifiedRead(key, sha256);
+    await unlink(targetPath);
+    await writeFile(targetPath, "an attacker-replaced regular file");
+
+    // The body still comes from the verified original inode, not the new file.
+    assert.deepEqual(await collectStream(stream), bytes);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("openVerifiedRead opens exactly one descriptor and closes it on completion", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const bytes = Buffer.from("one descriptor, closed on completion");
+    const sha256 = sha256OfBytes(bytes);
+    await archive.putOriginal({ sessionId: "sess-1", bytes, sha256, extension: "jpg" });
+    const key = `imports/sess-1/raw/${sha256}.jpg`;
+
+    const base = countOpenFileDescriptors();
+    const { stream } = await archive.openVerifiedRead(key, sha256);
+    // The digest and the stream share one descriptor: exactly one new fd.
+    assert.equal(countOpenFileDescriptors(), base + 1);
+
+    assert.deepEqual(await collectStream(stream), bytes);
+    await waitForClose(stream);
+    assert.equal(countOpenFileDescriptors(), base);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("openVerifiedRead closes its descriptor on early stream destroy", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const bytes = Buffer.alloc(256 * 1024, 7);
+    const sha256 = sha256OfBytes(bytes);
+    await archive.putOriginal({ sessionId: "sess-1", bytes, sha256, extension: "jpg" });
+    const key = `imports/sess-1/raw/${sha256}.jpg`;
+
+    const base = countOpenFileDescriptors();
+    const { stream } = await archive.openVerifiedRead(key, sha256);
+    assert.equal(countOpenFileDescriptors(), base + 1);
+
+    // Abort after the first chunk, as a client disconnect would.
+    stream.once("data", () => stream.destroy());
+    await waitForClose(stream);
+    assert.equal(countOpenFileDescriptors(), base);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("openVerifiedRead closes its descriptor when the digest mismatches", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const bytes = Buffer.from("content that will not match");
+    const sha256 = sha256OfBytes(bytes);
+    await archive.putOriginal({ sessionId: "sess-1", bytes, sha256, extension: "jpg" });
+    const key = `imports/sess-1/raw/${sha256}.jpg`;
+
+    const base = countOpenFileDescriptors();
+    await assert.rejects(
+      archive.openVerifiedRead(key, "f".repeat(64)),
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "HASH_MISMATCH"
+    );
+    assert.equal(countOpenFileDescriptors(), base);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("openVerifiedRead errors and closes its descriptor when a mid-stream read fails", async () => {
+  const { root, repositoryRoot } = await createArchiveRoot();
+  try {
+    const archive = store(root, repositoryRoot);
+    const bytes = Buffer.alloc(3 * 64 * 1024, 3);
+    const sha256 = sha256OfBytes(bytes);
+    await archive.putOriginal({ sessionId: "sess-1", bytes, sha256, extension: "jpg" });
+    const key = `imports/sess-1/raw/${sha256}.jpg`;
+    const targetPath = join(root, key);
+
+    const base = countOpenFileDescriptors();
+    const { stream } = await archive.openVerifiedRead(key, sha256);
+    assert.equal(countOpenFileDescriptors(), base + 1);
+
+    // The stream read-ahead may have completed one chunk before the truncate
+    // landed; what matters is that the body never completes: the next
+    // positional read past the new EOF must surface READ_FAILED instead of
+    // short-changing the body that Content-Length promised.
+    let chunks = 0;
+    await assert.rejects(
+      async () => {
+        for await (const chunk of stream) {
+          chunks += 1;
+          if (chunks === 1) await truncate(targetPath, 1);
+          void chunk;
+        }
+      },
+      (error: unknown) => error instanceof ArchiveStoreError && error.code === "READ_FAILED"
+    );
+    assert.ok(chunks < 3, "the truncated body must fail before streaming all verified bytes");
+    await waitForClose(stream);
+    assert.equal(countOpenFileDescriptors(), base);
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(repositoryRoot, { recursive: true, force: true });
