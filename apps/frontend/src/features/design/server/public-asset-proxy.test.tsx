@@ -48,7 +48,9 @@ function makeHarness(overrides: {
             })
           );
         }));
-  const env = overrides.env ?? { MYSTCRAG_BACKEND_ORIGIN: BACKEND_ORIGIN };
+  // "env in overrides" keeps an explicit undefined from becoming the fixture:
+  // a missing env is exactly the fail-closed case under test.
+  const env = "env" in overrides ? overrides.env : { MYSTCRAG_BACKEND_ORIGIN: BACKEND_ORIGIN };
   return {
     calls,
     handle: (assetKeyParam: string) => handlePublicAssetRequest({ assetKeyParam, env, fetcher: backend })
@@ -131,24 +133,66 @@ test("an unknown or unpublished asset forwards the backend 404 without echoing d
   assert.ok(!body.includes("/var/archive"), "upstream error detail must be redacted");
 });
 
-test("a backend outage or missing configuration fails safely without leaking the origin", async () => {
+test("a backend outage fails safely without leaking the origin", async () => {
   const harness = makeHarness({ backend: null });
   const response = await harness.handle(APPROVED_KEY);
   assert.equal(response.status, 502);
   const body = await response.text();
   assert.ok(!body.includes(BACKEND_ORIGIN));
   assert.ok(!body.includes("transient"));
+});
 
-  const unconfigured = makeHarness({ env: { MYSTCRAG_BACKEND_ORIGIN: "" } });
-  const safe = await unconfigured.handle(APPROVED_KEY);
-  assert.equal(safe.status, 502, "an explicitly empty origin fails closed");
-  assert.deepEqual(unconfigured.calls, [], "no upstream request is made without a usable origin");
-  assert.ok(!(await safe.text()).includes("127.0.0.1"));
+test("missing configuration fails closed with zero upstream requests", async () => {
+  // The recording fetcher would answer 200 to any attempted origin, so a call
+  // recorded here would fail the assertion — proving no request was made.
+  for (const env of [undefined, {}]) {
+    const harness = makeHarness({ env });
+    const response = await harness.handle(APPROVED_KEY);
+    assert.equal(response.status, 502, `env ${JSON.stringify(env)} must fail closed`);
+    assert.deepEqual(
+      harness.calls,
+      [],
+      `env ${JSON.stringify(env)} must never reach any upstream listener`
+    );
+    const body = await response.text();
+    assert.ok(!body.includes("127.0.0.1"));
+  }
 
-  const invalid = makeHarness({ env: { MYSTCRAG_BACKEND_ORIGIN: "ftp://bad" } });
-  const failed = await invalid.handle(APPROVED_KEY);
-  assert.equal(failed.status, 502);
-  assert.deepEqual(invalid.calls, []);
+  for (const origin of ["", "   ", "ftp://bad", "not-a-url"]) {
+    const harness = makeHarness({ env: { MYSTCRAG_BACKEND_ORIGIN: origin } });
+    const response = await harness.handle(APPROVED_KEY);
+    assert.equal(response.status, 502, `origin "${origin}" must fail closed`);
+    assert.deepEqual(harness.calls, [], `origin "${origin}" must never reach any upstream listener`);
+  }
+});
+
+test("only a pure http(s) origin is accepted; credentials, paths, queries and fragments fail closed", async () => {
+  const impure = [
+    "http://user:pass@127.0.0.1:4000",
+    "https://user@127.0.0.1:4000",
+    "http://127.0.0.1:4000/base",
+    "http://127.0.0.1:4000/base/",
+    "http://127.0.0.1:4000?x=1",
+    "http://127.0.0.1:4000#frag",
+    "http://127.0.0.1:4000/api/other"
+  ];
+  for (const origin of impure) {
+    const harness = makeHarness({ env: { MYSTCRAG_BACKEND_ORIGIN: origin } });
+    const response = await harness.handle(APPROVED_KEY);
+    assert.equal(response.status, 502, `origin "${origin}" must be rejected`);
+    assert.deepEqual(harness.calls, [], `origin "${origin}" must never receive a request`);
+  }
+});
+
+test("a valid origin with a trailing slash is normalized and requested exactly once", async () => {
+  const harness = makeHarness({ env: { MYSTCRAG_BACKEND_ORIGIN: `${BACKEND_ORIGIN}/` } });
+  const response = await harness.handle(APPROVED_KEY);
+  assert.equal(response.status, 200);
+  assert.deepEqual(
+    harness.calls.map((call) => call.url),
+    [`${BACKEND_ORIGIN}/api/assets/${encodeURIComponent(APPROVED_KEY)}`],
+    "the normalized origin joins exactly the approved-key asset path"
+  );
 });
 
 test("the proxy core never mentions admin surfaces or storage roots", async () => {

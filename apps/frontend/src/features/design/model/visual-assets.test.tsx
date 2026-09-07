@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getBeadVisual, getTrayVisual, nextBeadImagePhase } from "./visual-assets";
+import { getBeadVisual, getTrayVisual, loadBeadVisualImage, nextBeadImagePhase } from "./visual-assets";
 
 const coreMaterials = [
   "aquamarine-clear-v1",
@@ -95,4 +95,113 @@ test("bead image phases advance once and never loop back on repeated errors", ()
     "a failing fallback must not cycle back to the approved URL"
   );
   assert.equal(nextBeadImagePhase("FALLBACK", { type: "RESET" }), "PRIMARY");
+});
+
+type FakeImage = {
+  src: string;
+  onload: (() => void) | null;
+  onerror: (() => void) | null;
+};
+
+function imageHarness(): {
+  requests: string[];
+  createImage: () => FakeImage;
+  settle: (index: number, outcome: "ok" | "fail") => void;
+} {
+  const requests: string[] = [];
+  const pending: FakeImage[] = [];
+  return {
+    requests,
+    createImage() {
+      const image: FakeImage = {
+        src: "",
+        onload: null,
+        onerror: null
+      };
+      let current = "";
+      Object.defineProperty(image, "src", {
+        set(value: string) {
+          current = value;
+          requests.push(value);
+          pending.push(image);
+        },
+        get() {
+          return current;
+        }
+      });
+      return image;
+    },
+    settle(index: number, outcome: "ok" | "fail") {
+      const image = pending[index];
+      assert.ok(image !== undefined, `image request ${index} must exist`);
+      const handler = (outcome === "ok" ? image.onload : image.onerror) as
+        | (() => void)
+        | null;
+      assert.ok(handler !== null, `image request ${index} needs its handler attached`);
+      handler();
+    }
+  };
+}
+
+const EXPORT_APPROVED_URL = `/api/assets/${encodeURIComponent("approved:" + "d".repeat(64))}`;
+
+/** The fallback attempt starts one microtask after the primary rejects. */
+async function flush(): Promise<void> {
+  for (let index = 0; index < 8; index += 1) {
+    await Promise.resolve();
+  }
+}
+
+test("export image loading tries the approved src first and the photographic fallback second", async () => {
+  const harness = imageHarness();
+  const pending = loadBeadVisualImage(
+    { src: EXPORT_APPROVED_URL, fallbackSrc: "/beads/photographic/amethyst.webp" },
+    { createImage: harness.createImage }
+  );
+  harness.settle(0, "fail");
+  await flush();
+  harness.settle(1, "ok");
+  const image = await pending;
+
+  assert.deepEqual(
+    harness.requests,
+    [EXPORT_APPROVED_URL, "/beads/photographic/amethyst.webp"],
+    "the fallback request must follow the failed primary, in order"
+  );
+  assert.equal(image.src, "/beads/photographic/amethyst.webp");
+});
+
+test("a successful approved export load never requests the fallback", async () => {
+  const harness = imageHarness();
+  const pending = loadBeadVisualImage(
+    { src: EXPORT_APPROVED_URL, fallbackSrc: "/beads/photographic/amethyst.webp" },
+    { createImage: harness.createImage }
+  );
+  harness.settle(0, "ok");
+  await pending;
+  assert.deepEqual(harness.requests, [EXPORT_APPROVED_URL]);
+});
+
+test("a photographic primary loads once and never retries itself", async () => {
+  const harness = imageHarness();
+  const pending = loadBeadVisualImage(
+    { src: "/beads/photographic/clear-quartz.webp", fallbackSrc: "/beads/photographic/clear-quartz.webp" },
+    { createImage: harness.createImage }
+  );
+  harness.settle(0, "fail");
+  await assert.rejects(() => pending, /导出失败/);
+  assert.deepEqual(harness.requests, ["/beads/photographic/clear-quartz.webp"]);
+});
+
+test("both failures reject clearly instead of looping or swallowing", async () => {
+  const harness = imageHarness();
+  const pending = loadBeadVisualImage(
+    { src: EXPORT_APPROVED_URL, fallbackSrc: "/beads/photographic/amethyst.webp" },
+    { createImage: harness.createImage }
+  );
+  harness.settle(0, "fail");
+  await flush();
+  harness.settle(1, "fail");
+  await assert.rejects(() => pending, /导出失败/);
+  assert.deepEqual(harness.requests.length, 2, "exactly two attempts, no loop");
 });

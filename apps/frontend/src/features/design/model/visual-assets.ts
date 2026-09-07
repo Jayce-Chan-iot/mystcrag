@@ -33,6 +33,17 @@ export type BeadVisual = {
 /** The static table only ever describes the photographic surfaces. */
 type PhotographicBeadVisual = Pick<BeadVisual, "src" | "filter">;
 
+/**
+ * The subset of an <img> element the export loader drives. The handlers stay
+ * `unknown` because real DOM handler signatures and the test doubles assign in
+ * both directions; the loader only ever sets them and never reads them back.
+ */
+export type LoadableImageElement = {
+  src: string;
+  onload: unknown;
+  onerror: unknown;
+};
+
 export type TrayVisual = {
   src: string;
   alt: string;
@@ -102,6 +113,48 @@ function beadVisualOf(materialKey: string): PhotographicBeadVisual {
   if (materialKey.includes("prehnite")) return BEAD_VISUALS.prehnite;
   if (materialKey.includes("rhodonite")) return BEAD_VISUALS.rhodonite;
   return BEAD_VISUALS.clear;
+}
+
+/**
+ * One attempt to load an <img>-like element for the canvas export. The image
+ * factory is injected so tests drive real onload/onerror handlers.
+ */
+function loadImageElement<T extends LoadableImageElement>(
+  src: string,
+  options: { createImage: () => T }
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const image = options.createImage();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("导出失败：无法加载珠子图片。"));
+    image.src = src;
+  });
+}
+
+/**
+ * At most a two-step load for the export canvas: the primary visual first —
+ * the approved asset when one is attached — and, only if the primary differs
+ * from the photographic fallback, one fallback attempt. A failing fallback
+ * rejects clearly instead of looping or being swallowed.
+ */
+export async function loadBeadVisualImage<T extends LoadableImageElement>(
+  visual: Pick<BeadVisual, "src" | "fallbackSrc">,
+  options: { createImage: () => T }
+): Promise<T> {
+  let primaryError: unknown;
+  try {
+    return await loadImageElement(visual.src, options);
+  } catch (error) {
+    primaryError = error;
+  }
+  if (visual.fallbackSrc === visual.src) {
+    throw primaryError;
+  }
+  try {
+    return await loadImageElement(visual.fallbackSrc, options);
+  } catch {
+    throw new Error("导出失败：珠子图片加载失败，请稍后重试。");
+  }
 }
 
 export type BeadImagePhase = "PRIMARY" | "FALLBACK";

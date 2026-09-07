@@ -9,7 +9,7 @@ import { designApi } from "../../../lib/api/design-api";
 import { toFrontendApiError, type FrontendErrorCode } from "../../../lib/api/frontend-api-error";
 import { CrystalBeadImage } from "../../design/components/crystal-bead-image";
 import { formatMinorAmount } from "../../design/model/format-minor-amount";
-import { getBeadVisual } from "../../design/model/visual-assets";
+import { getBeadVisual, loadBeadVisualImage } from "../../design/model/visual-assets";
 import {
   detailRouteFor,
   editorRouteFor,
@@ -59,15 +59,6 @@ function BeadStrip({
   );
 }
 
-function loadExportImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const image = new window.Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error(`导出失败：无法加载 ${src}`));
-    image.src = src;
-  });
-}
-
 async function exportDesignCard(entry: GalleryEntry): Promise<string> {
   const canvas = document.createElement("canvas");
   canvas.width = EXPORT_CARD_WIDTH;
@@ -82,7 +73,11 @@ async function exportDesignCard(entry: GalleryEntry): Promise<string> {
 
   const beads = sortedBeads(entry.design).slice(0, 9);
   const images = await Promise.all(
-    beads.map((bead) => loadExportImage(getBeadVisual(bead.materialKey, bead.textureAssetKey).src))
+    beads.map((bead) =>
+      loadBeadVisualImage(getBeadVisual(bead.materialKey, bead.textureAssetKey), {
+        createImage: () => new window.Image()
+      })
+    )
   );
   const beadSize = 118;
   const gap = 14;

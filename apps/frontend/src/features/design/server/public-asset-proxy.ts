@@ -13,8 +13,6 @@ import {
  * invalid deployment configuration fails closed with a redacted body.
  */
 
-export const PUBLIC_ASSET_PROXY_DEFAULT_ORIGIN = "http://127.0.0.1:4000";
-
 const RESPONSE_HEADER_ALLOWLIST = ["content-type", "content-length", "etag", "cache-control"] as const;
 
 export type PublicAssetEnv = { readonly MYSTCRAG_BACKEND_ORIGIN?: string | undefined };
@@ -28,17 +26,35 @@ function redacted(status: number, code: string): Response {
   });
 }
 
+/**
+ * The deployment origin is mandatory: an undefined, empty or invalid
+ * `MYSTCRAG_BACKEND_ORIGIN` fails closed instead of silently aiming the public
+ * route at some local default. Only a *pure* http(s) origin is accepted —
+ * credentials, a non-root path, a query or a fragment would turn this proxy
+ * into an arbitrary-path forwarder, so they are refused like any other
+ * misconfiguration.
+ */
 function resolveBackendOrigin(env: PublicAssetEnv): string | null {
-  const raw = (env.MYSTCRAG_BACKEND_ORIGIN ?? PUBLIC_ASSET_PROXY_DEFAULT_ORIGIN).replace(/\/+$/, "");
-  if (raw === "") {
+  const raw = env.MYSTCRAG_BACKEND_ORIGIN;
+  if (typeof raw !== "string" || raw.trim() === "") {
     return null;
   }
+  let parsed: URL;
   try {
-    const parsed = new URL(raw);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" ? raw : null;
+    parsed = new URL(raw);
   } catch {
     return null;
   }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return null;
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    return null;
+  }
+  if (parsed.pathname !== "/" || parsed.search !== "" || parsed.hash !== "") {
+    return null;
+  }
+  return raw.replace(/\/+$/, "");
 }
 
 /**
