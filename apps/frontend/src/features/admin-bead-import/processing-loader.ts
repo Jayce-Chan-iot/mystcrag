@@ -1,10 +1,8 @@
 import {
   PublishBeadImageGroupRequestSchema,
-  canReviewProcessedAsset,
   type AssetImportProcessedAssetView,
   type AssetImportSessionGroupView,
   type AssetImportSessionResponse,
-  type ProcessedAssetReviewAction,
   type PublishBeadImageGroupRequest,
   type PublishBeadImageGroupResponse,
   type ReprocessBeadImageGroupRequest,
@@ -34,9 +32,10 @@ import { canStartProcessing } from "./workflow-model";
  * Issues the processing, QC and human review mutations and keeps the workflow
  * honest about them. Every revision-bearing request is read from the last
  * authoritative session, a 409 stops local submission and re-reads the session,
- * and an approval is only ever built for a current QC_PENDING asset while a
- * QC_FAILED asset may only be rejected. Nothing here fabricates a processed
- * version, a QC verdict or an approved key.
+ * and only the current QC_PENDING version is reviewable at all — an approval or
+ * a rejection on a superseded or failed-QC version is refused locally with zero
+ * network calls, because a QC_FAILED asset is inspect-and-reprocess only.
+ * Nothing here fabricates a processed version, a QC verdict or an approved key.
  */
 
 export type ReviewDecisionInput =
@@ -446,7 +445,11 @@ export function createProcessingLoader(deps: ProcessingLoaderDeps): ProcessingLo
     if (asset === undefined) {
       return refused(processedAssetId, "UNKNOWN_PROCESSED_ASSET");
     }
-    if (!canReviewProcessedAsset(asset.state, decision.action as ProcessedAssetReviewAction)) {
+    // The acceptance boundary is stricter than the contract's eligibility
+    // table: only the current QC_PENDING version may be reviewed, for approve
+    // or reject alike. A superseded version or a failed QC is refused here with
+    // zero network calls — a QC_FAILED asset is inspect-and-reprocess only.
+    if (!(asset.isCurrent && asset.state === "QC_PENDING")) {
       return refused(processedAssetId, "REVIEW_NOT_ALLOWED");
     }
     if (approveRequiresRights(decision)) {

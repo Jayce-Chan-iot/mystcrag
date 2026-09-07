@@ -22,6 +22,7 @@ import {
   PROCESSING_REFUSAL_MESSAGES,
   approvalDecisionReady,
   createProcessingLoader,
+  
   type ProcessingLoader,
   type ProcessingLoaderClient,
   type ProcessingRefusalReason,
@@ -426,26 +427,59 @@ test("an approval missing a required consent field is refused before any request
   assert.deepEqual(emptyNote.calls, []);
 });
 
-test("a reject answers a QC_FAILED asset without granting permissions", async () => {
+test("a current QC_FAILED asset accepts no review at all: not approve, not reject", async () => {
   const harness = makeHarness({
     session: makeSession({
       groups: [makeGroup({ processedAssets: [makeProcessedAsset({ state: "QC_FAILED", qcPassed: false, qcIssues: ["主体缺失"] })] })]
     })
   });
-  const result = await harness.loader.reviewProcessedAsset("group-1", "processed-1", {
+
+  const rejected = await harness.loader.reviewProcessedAsset("group-1", "processed-1", {
     action: "REJECT",
     reviewNote: "裁切主体缺失，重新处理。"
   });
-  assert.equal(result.outcome, "APPLIED");
-  assert.match(harness.calls[0] ?? "", /^review:group-1:processed-1$/);
+  assert.equal(rejected.outcome, "REFUSED", "a failed QC is inspect-and-reprocess only");
+  assert.equal(rejected.reason, "REVIEW_NOT_ALLOWED");
 
-  const parsed = ReviewProcessedAssetRequestSchema.safeParse(harness.requests[0]);
-  assert.equal(parsed.success, true);
-  if (parsed.success) {
-    assert.equal(parsed.data.action, "REJECT");
-    assert.equal("rightsHolder" in parsed.data, false);
-    assert.equal("usagePermission" in parsed.data, false);
-  }
+  const approved = await harness.loader.reviewProcessedAsset("group-1", "processed-1", approvalDecision());
+  assert.equal(approved.outcome, "REFUSED");
+  assert.equal(approved.reason, "REVIEW_NOT_ALLOWED");
+
+  assert.deepEqual(
+    harness.calls.filter((call) => call.startsWith("review:")),
+    [],
+    "a refused review makes zero network calls"
+  );
+});
+
+test("a superseded QC_PENDING version accepts no review either", async () => {
+  const harness = makeHarness({
+    session: makeSession({
+      groups: [
+        makeGroup({
+          processedAssets: [
+            makeProcessedAsset({ processedAssetId: "pa-old", processingVersion: 1, state: "QC_PENDING", isCurrent: false })
+          ]
+        })
+      ]
+    })
+  });
+
+  const approved = await harness.loader.reviewProcessedAsset("group-1", "pa-old", approvalDecision());
+  assert.equal(approved.outcome, "REFUSED");
+  assert.equal(approved.reason, "REVIEW_NOT_ALLOWED");
+
+  const rejected = await harness.loader.reviewProcessedAsset("group-1", "pa-old", {
+    action: "REJECT",
+    reviewNote: "旧版本不能审核。"
+  });
+  assert.equal(rejected.outcome, "REFUSED");
+  assert.equal(rejected.reason, "REVIEW_NOT_ALLOWED");
+
+  assert.deepEqual(
+    harness.calls.filter((call) => call.startsWith("review:")),
+    []
+  );
 });
 
 test("a 409 from a processing mutation re-reads the session and reports a conflict", async () => {
@@ -472,7 +506,10 @@ test("the loader reaches for the contract client and stays free of leaks", () =>
   for (const forbidden of FORBIDDEN) {
     assert.equal(SOURCE.includes(forbidden), false, `loader must not mention ${forbidden}`);
   }
-  assert.ok(SOURCE.includes("canReviewProcessedAsset"), "review eligibility is judged by the contract");
+  assert.ok(
+    SOURCE.includes('asset.isCurrent && asset.state === "QC_PENDING"'),
+    "review eligibility is the acceptance boundary: only the current QC_PENDING version"
+  );
   assert.ok(SOURCE.includes("expectedGroupRevision") && SOURCE.includes("reprocessGroup"), "reprocess uses authoritative revision");
 });
 function publishReadySession(
