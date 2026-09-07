@@ -22,7 +22,7 @@ import {
   PROCESSING_REFUSAL_MESSAGES,
   approvalDecisionReady,
   createProcessingLoader,
-  
+
   type ProcessingLoader,
   type ProcessingLoaderClient,
   type ProcessingRefusalReason,
