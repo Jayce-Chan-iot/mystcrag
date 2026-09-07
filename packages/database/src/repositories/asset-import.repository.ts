@@ -1362,6 +1362,66 @@ export class AssetImportRepository {
   }
 
   /**
+   * Resolves a source file's archive metadata for an admin binary read. The
+   * archive key and digest stay server-side; the Backend uses them to read and
+   * verify bytes and never echoes them to the caller.
+   */
+  async resolveSourceFileRead(fileId: string): Promise<{
+    kind: "ARW" | "JPEG" | "PNG" | "WEBP";
+    state: AssetSourceFileState;
+    archiveKey: string | null;
+    sha256: string | null;
+    byteSize: number;
+  }> {
+    validateIdentifierParam(fileId, "fileId");
+    try {
+      const file = (await this.prisma.assetSourceFile.findUnique({ where: { id: fileId } })) as unknown as SourceFileRow | null;
+      if (!file) {
+        throw new PersistenceError("NOT_FOUND", `Asset source file ${fileId} was not found`);
+      }
+      return {
+        kind: assertEnumValue(file.kind, ["ARW", "JPEG", "PNG", "WEBP"], "asset source file kind"),
+        state: assertFileState(file.state),
+        archiveKey: file.archiveKey,
+        sha256: file.sha256,
+        byteSize: toSafeNumber(file.byteSize, "asset source file byteSize")
+      };
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  /**
+   * Resolves a processed asset's storage metadata for an admin binary read. The
+   * storage key and digest stay server-side; the thumbnail key is derived by the
+   * Backend from this authoritative main key, never from a client path.
+   */
+  async resolveProcessedAssetRead(processedAssetId: string): Promise<{
+    state: (typeof ASSET_STATES)[number];
+    storageKey: string;
+    outputSha256: string;
+    outputContentType: string;
+    outputBytes: number;
+  }> {
+    validateIdentifierParam(processedAssetId, "processedAssetId");
+    try {
+      const asset = (await this.prisma.processedAsset.findUnique({ where: { id: processedAssetId } })) as unknown as ProcessedAssetRow | null;
+      if (!asset) {
+        throw new PersistenceError("NOT_FOUND", `Processed asset ${processedAssetId} was not found`);
+      }
+      return {
+        state: assertAssetState(asset.state),
+        storageKey: asset.storageKey,
+        outputSha256: asset.outputSha256,
+        outputContentType: asset.outputContentType,
+        outputBytes: toSafeNumber(asset.outputBytes, "processed asset outputBytes")
+      };
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  /**
    * Resolves and reserves exactly one registered upload target. Cross-session
    * ids deliberately map to NOT_FOUND so one admin session cannot probe
    * another session's manifest. The declared byte count is authoritative.
