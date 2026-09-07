@@ -7,7 +7,9 @@ import {
   AssetSourceFileKindSchema,
   CancelAssetImportSessionRequestSchema,
   CreateAssetImportSessionRequestSchema,
+  CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS,
   ListAssetImportSessionsQuerySchema,
+  ListCrystalsQuerySchema,
   PublishBeadImageGroupRequestSchema,
   ReprocessBeadImageGroupRequestSchema,
   RegisterAssetManifestRequestSchema,
@@ -28,10 +30,13 @@ import {
   type AssetImportManifestFileEntry,
   type AssetImportSessionState,
   type AssetSourceFileState,
+  type BeadProductDraftView,
   type CancelAssetImportSessionRequest,
   type CreateAssetImportSessionRequest,
   type CrystalDraftCurationField,
   type ListAssetImportSessionsQuery,
+  type ListCrystalsQuery,
+  type ListCrystalsResponse,
   type PublishBeadImageGroupRequest,
   type ReprocessBeadImageGroupRequest,
   type RegisterAssetManifestRequest,
@@ -260,6 +265,7 @@ const ProcessedAssetReviewReplaySchema = z.strictObject({
   reviewAction: z.enum(["APPROVE", "REJECT"]),
   state: z.enum(["APPROVED", "RETIRED"]),
   revision: z.number().int().positive(),
+  approvedAssetKey: ApprovedAssetKeySchema.nullable(),
   reviewedAt: z.iso.datetime()
 });
 
@@ -780,6 +786,7 @@ export type ProcessedAssetReviewResult = {
   reviewAction: "APPROVE" | "REJECT";
   state: "APPROVED" | "RETIRED";
   revision: number;
+  approvedAssetKey: string | null;
   reviewedAt: Date;
 };
 
@@ -959,14 +966,24 @@ export type AssetImportSessionDetail = {
       isCurrent: boolean;
       qcPassed: boolean | null;
       qcIssues: string[];
+      approvedAssetKey: string | null;
     }>;
     crystalDraft: {
       crystalDraftId: string;
       revision: number;
+      nameCn: string | null;
+      nameEn: string | null;
+      mineralName: string | null;
+      colorTags: string[] | null;
+      visualTags: string[] | null;
+      styleTags: string[] | null;
+      priceLevel: number | null;
+      complianceNote: string | null;
       curationComplete: boolean;
       missingFields: CrystalDraftCurationField[];
       promotionEligible: boolean;
     } | null;
+    productDraft: BeadProductDraftView | null;
   }>;
   jobs: AssetImportJobView[];
 };
@@ -1177,6 +1194,12 @@ export class AssetImportRepository {
       for (const draft of drafts) {
         draftProjections.set(draft.id, await this.toCrystalDraftProjection(this.prisma, draft));
       }
+      const productDraftRows = groups.length === 0
+        ? []
+        : (await this.prisma.materialProductDraft.findMany({
+            where: { groupId: { in: groups.map((group) => group.id) } }
+          })) as unknown as ProductDraftRow[];
+      const productDraftByGroup = new Map(productDraftRows.map((draft) => [draft.groupId, draft]));
 
       const sortedFiles = [...files].sort((left, right) => compareStable(left.id, right.id));
       const sortedGroups = [...groups].sort((left, right) => compareStable(left.id, right.id));
@@ -1222,7 +1245,11 @@ export class AssetImportRepository {
             processedAssets: groupAssets.map((asset) => toProcessedAssetReviewView(asset)),
             crystalDraft: group.crystalDraftId === null
               ? null
-              : (draftProjections.get(group.crystalDraftId) ?? null)
+              : (draftProjections.get(group.crystalDraftId) ?? null),
+            productDraft: (() => {
+              const draft = productDraftByGroup.get(group.id);
+              return draft === undefined ? null : toProductDraftProjection(draft);
+            })()
           };
         })),
         jobs: sortedJobs.map((job) => ({
@@ -1280,6 +1307,52 @@ export class AssetImportRepository {
           groupCount: groups.filter((group) => group.sessionId === row.id).length,
           createdAt: row.createdAt,
           updatedAt: row.updatedAt
+        })),
+        nextCursor: start + limit < sorted.length ? page.at(-1)?.id ?? null : null
+      };
+    } catch (error) {
+      rethrowPersistenceError(error);
+    }
+  }
+
+  /**
+   * Dedicated admin Crystal search. Matches nameCn/nameEn/mineralName case-
+   * insensitively and returns only the minimal safe identity fields, so an
+   * existing Crystal with no published product is still findable and no image
+   * is ever used to infer identity. Ordering is deterministic for stable pages.
+   */
+  async searchCrystals(query: ListCrystalsQuery): Promise<ListCrystalsResponse> {
+    const request = parseContract(ListCrystalsQuerySchema, query, "crystal search query");
+    try {
+      const rows = (await this.prisma.crystal.findMany({
+        where: {
+          OR: [
+            { nameCn: { contains: request.q, mode: "insensitive" } },
+            { nameEn: { contains: request.q, mode: "insensitive" } },
+            { mineralName: { contains: request.q, mode: "insensitive" } }
+          ]
+        }
+      })) as unknown as Array<{ id: string; nameCn: string; nameEn: string; mineralName: string }>;
+      const sorted = [...rows].sort((left, right) => {
+        const byName = compareStable(left.nameCn, right.nameCn);
+        return byName !== 0 ? byName : compareStable(left.id, right.id);
+      });
+      let start = 0;
+      if (request.cursor !== undefined) {
+        const cursorIndex = sorted.findIndex((row) => row.id === request.cursor);
+        if (cursorIndex < 0) {
+          throw new PersistenceError("NOT_FOUND", `Crystal search cursor ${request.cursor} was not found`);
+        }
+        start = cursorIndex + 1;
+      }
+      const limit = request.limit ?? 20;
+      const page = sorted.slice(start, start + limit);
+      return {
+        crystals: page.map((row) => ({
+          crystalId: row.id,
+          nameCn: row.nameCn,
+          nameEn: row.nameEn.trim() === "" ? null : row.nameEn,
+          mineralName: row.mineralName.trim() === "" ? null : row.mineralName
         })),
         nextCursor: start + limit < sorted.length ? page.at(-1)?.id ?? null : null
       };
@@ -2270,6 +2343,7 @@ export class AssetImportRepository {
           reviewAction: request.action,
           state: request.action === "APPROVE" ? "APPROVED" as const : "RETIRED" as const,
           revision: request.expectedGroupRevision + 1,
+          approvedAssetKey: request.action === "APPROVE" ? `approved:${asset.outputSha256}` : null,
           reviewedAt
         };
         return {
@@ -2918,7 +2992,14 @@ export class AssetImportRepository {
           throw new PersistenceError("DATA_INTEGRITY_ERROR", `Crystal draft ${crystalDraftId} vanished`);
         }
         const projection = await this.toCrystalDraftProjection(tx, draft);
-        const value = { ...projection, updatedAt };
+        const value = {
+          crystalDraftId: projection.crystalDraftId,
+          revision: projection.revision,
+          curationComplete: projection.curationComplete,
+          missingFields: projection.missingFields,
+          promotionEligible: projection.promotionEligible,
+          updatedAt
+        };
         return { value, persistedResult: { ...value, updatedAt: updatedAt.toISOString() } };
       }
     });
@@ -3747,9 +3828,20 @@ export class AssetImportRepository {
       const nameEn = crystal.nameEn.trim().toLocaleLowerCase("en-US");
       return nameCn === normalizedNameCn || (normalizedNameEn !== null && nameEn === normalizedNameEn);
     });
+    const missingSet = new Set<string>(missingFields);
+    const filled = (inputField: keyof typeof CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS): boolean =>
+      !missingSet.has(CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS[inputField]);
     return {
       crystalDraftId: draft.id,
       revision: draft.revision,
+      nameCn: filled("nameCn") ? draft.nameCn : null,
+      nameEn: filled("nameEn") ? draft.nameEn : null,
+      mineralName: filled("mineralName") ? draft.mineralName : null,
+      colorTags: filled("colorTags") ? [...draft.colorTags] : null,
+      visualTags: filled("visualTags") ? [...draft.visualTags] : null,
+      styleTags: filled("styleTags") ? [...draft.styleTags] : null,
+      priceLevel: filled("priceLevel") ? draft.priceLevel : null,
+      complianceNote: filled("complianceNote") ? draft.complianceNote : null,
       curationComplete: missingFields.length === 0,
       missingFields,
       promotionEligible:
@@ -4227,7 +4319,37 @@ function toProcessedAssetReviewView(
     state,
     isCurrent: asset.isCurrentVersion,
     qcPassed,
-    qcIssues
+    qcIssues,
+    approvedAssetKey: state === "APPROVED" ? asset.assetKey : null
+  };
+}
+
+function toProductDraftProjection(draft: ProductDraftRow): BeadProductDraftView {
+  return {
+    crystalName: draft.crystalName,
+    crystalId: draft.crystalId,
+    crystalDraftId: draft.crystalDraftId,
+    displayName: draft.displayName,
+    sku: draft.sku,
+    materialKey: draft.materialKey,
+    shape: draft.shape === null ? null : assertEnumValue(draft.shape, ["ROUND", "OVAL", "FACETED", "BAROQUE"] as const, "bead shape"),
+    diameterMm: draft.diameterMm,
+    lengthAlongStringMm: draft.lengthAlongStringMm,
+    currency: draft.currency === null ? null : assertCurrency(draft.currency),
+    unitPriceMinor: draft.unitPriceMinor === null ? null : toSafeNumber(draft.unitPriceMinor, "product draft unitPriceMinor"),
+    costMinor: draft.costMinor === null ? null : toSafeNumber(draft.costMinor, "product draft costMinor"),
+    availableQuantity: draft.availableQuantity,
+    qualityStatement: draft.qualityStatement,
+    qualitySource: draft.qualitySource,
+    textureAssetKey: draft.textureAssetKey,
+    modelAssetKey: draft.modelAssetKey,
+    rightsHolder: draft.rightsHolder,
+    usagePermission: draft.usagePermission === null ? null : assertUsagePermission(draft.usagePermission),
+    isAuthenticPhotograph: draft.isAuthenticPhotograph,
+    allowAiTraining: draft.allowAiTraining,
+    allowCommercialUse: draft.allowCommercialUse,
+    allowPublicDisplay: draft.allowPublicDisplay,
+    allowAiRecommendation: draft.allowAiRecommendation
   };
 }
 
