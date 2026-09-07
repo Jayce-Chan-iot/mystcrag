@@ -184,6 +184,45 @@ test("only a pure http(s) origin is accepted; credentials, paths, queries and fr
   }
 });
 
+test("origin spellings that URL parsing would silently normalize fail closed", async () => {
+  // new URL ignores leading/trailing whitespace, strips TAB/CR/LF anywhere,
+  // normalizes away empty ?/#, backslashes and dot segments — so the RAW text
+  // must be byte-identical to the canonical origin (with at most one trailing
+  // slash) or the proxy refuses, because such spellings can change what the
+  // joined fetch URL actually targets.
+  const bypass = [
+    ` ${BACKEND_ORIGIN}`,
+    `${BACKEND_ORIGIN} `,
+    `\t${BACKEND_ORIGIN}`,
+    `${BACKEND_ORIGIN}\t`,
+    `\r${BACKEND_ORIGIN}`,
+    `\n${BACKEND_ORIGIN}`,
+    "ht\ttp://127.0.0.1:4000",
+    `${BACKEND_ORIGIN}?`,
+    `${BACKEND_ORIGIN}#`,
+    "http:\\/\\/127.0.0.1:4000",
+    `${BACKEND_ORIGIN}\\`,
+    `${BACKEND_ORIGIN}/.`,
+    `${BACKEND_ORIGIN}/..`,
+    `${BACKEND_ORIGIN}/./`,
+    `${BACKEND_ORIGIN}/../`,
+    `${BACKEND_ORIGIN}/%2e`,
+    `${BACKEND_ORIGIN}/%2e%2e`,
+    `${BACKEND_ORIGIN}?#`,
+    "http://127.0.0.1:80"
+  ];
+  for (const origin of bypass) {
+    const harness = makeHarness({ env: { MYSTCRAG_BACKEND_ORIGIN: origin } });
+    const response = await harness.handle(APPROVED_KEY);
+    assert.equal(response.status, 502, `origin ${JSON.stringify(origin)} must be refused`);
+    assert.deepEqual(
+      harness.calls,
+      [],
+      `origin ${JSON.stringify(origin)} must never receive a request`
+    );
+  }
+});
+
 test("a valid origin with a trailing slash is normalized and requested exactly once", async () => {
   const harness = makeHarness({ env: { MYSTCRAG_BACKEND_ORIGIN: `${BACKEND_ORIGIN}/` } });
   const response = await harness.handle(APPROVED_KEY);

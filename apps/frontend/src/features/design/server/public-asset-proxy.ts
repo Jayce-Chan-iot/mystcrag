@@ -36,7 +36,7 @@ function redacted(status: number, code: string): Response {
  */
 function resolveBackendOrigin(env: PublicAssetEnv): string | null {
   const raw = env.MYSTCRAG_BACKEND_ORIGIN;
-  if (typeof raw !== "string" || raw.trim() === "") {
+  if (typeof raw !== "string" || raw === "") {
     return null;
   }
   let parsed: URL;
@@ -54,7 +54,16 @@ function resolveBackendOrigin(env: PublicAssetEnv): string | null {
   if (parsed.pathname !== "/" || parsed.search !== "" || parsed.hash !== "") {
     return null;
   }
-  return raw.replace(/\/+$/, "");
+  // The raw text must be byte-identical to the canonical origin (with at most
+  // one trailing slash). URL parsing silently ignores surrounding whitespace
+  // and embedded TAB/CR/LF, strips empty ?/# and normalizes backslashes and
+  // dot segments — accepting any other spelling would let the environment
+  // change what the joined fetch URL actually targets. The canonical
+  // parsed.origin is always what downstream concatenation uses.
+  if (raw !== parsed.origin && raw !== `${parsed.origin}/`) {
+    return null;
+  }
+  return parsed.origin;
 }
 
 /**
