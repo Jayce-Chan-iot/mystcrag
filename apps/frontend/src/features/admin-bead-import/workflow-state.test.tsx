@@ -53,6 +53,7 @@ function makeGroup(overrides: Partial<AssetImportSessionGroupView> = {}): AssetI
     revision: 1,
     processedAssets: [],
     crystalDraft: null,
+    productDraft: null,
     ...overrides
   };
 }
@@ -82,7 +83,8 @@ const processedAsset: AssetImportProcessedAssetView = {
   state: "QC_PENDING",
   isCurrent: true,
   qcPassed: true,
-  qcIssues: []
+  qcIssues: [],
+  approvedAssetKey: null
 };
 
 function sessionForState(state: AssetImportSessionState): AssetImportSessionResponse {

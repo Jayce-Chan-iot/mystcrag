@@ -480,6 +480,7 @@ test("human review approvals must carry all seven permission fields", async () =
   );
   assert.deepEqual(calls, []);
 
+  const APPROVED_KEY = `approved:${"a".repeat(64)}`;
   const ok = makeHarness({
     payload: {
       groupId: "group-1",
@@ -487,10 +488,11 @@ test("human review approvals must carry all seven permission fields", async () =
       reviewAction: "APPROVE",
       state: "APPROVED",
       revision: 3,
+      approvedAssetKey: APPROVED_KEY,
       reviewedAt: "2026-09-06T09:00:00.000Z"
     }
   });
-  await ok.client.reviewProcessedAsset("group-1", "processed-1", {
+  const approved = await ok.client.reviewProcessedAsset("group-1", "processed-1", {
     ...base,
     action: "APPROVE",
     rightsHolder: "玄矶水晶工作室",
@@ -505,6 +507,11 @@ test("human review approvals must carry all seven permission fields", async () =
     ok.calls[0]?.url,
     "/admin/bead-import/proxy/groups/group-1/processed-assets/processed-1/review"
   );
+  assert.equal(
+    approved.approvedAssetKey,
+    APPROVED_KEY,
+    "the authoritative approved key is the one the Backend returned, not a derived value"
+  );
 
   const rejected = makeHarness({
     payload: {
@@ -513,6 +520,7 @@ test("human review approvals must carry all seven permission fields", async () =
       reviewAction: "REJECT",
       state: "RETIRED",
       revision: 3,
+      approvedAssetKey: null,
       reviewedAt: "2026-09-06T09:05:00.000Z"
     }
   });
@@ -716,6 +724,122 @@ test("an expired admin session is surfaced as a non retryable authorization fail
     assert.equal(error.code, "UNAUTHORIZED");
     assert.equal(error.retryable, false);
     assert.equal(error.status, 401);
+    return true;
+  });
+});
+
+function binaryHarness(respond: (url: string) => Response) {
+  const calls: RecordedCall[] = [];
+  const client = createBeadImportClient({
+    fetcher: async (url, init) => {
+      const headers: Record<string, string> = {};
+      new Headers(init?.headers).forEach((value, key) => {
+        headers[key] = value;
+      });
+      calls.push({
+        url,
+        method: init?.method ?? "GET",
+        headers,
+        body: init?.body,
+        signal: init?.signal ?? undefined
+      });
+      return respond(url);
+    }
+  });
+  return { client, calls };
+}
+
+test("the crystal search goes through the cookie-scoped proxy and parses the contract", async () => {
+  const { client, calls } = makeHarness({
+    payload: {
+      crystals: [
+        { crystalId: "crystal-1", nameCn: "紫水晶", nameEn: "Amethyst", mineralName: "石英" }
+      ],
+      nextCursor: null
+    }
+  });
+  const page = await client.listCrystals({ q: "紫水晶", limit: 10 });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.method, "GET");
+  assert.equal(calls[0]?.url, `${BEAD_IMPORT_BROWSER_PROXY_PREFIX}/crystals?q=${encodeURIComponent("紫水晶")}&limit=10`);
+  assert.equal(headerNames(calls[0] ?? { headers: {} }).includes("x-admin-key"), false);
+  assert.deepEqual(page.crystals[0], {
+    crystalId: "crystal-1",
+    nameCn: "紫水晶",
+    nameEn: "Amethyst",
+    mineralName: "石英"
+  });
+  assert.equal(page.nextCursor, null);
+});
+
+test("the crystal search validates the query before any request is made", async () => {
+  const { client, calls } = makeHarness({});
+  await assert.rejects(() => client.listCrystals({ q: "   " }), (error: unknown) => {
+    assert.ok(error instanceof BeadImportApiError);
+    assert.equal(error.code, "CLIENT_VALIDATION");
+    return true;
+  });
+  assert.deepEqual(calls, [], "an empty query must not reach the network");
+});
+
+test("a source file preview is read through the proxy as a blob without the admin key", async () => {
+  const { client, calls } = binaryHarness(
+    () =>
+      new Response(new Blob([new Uint8Array([1, 2, 3])], { type: "image/jpeg" }), {
+        status: 200,
+        headers: { "content-type": "image/jpeg", etag: '"abc123"', "cache-control": "private, no-store" }
+      })
+  );
+  const content = await client.readSourceFileContent("file-1");
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.method, "GET");
+  assert.equal(calls[0]?.url, `${BEAD_IMPORT_BROWSER_PROXY_PREFIX}/files/file-1/content`);
+  assert.equal(headerNames(calls[0] ?? { headers: {} }).includes("x-admin-key"), false);
+  assert.equal(content.contentType, "image/jpeg");
+  assert.equal(content.etag, '"abc123"');
+  assert.equal(content.byteSize, 3);
+  assert.equal(await content.blob.arrayBuffer().then((buffer) => buffer.byteLength), 3);
+});
+
+test("a processed rendition read forwards the rendition query", async () => {
+  const { client, calls } = binaryHarness(
+    () =>
+      new Response(new Blob([new Uint8Array([9])], { type: "image/webp" }), {
+        status: 200,
+        headers: { "content-type": "image/webp", etag: '"xyz789"' }
+      })
+  );
+  const content = await client.readProcessedAssetContent("processed-1", "thumbnail");
+
+  assert.equal(calls[0]?.url, `${BEAD_IMPORT_BROWSER_PROXY_PREFIX}/processed-assets/processed-1/content?rendition=thumbnail`);
+  assert.equal(content.contentType, "image/webp");
+});
+
+test("an ARW source that the Backend refuses maps to a typed preview failure", async () => {
+  const { client } = binaryHarness(
+    () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "UNSUPPORTED_MEDIA_TYPE",
+            message: "This file kind cannot be previewed.",
+            assetCode: "SOURCE_PREVIEW_UNAVAILABLE",
+            retryable: false,
+            recoveryAction: "NO_RECOVERY",
+            requestId: "req-1"
+          }
+        }),
+        { status: 415, headers: { "content-type": "application/json" } }
+      )
+  );
+
+  await assert.rejects(() => client.readSourceFileContent("file-arw"), (error: unknown) => {
+    assert.ok(error instanceof BeadImportApiError);
+    assert.equal(error.status, 415);
+    assert.equal(error.assetCode, "SOURCE_PREVIEW_UNAVAILABLE");
+    assert.equal(error.retryable, false);
     return true;
   });
 });

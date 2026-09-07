@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { BeadImportWorkflow } from "./bead-import-workflow";
 
 const CONTAINER_SOURCE = readFileSync(join(__dirname, "bead-import-workflow.tsx"), "utf8");
+const PROCESSING_PANEL_SOURCE = readFileSync(join(__dirname, "processing-panel.tsx"), "utf8");
 const PAGE_SOURCE = readFileSync(
   join(__dirname, "../../../../app/admin/bead-import/[sessionId]/page.tsx"),
   "utf8"
@@ -78,4 +79,51 @@ test("the container reads no server configuration and holds no key material", ()
 test("the container derives the step from the session, never from React memory", () => {
   assert.ok(CONTAINER_SOURCE.includes("currentWorkflowStep(state)"), "the step must come from the reducer");
   assert.ok(CONTAINER_SOURCE.includes("lifecycle.start(sessionId)"), "the container must re-read the session on mount");
+});
+
+test("an upload that settles re-reads the authoritative session so the flow never stalls on step 1", () => {
+  assert.match(
+    CONTAINER_SOURCE,
+    /uploadQueue\.start\([\s\S]*?\)\s*\.\s*then\(\s*\(\)\s*=>\s*lifecycle\.refresh\(\)\s*\)/,
+    "the queue's terminal state must be followed by an authoritative session read"
+  );
+  assert.match(
+    CONTAINER_SOURCE,
+    /retryRegistered\([\s\S]*?\)\s*\.\s*then\(\s*\(\)\s*=>\s*lifecycle\.refresh\(\)\s*\)/,
+    "a registered-file retry must also end in an authoritative read"
+  );
+});
+
+test("a re-picked folder retries registered failed files instead of re-registering a manifest", () => {
+  assert.ok(
+    CONTAINER_SOURCE.includes("decideUploadRecovery"),
+    "the container must decide between registration and registered retry through the recovery model"
+  );
+});
+
+test("the processing step wires the approved-key publish and the preview comparison", () => {
+  assert.ok(
+    CONTAINER_SOURCE.includes("onPublish"),
+    "the processing panel must receive a publish action"
+  );
+  assert.ok(
+    CONTAINER_SOURCE.includes("preview={previewContext}"),
+    "the container must hand the preview loader context to the processing step"
+  );
+  assert.ok(
+    PROCESSING_PANEL_SOURCE.includes("AssetPreview") &&
+      PROCESSING_PANEL_SOURCE.includes("rendition=\"thumbnail\""),
+    "the processing step must render the original-vs-processed comparison"
+  );
+  assert.ok(
+    PROCESSING_PANEL_SOURCE.includes("onPublish"),
+    "the processing panel must offer the publish action"
+  );
+});
+
+test("the naming step offers existing-crystal search and selection", () => {
+  assert.ok(
+    CONTAINER_SOURCE.includes("CrystalSearch") || CONTAINER_SOURCE.includes("crystal-search"),
+    "the operator must be able to search and select an existing Crystal"
+  );
 });

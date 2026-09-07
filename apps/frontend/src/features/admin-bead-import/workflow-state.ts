@@ -11,10 +11,12 @@ import type {
 import {
   PRODUCT_DRAFT_DECISION_FIELDS,
   PRODUCT_DRAFT_TEXT_FIELDS,
+  curationFormFromView,
   emptyCurationForm,
   emptyProductDraftForm,
   isCurationFormEmpty,
   isProductDraftFormEmpty,
+  productDraftFormFromView,
   sameCurationForm,
   sameProductDraftForm,
   type BeadShape,
@@ -490,6 +492,52 @@ function pruneToSession(
   };
 }
 
+/**
+ * Hydrates the operator's draft forms from the authoritative productDraft views
+ * the session carries. A dirty local form is never touched — unsaved operator
+ * work wins — while an absent or clean form follows the server so a refresh
+ * shows what the Backend already accepted instead of an empty sheet.
+ */
+function seededDraftForms(
+  draftForms: Record<string, ProductDraftEntry>,
+  session: AssetImportSessionResponse
+): Record<string, ProductDraftEntry> {
+  const next = { ...draftForms };
+  for (const group of session.groups) {
+    if (group.productDraft === null) {
+      continue;
+    }
+    const existing = next[group.groupId];
+    if (existing !== undefined && isProductDraftEntryDirty(existing)) {
+      continue;
+    }
+    const form = productDraftFormFromView(group.productDraft);
+    next[group.groupId] = { form, saved: form, baseRevision: group.revision };
+  }
+  return next;
+}
+
+/** As above, for the full CrystalDraft curation fields. */
+function seededCurationForms(
+  curationForms: Record<string, CurationEntry>,
+  session: AssetImportSessionResponse
+): Record<string, CurationEntry> {
+  const next = { ...curationForms };
+  for (const group of session.groups) {
+    const draft = group.crystalDraft;
+    if (draft === null) {
+      continue;
+    }
+    const existing = next[draft.crystalDraftId];
+    if (existing !== undefined && isCurationEntryDirty(existing)) {
+      continue;
+    }
+    const form = curationFormFromView(draft);
+    next[draft.crystalDraftId] = { form, saved: form, baseRevision: draft.revision };
+  }
+  return next;
+}
+
 function syncSession(
   state: BeadImportWorkflowState,
   session: AssetImportSessionResponse,
@@ -507,11 +555,16 @@ function syncSession(
     });
   }
   const pruned = pruneToSession(state, session);
-  const staleGroupIds = detectStaleGroupIds(pruned.localEdits, pruned.draftForms, session);
-  const staleCrystalDraftIds = detectStaleCrystalDraftIds(pruned.curationForms, session);
+  const draftForms = seededDraftForms(pruned.draftForms, session);
+  const curationForms = seededCurationForms(pruned.curationForms, session);
+  const staleGroupIds = detectStaleGroupIds(pruned.localEdits, draftForms, session);
+  const staleCrystalDraftIds = detectStaleCrystalDraftIds(curationForms, session);
   return {
     ...state,
-    ...pruned,
+    localEdits: pruned.localEdits,
+    draftForms,
+    draftCompleteness: pruned.draftCompleteness,
+    curationForms,
     sessionId: session.sessionId,
     session,
     status: "READY",
@@ -959,11 +1012,13 @@ export function workflowReducer(
           group.crystalDraft?.crystalDraftId === response.crystalDraftId
             ? {
                 ...group,
+                // The save only moves the verdict fields; the curated values the
+                // operator sees stay the full authoritative view, never a downgrade.
                 crystalDraft: {
-                  crystalDraftId: response.crystalDraftId,
+                  ...group.crystalDraft,
                   revision: response.revision,
                   curationComplete: response.curationComplete,
-                  missingFields: response.missingFields,
+                  missingFields: [...response.missingFields],
                   promotionEligible: response.promotionEligible
                 }
               }

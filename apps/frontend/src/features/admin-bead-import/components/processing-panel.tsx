@@ -6,7 +6,10 @@ import type {
   ProcessedAssetState
 } from "@mystcrag/design-contract";
 
+import type { PreviewLoaderClient } from "../preview-loader";
+import type { ObjectUrlRegistry } from "../session-lifecycle";
 import type { ReviewDecisionInput } from "../processing-loader";
+import { AssetPreview } from "./asset-preview";
 import {
   BUTTON_CLASS,
   CARD_CLASS,
@@ -44,6 +47,12 @@ export type ProcessingGroupCard = {
   state: BeadImageGroupState;
   revision: number;
   processedAssets: ProcessedAssetCard[];
+  /** The member file whose original bytes the comparison shows first. */
+  previewFileId: string | null;
+  /** Whether the session marks a current APPROVED version carrying its key. */
+  hasApprovedTexture: boolean;
+  /** Whether every draft-side publication blocker the console can see is gone. */
+  publishReady: boolean;
   stale: boolean;
   inFlight: boolean;
   failureMessage: string | null;
@@ -58,6 +67,8 @@ export type ProcessingPanelProps = {
   blockedByConflict: boolean;
   conflictMessage: string;
   publishBlockers: readonly string[];
+  preview?: { client: PreviewLoaderClient; objectUrls: ObjectUrlRegistry } | null;
+  onPublish?: (groupId: string) => void;
   onStartProcessing: () => void;
   onReprocess: (groupId: string, settings: { maskThreshold?: number; edgeFeatherPx?: number }) => void;
   onSelectVersion: (groupId: string, processingVersion: number) => void;
@@ -94,7 +105,12 @@ function ReviewForm({
   asset: ProcessedAssetCard;
   onReview: (decision: ReviewDecisionInput) => void;
 }) {
-  const [mode, setMode] = React.useState<"APPROVE" | "REJECT">(asset.state === "QC_FAILED" ? "REJECT" : "APPROVE");
+  // APPROVE/REJECT belong to the current QC_PENDING version alone; a QC_FAILED
+  // version keeps only the rejection the contract allows; an old version never
+  // reaches this form at all.
+  const canApprove = asset.isCurrent && asset.state === "QC_PENDING";
+  const canReject = asset.isCurrent && (asset.state === "QC_PENDING" || asset.state === "QC_FAILED");
+  const [mode, setMode] = React.useState<"APPROVE" | "REJECT">(canApprove ? "APPROVE" : "REJECT");
   const [reviewNote, setReviewNote] = React.useState("");
   const [rightsHolder, setRightsHolder] = React.useState("");
   const [usagePermission, setUsagePermission] = React.useState<"OWNED" | "GRANTED">("OWNED");
@@ -105,7 +121,6 @@ function ReviewForm({
   const [allowAiRecommendation, setAllowAiRecommendation] = React.useState(false);
 
   const prefix = `bead-import-review-${groupId}-${asset.processedAssetId}`;
-  const canApprove = asset.state === "QC_PENDING";
   const approveReady = canApprove && reviewNote.trim() !== "" && rightsHolder.trim() !== "";
 
   function submit() {
@@ -145,7 +160,8 @@ function ReviewForm({
           <button
             type="button"
             onClick={() => setMode("REJECT")}
-            className={mode === "REJECT" ? DANGER_BUTTON_CLASS : SECONDARY_BUTTON_CLASS}
+            disabled={!canReject}
+            className={`${mode === "REJECT" ? DANGER_BUTTON_CLASS : SECONDARY_BUTTON_CLASS} ${!canReject ? "opacity-60" : ""}`}
           >
             拒绝
           </button>
@@ -230,7 +246,11 @@ function ReviewForm({
       <button
         type="button"
         onClick={submit}
-        disabled={reviewNote.trim() === "" || (mode === "APPROVE" && !approveReady)}
+        disabled={
+          reviewNote.trim() === "" ||
+          (mode === "APPROVE" && !approveReady) ||
+          (mode === "REJECT" && !canReject)
+        }
         className={mode === "REJECT" ? DANGER_BUTTON_CLASS : BUTTON_CLASS}
       >
         {mode === "REJECT" ? "提交拒绝" : "提交批准"}
@@ -307,15 +327,19 @@ function ReprocessForm({
 function ProcessingCard({
   group,
   canOperate,
+  preview,
   onReprocess,
   onSelectVersion,
-  onReview
+  onReview,
+  onPublish
 }: {
   group: ProcessingGroupCard;
   canOperate: boolean;
+  preview: { client: PreviewLoaderClient; objectUrls: ObjectUrlRegistry } | null;
   onReprocess: (settings: { maskThreshold?: number; edgeFeatherPx?: number }) => void;
   onSelectVersion: (processingVersion: number) => void;
   onReview: (processedAssetId: string, decision: ReviewDecisionInput) => void;
+  onPublish: () => void;
 }) {
   const headingId = `bead-import-processing-${group.groupId}-heading`;
 
@@ -353,6 +377,36 @@ function ProcessingCard({
                 </p>
               )}
 
+              {asset.isCurrent && preview !== null && (
+                <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">
+                  {group.previewFileId !== null && (
+                    <AssetPreview
+                      label="原图"
+                      kind="source"
+                      id={group.previewFileId}
+                      client={preview.client}
+                      objectUrls={preview.objectUrls}
+                    />
+                  )}
+                  <AssetPreview
+                    label="处理主图"
+                    kind="processed"
+                    id={asset.processedAssetId}
+                    rendition="main"
+                    client={preview.client}
+                    objectUrls={preview.objectUrls}
+                  />
+                  <AssetPreview
+                    label="缩略图"
+                    kind="processed"
+                    id={asset.processedAssetId}
+                    rendition="thumbnail"
+                    client={preview.client}
+                    objectUrls={preview.objectUrls}
+                  />
+                </div>
+              )}
+
               {!asset.isCurrent && canOperate && (
                 <button
                   type="button"
@@ -363,7 +417,15 @@ function ProcessingCard({
                 </button>
               )}
 
-              {(asset.state === "QC_PENDING" || asset.state === "QC_FAILED") && canOperate && (
+              {asset.isCurrent && asset.state === "QC_PENDING" && canOperate && (
+                <ReviewForm
+                  groupId={group.groupId}
+                  asset={asset}
+                  onReview={(decision) => onReview(asset.processedAssetId, decision)}
+                />
+              )}
+
+              {asset.isCurrent && asset.state === "QC_FAILED" && canOperate && (
                 <ReviewForm
                   groupId={group.groupId}
                   asset={asset}
@@ -378,6 +440,23 @@ function ProcessingCard({
       {canOperate && (
         <ReprocessForm group={group} onReprocess={onReprocess} />
       )}
+
+      {canOperate && group.state !== "PUBLISHED" && (
+        <div className={`${SUBCARD_CLASS} gap-2`}>
+          <p className="min-w-0 text-sm font-medium">发布该分组</p>
+          <p className="min-w-0 text-xs leading-5 text-[var(--muted)]">
+            发布使用服务端批准的当前处理版本贴图（权威 approvedAssetKey），并确认珠子名称、水晶引用与授权信息。确认点击即为操作者确认。
+          </p>
+          <button
+            type="button"
+            onClick={onPublish}
+            disabled={!group.publishReady || !group.hasApprovedTexture}
+            className={`${BUTTON_CLASS} self-start`}
+          >
+            {group.hasApprovedTexture ? "发布该分组" : "贴图尚未批准，暂不能发布"}
+          </button>
+        </div>
+      )}
     </article>
   );
 }
@@ -391,6 +470,8 @@ export function ProcessingPanel({
   blockedByConflict,
   conflictMessage,
   publishBlockers,
+  preview = null,
+  onPublish = () => {},
   onStartProcessing,
   onReprocess,
   onSelectVersion,
@@ -458,7 +539,7 @@ export function ProcessingPanel({
 
       {sessionState === "READY_TO_PUBLISH" && publishBlockers.length === 0 && (
         <p role="status" className={`${NOTICE_CLASS} ${NOTICE_TONE_CLASS.info}`}>
-          当前发布所需的贴图素材仍未由服务端写入，控制台暂不提供发布操作，请等待贴图素材就绪后再发布。
+          发布条件已满足：在分组卡片中确认后即可发布，贴图素材键由服务端批准的处理版本提供。
         </p>
       )}
 
@@ -479,9 +560,11 @@ export function ProcessingPanel({
               key={group.groupId}
               group={group}
               canOperate={canOperate && group.state !== "PUBLISHED" && !group.stale}
+              preview={preview}
               onReprocess={(settings) => onReprocess(group.groupId, settings)}
               onSelectVersion={(processingVersion) => onSelectVersion(group.groupId, processingVersion)}
               onReview={(processedAssetId, decision) => onReview(group.groupId, processedAssetId, decision)}
+              onPublish={() => onPublish(group.groupId)}
             />
           ))}
         </div>

@@ -8,6 +8,7 @@ import type {
   AssetImportSessionFileView,
   AssetImportSessionGroupView,
   AssetImportSessionResponse,
+  BeadProductDraftView,
   SaveBeadProductDraftResponse,
   UpdateCrystalDraftCurationResponse
 } from "@mystcrag/design-contract";
@@ -45,9 +46,44 @@ const SAVED_AT = "2026-09-06T09:10:00.000Z";
 const CRYSTAL_DRAFT: AssetImportCrystalDraftView = {
   crystalDraftId: "crystal-draft-1",
   revision: 4,
+  nameCn: null,
+  nameEn: null,
+  mineralName: null,
+  colorTags: null,
+  visualTags: null,
+  styleTags: null,
+  priceLevel: null,
+  complianceNote: null,
   curationComplete: false,
   missingFields: ["COLOR_TAGS", "PRICE_LEVEL"],
   promotionEligible: false
+};
+
+const PRODUCT_DRAFT: BeadProductDraftView = {
+  crystalName: "白水晶",
+  crystalId: null,
+  crystalDraftId: "crystal-draft-1",
+  displayName: "天然白水晶圆珠手串",
+  sku: "MXJ-BEAD-QUARTZ-08",
+  materialKey: "quartz-clear",
+  shape: "ROUND",
+  diameterMm: 10,
+  lengthAlongStringMm: null,
+  currency: "CNY",
+  unitPriceMinor: 1250,
+  costMinor: 800,
+  availableQuantity: 25,
+  qualityStatement: "肉眼干净，天然棉裂可见。",
+  qualitySource: "供应商出厂检验单。",
+  textureAssetKey: null,
+  modelAssetKey: null,
+  rightsHolder: "玄矶工作室",
+  usagePermission: "OWNED",
+  isAuthenticPhotograph: true,
+  allowAiTraining: false,
+  allowCommercialUse: true,
+  allowPublicDisplay: true,
+  allowAiRecommendation: false
 };
 
 function makeFile(overrides: Partial<AssetImportSessionFileView> = {}): AssetImportSessionFileView {
@@ -73,6 +109,7 @@ function namedGroup(
     revision: 3,
     processedAssets: [],
     crystalDraft: CRYSTAL_DRAFT,
+    productDraft: null,
     ...overrides
   };
 }
@@ -468,7 +505,10 @@ test("curation edits are keyed by the crystal draft the session actually carries
   assert.equal(entry.form.colorTags, "白色, 透明");
   assert.equal(entry.form.priceLevel, "3");
   assert.equal(entry.form.nameCn, "", "an unpatched field stays untouched");
-  assert.equal(entry.saved, null);
+  assert.ok(
+    entry.saved !== null && entry.saved.colorTags === "" && entry.saved.priceLevel === "",
+    "the seeded baseline is the server's own (still empty) curation view"
+  );
   assert.equal(entry.baseRevision, 4);
   assert.equal(isCurationDirty(after, "crystal-draft-1"), true);
 
@@ -756,4 +796,153 @@ test("the draft slice stores no storage path, admin key or inferred crystal iden
     !SOURCE.includes("curationComplete: true") && !SOURCE.includes("promotionEligible: true"),
     "a curation verdict is the server's to give, so the state must not assert one"
   );
+});
+
+function crystalDraftWithCuration(): AssetImportCrystalDraftView {
+  return {
+    ...CRYSTAL_DRAFT,
+    nameCn: "白水晶",
+    nameEn: "Clear Quartz",
+    mineralName: "石英",
+    colorTags: ["白色", "透明"],
+    visualTags: ["冰裂"],
+    styleTags: ["简约"],
+    priceLevel: 3,
+    complianceNote: "仅描述材质与外观，不涉及任何功效。",
+    curationComplete: true,
+    missingFields: [],
+    promotionEligible: true
+  };
+}
+
+test("a loaded session seeds the product draft form from the authoritative productDraft", () => {
+  const state = loaded({ groups: [namedGroup({ productDraft: PRODUCT_DRAFT })] });
+
+  const entry = productDraftEntryFor(state, "group-1");
+  assert.ok(entry !== null, "the operator must see what the server already holds");
+  assert.equal(entry.form.text.displayName, "天然白水晶圆珠手串");
+  assert.equal(entry.form.text.sku, "MXJ-BEAD-QUARTZ-08");
+  assert.equal(
+    entry.form.text.unitPrice,
+    "12.5",
+    "a minor-unit price is shown in the major units the form collects"
+  );
+  assert.equal(entry.form.text.availableQuantity, "25");
+  assert.equal(entry.form.shape, "ROUND");
+  assert.equal(entry.form.currency, "CNY");
+  assert.equal(entry.form.usagePermission, "OWNED");
+  assert.equal(entry.form.decisions.isAuthenticPhotograph, true);
+  assert.equal(entry.form.decisions.allowAiTraining, false);
+  assert.ok(entry.saved !== null && entry.saved.text.displayName === "天然白水晶圆珠手串");
+  assert.equal(entry.baseRevision, 3);
+  assert.equal(isProductDraftDirty(state, "group-1"), false, "the server's own values read as clean");
+});
+
+test("a loaded session seeds every curation field from the full CrystalDraft view", () => {
+  const state = loaded({ groups: [namedGroup({ crystalDraft: crystalDraftWithCuration() })] });
+
+  const entry = curationEntryFor(state, "crystal-draft-1");
+  assert.ok(entry !== null);
+  assert.equal(entry.form.nameCn, "白水晶");
+  assert.equal(entry.form.nameEn, "Clear Quartz");
+  assert.equal(entry.form.mineralName, "石英");
+  assert.equal(entry.form.colorTags, "白色、透明", "tag arrays read back as one editable list");
+  assert.equal(entry.form.visualTags, "冰裂");
+  assert.equal(entry.form.styleTags, "简约");
+  assert.equal(entry.form.priceLevel, "3");
+  assert.equal(entry.form.complianceNote, "仅描述材质与外观，不涉及任何功效。");
+  assert.ok(entry.saved !== null && entry.saved.nameCn === "白水晶");
+  assert.equal(entry.baseRevision, 4);
+  assert.equal(isCurationDirty(state, "crystal-draft-1"), false);
+});
+
+test("an unsaved operator draft is never overwritten by a seeded server view", () => {
+  const before = typed(loaded({ groups: [namedGroup({ productDraft: PRODUCT_DRAFT })] }));
+  const localSku = productDraftEntryFor(before, "group-1")?.form.text.sku;
+  assert.equal(localSku, "MXJ-BEAD-QUARTZ-08");
+  const operatorSku = workflowReducer(before, {
+    type: "EDIT_PRODUCT_DRAFT",
+    groupId: "group-1",
+    patch: { text: { sku: "MXJ-OPERATOR-01" } }
+  });
+
+  const polled = workflowReducer(operatorSku, {
+    type: "SESSION_REFRESHED",
+    session: reviewSession({ groups: [namedGroup({ productDraft: PRODUCT_DRAFT })] }),
+    syncedAt: RESYNCED_AT
+  });
+  assert.equal(
+    productDraftEntryFor(polled, "group-1")?.form.text.sku,
+    "MXJ-OPERATOR-01",
+    "unsaved typing wins over hydration"
+  );
+  assert.equal(isProductDraftDirty(polled, "group-1"), true);
+
+  const curatedBefore = curated(
+    loaded({ groups: [namedGroup({ crystalDraft: crystalDraftWithCuration() })] })
+  );
+  const curatedPolled = workflowReducer(curatedBefore, {
+    type: "SESSION_REFRESHED",
+    session: reviewSession({ groups: [namedGroup({ crystalDraft: crystalDraftWithCuration() })] }),
+    syncedAt: RESYNCED_AT
+  });
+  assert.equal(
+    curationEntryFor(curatedPolled, "crystal-draft-1")?.form.priceLevel,
+    "3",
+    "the operator's own curation answer is preserved"
+  );
+});
+
+test("a clean draft follows the server view when a refresh brings new values", () => {
+  const seeded = loaded({ groups: [namedGroup({ productDraft: PRODUCT_DRAFT })] });
+  const updated = workflowReducer(seeded, {
+    type: "SESSION_REFRESHED",
+    session: reviewSession({
+      groups: [
+        namedGroup({
+          revision: 5,
+          productDraft: { ...PRODUCT_DRAFT, displayName: "天然白水晶圆珠手串（改）", unitPriceMinor: 1300 }
+        })
+      ]
+    }),
+    syncedAt: RESYNCED_AT
+  });
+
+  const entry = productDraftEntryFor(updated, "group-1");
+  assert.ok(entry !== null);
+  assert.equal(entry.form.text.displayName, "天然白水晶圆珠手串（改）");
+  assert.equal(entry.form.text.unitPrice, "13");
+  assert.equal(entry.baseRevision, 5);
+  assert.equal(isProductDraftDirty(updated, "group-1"), false);
+});
+
+test("saving curation keeps the full crystal draft view instead of downgrading it", () => {
+  const before = loaded({ groups: [namedGroup({ crystalDraft: crystalDraftWithCuration() })] });
+  const saving = workflowReducer(before, {
+    type: "CURATION_SAVE_STARTED",
+    crystalDraftId: "crystal-draft-1"
+  });
+  const saved = workflowReducer(saving, {
+    type: "CURATION_SAVE_APPLIED",
+    crystalDraftId: "crystal-draft-1",
+    response: curationSaved({ revision: 6 })
+  });
+
+  const draft = crystalDraftViewFor(saved, "group-1");
+  assert.ok(draft !== null);
+  assert.equal(draft.nameCn, "白水晶", "the curated fields survive the save");
+  assert.equal(draft.priceLevel, 3);
+  assert.equal(draft.revision, 6);
+  assert.equal(draft.curationComplete, true);
+  assert.deepEqual(draft.missingFields, []);
+  assert.equal(draft.promotionEligible, true);
+});
+
+test("a group without a server draft still starts from the shared empty form", () => {
+  const state = loaded();
+  const entry = productDraftEntryFor(state, "group-1");
+  assert.equal(entry, null, "no draft, no invented values");
+
+  const afterTyping = typed(state);
+  assert.equal(productDraftEntryFor(afterTyping, "group-1")?.form.text.displayName, "");
 });

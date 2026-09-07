@@ -47,6 +47,7 @@ function makeGroup(overrides: Partial<AssetImportSessionGroupView> = {}): AssetI
     revision: 1,
     processedAssets: [],
     crystalDraft: null,
+    productDraft: null,
     ...overrides
   };
 }
@@ -76,7 +77,8 @@ const processedAsset = {
   state: "QC_PENDING" as const,
   isCurrent: true,
   qcPassed: true,
-  qcIssues: []
+  qcIssues: [],
+  approvedAssetKey: null
 };
 
 test("the fixture builder produces contract-valid sessions", () => {

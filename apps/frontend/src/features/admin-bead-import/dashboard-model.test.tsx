@@ -215,6 +215,7 @@ test("dashboard buckets never contradict the four step workflow", () => {
       revision: 1,
       processedAssets: [],
       crystalDraft: null,
+      productDraft: null,
       crystalName
     }
   ];

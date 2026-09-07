@@ -1,8 +1,12 @@
 import {
+  PublishBeadImageGroupRequestSchema,
   canReviewProcessedAsset,
   type AssetImportProcessedAssetView,
+  type AssetImportSessionGroupView,
   type AssetImportSessionResponse,
   type ProcessedAssetReviewAction,
+  type PublishBeadImageGroupRequest,
+  type PublishBeadImageGroupResponse,
   type ReprocessBeadImageGroupRequest,
   type ReprocessBeadImageGroupResponse,
   type ReprocessSettings,
@@ -14,6 +18,7 @@ import {
 } from "@mystcrag/design-contract";
 
 import { classifyFailure } from "./failure-copy";
+import { isPublishableUsagePermission } from "./draft-form";
 import { classifySessionFailure, type AbortHandle, type AbortSignalLike } from "./session-lifecycle";
 import {
   CONFLICT_NOTICE_MESSAGE,
@@ -59,7 +64,10 @@ export type ProcessingRefusalReason =
   | "UNKNOWN_PROCESSED_ASSET"
   | "REVIEW_NOT_ALLOWED"
   | "APPROVE_REQUIRES_RIGHTS"
-  | "INVALID_SETTINGS";
+  | "INVALID_SETTINGS"
+  | "NO_APPROVED_TEXTURE"
+  | "DRAFT_INCOMPLETE"
+  | "CONSENT_NOT_GRANTED";
 
 export const PROCESSING_REFUSAL_MESSAGES: Readonly<Record<ProcessingRefusalReason, string>> = {
   NO_SESSION: "导入任务尚未载入，无法发起处理。",
@@ -72,7 +80,12 @@ export const PROCESSING_REFUSAL_MESSAGES: Readonly<Record<ProcessingRefusalReaso
   UNKNOWN_PROCESSED_ASSET: "该处理版本不存在，请刷新后再试。",
   REVIEW_NOT_ALLOWED: "该处理版本当前不能执行此审核操作。",
   APPROVE_REQUIRES_RIGHTS: "批准前必须完整填写七项人工授权与同意声明。",
-  INVALID_SETTINGS: "重新处理的参数超出允许范围：maskThreshold 为 0–1，edgeFeatherPx 为 0–8。"
+  INVALID_SETTINGS: "重新处理的参数超出允许范围：maskThreshold 为 0–1，edgeFeatherPx 为 0–8。",
+  NO_APPROVED_TEXTURE:
+    "该分组的当前处理版本还没有服务端批准的贴图，发布必须使用后端写下的权威素材键。",
+  DRAFT_INCOMPLETE: "商品草稿尚未完整，发布所需的字段还没有全部由人工填写。"
+  ,
+  CONSENT_NOT_GRANTED: "公开发布与商业使用必须明确授权为同意，未同意时不能发布。"
 };
 
 export type ProcessingResult =
@@ -110,6 +123,11 @@ export type ProcessingLoaderClient = {
     request: ReviewProcessedAssetRequest,
     requestOptions?: { signal?: AbortSignalLike }
   ): Promise<ReviewProcessedAssetResponse>;
+  publishGroup(
+    groupId: string,
+    request: PublishBeadImageGroupRequest,
+    requestOptions?: { signal?: AbortSignalLike }
+  ): Promise<PublishBeadImageGroupResponse>;
   getSession(
     sessionId: string,
     requestOptions?: { signal?: AbortSignalLike }
@@ -134,6 +152,7 @@ export type ProcessingLoader = {
     processedAssetId: string,
     decision: ReviewDecisionInput
   ): Promise<ProcessingResult>;
+  publishGroup(groupId: string): Promise<ProcessingResult>;
   cancel(): void;
 };
 
@@ -165,6 +184,46 @@ function invalidSettings(settings: ReprocessSettings): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * The approved texture key of a group, taken only from the version the session
+ * marks current and APPROVED. An approved key on a superseded version does not
+ * qualify, and no other state exposes a key at all.
+ */
+function approvedTextureOf(group: AssetImportSessionGroupView): string | null {
+  const current = group.processedAssets.find(
+    (asset) => asset.isCurrent && asset.state === "APPROVED"
+  );
+  return current?.approvedAssetKey ?? null;
+}
+
+function publishDraftIsIncomplete(
+  draft: AssetImportSessionGroupView["productDraft"]
+): boolean {
+  if (draft === null) {
+    return true;
+  }
+  return (
+    draft.crystalName === null ||
+    draft.displayName === null ||
+    draft.sku === null ||
+    draft.materialKey === null ||
+    draft.shape === null ||
+    draft.diameterMm === null ||
+    draft.qualityStatement === null ||
+    draft.qualitySource === null ||
+    draft.currency === null ||
+    draft.unitPriceMinor === null ||
+    draft.costMinor === null ||
+    draft.availableQuantity === null ||
+    draft.rightsHolder === null ||
+    draft.usagePermission === null ||
+    !isPublishableUsagePermission(draft.usagePermission) ||
+    draft.isAuthenticPhotograph === null ||
+    draft.allowAiTraining === null ||
+    draft.allowAiRecommendation === null
+  );
 }
 
 function approveRequiresRights(decision: ReviewDecisionInput): boolean {
@@ -390,6 +449,85 @@ export function createProcessingLoader(deps: ProcessingLoaderDeps): ProcessingLo
     });
   }
 
+  /**
+   * Publication assembles its body exclusively from the authoritative session:
+   * every business field comes from the Backend's productDraft view and the
+   * texture key is the approved key the Backend wrote on the current APPROVED
+   * version. Nothing here derives, assembles or guesses an asset key. The two
+   * affirmative grants are literals the publish action itself stands for, and
+   * the crystal reference plus its promotion confirmation come from the view.
+   */
+  async function publishGroup(groupId: string): Promise<ProcessingResult> {
+    const state = deps.getState();
+    const sessionId = state.sessionId;
+    if (state.session === null || sessionId === null) {
+      return refused(groupId, "NO_SESSION");
+    }
+    const group = findGroup(state, groupId);
+    if (group === undefined) {
+      return refused(groupId, "UNKNOWN_GROUP");
+    }
+    const blocker = groupBlockerReason(groupSubmissionBlocker(state, groupId));
+    if (blocker !== null) {
+      return refused(groupId, blocker);
+    }
+    const draft = group.productDraft;
+    if (draft === null || publishDraftIsIncomplete(draft)) {
+      return refused(groupId, "DRAFT_INCOMPLETE");
+    }
+    const approved = approvedTextureOf(group);
+    if (approved === null) {
+      return refused(groupId, "NO_APPROVED_TEXTURE");
+    }
+    if (draft.allowPublicDisplay !== true || draft.allowCommercialUse !== true) {
+      return refused(groupId, "CONSENT_NOT_GRANTED");
+    }
+
+    const candidate: Record<string, unknown> = {
+      idempotencyKey: deps.createIdempotencyKey(),
+      expectedGroupRevision: group.revision,
+      crystalName: draft.crystalName,
+      crystalNameConfirmedByOperator: true,
+      displayName: draft.displayName,
+      sku: draft.sku,
+      materialKey: draft.materialKey,
+      shape: draft.shape,
+      diameterMm: draft.diameterMm,
+      qualityStatement: draft.qualityStatement,
+      qualitySource: draft.qualitySource,
+      textureAssetKey: approved,
+      currency: draft.currency,
+      unitPriceMinor: draft.unitPriceMinor,
+      costMinor: draft.costMinor,
+      availableQuantity: draft.availableQuantity,
+      allowPublicDisplay: true,
+      allowAiTraining: draft.allowAiTraining,
+      allowAiRecommendation: draft.allowAiRecommendation,
+      allowCommercialUse: true,
+      rightsHolder: draft.rightsHolder,
+      usagePermission: draft.usagePermission,
+      isAuthenticPhotograph: draft.isAuthenticPhotograph
+    };
+    if (draft.crystalId !== null) {
+      candidate.crystalId = draft.crystalId;
+    } else if (draft.crystalDraftId !== null) {
+      candidate.crystalDraftId = draft.crystalDraftId;
+      candidate.crystalDraftPromotionConfirmed = true;
+    }
+    if (draft.lengthAlongStringMm !== null) {
+      candidate.lengthAlongStringMm = draft.lengthAlongStringMm;
+    }
+
+    const parsed = PublishBeadImageGroupRequestSchema.safeParse(candidate);
+    if (!parsed.success) {
+      return refused(groupId, "DRAFT_INCOMPLETE");
+    }
+
+    return runMutation(`publish:${groupId}`, sessionId, async (controller) => {
+      await deps.client.publishGroup(groupId, parsed.data, { signal: controller.signal });
+    });
+  }
+
   function cancel(): void {
     cancelled = true;
     for (const controller of live) {
@@ -399,5 +537,12 @@ export function createProcessingLoader(deps: ProcessingLoaderDeps): ProcessingLo
     inFlight.clear();
   }
 
-  return { startProcessing, reprocessGroup, selectProcessedVersion, reviewProcessedAsset, cancel };
+  return {
+    startProcessing,
+    reprocessGroup,
+    selectProcessedVersion,
+    reviewProcessedAsset,
+    publishGroup,
+    cancel
+  };
 }

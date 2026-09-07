@@ -22,6 +22,9 @@ function group(overrides: Partial<ProcessingGroupCard> = {}): ProcessingGroupCar
       { processedAssetId: "pa-1", processingVersion: 1, state: "QC_PENDING", isCurrent: true, qcIssues: [] },
       { processedAssetId: "pa-2", processingVersion: 2, state: "QC_FAILED", isCurrent: false, qcIssues: ["主体缺失"] }
     ],
+    previewFileId: null,
+    hasApprovedTexture: false,
+    publishReady: false,
     stale: false,
     inFlight: false,
     failureMessage: null,
@@ -59,11 +62,24 @@ test("QC state is shown as text, never only as color", () => {
 });
 
 test("a QC_FAILED asset can be rejected but never approved", () => {
-  const html = render();
+  const html = render([
+    group({
+      processedAssets: [
+        {
+          processedAssetId: "pa-failed",
+          processingVersion: 2,
+          state: "QC_FAILED",
+          isCurrent: true,
+          qcIssues: ["主体缺失"]
+        }
+      ]
+    })
+  ]);
   assert.ok(html.includes("批准"));
   assert.ok(html.includes("拒绝"));
   assert.ok(html.includes("审核备注（必填）"));
   assert.ok(html.includes("提交拒绝"));
+  assert.ok(!html.includes("提交批准"), "a failed QC verdict can never be approved");
 });
 
 test("an approval demands the full human consent surface", () => {
@@ -108,4 +124,57 @@ test("the panel never invents a QC verdict, an approved key or an effect", () =>
   for (const forbidden of ["fetch(", "process.env", "localStorage"]) {
     assert.equal(SOURCE.includes(forbidden), false, `the panel must not reach for ${forbidden}`);
   }
+});
+
+test("APPROVE and REJECT are only offered for the current QC_PENDING version", () => {
+  const html = render([group()]);
+  assert.ok(html.includes("提交批准"), "the current QC_PENDING version keeps its review form");
+  assert.ok(html.includes(">拒绝"), "the reject toggle stays available for a current QC_PENDING version");
+  assert.ok(html.includes("人工审核"));
+});
+
+test("an old version is read-only: no review form and no approval controls", () => {
+  const html = render([
+    group({
+      processedAssets: [
+        { processedAssetId: "pa-old", processingVersion: 1, state: "QC_PENDING", isCurrent: false, qcIssues: [] }
+      ]
+    })
+  ]);
+  assert.ok(!html.includes("提交批准"), "an old version must never be approvable");
+  assert.ok(!html.includes("提交拒绝"), "an old version must never be rejectable");
+  assert.ok(html.includes("待人工审核"), "the state is still visible");
+  assert.ok(html.includes("设为当前版本"), "an old version can still be selected");
+});
+
+test("a current QC_FAILED version keeps only its contract reject path and never approval", () => {
+  const html = render([
+    group({
+      processedAssets: [
+        {
+          processedAssetId: "pa-failed",
+          processingVersion: 2,
+          state: "QC_FAILED",
+          isCurrent: true,
+          qcIssues: ["主体缺失"]
+        }
+      ]
+    })
+  ]);
+  assert.ok(!html.includes("提交批准"), "a QC_FAILED version must not be approvable");
+  assert.ok(html.includes("提交拒绝"), "the contract's only disposition for a failed QC is a rejection");
+  assert.ok(html.includes("主体缺失"), "the QC issue must reach the operator");
+});
+
+test("the source never offers review actions for a version the session marks retired or draft", () => {
+  const html = render([
+    group({
+      processedAssets: [
+        { processedAssetId: "pa-draft", processingVersion: 3, state: "DRAFT", isCurrent: true, qcIssues: [] },
+        { processedAssetId: "pa-retired", processingVersion: 2, state: "RETIRED", isCurrent: false, qcIssues: [] }
+      ]
+    })
+  ]);
+  assert.ok(!html.includes("提交批准"));
+  assert.ok(!html.includes("提交拒绝"));
 });

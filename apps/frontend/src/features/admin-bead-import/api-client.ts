@@ -10,6 +10,8 @@ import {
   CreateAssetImportSessionResponseSchema,
   GetBeadImageGroupPublishResultResponseSchema,
   ListAssetImportSessionsResponseSchema,
+  ListCrystalsQuerySchema,
+  ListCrystalsResponseSchema,
   PublishBeadImageGroupRequestSchema,
   PublishBeadImageGroupResponseSchema,
   RegisterAssetManifestRequestSchema,
@@ -43,6 +45,9 @@ import {
   type GetBeadImageGroupPublishResultResponse,
   type ListAssetImportSessionsQuery,
   type ListAssetImportSessionsResponse,
+  type ListCrystalsQuery,
+  type ListCrystalsResponse,
+  type ProcessedAssetRendition,
   type PublishBeadImageGroupRequest,
   type PublishBeadImageGroupResponse,
   type RegisterAssetManifestRequest,
@@ -322,6 +327,18 @@ export type BeadImportUpload = {
   sha256?: string;
 };
 
+/**
+ * A binary admin read that arrived through the same-origin proxy. The bytes are
+ * a Blob the browser owns; no storage key, no admin key and no backend origin
+ * ever take part in the exchange.
+ */
+export type BeadImportBinaryContent = {
+  blob: Blob;
+  contentType: string | null;
+  etag: string | null;
+  byteSize: number;
+};
+
 type SendConfig = {
   method: "GET" | "POST" | "PATCH" | "PUT";
   query?: Record<string, string | number | undefined>;
@@ -395,6 +412,40 @@ export function createBeadImportClient(options: BeadImportClientOptions = {}) {
       });
     }
     return parse(payload);
+  }
+
+  async function readBinary(
+    path: string,
+    query: SendConfig["query"],
+    requestOptions: BeadImportRequestOptions
+  ): Promise<BeadImportBinaryContent> {
+    let response: Response;
+    try {
+      response = await fetcher(buildUrl(prefix, path, query), {
+        method: "GET",
+        cache: "no-store",
+        credentials: "same-origin",
+        signal: requestOptions.signal
+      });
+    } catch {
+      throw new BeadImportApiError({
+        code: "NETWORK_ERROR",
+        status: 0,
+        message: NETWORK_MESSAGE,
+        retryable: true
+      });
+    }
+    if (!response.ok) {
+      const text = await response.text();
+      throw classifyFailure(response.status, text);
+    }
+    const blob = await response.blob();
+    return {
+      blob,
+      contentType: response.headers.get("content-type"),
+      etag: response.headers.get("etag"),
+      byteSize: blob.size
+    };
   }
 
   function sessionPath(sessionId: string): string {
@@ -647,6 +698,45 @@ export function createBeadImportClient(options: BeadImportClientOptions = {}) {
         `${groupPath(groupId)}/publish-result`,
         { method: "GET", signal: requestOptions.signal },
         (payload) => parseResponse(GetBeadImageGroupPublishResultResponseSchema, payload)
+      );
+    },
+
+    async listCrystals(
+      query: ListCrystalsQuery,
+      requestOptions: BeadImportRequestOptions = {}
+    ): Promise<ListCrystalsResponse> {
+      const parsed = parseRequest(ListCrystalsQuerySchema, query);
+      return send(
+        "/crystals",
+        {
+          method: "GET",
+          query: { q: parsed.q, limit: parsed.limit, cursor: parsed.cursor },
+          signal: requestOptions.signal
+        },
+        (payload) => parseResponse(ListCrystalsResponseSchema, payload)
+      );
+    },
+
+    async readSourceFileContent(
+      fileId: string,
+      requestOptions: BeadImportRequestOptions = {}
+    ): Promise<BeadImportBinaryContent> {
+      return readBinary(
+        `/files/${encodeURIComponent(fileId)}/content`,
+        undefined,
+        requestOptions
+      );
+    },
+
+    async readProcessedAssetContent(
+      processedAssetId: string,
+      rendition: ProcessedAssetRendition,
+      requestOptions: BeadImportRequestOptions = {}
+    ): Promise<BeadImportBinaryContent> {
+      return readBinary(
+        `/processed-assets/${encodeURIComponent(processedAssetId)}/content`,
+        { rendition },
+        requestOptions
       );
     }
   };

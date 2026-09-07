@@ -70,6 +70,14 @@ const SAVED_AT = "2026-09-06T09:10:00.000Z";
 const CRYSTAL_DRAFT: AssetImportCrystalDraftView = {
   crystalDraftId: "crystal-draft-1",
   revision: 4,
+  nameCn: null,
+  nameEn: null,
+  mineralName: null,
+  colorTags: null,
+  visualTags: null,
+  styleTags: null,
+  priceLevel: null,
+  complianceNote: null,
   curationComplete: false,
   missingFields: ["COLOR_TAGS", "PRICE_LEVEL"],
   promotionEligible: false
@@ -119,6 +127,7 @@ function makeGroup(
     revision: 3,
     processedAssets: [],
     crystalDraft: CRYSTAL_DRAFT,
+    productDraft: null,
     ...overrides
   };
 }
@@ -812,7 +821,12 @@ test("a curation failure gets its own notice slot and leaves the work in place",
   assert.deepEqual(state.inFlightCrystalDraftIds, []);
   assert.equal(state.blockedByConflict, false);
   assert.ok(state.notices.some((notice) => notice.id === "curation-failure:crystal-draft-1"));
-  assert.equal(state.curationForms["crystal-draft-1"]?.saved, null);
+  const entry = state.curationForms["crystal-draft-1"];
+  assert.ok(entry !== undefined, "a failed save keeps the work in place");
+  assert.ok(
+    entry.saved !== null && entry.form !== entry.saved,
+    "the work is still measured against the seeded server baseline"
+  );
 });
 
 test("cancelling aborts a live draft save and stops the loader dispatching", async () => {

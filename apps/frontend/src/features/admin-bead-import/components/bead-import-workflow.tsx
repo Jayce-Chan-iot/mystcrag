@@ -4,17 +4,26 @@ import * as React from "react";
 
 import { normalizeAssetRelativePath } from "@mystcrag/design-contract";
 
-import { createBeadImportClient, newIdempotencyKey } from "../api-client";
+import { createBeadImportClient, newIdempotencyKey, type BeadImportClient } from "../api-client";
+import type { CrystalSearchResult } from "@mystcrag/design-contract";
 import { createDraftLoader } from "../draft-loader";
 import { publishBlockersFor } from "../draft-form";
 import { classifyFailure } from "../failure-copy";
 import { readDirectoryDrop, type DataTransferItemLike } from "../folder-picker";
 import { createGroupLoader } from "../group-loader";
+import type { PreviewLoaderClient } from "../preview-loader";
 import { createProcessingLoader, type ReviewDecisionInput } from "../processing-loader";
 import { createSessionLifecycle } from "../session-lifecycle";
 import { detectDirectorySupport, planUploads } from "../upload-model";
+import { decideUploadRecovery } from "../upload-recovery";
 import { createUploadQueue, type UploadFileSource, type UploadQueueState } from "../upload-queue";
-import { canStartGrouping, canStartProcessing, type WorkflowStep } from "../workflow-model";
+import {
+  canRegisterManifest,
+  canStartGrouping,
+  canStartProcessing,
+  canUploadFileContent,
+  type WorkflowStep
+} from "../workflow-model";
 import {
   CONFLICT_NOTICE_MESSAGE,
   currentWorkflowStep,
@@ -197,7 +206,6 @@ export function BeadImportWorkflow({ sessionId }: { sessionId: string }) {
       if (session === null) {
         return;
       }
-      const plan = planUploads(files, { newClientFileId: newIdempotencyKey });
       const byPath = new Map<string, UploadFileSource>();
       for (const file of files) {
         const path = sourceRelativePath(file);
@@ -205,6 +213,27 @@ export function BeadImportWorkflow({ sessionId }: { sessionId: string }) {
           byPath.set(path, file);
         }
       }
+      const recovery = decideUploadRecovery({
+        session,
+        pickedRelativePaths: [...byPath.keys()],
+        newClientFileId: newIdempotencyKey
+      });
+      if (recovery.mode === "RETRY_REGISTERED") {
+        // The session already owns these file ids: re-send their bytes only.
+        const sources = new Map<string, UploadFileSource>();
+        for (const target of recovery.targets) {
+          const source = byPath.get(target.relativePath);
+          if (source !== undefined) {
+            sources.set(target.clientFileId, source);
+          }
+        }
+        setPickedCount(recovery.targets.length);
+        void uploadQueue
+          .retryRegistered(session.sessionId, recovery.targets, sources)
+          .then(() => lifecycle.refresh());
+        return;
+      }
+      const plan = planUploads(files, { newClientFileId: newIdempotencyKey });
       const sources = new Map<string, UploadFileSource>();
       for (const entry of plan.entries) {
         const source = byPath.get(entry.relativePath);
@@ -213,9 +242,9 @@ export function BeadImportWorkflow({ sessionId }: { sessionId: string }) {
         }
       }
       setPickedCount(plan.entries.length);
-      void uploadQueue.start(session.sessionId, plan, sources);
+      void uploadQueue.start(session.sessionId, plan, sources).then(() => lifecycle.refresh());
     },
-    [uploadQueue]
+    [uploadQueue, lifecycle]
   );
 
   const handleDropItems = React.useCallback(
@@ -334,10 +363,47 @@ export function BeadImportWorkflow({ sessionId }: { sessionId: string }) {
     void processingLoader.startProcessing().finally(() => setProcessingInFlight(false));
   }, [processingLoader, setProcessingInFlight]);
 
+  const handlePublish = React.useCallback(
+    (groupId: string) => {
+      void processingLoader.publishGroup(groupId).then((result) => {
+        if (result.outcome === "REFUSED" || result.outcome === "FAILED") {
+          dispatch({ type: "GROUP_MUTATION_FAILED", groupId, message: result.message });
+        }
+      });
+    },
+    [processingLoader]
+  );
+
+  const crystalSearchClient = React.useMemo<{ listCrystals: BeadImportClient["listCrystals"] }>(
+    () => ({ listCrystals: (query, requestOptions) => client.listCrystals(query, requestOptions) }),
+    [client]
+  );
+
+  const handleCrystalSelected = React.useCallback(
+    (groupId: string, result: CrystalSearchResult) => {
+      // An existing Crystal is resolved by saving its authoritative name through
+      // the same revision-guarded naming path as any other name.
+      void groupLoader.submit(groupId, { action: "SET_NAME", crystalName: result.nameCn });
+    },
+    [groupLoader]
+  );
+
   const session = state.session;
   const step: WorkflowStep = currentWorkflowStep(state);
   const locked = isSessionLocked(state);
   const queueRunning = upload.phase === "REGISTERING" || upload.phase === "UPLOADING";
+
+  // Registered files the archive still lacks. They are only retryable when the
+  // Backend refuses a fresh manifest; otherwise the normal flow covers them.
+  const serverRetryable = React.useMemo(
+    () =>
+      session === null || canRegisterManifest(session.state) || !canUploadFileContent(session.state)
+        ? []
+        : session.files
+            .filter((file) => file.state === "FAILED" || file.state === "PENDING")
+            .map((file) => ({ fileId: file.fileId, relativePath: file.relativePath, byteSize: file.byteSize })),
+    [session]
+  );
 
   const groupCards = groupCardsOf(
     session?.groups ?? [],
@@ -353,22 +419,53 @@ export function BeadImportWorkflow({ sessionId }: { sessionId: string }) {
 
   const draftCards = draftCardsOf(state);
 
-  const processingCards = (session?.groups ?? []).map((group) => ({
-    groupId: group.groupId,
-    crystalName: group.crystalName ?? null,
-    state: group.state,
-    revision: group.revision,
-    processedAssets: group.processedAssets.map((asset) => ({
-      processedAssetId: asset.processedAssetId,
-      processingVersion: asset.processingVersion,
-      state: asset.state,
-      isCurrent: asset.isCurrent,
-      qcIssues: [...asset.qcIssues]
-    })),
-    stale: state.staleGroupIds.includes(group.groupId),
-    inFlight: state.inFlightGroupIds.includes(group.groupId),
-    failureMessage: failureMessageFor(state.notices, "group-mutation-failure:", group.groupId)
-  }));
+  const processingCards = (session?.groups ?? []).map((group) => {
+    const entry = state.draftForms[group.groupId];
+    const crystalDraft = group.crystalDraft;
+    const completeness = state.draftCompleteness[group.groupId];
+    const publishReady =
+      publishBlockersFor({
+        completeness: completeness ?? null,
+        usagePermission: entry?.form.usagePermission ?? null,
+        crystalDraft:
+          crystalDraft === null
+            ? null
+            : { curationComplete: crystalDraft.curationComplete, promotionEligible: crystalDraft.promotionEligible }
+      }).length === 0;
+    const hasApprovedTexture = group.processedAssets.some(
+      (asset) => asset.isCurrent && asset.state === "APPROVED" && asset.approvedAssetKey !== null
+    );
+    return {
+      groupId: group.groupId,
+      crystalName: group.crystalName ?? null,
+      state: group.state,
+      revision: group.revision,
+      processedAssets: group.processedAssets.map((asset) => ({
+        processedAssetId: asset.processedAssetId,
+        processingVersion: asset.processingVersion,
+        state: asset.state,
+        isCurrent: asset.isCurrent,
+        qcIssues: [...asset.qcIssues]
+      })),
+      previewFileId: group.memberFileIds[0] ?? null,
+      hasApprovedTexture,
+      publishReady,
+      stale: state.staleGroupIds.includes(group.groupId),
+      inFlight: state.inFlightGroupIds.includes(group.groupId),
+      failureMessage: failureMessageFor(state.notices, "group-mutation-failure:", group.groupId)
+    };
+  });
+
+  const previewContext = React.useMemo(
+    () => ({
+      client: client as unknown as PreviewLoaderClient,
+      objectUrls: {
+        createObjectUrl: (source: Blob) => URL.createObjectURL(source),
+        revokeObjectUrl: (url: string) => URL.revokeObjectURL(url)
+      }
+    }),
+    [client]
+  );
 
   const publishBlockers = React.useMemo(() => {
     const blockers = new Set<string>();
@@ -409,8 +506,11 @@ export function BeadImportWorkflow({ sessionId }: { sessionId: string }) {
               onPickFolder={() => document.getElementById("bead-import-folder-input")?.click()}
               onFilesPicked={(files) => beginUpload(files)}
               onDropItems={handleDropItems}
-              onRetryFile={(fileId) => void uploadQueue.retry(session.sessionId, fileId)}
+              onRetryFile={(fileId) =>
+                void uploadQueue.retry(session.sessionId, fileId).then(() => lifecycle.refresh())
+              }
               onCancel={() => uploadQueue.cancel()}
+              serverRetryable={serverRetryable}
             />
             {canStartGrouping(session.state) && (
               <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-soft)] p-3">
@@ -474,6 +574,8 @@ export function BeadImportWorkflow({ sessionId }: { sessionId: string }) {
             onResetCuration={(crystalDraftId) => dispatch({ type: "RESET_CURATION_DRAFT", crystalDraftId })}
             onSaveCuration={(crystalDraftId) => void draftLoader.saveCuration(crystalDraftId)}
             onAcknowledgeConflict={handleAcknowledgeConflict}
+            crystalSearchClient={crystalSearchClient}
+            onCrystalSelected={handleCrystalSelected}
           />
         );
         break;
@@ -494,6 +596,8 @@ export function BeadImportWorkflow({ sessionId }: { sessionId: string }) {
               void processingLoader.selectProcessedVersion(groupId, processingVersion)
             }
             onReview={handleReview}
+            onPublish={handlePublish}
+            preview={previewContext}
             onAcknowledgeConflict={handleAcknowledgeConflict}
           />
         );

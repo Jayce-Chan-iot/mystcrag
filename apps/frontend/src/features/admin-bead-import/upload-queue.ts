@@ -43,7 +43,14 @@ export type UploadFileProgress = {
   attempts: number;
 };
 
-export type UploadQueuePhase = "IDLE" | "REGISTERING" | "UPLOADING" | "COMPLETE" | "BLOCKED" | "FAILED";
+export type UploadQueuePhase =
+  | "IDLE"
+  | "REGISTERING"
+  | "UPLOADING"
+  | "COMPLETE"
+  | "BLOCKED"
+  | "FAILED"
+  | "CANCELLED";
 
 export type UploadQueueTotals = {
   registered: number;
@@ -84,14 +91,30 @@ export type UploadQueueDeps = {
   report: (state: UploadQueueState) => void;
 };
 
+/** A registered file the authoritative session already knows, awaiting its bytes again. */
+export type RegisteredRetryTarget = {
+  fileId: string;
+  clientFileId: string;
+  relativePath: string;
+  byteSize: number;
+};
+
 export type UploadQueueController = {
   start(sessionId: string, plan: UploadPlan, sources: ReadonlyMap<string, UploadFileSource>): Promise<void>;
   retry(sessionId: string, fileId: string): Promise<void>;
+  retryRegistered(
+    sessionId: string,
+    targets: ReadonlyArray<RegisteredRetryTarget>,
+    sources: ReadonlyMap<string, UploadFileSource>
+  ): Promise<void>;
   cancel(): void;
   snapshot(): UploadQueueState;
 };
 
 const NOTHING_TO_REGISTER_MESSAGE = "没有可登记的文件：仅支持 ARW、JPG、PNG、WEBP。";
+const CANCELLED_MESSAGE = "已停止上传，已上传的文件仍然有效。";
+const NOTHING_TO_RETRY_MESSAGE = "没有匹配到待重试的已登记文件，请核对所选文件夹。";
+const START_FAILURE_MESSAGE = "上传未能开始，请稍后重试。";
 const UNREGISTERED_MESSAGE = "服务端未登记该文件，请重新导入。";
 const MISSING_SOURCE_MESSAGE = "浏览器已释放该文件，请重新选择后再上传。";
 const DUPLICATE_MESSAGE = "服务端已存在相同文件，本次未重复归档。";
@@ -275,6 +298,22 @@ export function createUploadQueue(deps: UploadQueueDeps): UploadQueueController 
     plan: UploadPlan,
     planSources: ReadonlyMap<string, UploadFileSource>
   ): Promise<void> {
+    try {
+      await runStart(sessionId, plan, planSources);
+    } catch {
+      if (!cancelled) {
+        phase = "FAILED";
+        message = START_FAILURE_MESSAGE;
+        emit();
+      }
+    }
+  }
+
+  async function runStart(
+    sessionId: string,
+    plan: UploadPlan,
+    planSources: ReadonlyMap<string, UploadFileSource>
+  ): Promise<void> {
     cancelled = false;
     active = 0;
     archivedBytes = 0;
@@ -361,16 +400,79 @@ export function createUploadQueue(deps: UploadQueueDeps): UploadQueueController 
     finish();
   }
 
+  async function retryRegistered(
+    sessionId: string,
+    targets: ReadonlyArray<RegisteredRetryTarget>,
+    retrySources: ReadonlyMap<string, UploadFileSource>
+  ): Promise<void> {
+    if (targets.length === 0) {
+      cancelled = false;
+      active = 0;
+      live = new Set();
+      idle = null;
+      sources = retrySources;
+      phase = "BLOCKED";
+      message = NOTHING_TO_RETRY_MESSAGE;
+      files = [];
+      emit();
+      return;
+    }
+    try {
+      cancelled = false;
+      active = 0;
+      archivedBytes = 0;
+      live = new Set();
+      idle = null;
+      sources = retrySources;
+      message = null;
+      files = targets.map((target) => ({
+        clientFileId: target.clientFileId,
+        fileId: target.fileId,
+        label: target.relativePath,
+        relativePath: target.relativePath,
+        byteSize: target.byteSize,
+        status: "QUEUED" as const,
+        message: null,
+        attempts: 0
+      }));
+      // The file ids already exist on the server: a retry re-sends content only,
+      // so no manifest is registered and no duplicate registration is created.
+      phase = "UPLOADING";
+      emit();
+      await runPump(sessionId);
+      if (cancelled) {
+        return;
+      }
+      finish();
+    } catch {
+      if (!cancelled) {
+        phase = "FAILED";
+        message = START_FAILURE_MESSAGE;
+        emit();
+      }
+    }
+  }
+
   function cancel(): void {
+    if (cancelled) {
+      return;
+    }
     cancelled = true;
     for (const controller of live) {
       controller.abort("bead import upload cancelled");
     }
     live.clear();
+    if (phase === "REGISTERING" || phase === "UPLOADING") {
+      // A cancelled run must never leave the operator in a running phase: the
+      // queue settles in its own terminal state instead of waiting forever.
+      phase = "CANCELLED";
+      message = CANCELLED_MESSAGE;
+      deps.report(snapshot());
+    }
     const resolve = idle;
     idle = null;
     resolve?.();
   }
 
-  return { start, retry, cancel, snapshot };
+  return { start, retry, retryRegistered, cancel, snapshot };
 }

@@ -8,7 +8,9 @@ import {
   SaveBeadProductDraftRequestSchema,
   UpdateCrystalDraftCurationRequestSchema,
   missingCrystalDraftCurationFields,
+  type AssetImportCrystalDraftView,
   type AssetUsagePermission,
+  type BeadProductDraftView,
   type CrystalDraftCurationField,
   type DraftCompletenessField,
   type SaveBeadProductDraftRequest,
@@ -22,12 +24,11 @@ import {
  * reported to the operator and left out of the save, so this module never
  * restates a length, a range or a placeholder rule of its own.
  *
- * Two publish-required inputs are deliberately absent here. There is no read
- * surface this console may reach that resolves an existing crystal record, so a
- * crystal reference can only ever be the draft the Backend created and returned;
- * and an approved texture key is written by the Backend after human review, so
- * no field in this form can produce one. Both show up as publication blockers
- * rather than as inputs an operator could fill in with a guess.
+ * An approved texture key is written by the Backend after human review, so no
+ * field in this form can produce one; it shows up as a publication blocker
+ * rather than as an input an operator could fill in with a guess. An existing
+ * Crystal record, by contrast, is resolvable through the dedicated admin search
+ * endpoint, so the console offers search-and-select instead of free-text guessing.
  */
 
 export type BeadShape = NonNullable<SaveBeadProductDraftRequest["shape"]>;
@@ -243,6 +244,75 @@ export function emptyCurationForm(): CurationForm {
     styleTags: "",
     priceLevel: "",
     complianceNote: ""
+  };
+}
+
+/**
+ * Exact minor-unit inverse of {@link toMinorUnits}: the fraction is assembled
+ * digit-wise and stripped of trailing zeros, so a hydrated price reads back
+ * into the very same minor amount when saved again.
+ */
+export function minorUnitsToMajorText(minor: number, currency: SupportedCurrency): string {
+  const units = CURRENCY_MINOR_UNITS[currency];
+  const fractionDigits = String(units).length - 1;
+  const sign = minor < 0 ? "-" : "";
+  const absolute = Math.abs(minor);
+  const whole = Math.trunc(absolute / units);
+  const fraction = String(absolute % units).padStart(fractionDigits, "0").replace(/0+$/, "");
+  return fraction === "" ? `${sign}${whole}` : `${sign}${whole}.${fraction}`;
+}
+
+function nullableText(value: string | null): string {
+  return value ?? "";
+}
+
+/**
+ * Hydrates the operator form from the authoritative `BeadProductDraftView` the
+ * session carries, so a refresh shows what the Backend already accepted instead
+ * of an empty sheet. The result reads as clean (`saved`) until the operator edits.
+ */
+export function productDraftFormFromView(view: BeadProductDraftView): ProductDraftForm {
+  const form = emptyProductDraftForm();
+  form.text.displayName = nullableText(view.displayName);
+  form.text.sku = nullableText(view.sku);
+  form.text.materialKey = nullableText(view.materialKey);
+  form.text.diameterMm = view.diameterMm === null ? "" : String(view.diameterMm);
+  form.text.lengthAlongStringMm =
+    view.lengthAlongStringMm === null ? "" : String(view.lengthAlongStringMm);
+  form.text.unitPrice =
+    view.unitPriceMinor === null || view.currency === null
+      ? ""
+      : minorUnitsToMajorText(view.unitPriceMinor, view.currency);
+  form.text.cost =
+    view.costMinor === null || view.currency === null
+      ? ""
+      : minorUnitsToMajorText(view.costMinor, view.currency);
+  form.text.availableQuantity = view.availableQuantity === null ? "" : String(view.availableQuantity);
+  form.text.qualityStatement = nullableText(view.qualityStatement);
+  form.text.qualitySource = nullableText(view.qualitySource);
+  form.text.rightsHolder = nullableText(view.rightsHolder);
+  form.shape = view.shape;
+  form.currency = view.currency;
+  form.usagePermission = view.usagePermission;
+  form.decisions.isAuthenticPhotograph = view.isAuthenticPhotograph;
+  form.decisions.allowAiTraining = view.allowAiTraining;
+  form.decisions.allowCommercialUse = view.allowCommercialUse;
+  form.decisions.allowPublicDisplay = view.allowPublicDisplay;
+  form.decisions.allowAiRecommendation = view.allowAiRecommendation;
+  return form;
+}
+
+/** Hydrates the curation form from the full CrystalDraft view, tags joined for editing. */
+export function curationFormFromView(view: AssetImportCrystalDraftView): CurationForm {
+  return {
+    nameCn: nullableText(view.nameCn),
+    nameEn: nullableText(view.nameEn),
+    mineralName: nullableText(view.mineralName),
+    colorTags: (view.colorTags ?? []).join("、"),
+    visualTags: (view.visualTags ?? []).join("、"),
+    styleTags: (view.styleTags ?? []).join("、"),
+    priceLevel: view.priceLevel === null ? "" : String(view.priceLevel),
+    complianceNote: nullableText(view.complianceNote)
   };
 }
 

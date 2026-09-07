@@ -34,6 +34,9 @@ import {
   type CurationPatch,
   type ProductDraftPatch
 } from "../workflow-state";
+import type { CrystalSearchClient } from "../crystal-search";
+import type { CrystalSearchResult } from "@mystcrag/design-contract";
+import { CrystalSearchField } from "./crystal-search-field";
 import {
   BUTTON_CLASS,
   CARD_CLASS,
@@ -93,6 +96,9 @@ export type DraftPanelProps = {
   onResetCuration: (crystalDraftId: string) => void;
   onSaveCuration: (crystalDraftId: string) => void;
   onAcknowledgeConflict: () => void;
+  /** The dedicated admin Crystal search client; absent means no search field. */
+  crystalSearchClient?: CrystalSearchClient | null;
+  onCrystalSelected?: (groupId: string, result: CrystalSearchResult) => void;
 };
 
 const CURRENCY_LABELS: Readonly<Record<SupportedCurrency, string>> = {
@@ -502,7 +508,9 @@ function DraftCard({
   onCheckCompleteness,
   onCurationPatch,
   onResetCuration,
-  onSaveCuration
+  onSaveCuration,
+  crystalSearchClient,
+  onCrystalSelected
 }: {
   card: DraftGroupCard;
   locked: boolean;
@@ -514,6 +522,8 @@ function DraftCard({
   onCurationPatch: (patch: CurationPatch) => void;
   onResetCuration: () => void;
   onSaveCuration: () => void;
+  crystalSearchClient: CrystalSearchClient | null;
+  onCrystalSelected: (result: CrystalSearchResult) => void;
 }) {
   const canOperate = !locked && !blockedByConflict && card.state !== "PUBLISHED" && !card.stale;
   const headingId = `bead-import-draft-${card.groupId}-heading`;
@@ -532,6 +542,13 @@ function DraftCard({
         <p role="alert" className={`${NOTICE_CLASS} ${NOTICE_TONE_CLASS.danger} min-w-0 break-all`}>
           {card.failureMessage}
         </p>
+      )}
+
+      {crystalSearchClient !== null && canOperate && (
+        <CrystalSearchField
+          client={crystalSearchClient}
+          onSelect={onCrystalSelected}
+        />
       )}
 
       <ProductDraftFormView
@@ -572,7 +589,9 @@ export function DraftPanel({
   onCurationPatch,
   onResetCuration,
   onSaveCuration,
-  onAcknowledgeConflict
+  onAcknowledgeConflict,
+  crystalSearchClient = null,
+  onCrystalSelected = () => {}
 }: DraftPanelProps) {
   return (
     <section aria-labelledby="bead-import-draft-heading" className="flex min-w-0 flex-col gap-4">
@@ -626,6 +645,8 @@ export function DraftPanel({
               onCurationPatch={(patch) => onCurationPatch(card.crystalDraft?.crystalDraftId ?? "", patch)}
               onResetCuration={() => onResetCuration(card.crystalDraft?.crystalDraftId ?? "")}
               onSaveCuration={() => onSaveCuration(card.crystalDraft?.crystalDraftId ?? "")}
+              crystalSearchClient={crystalSearchClient}
+              onCrystalSelected={(result) => onCrystalSelected(card.groupId, result)}
             />
           ))}
         </div>

@@ -39,6 +39,7 @@ type Harness = {
   latest(): UploadQueueState;
   releaseUploads(results: (SanitizedUploadResult | Error)[]): void;
   setManifestResult(result: RegisterAssetManifestResponse | Error): void;
+  releaseManifest(result: RegisterAssetManifestResponse): void;
 };
 
 function makeSource(
@@ -68,7 +69,9 @@ function makeSource(
   return { file, source, stream };
 }
 
-function makeHarness(options: { gateUploads?: boolean } = {}): Harness {
+function makeHarness(
+  options: { gateUploads?: boolean; gateManifest?: boolean; newIdempotencyKey?: () => string } = {}
+): Harness {
   const reports: UploadQueueState[] = [];
   const uploads: RecordedUpload[] = [];
   const manifestRequests: { sessionId: string; request: RegisterAssetManifestRequest }[] = [];
@@ -78,6 +81,7 @@ function makeHarness(options: { gateUploads?: boolean } = {}): Harness {
   let active = 0;
   let aborted = 0;
   let manifestResult: RegisterAssetManifestResponse | Error | null = null;
+  let manifestGates: ((result: RegisterAssetManifestResponse) => void)[] = [];
   let gates: ((result: SanitizedUploadResult | Error) => void)[] = [];
 
   const queue = createUploadQueue({
@@ -90,6 +94,11 @@ function makeHarness(options: { gateUploads?: boolean } = {}): Harness {
         }
         if (manifestResult !== null) {
           return manifestResult;
+        }
+        if (options.gateManifest === true) {
+          return await new Promise<RegisterAssetManifestResponse>((resolve) => {
+            manifestGates.push(resolve);
+          });
         }
         return {
           sessionId,
@@ -122,7 +131,7 @@ function makeHarness(options: { gateUploads?: boolean } = {}): Harness {
         }
       }
     },
-    newIdempotencyKey: () => `idem-${idempotencyKeys.length + 1}`,
+    newIdempotencyKey: options.newIdempotencyKey ?? (() => `idem-${idempotencyKeys.length + 1}`),
     createAbortController: () => {
       let abortedLocally = false;
       return {
@@ -174,6 +183,13 @@ function makeHarness(options: { gateUploads?: boolean } = {}): Harness {
     },
     setManifestResult(result) {
       manifestResult = result;
+    },
+    releaseManifest(result) {
+      const pending = manifestGates;
+      manifestGates = [];
+      for (const release of pending) {
+        release(result);
+      }
     }
   };
 }
@@ -492,4 +508,127 @@ test("an upload result outside the contract states is a failure, not a silent su
   const latest = harness.latest();
   assert.equal(latest.totals.archived, 0);
   assert.equal(latest.files[0]?.status, "FAILED");
+});
+
+test("cancelling while registering settles the queue in a terminal CANCELLED phase", async () => {
+  const harness = makeHarness({ gateManifest: true });
+  const { plan, sources } = planOf(["批次/a.jpg", "批次/b.jpg"]);
+  const running = harness.queue.start("session-1", plan, sources);
+  await settled();
+  assert.equal(harness.manifestRequests.length, 1);
+  assert.equal(harness.uploads.length, 0);
+
+  harness.queue.cancel();
+  harness.releaseManifest({
+    sessionId: "session-1",
+    registeredFileCount: 2,
+    files: [
+      { fileId: "file-1", clientFileId: "cf-1", uploadStatus: "PENDING", createdAt: "2026-09-07T10:00:00.000Z" },
+      { fileId: "file-2", clientFileId: "cf-2", uploadStatus: "PENDING", createdAt: "2026-09-07T10:00:00.000Z" }
+    ]
+  });
+  await running;
+
+  assert.equal(harness.uploads.length, 0, "a cancelled queue must never upload");
+  assert.equal(harness.latest().phase, "CANCELLED", "an operator must not be stuck in a running phase");
+  assert.equal(harness.latest().message !== null, true);
+});
+
+test("cancelling mid-upload settles in CANCELLED and never reports COMPLETE", async () => {
+  const harness = makeHarness({ gateUploads: true });
+  const { plan, sources } = planOf(["批次/a.jpg", "批次/b.jpg", "批次/c.jpg"]);
+  const running = harness.queue.start("session-1", plan, sources);
+  await settled();
+  assert.equal(harness.uploads.length, 3);
+
+  harness.queue.cancel();
+  assert.equal(harness.latest().phase, "CANCELLED");
+  harness.releaseUploads([archived("file-1"), archived("file-2"), archived("file-3")]);
+  await running;
+
+  assert.equal(harness.latest().phase, "CANCELLED", "a cancelled run must not end as COMPLETE");
+  assert.equal(harness.uploads.length, 3);
+});
+
+test("an unexpected start failure lands in a terminal FAILED phase, never an unhandled rejection", async () => {
+  const harness = makeHarness({
+    newIdempotencyKey: () => {
+      throw new Error("key material unavailable");
+    }
+  });
+  const { plan, sources } = planOf(["批次/a.jpg"]);
+  await assert.doesNotReject(() => harness.queue.start("session-1", plan, sources));
+
+  const latest = harness.latest();
+  assert.equal(latest.phase, "FAILED");
+  assert.equal(latest.message !== null, true);
+  assert.equal(harness.manifestRequests.length, 0);
+});
+
+test("registered files are retried against their known file ids without a new manifest", async () => {
+  const harness = makeHarness();
+  const { sources } = planOf(["批次/a.jpg", "批次/b.jpg"]);
+  await harness.queue.retryRegistered(
+    "session-1",
+    [
+      { fileId: "file-9", clientFileId: "cf-1", relativePath: "批次/a.jpg", byteSize: 2048 },
+      { fileId: "file-7", clientFileId: "cf-2", relativePath: "批次/b.jpg", byteSize: 2048 }
+    ],
+    sources
+  );
+
+  assert.equal(harness.manifestRequests.length, 0, "registered files must never be re-registered");
+  assert.deepEqual(
+    harness.uploads.map((entry) => entry.fileId),
+    ["file-9", "file-7"]
+  );
+  const latest = harness.latest();
+  assert.equal(latest.phase, "COMPLETE");
+  assert.equal(latest.totals.registered, 2);
+  assert.equal(latest.totals.archived, 2);
+  assert.equal(latest.totals.declaredBytes, 4096);
+});
+
+test("a registered retry still respects the concurrency bound and a missing source fails alone", async () => {
+  const harness = makeHarness({ gateUploads: true });
+  const { sources } = planOf(["批次/a.jpg", "批次/b.jpg", "批次/c.jpg"]);
+  const fourFiles = ["a", "b", "c", "d"].map((name, index) => ({
+    fileId: `file-${index + 1}`,
+    clientFileId: index < 3 ? `cf-${index + 1}` : "cf-missing-4",
+    relativePath: `批次/${name}.jpg`,
+    byteSize: 2048
+  }));
+  const running = harness.queue.retryRegistered("session-1", fourFiles, sources);
+  await settled();
+
+  assert.equal(harness.peakConcurrency, UPLOAD_QUEUE_CONCURRENCY);
+  harness.releaseUploads([archived("file-1"), archived("file-2"), archived("file-3")]);
+  await running;
+
+  const latest = harness.latest();
+  assert.equal(latest.totals.failed, 1, "a missing browser file fails by itself");
+  assert.equal(latest.totals.archived, 3);
+});
+
+test("an empty registered retry is a blocked no-op", async () => {
+  const harness = makeHarness();
+  await harness.queue.retryRegistered("session-1", [], new Map());
+  const latest = harness.latest();
+  assert.equal(latest.phase, "BLOCKED");
+  assert.equal(harness.manifestRequests.length, 0);
+  assert.equal(harness.uploads.length, 0);
+});
+
+test("cancelling a registered retry settles in CANCELLED", async () => {
+  const harness = makeHarness({ gateUploads: true });
+  const { sources } = planOf(["批次/a.jpg"]);
+  const running = harness.queue.retryRegistered(
+    "session-1",
+    [{ fileId: "file-9", clientFileId: "cf-1", relativePath: "批次/a.jpg", byteSize: 2048 }],
+    sources
+  );
+  await settled();
+  harness.queue.cancel();
+  await running;
+  assert.equal(harness.latest().phase, "CANCELLED");
 });

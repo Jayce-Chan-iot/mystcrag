@@ -39,6 +39,8 @@ export type UploadPanelProps = {
   onDropItems: (items: readonly DataTransferItemLike[]) => void;
   onRetryFile: (fileId: string) => void;
   onCancel: () => void;
+  /** Registered files the authoritative session holds without archived bytes. */
+  serverRetryable?: readonly { fileId: string; relativePath: string; byteSize: number }[];
 };
 
 const PHASE_LABELS: Readonly<Record<UploadQueuePhase, string>> = {
@@ -47,7 +49,8 @@ const PHASE_LABELS: Readonly<Record<UploadQueuePhase, string>> = {
   UPLOADING: "正在上传素材…",
   COMPLETE: "本次上传已结束",
   BLOCKED: "本次选择无法登记",
-  FAILED: "文件清单登记失败"
+  FAILED: "文件清单登记失败",
+  CANCELLED: "已停止上传"
 };
 
 const STATUS_LABELS: Readonly<Record<UploadFileStatus, string>> = {
@@ -118,7 +121,8 @@ export function UploadPanel({
   onFilesPicked,
   onDropItems,
   onRetryFile,
-  onCancel
+  onCancel,
+  serverRetryable = []
 }: UploadPanelProps) {
   const running = RUNNING_PHASES.has(queue.phase);
   const folderSupported = support.folderInput || support.folderDrop;
@@ -226,6 +230,20 @@ export function UploadPanel({
         <p role="status" className="min-w-0 text-sm text-[var(--warning)]">
           有 {unreadableCount} 个文件无法读取，未被登记。
         </p>
+      )}
+
+      {serverRetryable.length > 0 && (
+        <div
+          role="status"
+          className="flex min-w-0 flex-col gap-1 rounded-xl border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-4 py-3"
+        >
+          <p className="min-w-0 text-sm font-medium">
+            服务端有 {serverRetryable.length} 个已登记文件未归档
+          </p>
+          <p className="min-w-0 text-xs leading-5 text-[var(--muted)]">
+            重新选择同一素材文件夹后，将直接对这些文件重试上传，不会重复登记清单。
+          </p>
+        </div>
       )}
 
       <div aria-live="polite" className="flex min-w-0 flex-col gap-3">

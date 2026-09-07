@@ -59,6 +59,7 @@ function makeGroup(overrides: Partial<AssetImportSessionGroupView> = {}): AssetI
     revision: 3,
     processedAssets: [],
     crystalDraft: null,
+    productDraft: null,
     ...overrides
   };
 }

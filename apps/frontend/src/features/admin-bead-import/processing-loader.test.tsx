@@ -4,12 +4,16 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  PublishBeadImageGroupRequestSchema,
   ReprocessBeadImageGroupRequestSchema,
   ReviewProcessedAssetRequestSchema,
   SelectProcessedVersionRequestSchema,
+  type AssetImportCrystalDraftView,
   type AssetImportProcessedAssetView,
   type AssetImportSessionGroupView,
-  type AssetImportSessionResponse
+  type AssetImportSessionResponse,
+  type BeadProductDraftView,
+  type PublishBeadImageGroupRequest
 } from "@mystcrag/design-contract";
 
 import { BeadImportApiError } from "./api-client";
@@ -62,6 +66,7 @@ function makeProcessedAsset(overrides: Partial<AssetImportProcessedAssetView> = 
     isCurrent: true,
     qcPassed: true,
     qcIssues: [],
+    approvedAssetKey: null,
     ...overrides
   };
 }
@@ -74,13 +79,61 @@ function makeGroup(overrides: Partial<AssetImportSessionGroupView> = {}): AssetI
     memberFileIds: ["file-1"],
     revision: 5,
     processedAssets: [makeProcessedAsset()],
-    crystalDraft: {
-      crystalDraftId: "crystal-draft-1",
-      revision: 2,
-      curationComplete: true,
-      missingFields: [],
-      promotionEligible: true
-    },
+    crystalDraft: makeCrystalDraft(),
+    productDraft: null,
+    ...overrides
+  };
+}
+
+const APPROVED_KEY = `approved:${"b".repeat(64)}`;
+
+function makeCrystalDraft(overrides: Partial<AssetImportCrystalDraftView> = {}): AssetImportCrystalDraftView {
+  return {
+    crystalDraftId: "crystal-draft-1",
+    revision: 2,
+    nameCn: "白水晶",
+    nameEn: "Clear Quartz",
+    mineralName: "石英",
+    colorTags: ["白色"],
+    visualTags: ["冰裂"],
+    styleTags: ["简约"],
+    priceLevel: 3,
+    complianceNote: "仅描述材质与外观，不涉及任何功效。",
+    curationComplete: true,
+    missingFields: [],
+    promotionEligible: true,
+    ...overrides
+  };
+}
+
+function makeProductDraft(
+  overrides: Partial<BeadProductDraftView> = {}
+): BeadProductDraftView {
+  return {
+    crystalName: "白水晶",
+    crystalId: null,
+    crystalDraftId: "crystal-draft-1",
+    displayName: "天然白水晶圆珠手串",
+    sku: "MXJ-BEAD-QUARTZ-08",
+    materialKey: "quartz-clear",
+    shape: "ROUND",
+    diameterMm: 10,
+    lengthAlongStringMm: null,
+    currency: "CNY",
+    unitPriceMinor: 1250,
+    costMinor: 800,
+    availableQuantity: 25,
+    qualityStatement: "肉眼干净，天然棉裂可见。",
+    qualitySource: "供应商出厂检验单。",
+    textureAssetKey: null,
+    modelAssetKey: null,
+    rightsHolder: "玄矶水晶工作室",
+    usagePermission: "OWNED",
+    isAuthenticPhotograph: true,
+    allowAiTraining: false,
+    allowCommercialUse: true,
+    allowPublicDisplay: true,
+    allowAiRecommendation: true,
     ...overrides
   };
 }
@@ -173,7 +226,21 @@ function makeHarness(options: { session?: AssetImportSessionResponse } = {}): Ha
         reviewAction: "APPROVE",
         state: "APPROVED",
         revision: 6,
+        approvedAssetKey: APPROVED_KEY,
         reviewedAt: SYNCED_AT
+      };
+    },
+    async publishGroup(groupId, request) {
+      calls.push(`publish:${groupId}:${request.expectedGroupRevision}`);
+      requests.push(request);
+      return {
+        groupId,
+        state: "PUBLISHED" as const,
+        materialProductId: "product-1",
+        crystalId: "crystal-1",
+        inventorySnapshotId: "inventory-1",
+        publishedAssetKeys: [request.textureAssetKey],
+        publishedAt: SYNCED_AT
       };
     },
     async getSession(sessionId) {
@@ -406,4 +473,162 @@ test("the loader reaches for the contract client and stays free of leaks", () =>
   }
   assert.ok(SOURCE.includes("canReviewProcessedAsset"), "review eligibility is judged by the contract");
   assert.ok(SOURCE.includes("expectedGroupRevision") && SOURCE.includes("reprocessGroup"), "reprocess uses authoritative revision");
+});
+function publishReadySession(
+  overrides: Partial<AssetImportSessionResponse> = {},
+  groupOverrides: Partial<AssetImportSessionGroupView> = {}
+): AssetImportSessionResponse {
+  return makeSession({
+    state: "READY_TO_PUBLISH",
+    groups: [
+      makeGroup({
+        state: "READY",
+        processedAssets: [
+          makeProcessedAsset({ state: "APPROVED", approvedAssetKey: APPROVED_KEY })
+        ],
+        productDraft: makeProductDraft(),
+        ...groupOverrides
+      })
+    ],
+    ...overrides
+  });
+}
+
+test("publish builds the request from the authoritative session and the approved key alone", async () => {
+  const harness = makeHarness({ session: publishReadySession() });
+  const result = await harness.loader.publishGroup("group-1");
+  assert.equal(result.outcome, "APPLIED");
+
+  const request = harness.requests[0] as PublishBeadImageGroupRequest;
+  assert.equal(PublishBeadImageGroupRequestSchema.safeParse(request).success, true);
+  assert.equal(
+    request.textureAssetKey,
+    APPROVED_KEY,
+    "the texture key is the Backend's approved key, never a client-derived value"
+  );
+  assert.equal(request.crystalName, "白水晶");
+  assert.equal(request.crystalNameConfirmedByOperator, true);
+  assert.equal(request.displayName, "天然白水晶圆珠手串");
+  assert.equal(request.sku, "MXJ-BEAD-QUARTZ-08");
+  assert.equal(request.materialKey, "quartz-clear");
+  assert.equal(request.shape, "ROUND");
+  assert.equal(request.diameterMm, 10);
+  assert.equal(request.qualityStatement, "肉眼干净，天然棉裂可见。");
+  assert.equal(request.qualitySource, "供应商出厂检验单。");
+  assert.equal(request.currency, "CNY");
+  assert.equal(request.unitPriceMinor, 1250);
+  assert.equal(request.costMinor, 800);
+  assert.equal(request.availableQuantity, 25);
+  assert.equal(request.rightsHolder, "玄矶水晶工作室");
+  assert.equal(request.usagePermission, "OWNED");
+  assert.equal(request.isAuthenticPhotograph, true);
+  assert.equal(request.allowAiTraining, false);
+  assert.equal(request.allowAiRecommendation, true);
+  assert.equal(request.allowCommercialUse, true, "publish is an affirmative commercial grant");
+  assert.equal(request.allowPublicDisplay, true, "publish is an affirmative display grant");
+  assert.equal(request.crystalDraftId, "crystal-draft-1");
+  assert.equal(request.crystalDraftPromotionConfirmed, true);
+  assert.equal("crystalId" in request, false, "a draft reference and a crystal id never coexist");
+  assert.ok(harness.calls.some((call) => call.startsWith("publish:group-1:5")));
+});
+
+test("publish uses the existing crystal reference when the draft resolves one", async () => {
+  const harness = makeHarness({
+    session: publishReadySession({}, {
+      productDraft: makeProductDraft({ crystalId: "crystal-9", crystalDraftId: null })
+    })
+  });
+  const result = await harness.loader.publishGroup("group-1");
+  assert.equal(result.outcome, "APPLIED");
+  const request = harness.requests[0] as PublishBeadImageGroupRequest;
+  assert.equal(request.crystalId, "crystal-9");
+  assert.equal("crystalDraftId" in request, false);
+  assert.equal("crystalDraftPromotionConfirmed" in request, false);
+});
+
+test("publish is refused when the current version was never approved", async () => {
+  const harness = makeHarness({
+    session: publishReadySession({}, {
+      processedAssets: [makeProcessedAsset({ state: "QC_PENDING", approvedAssetKey: null })]
+    })
+  });
+  const result = await harness.loader.publishGroup("group-1");
+  assert.equal(result.outcome, "REFUSED");
+  if (result.outcome === "REFUSED") {
+    assert.equal(result.reason, "NO_APPROVED_TEXTURE");
+  }
+  assert.deepEqual(harness.calls, [], "a refused publish must not reach the network");
+});
+
+test("publish is refused when an old version holds the only approved key", async () => {
+  const harness = makeHarness({
+    session: publishReadySession({}, {
+      processedAssets: [
+        makeProcessedAsset({ state: "APPROVED", approvedAssetKey: APPROVED_KEY, isCurrent: false }),
+        makeProcessedAsset({
+          processedAssetId: "processed-2",
+          processingVersion: 2,
+          state: "QC_PENDING",
+          isCurrent: true,
+          approvedAssetKey: null
+        })
+      ]
+    })
+  });
+  const result = await harness.loader.publishGroup("group-1");
+  assert.equal(result.outcome, "REFUSED");
+  if (result.outcome === "REFUSED") {
+    assert.equal(result.reason, "NO_APPROVED_TEXTURE");
+  }
+});
+
+test("publish is refused while the authoritative draft is incomplete or withholds a required grant", async () => {
+  const incomplete = makeHarness({
+    session: publishReadySession({}, { productDraft: makeProductDraft({ sku: null }) })
+  });
+  const incompleteResult = await incomplete.loader.publishGroup("group-1");
+  assert.equal(incompleteResult.outcome, "REFUSED");
+  if (incompleteResult.outcome === "REFUSED") {
+    assert.equal(incompleteResult.reason, "DRAFT_INCOMPLETE");
+  }
+  assert.deepEqual(incomplete.calls, []);
+
+  const withheld = makeHarness({
+    session: publishReadySession({}, { productDraft: makeProductDraft({ allowPublicDisplay: false }) })
+  });
+  const withheldResult = await withheld.loader.publishGroup("group-1");
+  assert.equal(withheldResult.outcome, "REFUSED");
+  if (withheldResult.outcome === "REFUSED") {
+    assert.equal(withheldResult.reason, "CONSENT_NOT_GRANTED");
+  }
+  assert.deepEqual(withheld.calls, []);
+});
+
+test("a published task refuses publication through the shared group lock", async () => {
+  const harness = makeHarness({
+    session: publishReadySession(
+      { state: "PUBLISHED" },
+      { state: "PUBLISHED" as never }
+    )
+  });
+  const result = await harness.loader.publishGroup("group-1");
+  assert.equal(result.outcome, "REFUSED");
+  if (result.outcome === "REFUSED") {
+    assert.equal(result.reason, "GROUP_LOCKED");
+  }
+  assert.deepEqual(harness.calls, []);
+});
+
+test("publish consults the shared submission blockers, so a stale view cannot publish", () => {
+  assert.ok(
+    SOURCE.includes("groupSubmissionBlocker"),
+    "publish must reuse the same blocker authority as every other mutation"
+  );
+});
+
+test("the publish path exists on the loader and never assembles an approved key", () => {
+  assert.ok(SOURCE.includes("publishGroup"), "the loader must expose the publish action");
+  for (const forbidden of FORBIDDEN) {
+    assert.equal(SOURCE.includes(forbidden), false, `the loader must not mention ${forbidden}`);
+  }
 });
