@@ -307,10 +307,9 @@ export class AssetImportApplicationService {
       const bytes = await this.deps.archiveStore.verifiedRead(asset.storageKey, asset.outputSha256);
       return { bytes, contentType: asset.outputContentType, etag: `"${asset.outputSha256}"` };
     }
-    const thumbnailKey = asset.storageKey.replace(
-      new RegExp(`${PROCESSED_MAIN_FILENAME}$`),
-      PROCESSED_THUMBNAIL_FILENAME
-    );
+    const thumbnailKey = asset.storageKey.endsWith(PROCESSED_MAIN_FILENAME)
+      ? `${asset.storageKey.slice(0, -PROCESSED_MAIN_FILENAME.length)}${PROCESSED_THUMBNAIL_FILENAME}`
+      : asset.storageKey;
     const bytes = await this.deps.archiveStore.read(thumbnailKey);
     const thumbnailSha256 = createHash("sha256").update(bytes).digest("hex");
     return { bytes, contentType: asset.outputContentType, etag: `"${thumbnailSha256}"` };
