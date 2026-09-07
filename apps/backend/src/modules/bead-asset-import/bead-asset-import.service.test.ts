@@ -63,6 +63,21 @@ function repository(overrides: Record<string, unknown> = {}) {
       state: "FAILED",
       changed: true
     }),
+    searchCrystals: async () => ({ crystals: [], nextCursor: null }),
+    resolveSourceFileRead: async () => ({
+      kind: "JPEG",
+      state: "ARCHIVED",
+      archiveKey: "imports/session-1/raw/photo.jpg",
+      sha256: SHA,
+      byteSize: JPEG.byteLength
+    }),
+    resolveProcessedAssetRead: async () => ({
+      state: "APPROVED",
+      storageKey: "imports/session-1/processed/group-1/v1/bead-512.webp",
+      outputSha256: SHA,
+      outputContentType: "image/webp",
+      outputBytes: 4
+    }),
     ...overrides
   } as never;
 }
@@ -384,4 +399,69 @@ test("audited mutations use only the fixed server-side asset administrator actor
   await service.publishGroup("group-1", {} as never);
 
   assert.deepEqual(actors, Array(6).fill("asset-admin-local-operator"));
+});
+
+function makeBinaryStore(overrides: Record<string, unknown> = {}) {
+  return {
+    read: async () => new Uint8Array([1, 2, 3]),
+    verifiedRead: async () => new Uint8Array([1, 2, 3]),
+    ...overrides
+  } as never;
+}
+
+test("source file read returns verified bytes, content type and a strong etag", async () => {
+  const service = new AssetImportApplicationService({
+    repository: repository(),
+    archiveStore: makeBinaryStore()
+  });
+  const result = await service.readSourceFile("file-1");
+  assert.equal(result.contentType, "image/jpeg");
+  assert.equal(result.etag, `"${SHA}"`);
+});
+
+test("a raw ARW source is never disguised as a browser image", async () => {
+  const service = new AssetImportApplicationService({
+    repository: repository({
+      resolveSourceFileRead: async () => ({ kind: "ARW", state: "ARCHIVED", archiveKey: "x", sha256: SHA, byteSize: 6 })
+    }),
+    archiveStore: makeBinaryStore()
+  });
+  await assert.rejects(() => service.readSourceFile("file-1"), (error) => {
+    assert.ok(error instanceof AssetImportApiError);
+    assert.equal(error.transportCode, "UNSUPPORTED_MEDIA_TYPE");
+    assert.equal(error.assetCode, "SOURCE_PREVIEW_UNAVAILABLE");
+    return true;
+  });
+});
+
+test("an unarchived source is not readable", async () => {
+  const service = new AssetImportApplicationService({
+    repository: repository({
+      resolveSourceFileRead: async () => ({ kind: "JPEG", state: "PENDING", archiveKey: null, sha256: null, byteSize: 6 })
+    }),
+    archiveStore: makeBinaryStore()
+  });
+  await assert.rejects(() => service.readSourceFile("file-1"), (error) => {
+    assert.ok(error instanceof AssetImportApiError);
+    assert.equal(error.transportCode, "NOT_FOUND");
+    return true;
+  });
+});
+
+test("processed main read verifies the stored SHA while the thumbnail derives its own etag", async () => {
+  const calls: string[] = [];
+  const service = new AssetImportApplicationService({
+    repository: repository(),
+    archiveStore: {
+      verifiedRead: async (key: string) => { calls.push(`verified:${key}`); return new Uint8Array([1, 2, 3]); },
+      read: async (key: string) => { calls.push(`read:${key}`); return new Uint8Array([4, 5, 6]); }
+    } as never
+  });
+  const main = await service.readProcessedAsset("asset-1", "main");
+  assert.equal(main.etag, `"${SHA}"`);
+  assert.equal(calls[0], "verified:imports/session-1/processed/group-1/v1/bead-512.webp");
+
+  const thumbnail = await service.readProcessedAsset("asset-1", "thumbnail");
+  assert.equal(calls[1], "read:imports/session-1/processed/group-1/v1/thumb-256.webp");
+  assert.match(thumbnail.etag, /^"[0-9a-f]{64}"$/);
 });

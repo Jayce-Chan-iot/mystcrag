@@ -2,6 +2,7 @@ import type { Readable } from "node:stream";
 
 import {
   ASSET_MANIFEST_LIMITS,
+  AssetFileContentParamsSchema,
   AssetImportSessionResponseSchema,
   CancelAssetImportSessionParamsSchema,
   CancelAssetImportSessionRequestSchema,
@@ -15,6 +16,10 @@ import {
   IdentifierSchema,
   ListAssetImportSessionsQuerySchema,
   ListAssetImportSessionsResponseSchema,
+  ListCrystalsQuerySchema,
+  ListCrystalsResponseSchema,
+  ProcessedAssetContentParamsSchema,
+  ProcessedAssetContentQuerySchema,
   PublishBeadImageGroupParamsSchema,
   PublishBeadImageGroupRequestSchema,
   PublishBeadImageGroupResponseSchema,
@@ -135,6 +140,27 @@ async function handle(
   }
 }
 
+async function handleBinary(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  execute: () => Promise<{ bytes: Uint8Array; contentType: string; etag: string }>
+): Promise<FastifyReply> {
+  try {
+    const content = await execute();
+    return reply
+      .status(200)
+      .header("content-type", content.contentType)
+      .header("content-length", String(content.bytes.byteLength))
+      .header("etag", content.etag)
+      .header("cache-control", "private, no-store")
+      .send(Buffer.from(content.bytes));
+  } catch (error) {
+    const normalized = normalizeAssetImportError(error);
+    assertAssetErrorPair(normalized);
+    return reply.status(normalized.statusCode).send(assetImportErrorEnvelope(normalized, request.id));
+  }
+}
+
 export function registerAssetImportRoutes(
   app: FastifyInstance,
   service: AssetImportApplicationService,
@@ -244,6 +270,24 @@ export function registerAssetImportRoutes(
     assetApp.get("/groups/:groupId/publish-result", (request, reply) => handle(request, reply, async () => {
       const params = requestData(GetBeadImageGroupPublishResultParamsSchema, request.params);
       return responseData(GetBeadImageGroupPublishResultResponseSchema, await service.getPublishResult(params.groupId));
+    }));
+
+    assetApp.get("/files/:fileId/content", (request, reply) => handleBinary(request, reply, async () => {
+      const params = requestData(AssetFileContentParamsSchema, request.params);
+      return service.readSourceFile(params.fileId);
+    }));
+    assetApp.get("/processed-assets/:processedAssetId/content", (request, reply) => handleBinary(request, reply, async () => {
+      const params = requestData(ProcessedAssetContentParamsSchema, request.params);
+      const query = requestData(ProcessedAssetContentQuerySchema, request.query as Record<string, unknown>);
+      return service.readProcessedAsset(params.processedAssetId, query.rendition ?? "main");
+    }));
+    assetApp.get("/crystals", (request, reply) => handle(request, reply, async () => {
+      const raw = request.query as Record<string, unknown>;
+      const query = requestData(ListCrystalsQuerySchema, {
+        ...raw,
+        ...(typeof raw.limit === "string" ? { limit: Number(raw.limit) } : {})
+      });
+      return responseData(ListCrystalsResponseSchema, await service.searchCrystals(query));
     }));
 
     assetApp.register(async (uploadApp) => {
