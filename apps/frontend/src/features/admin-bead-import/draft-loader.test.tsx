@@ -884,3 +884,41 @@ test("the loader reaches for the contract client and nothing else", () => {
     "every bound is judged by the shared model, which the contract judges"
   );
 });
+
+test("selecting an existing crystal persists its id through the draft boundary", async () => {
+  const harness = makeHarness();
+  const result = await harness.loader.selectExistingCrystal("group-1", "crystal-9", "紫水晶");
+
+  assert.equal(result.outcome, "APPLIED");
+  assert.equal(harness.drafts.length, 1, "the selection is one explicit draft save");
+  const request = harness.drafts[0]?.request as SaveBeadProductDraftRequest;
+  assert.equal(request.crystalId, "crystal-9", "the chosen id itself is saved, never a name-derived guess");
+  assert.equal(request.crystalName, "紫水晶");
+  assert.equal(
+    "crystalDraftId" in request,
+    false,
+    "an existing-crystal reference and a draft reference never coexist"
+  );
+  assert.equal(request.expectedGroupRevision, 3, "the revision is the authoritative group revision");
+  assert.ok(
+    harness.sessionCalls >= 1,
+    "the authoritative session is re-read so productDraft.crystalId is preserved"
+  );
+});
+
+test("a crystal selection conflict stops local submission and re-reads the session", async () => {
+  const harness = makeHarness();
+  harness.setDraftResult(
+    new BeadImportApiError({ code: "CONFLICT", status: 409, message: "stale", retryable: true })
+  );
+  const result = await harness.loader.selectExistingCrystal("group-1", "crystal-9", "紫水晶");
+  assert.equal(result.outcome, "CONFLICT");
+  assert.ok(harness.sessionCalls >= 1, "a 409 re-reads the authoritative session");
+});
+
+test("a crystal selection for a group the session does not carry is refused locally", async () => {
+  const harness = makeHarness();
+  const result = await harness.loader.selectExistingCrystal("group-missing", "crystal-9", "紫水晶");
+  assert.equal(result.outcome, "REFUSED");
+  assert.equal(harness.drafts.length, 0, "a refused selection never reaches the network");
+});

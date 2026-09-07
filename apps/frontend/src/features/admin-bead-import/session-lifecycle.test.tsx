@@ -263,23 +263,46 @@ test("an unknown failure is classified without leaking the thrown message", asyn
   }
 });
 
-test("overlapping refreshes never start a second request", async () => {
-  let release: ((session: AssetImportSessionResponse) => void) | undefined;
+test("an explicit refresh that lands on an in-flight read is queued, never dropped", async () => {
+  const releases: ((session: AssetImportSessionResponse) => void)[] = [];
   const harness = makeHarness({
-    fetchSession: () =>
-      new Promise<AssetImportSessionResponse>((resolve) => {
-        release = resolve;
-      })
+    fetchSession: (sessionId, init) => {
+      harness.calls.push({ sessionId, signal: init.signal });
+      return new Promise<AssetImportSessionResponse>((resolve) => {
+        releases.push(resolve);
+      });
+    }
   });
   const first = harness.controller.start("session-1");
+  await settle();
+
+  // A poll is in flight when the upload completes and asks for a refresh.
   await harness.controller.refresh();
-  await harness.controller.refresh();
-  assert.equal(harness.aborters.controllers.length, 1, "one request at a time");
-  assert.equal(harness.actions.length, 1, "only the first SESSION_REQUESTED was dispatched");
-  release?.(makeSession("NEEDS_REVIEW"));
+  assert.equal(harness.calls.length, 1, "one request at a time while a read is in flight");
+
+  // The in-flight read returns a pre-upload snapshot that would stop polling.
+  releases[0]?.(makeSession("NEEDS_REVIEW"));
   await first;
   await settle();
+
+  assert.equal(
+    harness.calls.length,
+    2,
+    "the queued refresh must run once the in-flight read has settled"
+  );
+  releases[1]?.(makeSession("READY_TO_PUBLISH"));
+  await settle();
+
   assert.equal(harness.actions[1]?.type, "SESSION_LOADED");
+  assert.equal(harness.actions[2]?.type, "SESSION_REFRESHED");
+  const refreshed = harness.actions[2];
+  assert.ok(refreshed?.type === "SESSION_REFRESHED");
+  assert.equal(
+    refreshed.session.state,
+    "READY_TO_PUBLISH",
+    "the workflow must end on the post-upload authoritative session, not the stale poll"
+  );
+  assert.deepEqual(harness.calls.map(() => true).length, 2);
 });
 
 test("stop clears the timer, aborts the request and releases every preview url", async () => {

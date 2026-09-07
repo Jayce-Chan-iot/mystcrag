@@ -17,6 +17,8 @@ function card(overrides: Partial<DraftGroupCard> = {}): DraftGroupCard {
   return {
     groupId: "group-1",
     crystalName: "白水晶",
+    linkedCrystalId: null,
+    linkedCrystalName: null,
     state: "NAMED",
     productForm: emptyProductDraftForm(),
     productDirty: false,
@@ -102,4 +104,26 @@ test("the panel never infers identity or effect from a file or image", () => {
   for (const forbidden of ["fetch(", "process.env", "localStorage"]) {
     assert.equal(SOURCE.includes(forbidden), false, `the panel must not reach for ${forbidden}`);
   }
+});
+
+test("a group linked to an existing crystal shows the selection instead of a guess", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(DraftPanel, {
+      cards: [card({ linkedCrystalId: "crystal-9", linkedCrystalName: "紫水晶" })],
+      locked: false,
+      blockedByConflict: false,
+      conflictMessage: "",
+      onProductPatch: () => {},
+      onResetProduct: () => {},
+      onSaveProduct: () => {},
+      onCheckCompleteness: () => {},
+      onCurationPatch: () => {},
+      onResetCuration: () => {},
+      onSaveCuration: () => {},
+      onAcknowledgeConflict: () => {}
+    })
+  );
+  assert.ok(html.includes("已关联已有水晶"));
+  assert.ok(html.includes("紫水晶"));
+  assert.ok(!html.includes("crystal-9"), "the internal id is never the visible label");
 });

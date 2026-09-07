@@ -4,7 +4,7 @@ import * as React from "react";
 
 import { normalizeAssetRelativePath } from "@mystcrag/design-contract";
 
-import { createBeadImportClient, newIdempotencyKey, type BeadImportClient } from "../api-client";
+import { createBeadImportClient, newIdempotencyKey } from "../api-client";
 import type { CrystalSearchResult } from "@mystcrag/design-contract";
 import { createDraftLoader } from "../draft-loader";
 import { publishBlockersFor } from "../draft-form";
@@ -12,7 +12,11 @@ import { classifyFailure } from "../failure-copy";
 import { readDirectoryDrop, type DataTransferItemLike } from "../folder-picker";
 import { createGroupLoader } from "../group-loader";
 import type { PreviewLoaderClient } from "../preview-loader";
-import { createProcessingLoader, type ReviewDecisionInput } from "../processing-loader";
+import {
+  createProcessingLoader,
+  type ReviewDecisionInput,
+  type PublishConfirmation
+} from "../processing-loader";
 import { createSessionLifecycle } from "../session-lifecycle";
 import { detectDirectorySupport, planUploads } from "../upload-model";
 import { decideUploadRecovery } from "../upload-recovery";
@@ -106,6 +110,9 @@ export function BeadImportWorkflow({ sessionId }: { sessionId: string }) {
     ignoreReason: ""
   });
   const [processingInFlight, setProcessingInFlight] = React.useState(false);
+  // Previews are fetched on demand for one group at a time: collapsing a group
+  // cancels its reads and revokes its object URLs through the preview loaders.
+  const [expandedPreviewGroupId, setExpandedPreviewGroupId] = React.useState<string | null>(null);
 
   const directorySupport = React.useMemo(
     () =>
@@ -364,8 +371,8 @@ export function BeadImportWorkflow({ sessionId }: { sessionId: string }) {
   }, [processingLoader, setProcessingInFlight]);
 
   const handlePublish = React.useCallback(
-    (groupId: string) => {
-      void processingLoader.publishGroup(groupId).then((result) => {
+    (groupId: string, confirmation: PublishConfirmation) => {
+      void processingLoader.publishGroup(groupId, confirmation).then((result) => {
         if (result.outcome === "REFUSED" || result.outcome === "FAILED") {
           dispatch({ type: "GROUP_MUTATION_FAILED", groupId, message: result.message });
         }
@@ -374,18 +381,24 @@ export function BeadImportWorkflow({ sessionId }: { sessionId: string }) {
     [processingLoader]
   );
 
-  const crystalSearchClient = React.useMemo<{ listCrystals: BeadImportClient["listCrystals"] }>(
-    () => ({ listCrystals: (query, requestOptions) => client.listCrystals(query, requestOptions) }),
-    [client]
+  const handleTogglePreviews = React.useCallback(
+    (groupId: string) => {
+      setExpandedPreviewGroupId((current) => (current === groupId ? null : groupId));
+    },
+    [setExpandedPreviewGroupId]
   );
+
+  // The contract client already satisfies the search client's shape, so the
+  // search field talks to the same memoized instance without a new wrapper.
+  const crystalSearchClient = client;
 
   const handleCrystalSelected = React.useCallback(
     (groupId: string, result: CrystalSearchResult) => {
-      // An existing Crystal is resolved by saving its authoritative name through
-      // the same revision-guarded naming path as any other name.
-      void groupLoader.submit(groupId, { action: "SET_NAME", crystalName: result.nameCn });
+      // The picked id itself is persisted through the draft boundary; a refresh
+      // afterwards brings back the authoritative productDraft.crystalId.
+      void draftLoader.selectExistingCrystal(groupId, result.crystalId, result.nameCn);
     },
-    [groupLoader]
+    [draftLoader]
   );
 
   const session = state.session;
@@ -447,9 +460,16 @@ export function BeadImportWorkflow({ sessionId }: { sessionId: string }) {
         isCurrent: asset.isCurrent,
         qcIssues: [...asset.qcIssues]
       })),
-      previewFileId: group.memberFileIds[0] ?? null,
+      // The processed version was built from the authoritative primary file,
+      // which is the honest original for the comparison — even when it is not
+      // the first member.
+      previewFileId: group.primaryFileId ?? group.memberFileIds[0] ?? null,
       hasApprovedTexture,
       publishReady,
+      promotionRequired:
+        group.productDraft !== null &&
+        group.productDraft.crystalId === null &&
+        group.productDraft.crystalDraftId !== null,
       stale: state.staleGroupIds.includes(group.groupId),
       inFlight: state.inFlightGroupIds.includes(group.groupId),
       failureMessage: failureMessageFor(state.notices, "group-mutation-failure:", group.groupId)
@@ -598,6 +618,8 @@ export function BeadImportWorkflow({ sessionId }: { sessionId: string }) {
             onReview={handleReview}
             onPublish={handlePublish}
             preview={previewContext}
+            expandedPreviewGroupId={expandedPreviewGroupId}
+            onTogglePreviews={handleTogglePreviews}
             onAcknowledgeConflict={handleAcknowledgeConflict}
           />
         );

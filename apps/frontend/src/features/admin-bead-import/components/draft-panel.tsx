@@ -60,6 +60,9 @@ import {
 export type DraftGroupCard = {
   groupId: string;
   crystalName: string | null;
+  /** The existing Crystal the authoritative productDraft references, if any. */
+  linkedCrystalId: string | null;
+  linkedCrystalName: string | null;
   state: BeadImageGroupState;
   productForm: ProductDraftForm;
   productDirty: boolean;
@@ -138,6 +141,9 @@ export function draftCardsOf(state: BeadImportWorkflowState): DraftGroupCard[] {
     return {
       groupId: group.groupId,
       crystalName: group.crystalName ?? null,
+      linkedCrystalId: group.productDraft?.crystalId ?? null,
+      linkedCrystalName:
+        group.productDraft?.crystalId === null ? null : group.productDraft?.crystalName ?? null,
       state: group.state,
       productForm: entry?.form ?? emptyProductDraftForm(),
       productDirty: isProductDraftDirty(state, group.groupId),
@@ -534,6 +540,9 @@ function DraftCard({
         <h3 id={headingId} className="min-w-0 break-all text-sm font-semibold">
           {card.crystalName ?? "未命名分组"}
         </h3>
+        {card.linkedCrystalId !== null && card.linkedCrystalName !== null && (
+          <Pill label={`已关联已有水晶：${card.linkedCrystalName}`} tone="success" />
+        )}
         {card.stale && <Pill label="服务端已更新，待确认" tone="warning" />}
         {card.inFlightProduct && <Pill label="提交中" tone="info" />}
       </header>

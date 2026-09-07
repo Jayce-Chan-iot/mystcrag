@@ -127,3 +127,29 @@ test("the naming step offers existing-crystal search and selection", () => {
     "the operator must be able to search and select an existing Crystal"
   );
 });
+
+test("a selected existing crystal is persisted through the draft boundary, not by renaming", () => {
+  assert.ok(
+    CONTAINER_SOURCE.includes("selectExistingCrystal"),
+    "the selection must go through the explicit crystal-selection submit"
+  );
+  assert.ok(
+    !CONTAINER_SOURCE.includes('crystalName: result.nameCn }'),
+    "a name-only rename must not be the selection path"
+  );
+});
+
+test("the original comparison uses the authoritative primary file", () => {
+  assert.match(
+    CONTAINER_SOURCE,
+    /previewFileId: group\.primaryFileId \?\? group\.memberFileIds\[0\] \?\? null/,
+    "the processed version is built from the primary file, even when it is not the first member"
+  );
+});
+
+test("previews are on-demand: the container holds the expanded group", () => {
+  assert.ok(
+    CONTAINER_SOURCE.includes("expandedPreviewGroupId"),
+    "the container owns the single expanded preview group"
+  );
+});

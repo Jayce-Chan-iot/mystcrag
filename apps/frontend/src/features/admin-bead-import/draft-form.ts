@@ -513,6 +513,25 @@ export function buildProductDraftRequest(input: {
   return parsed.success ? parsed.data : null;
 }
 
+/**
+ * The explicit existing-Crystal selection body: the chosen id itself plus the
+ * name it was presented under, judged by the same contract as any other draft
+ * save. The Backend owns clearing a superseded crystalDraftId; nothing here
+ * derives an id from a name.
+ */
+export function buildCrystalSelectionRequest(input: {
+  crystalId: string;
+  crystalName: string;
+  expectedGroupRevision: number;
+}): SaveBeadProductDraftRequest | null {
+  const parsed = SaveBeadProductDraftRequestSchema.safeParse({
+    expectedGroupRevision: input.expectedGroupRevision,
+    crystalId: input.crystalId,
+    crystalName: input.crystalName.trim()
+  });
+  return parsed.success ? parsed.data : null;
+}
+
 export function isPublishableUsagePermission(permission: AssetUsagePermission | null): boolean {
   return permission !== null && PUBLISHABLE_USAGE_PERMISSIONS.has(permission);
 }

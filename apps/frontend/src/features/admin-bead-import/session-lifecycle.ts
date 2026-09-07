@@ -95,6 +95,11 @@ export function createSessionLifecycle(deps: SessionLifecycleDeps): SessionLifec
   let running = false;
   let timer: TimerHandle | null = null;
   let inFlight: AbortHandle | null = null;
+  // An explicit refresh that lands on an in-flight read must not be dropped: it
+  // is queued here and drains once the current read settles, so a finished
+  // upload always ends on the authoritative session even when an older poll was
+  // still on the wire.
+  let pendingRefresh = false;
 
   function clearTimer(): void {
     if (timer === null) {
@@ -111,6 +116,14 @@ export function createSessionLifecycle(deps: SessionLifecycleDeps): SessionLifec
       timer = null;
       void run(kind);
     }, pollIntervalMs);
+  }
+
+  function drainPendingRefresh(): void {
+    if (!running || !pendingRefresh) {
+      return;
+    }
+    pendingRefresh = false;
+    void run("refresh");
   }
 
   async function run(kind: "load" | "refresh"): Promise<void> {
@@ -134,6 +147,7 @@ export function createSessionLifecycle(deps: SessionLifecycleDeps): SessionLifec
       if (shouldPoll(session)) {
         schedule("refresh");
       }
+      drainPendingRefresh();
     } catch (error) {
       if (!running || inFlight !== controller) {
         return;
@@ -144,11 +158,13 @@ export function createSessionLifecycle(deps: SessionLifecycleDeps): SessionLifec
       if (info.retryable) {
         schedule("load");
       }
+      drainPendingRefresh();
     }
   }
 
   function stop(): void {
     running = false;
+    pendingRefresh = false;
     clearTimer();
     const controller = inFlight;
     inFlight = null;
@@ -182,7 +198,13 @@ export function createSessionLifecycle(deps: SessionLifecycleDeps): SessionLifec
 
   return {
     start,
-    refresh: () => run("refresh"),
+    refresh: () => {
+      if (inFlight !== null) {
+        pendingRefresh = true;
+        return Promise.resolve();
+      }
+      return run("refresh");
+    },
     stop,
     trackObjectUrl,
     releaseObjectUrl,

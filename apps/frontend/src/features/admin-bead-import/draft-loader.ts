@@ -10,6 +10,7 @@ import type {
 
 import {
   buildCurationRequest,
+  buildCrystalSelectionRequest,
   buildProductDraftRequest,
   curationIssues,
   productDraftIssues,
@@ -125,6 +126,11 @@ export type DraftLoader = {
   saveProductDraft(groupId: string): Promise<DraftSubmitResult>;
   checkCompleteness(groupId: string): Promise<DraftSubmitResult>;
   saveCuration(crystalDraftId: string): Promise<DraftSubmitResult>;
+  selectExistingCrystal(
+    groupId: string,
+    crystalId: string,
+    crystalName: string
+  ): Promise<DraftSubmitResult>;
   cancel(): void;
 };
 
@@ -341,6 +347,72 @@ export function createDraftLoader(deps: DraftLoaderDeps): DraftLoader {
     return { outcome: "APPLIED", targetId: crystalDraftId };
   }
 
+  /**
+   * The explicit select-existing-Crystal submit: the id the operator picked in
+   * the search is persisted through the same draft boundary and revision guard
+   * as every other draft field — never a name-derived guess and never a client
+   * merge into the current form. The authoritative session is re-read afterwards
+   * so productDraft.crystalId (and the Backend-cleared crystalDraftId) is what
+   * publication later consumes.
+   */
+  async function selectExistingCrystal(
+    groupId: string,
+    crystalId: string,
+    crystalName: string
+  ): Promise<DraftSubmitResult> {
+    const state = deps.getState();
+    const sessionId = state.sessionId;
+    if (state.session === null || sessionId === null) {
+      return refused(groupId, "NO_SESSION");
+    }
+    const revision = groupRevisionFor(state, groupId);
+    if (revision === null) {
+      return refused(groupId, "UNKNOWN_GROUP");
+    }
+    const blocker = groupSubmissionBlocker(state, groupId);
+    if (blocker !== null) {
+      return refused(groupId, blocker);
+    }
+    const request = buildCrystalSelectionRequest({
+      crystalId,
+      crystalName,
+      expectedGroupRevision: revision
+    });
+    if (request === null) {
+      return refused(groupId, "INVALID_INPUT");
+    }
+
+    const controller = begin();
+    emit({ type: "GROUP_MUTATION_STARTED", groupId });
+
+    let response: SaveBeadProductDraftResponse;
+    try {
+      response = await deps.client.saveGroupDraft(groupId, request, { signal: controller.signal });
+    } catch (error) {
+      if (settle(controller)) {
+        return { outcome: "CANCELLED", targetId: groupId };
+      }
+      const failure = classifyFailure(error);
+      if (failure.code === "CONFLICT") {
+        emit({ type: "GROUP_MUTATION_CONFLICT", groupId });
+        await refresh(sessionId);
+        return { outcome: "CONFLICT", targetId: groupId };
+      }
+      emit({ type: "GROUP_MUTATION_FAILED", groupId, message: failure.message });
+      return { outcome: "FAILED", targetId: groupId, ...failure };
+    }
+
+    if (settle(controller)) {
+      return { outcome: "CANCELLED", targetId: groupId };
+    }
+
+    // The revision moves and the server may have cleared the draft reference:
+    // the authoritative session, not a local merge, decides what the operator sees.
+    emit({ type: "GROUP_MUTATION_APPLIED", groupId, revision: response.revision });
+    await refresh(sessionId);
+    return { outcome: "APPLIED", targetId: groupId };
+  }
+
   function cancel(): void {
     cancelled = true;
     for (const controller of live) {
@@ -349,5 +421,5 @@ export function createDraftLoader(deps: DraftLoaderDeps): DraftLoader {
     live.clear();
   }
 
-  return { saveProductDraft, checkCompleteness, saveCuration, cancel };
+  return { saveProductDraft, checkCompleteness, saveCuration, selectExistingCrystal, cancel };
 }

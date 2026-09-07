@@ -25,6 +25,7 @@ function group(overrides: Partial<ProcessingGroupCard> = {}): ProcessingGroupCar
     previewFileId: null,
     hasApprovedTexture: false,
     publishReady: false,
+    promotionRequired: false,
     stale: false,
     inFlight: false,
     failureMessage: null,
@@ -32,11 +33,29 @@ function group(overrides: Partial<ProcessingGroupCard> = {}): ProcessingGroupCar
   };
 }
 
+const SSR_PREVIEW = {
+  client: {
+    readSourceFileContent: async () => {
+      throw new Error("no preview may load during SSR");
+    },
+    readProcessedAssetContent: async () => {
+      throw new Error("no preview may load during SSR");
+    }
+  },
+  objectUrls: {
+    createObjectUrl: () => {
+      throw new Error("no object url may exist during SSR");
+    },
+    revokeObjectUrl: () => {}
+  }
+};
+
 function render(groups: ProcessingGroupCard[] = [group()], overrides: Partial<Parameters<typeof ProcessingPanel>[0]> = {}) {
   return renderToStaticMarkup(
     <ProcessingPanel
       sessionState="NEEDS_REVIEW"
       groups={groups}
+      preview={SSR_PREVIEW}
       canStartProcessing={false}
       processingInFlight={false}
       locked={false}
@@ -61,7 +80,7 @@ test("QC state is shown as text, never only as color", () => {
   assert.ok(html.includes("当前版本"));
 });
 
-test("a QC_FAILED asset can be rejected but never approved", () => {
+test("a current QC_FAILED version is read-only: status, issues and a reprocess path only", () => {
   const html = render([
     group({
       processedAssets: [
@@ -75,11 +94,12 @@ test("a QC_FAILED asset can be rejected but never approved", () => {
       ]
     })
   ]);
-  assert.ok(html.includes("批准"));
-  assert.ok(html.includes("拒绝"));
-  assert.ok(html.includes("审核备注（必填）"));
-  assert.ok(html.includes("提交拒绝"));
   assert.ok(!html.includes("提交批准"), "a failed QC verdict can never be approved");
+  assert.ok(!html.includes("提交拒绝"), "the acceptance gates review to the current QC_PENDING version");
+  assert.ok(!html.includes("审核备注（必填）"), "no review form renders for a failed QC");
+  assert.ok(html.includes("质检未通过"), "the state is still visible");
+  assert.ok(html.includes("主体缺失"), "the QC issue must reach the operator");
+  assert.ok(html.includes("重新处理"), "reprocessing stays available");
 });
 
 test("an approval demands the full human consent surface", () => {
@@ -147,7 +167,7 @@ test("an old version is read-only: no review form and no approval controls", () 
   assert.ok(html.includes("设为当前版本"), "an old version can still be selected");
 });
 
-test("a current QC_FAILED version keeps only its contract reject path and never approval", () => {
+test("the review form never names a rejected-QC or superseded version", () => {
   const html = render([
     group({
       processedAssets: [
@@ -157,13 +177,21 @@ test("a current QC_FAILED version keeps only its contract reject path and never 
           state: "QC_FAILED",
           isCurrent: true,
           qcIssues: ["主体缺失"]
+        },
+        {
+          processedAssetId: "pa-old",
+          processingVersion: 1,
+          state: "QC_PENDING",
+          isCurrent: false,
+          qcIssues: []
         }
       ]
     })
   ]);
-  assert.ok(!html.includes("提交批准"), "a QC_FAILED version must not be approvable");
-  assert.ok(html.includes("提交拒绝"), "the contract's only disposition for a failed QC is a rejection");
-  assert.ok(html.includes("主体缺失"), "the QC issue must reach the operator");
+  assert.ok(!html.includes("提交批准"));
+  assert.ok(!html.includes("提交拒绝"));
+  assert.ok(html.includes("主体缺失"));
+  assert.ok(html.includes("待人工审核"), "the old version's state stays visible as text");
 });
 
 test("the source never offers review actions for a version the session marks retired or draft", () => {
@@ -177,4 +205,49 @@ test("the source never offers review actions for a version the session marks ret
   ]);
   assert.ok(!html.includes("提交批准"));
   assert.ok(!html.includes("提交拒绝"));
+});
+
+test("initial render makes no preview request: previews stay collapsed until asked", () => {
+  const html = render([group(), group({ groupId: "group-2", crystalName: "紫水晶" })]);
+  assert.ok(html.includes("加载预览"), "the operator must see the on-demand affordance");
+  assert.ok(!html.includes("正在加载预览"), "no preview is fetched before the operator asks");
+  assert.ok(!html.includes("处理主图") && !html.includes("缩略图"), "no preview is mounted");
+});
+
+test("expanding one group loads exactly that group's previews and nothing else", () => {
+  const html = render(
+    [
+      group({ previewFileId: "file-primary" }),
+      group({ groupId: "group-2", crystalName: "紫水晶" })
+    ],
+    { expandedPreviewGroupId: "group-1" }
+  );
+  assert.ok(html.includes("原图"));
+  assert.ok(html.includes("处理主图"));
+  assert.ok(html.includes("缩略图"));
+  assert.ok(
+    (html.match(/正在加载预览/g) ?? []).length === 3,
+    "exactly the expanded group's three previews load"
+  );
+  assert.equal(
+    (html.match(/收起预览/g) ?? []).length,
+    1,
+    "exactly one group is expanded at a time"
+  );
+  assert.ok(
+    html.includes("预览按需加载"),
+    "the other group stays collapsed with its own affordance"
+  );
+});
+
+test("the publish action demands two explicit operator confirmations", () => {
+  const html = render([
+    group({ publishReady: true, hasApprovedTexture: true, promotionRequired: true })
+  ]);
+  assert.ok(html.includes("我确认使用该珠子名称发布"), "the name confirmation is explicit");
+  assert.ok(
+    html.includes("我确认将该水晶资料草稿提升为正式水晶"),
+    "the promotion confirmation is explicit and default-unselected"
+  );
+  assert.match(html, /disabled[^>]*>确认并发布/, "an unconfirmed publish cannot be sent");
 });

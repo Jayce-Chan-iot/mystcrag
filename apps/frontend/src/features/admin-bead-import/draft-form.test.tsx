@@ -208,11 +208,22 @@ test("the operator can never author a crystal id or an approved asset key", () =
   });
 
   assert.ok(request !== null);
-  assert.equal("crystalId" in request, false, "no surface exists to search crystals safely");
+  assert.equal("crystalId" in request, false, "the product-draft form has no id surface");
   assert.equal("textureAssetKey" in request, false, "approved keys come from the Backend only");
   assert.equal("modelAssetKey" in request, false);
   assert.equal(SOURCE.includes("textureAssetKey:"), false);
-  assert.equal(SOURCE.includes("crystalId:"), false);
+  // The only legitimate crystalId sites are inside the explicit
+  // search-selection builder (its input type and the field it forwards), whose
+  // value is the id the Backend's search returned — never name-derived.
+  assert.equal(
+    SOURCE.split("crystalId:").length - 1,
+    2,
+    "crystalId may only appear in the selection builder's signature and forwarding"
+  );
+  assert.ok(
+    SOURCE.includes("buildCrystalSelectionRequest") && SOURCE.includes("crystalId: input.crystalId"),
+    "that surface is the selection builder and it forwards the searched id"
+  );
 });
 
 test("a crystal reference is either the session's draft id or nothing", () => {

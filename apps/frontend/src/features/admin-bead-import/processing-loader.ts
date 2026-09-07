@@ -67,7 +67,8 @@ export type ProcessingRefusalReason =
   | "INVALID_SETTINGS"
   | "NO_APPROVED_TEXTURE"
   | "DRAFT_INCOMPLETE"
-  | "CONSENT_NOT_GRANTED";
+  | "CONSENT_NOT_GRANTED"
+  | "PUBLISH_CONFIRMATION_MISSING";
 
 export const PROCESSING_REFUSAL_MESSAGES: Readonly<Record<ProcessingRefusalReason, string>> = {
   NO_SESSION: "导入任务尚未载入，无法发起处理。",
@@ -85,7 +86,9 @@ export const PROCESSING_REFUSAL_MESSAGES: Readonly<Record<ProcessingRefusalReaso
     "该分组的当前处理版本还没有服务端批准的贴图，发布必须使用后端写下的权威素材键。",
   DRAFT_INCOMPLETE: "商品草稿尚未完整，发布所需的字段还没有全部由人工填写。"
   ,
-  CONSENT_NOT_GRANTED: "公开发布与商业使用必须明确授权为同意，未同意时不能发布。"
+  CONSENT_NOT_GRANTED: "公开发布与商业使用必须明确授权为同意，未同意时不能发布。",
+  PUBLISH_CONFIRMATION_MISSING:
+    "发布前必须逐项勾选确认：珠子名称确认，以及需要提升水晶资料草稿时的提升确认。"
 };
 
 export type ProcessingResult =
@@ -143,6 +146,11 @@ export type ProcessingLoaderDeps = {
   createIdempotencyKey: () => string;
 };
 
+export type PublishConfirmation = {
+  crystalNameConfirmed: boolean;
+  crystalDraftPromotionConfirmed: boolean;
+};
+
 export type ProcessingLoader = {
   startProcessing(): Promise<ProcessingResult>;
   reprocessGroup(groupId: string, settings?: ReprocessSettings): Promise<ProcessingResult>;
@@ -152,7 +160,10 @@ export type ProcessingLoader = {
     processedAssetId: string,
     decision: ReviewDecisionInput
   ): Promise<ProcessingResult>;
-  publishGroup(groupId: string): Promise<ProcessingResult>;
+  publishGroup(
+    groupId: string,
+    confirmation: PublishConfirmation
+  ): Promise<ProcessingResult>;
   cancel(): void;
 };
 
@@ -223,6 +234,33 @@ function publishDraftIsIncomplete(
     draft.isAuthenticPhotograph === null ||
     draft.allowAiTraining === null ||
     draft.allowAiRecommendation === null
+  );
+}
+
+/**
+ * Whether an approval may leave the browser: every required input is answered,
+ * and an explicit `false` counts as an answer while `null` never does. Shared
+ * by the review form's disabled state and the loader's own final gate.
+ */
+export function approvalDecisionReady(decision: {
+  reviewNote: string;
+  rightsHolder: string;
+  usagePermission: "OWNED" | "GRANTED" | null;
+  isAuthenticPhotograph: boolean | null;
+  allowAiTraining: boolean | null;
+  allowCommercialUse: boolean | null;
+  allowPublicDisplay: boolean | null;
+  allowAiRecommendation: boolean | null;
+}): boolean {
+  return (
+    decision.reviewNote.trim() !== "" &&
+    decision.rightsHolder.trim() !== "" &&
+    decision.usagePermission !== null &&
+    decision.isAuthenticPhotograph !== null &&
+    decision.allowAiTraining !== null &&
+    decision.allowCommercialUse !== null &&
+    decision.allowPublicDisplay !== null &&
+    decision.allowAiRecommendation !== null
   );
 }
 
@@ -454,10 +492,14 @@ export function createProcessingLoader(deps: ProcessingLoaderDeps): ProcessingLo
    * every business field comes from the Backend's productDraft view and the
    * texture key is the approved key the Backend wrote on the current APPROVED
    * version. Nothing here derives, assembles or guesses an asset key. The two
-   * affirmative grants are literals the publish action itself stands for, and
-   * the crystal reference plus its promotion confirmation come from the view.
+   * affirmative grants are passed through verbatim from the saved draft after
+   * being checked to be `true`, and the name / promotion confirmations are the
+   * operator's own explicit choices — an unchecked box means zero network.
    */
-  async function publishGroup(groupId: string): Promise<ProcessingResult> {
+  async function publishGroup(
+    groupId: string,
+    confirmation: PublishConfirmation
+  ): Promise<ProcessingResult> {
     const state = deps.getState();
     const sessionId = state.sessionId;
     if (state.session === null || sessionId === null) {
@@ -482,12 +524,20 @@ export function createProcessingLoader(deps: ProcessingLoaderDeps): ProcessingLo
     if (draft.allowPublicDisplay !== true || draft.allowCommercialUse !== true) {
       return refused(groupId, "CONSENT_NOT_GRANTED");
     }
+    const promotionRequired = draft.crystalId === null && draft.crystalDraftId !== null;
+    if (
+      !confirmation.crystalNameConfirmed ||
+      (promotionRequired && !confirmation.crystalDraftPromotionConfirmed)
+    ) {
+      return refused(groupId, "PUBLISH_CONFIRMATION_MISSING");
+    }
 
     const candidate: Record<string, unknown> = {
       idempotencyKey: deps.createIdempotencyKey(),
       expectedGroupRevision: group.revision,
       crystalName: draft.crystalName,
-      crystalNameConfirmedByOperator: true,
+      // Sent only because the operator checked the name confirmation above.
+      crystalNameConfirmedByOperator: confirmation.crystalNameConfirmed,
       displayName: draft.displayName,
       sku: draft.sku,
       materialKey: draft.materialKey,
@@ -500,10 +550,12 @@ export function createProcessingLoader(deps: ProcessingLoaderDeps): ProcessingLo
       unitPriceMinor: draft.unitPriceMinor,
       costMinor: draft.costMinor,
       availableQuantity: draft.availableQuantity,
-      allowPublicDisplay: true,
+      // Both grants were checked to be `true` above and pass through verbatim
+      // from the saved draft — never a hardcoded literal.
+      allowPublicDisplay: draft.allowPublicDisplay,
       allowAiTraining: draft.allowAiTraining,
       allowAiRecommendation: draft.allowAiRecommendation,
-      allowCommercialUse: true,
+      allowCommercialUse: draft.allowCommercialUse,
       rightsHolder: draft.rightsHolder,
       usagePermission: draft.usagePermission,
       isAuthenticPhotograph: draft.isAuthenticPhotograph
@@ -512,7 +564,8 @@ export function createProcessingLoader(deps: ProcessingLoaderDeps): ProcessingLo
       candidate.crystalId = draft.crystalId;
     } else if (draft.crystalDraftId !== null) {
       candidate.crystalDraftId = draft.crystalDraftId;
-      candidate.crystalDraftPromotionConfirmed = true;
+      // Only ever sent because the operator checked the promotion confirmation.
+      candidate.crystalDraftPromotionConfirmed = confirmation.crystalDraftPromotionConfirmed;
     }
     if (draft.lengthAlongStringMm !== null) {
       candidate.lengthAlongStringMm = draft.lengthAlongStringMm;

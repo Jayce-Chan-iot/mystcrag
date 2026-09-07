@@ -20,6 +20,7 @@ import { BeadImportApiError } from "./api-client";
 import { initialWorkflowState, workflowReducer, type WorkflowAction } from "./workflow-state";
 import {
   PROCESSING_REFUSAL_MESSAGES,
+  approvalDecisionReady,
   createProcessingLoader,
   type ProcessingLoader,
   type ProcessingLoaderClient,
@@ -243,7 +244,7 @@ function makeHarness(options: { session?: AssetImportSessionResponse } = {}): Ha
         publishedAt: SYNCED_AT
       };
     },
-    async getSession(sessionId) {
+    async getSession(sessionId: string) {
       calls.push(`getSession:${sessionId}`);
       return refreshed;
     }
@@ -496,7 +497,10 @@ function publishReadySession(
 
 test("publish builds the request from the authoritative session and the approved key alone", async () => {
   const harness = makeHarness({ session: publishReadySession() });
-  const result = await harness.loader.publishGroup("group-1");
+  const result = await harness.loader.publishGroup("group-1", {
+    crystalNameConfirmed: true,
+    crystalDraftPromotionConfirmed: true
+  });
   assert.equal(result.outcome, "APPLIED");
 
   const request = harness.requests[0] as PublishBeadImageGroupRequest;
@@ -538,7 +542,10 @@ test("publish uses the existing crystal reference when the draft resolves one", 
       productDraft: makeProductDraft({ crystalId: "crystal-9", crystalDraftId: null })
     })
   });
-  const result = await harness.loader.publishGroup("group-1");
+  const result = await harness.loader.publishGroup("group-1", {
+    crystalNameConfirmed: true,
+    crystalDraftPromotionConfirmed: false
+  });
   assert.equal(result.outcome, "APPLIED");
   const request = harness.requests[0] as PublishBeadImageGroupRequest;
   assert.equal(request.crystalId, "crystal-9");
@@ -552,7 +559,10 @@ test("publish is refused when the current version was never approved", async () 
       processedAssets: [makeProcessedAsset({ state: "QC_PENDING", approvedAssetKey: null })]
     })
   });
-  const result = await harness.loader.publishGroup("group-1");
+  const result = await harness.loader.publishGroup("group-1", {
+    crystalNameConfirmed: true,
+    crystalDraftPromotionConfirmed: true
+  });
   assert.equal(result.outcome, "REFUSED");
   if (result.outcome === "REFUSED") {
     assert.equal(result.reason, "NO_APPROVED_TEXTURE");
@@ -575,7 +585,10 @@ test("publish is refused when an old version holds the only approved key", async
       ]
     })
   });
-  const result = await harness.loader.publishGroup("group-1");
+  const result = await harness.loader.publishGroup("group-1", {
+    crystalNameConfirmed: true,
+    crystalDraftPromotionConfirmed: true
+  });
   assert.equal(result.outcome, "REFUSED");
   if (result.outcome === "REFUSED") {
     assert.equal(result.reason, "NO_APPROVED_TEXTURE");
@@ -586,7 +599,10 @@ test("publish is refused while the authoritative draft is incomplete or withhold
   const incomplete = makeHarness({
     session: publishReadySession({}, { productDraft: makeProductDraft({ sku: null }) })
   });
-  const incompleteResult = await incomplete.loader.publishGroup("group-1");
+  const incompleteResult = await incomplete.loader.publishGroup("group-1", {
+    crystalNameConfirmed: true,
+    crystalDraftPromotionConfirmed: true
+  });
   assert.equal(incompleteResult.outcome, "REFUSED");
   if (incompleteResult.outcome === "REFUSED") {
     assert.equal(incompleteResult.reason, "DRAFT_INCOMPLETE");
@@ -596,7 +612,10 @@ test("publish is refused while the authoritative draft is incomplete or withhold
   const withheld = makeHarness({
     session: publishReadySession({}, { productDraft: makeProductDraft({ allowPublicDisplay: false }) })
   });
-  const withheldResult = await withheld.loader.publishGroup("group-1");
+  const withheldResult = await withheld.loader.publishGroup("group-1", {
+    crystalNameConfirmed: true,
+    crystalDraftPromotionConfirmed: true
+  });
   assert.equal(withheldResult.outcome, "REFUSED");
   if (withheldResult.outcome === "REFUSED") {
     assert.equal(withheldResult.reason, "CONSENT_NOT_GRANTED");
@@ -611,7 +630,10 @@ test("a published task refuses publication through the shared group lock", async
       { state: "PUBLISHED" as never }
     )
   });
-  const result = await harness.loader.publishGroup("group-1");
+  const result = await harness.loader.publishGroup("group-1", {
+    crystalNameConfirmed: true,
+    crystalDraftPromotionConfirmed: true
+  });
   assert.equal(result.outcome, "REFUSED");
   if (result.outcome === "REFUSED") {
     assert.equal(result.reason, "GROUP_LOCKED");
@@ -631,4 +653,75 @@ test("the publish path exists on the loader and never assembles an approved key"
   for (const forbidden of FORBIDDEN) {
     assert.equal(SOURCE.includes(forbidden), false, `the loader must not mention ${forbidden}`);
   }
+});
+
+test("publish without the operator's explicit name confirmation makes zero network calls", async () => {
+  const harness = makeHarness({ session: publishReadySession() });
+  const result = await harness.loader.publishGroup("group-1", {
+    crystalNameConfirmed: false,
+    crystalDraftPromotionConfirmed: true
+  });
+  assert.equal(result.outcome, "REFUSED");
+  if (result.outcome === "REFUSED") {
+    assert.equal(result.reason, "PUBLISH_CONFIRMATION_MISSING");
+  }
+  assert.deepEqual(harness.calls, [], "an unconfirmed publish never leaves the browser");
+});
+
+test("publish with a required but unconfirmed draft promotion makes zero network calls", async () => {
+  const harness = makeHarness({ session: publishReadySession() });
+  const result = await harness.loader.publishGroup("group-1", {
+    crystalNameConfirmed: true,
+    crystalDraftPromotionConfirmed: false
+  });
+  assert.equal(result.outcome, "REFUSED");
+  if (result.outcome === "REFUSED") {
+    assert.equal(result.reason, "PUBLISH_CONFIRMATION_MISSING");
+  }
+  assert.deepEqual(harness.calls, []);
+});
+
+test("an untouched approval is not ready and an explicit false is a valid decision", () => {
+  assert.equal(
+    approvalDecisionReady({
+      reviewNote: "  ",
+      rightsHolder: "玄矶水晶工作室",
+      usagePermission: "OWNED",
+      isAuthenticPhotograph: true,
+      allowAiTraining: null,
+      allowCommercialUse: null,
+      allowPublicDisplay: null,
+      allowAiRecommendation: null
+    }),
+    false,
+    "an unanswered decision blocks the approval"
+  );
+  assert.equal(
+    approvalDecisionReady({
+      reviewNote: "已逐项确认。",
+      rightsHolder: "玄矶水晶工作室",
+      usagePermission: null,
+      isAuthenticPhotograph: true,
+      allowAiTraining: false,
+      allowCommercialUse: true,
+      allowPublicDisplay: true,
+      allowAiRecommendation: false
+    }),
+    false,
+    "an unanswered usage permission blocks the approval"
+  );
+  assert.equal(
+    approvalDecisionReady({
+      reviewNote: "已逐项确认。",
+      rightsHolder: "玄矶水晶工作室",
+      usagePermission: "GRANTED",
+      isAuthenticPhotograph: true,
+      allowAiTraining: false,
+      allowCommercialUse: false,
+      allowPublicDisplay: true,
+      allowAiRecommendation: false
+    }),
+    true,
+    "an explicit false is a decision, not an omission"
+  );
 });
