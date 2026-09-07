@@ -127,6 +127,31 @@ export const ProcessedAssetStateSchema = z.enum([
 ]);
 export type ProcessedAssetState = z.infer<typeof ProcessedAssetStateSchema>;
 
+export const CRYSTAL_DRAFT_TAG_LIMITS = {
+  colorTags: 20,
+  visualTags: 30,
+  styleTags: 30
+} as const;
+
+export const CRYSTAL_PRICE_LEVEL_RANGE = { min: 1, max: 5 } as const;
+export const CrystalPriceLevelSchema = z
+  .number()
+  .int()
+  .min(CRYSTAL_PRICE_LEVEL_RANGE.min)
+  .max(CRYSTAL_PRICE_LEVEL_RANGE.max);
+export type CrystalPriceLevel = z.infer<typeof CrystalPriceLevelSchema>;
+
+/**
+ * General draft permission vocabulary. UNKNOWN and PROHIBITED records may be
+ * saved locally for review but can never be published; publication uses the
+ * narrower PublishAssetUsagePermissionSchema below.
+ */
+export const AssetUsagePermissionSchema = z.enum(["UNKNOWN", "OWNED", "GRANTED", "PROHIBITED"]);
+export type AssetUsagePermission = z.infer<typeof AssetUsagePermissionSchema>;
+
+export const PublishAssetUsagePermissionSchema = z.enum(["OWNED", "GRANTED"]);
+export type PublishAssetUsagePermission = z.infer<typeof PublishAssetUsagePermissionSchema>;
+
 export const CRYSTAL_DRAFT_CURATION_FIELDS = [
   "NAME_CN",
   "NAME_EN",
@@ -398,7 +423,8 @@ export const AssetImportProcessedAssetViewSchema = z
     state: ProcessedAssetStateSchema,
     isCurrent: z.boolean(),
     qcPassed: z.boolean().nullable(),
-    qcIssues: z.array(NonEmptyTextSchema).max(100)
+    qcIssues: z.array(NonEmptyTextSchema).max(100),
+    approvedAssetKey: ApprovedAssetKeySchema.nullable()
   })
   .superRefine((asset, context) => {
     if ((asset.state === "QC_PENDING" || asset.state === "APPROVED") && asset.qcPassed !== true) {
@@ -413,6 +439,12 @@ export const AssetImportProcessedAssetViewSchema = z
     if (asset.state === "DRAFT" && asset.qcPassed !== null) {
       context.addIssue({ code: "custom", message: "DRAFT has no QC verdict", path: ["qcPassed"] });
     }
+    if (asset.state === "APPROVED" && asset.approvedAssetKey === null) {
+      context.addIssue({ code: "custom", message: "APPROVED processed asset must expose its approved key", path: ["approvedAssetKey"] });
+    }
+    if (asset.state !== "APPROVED" && asset.approvedAssetKey !== null) {
+      context.addIssue({ code: "custom", message: "Only an APPROVED processed asset may expose an approved key", path: ["approvedAssetKey"] });
+    }
   });
 export type AssetImportProcessedAssetView = z.infer<typeof AssetImportProcessedAssetViewSchema>;
 
@@ -420,6 +452,14 @@ export const AssetImportCrystalDraftViewSchema = z
   .strictObject({
     crystalDraftId: IdentifierSchema,
     revision: PositiveSafeIntegerSchema,
+    nameCn: z.string().trim().min(1).max(120).nullable(),
+    nameEn: z.string().trim().min(1).max(120).nullable(),
+    mineralName: z.string().trim().min(1).max(160).nullable(),
+    colorTags: z.array(z.string().trim().min(1).max(120)).min(1).max(CRYSTAL_DRAFT_TAG_LIMITS.colorTags).nullable(),
+    visualTags: z.array(z.string().trim().min(1).max(120)).min(1).max(CRYSTAL_DRAFT_TAG_LIMITS.visualTags).nullable(),
+    styleTags: z.array(z.string().trim().min(1).max(120)).min(1).max(CRYSTAL_DRAFT_TAG_LIMITS.styleTags).nullable(),
+    priceLevel: CrystalPriceLevelSchema.nullable(),
+    complianceNote: z.string().trim().min(1).max(4_000).nullable(),
     curationComplete: z.boolean(),
     missingFields: z.array(CrystalDraftCurationFieldSchema).max(CRYSTAL_DRAFT_CURATION_FIELDS.length),
     promotionEligible: z.boolean()
@@ -438,6 +478,44 @@ export const AssetImportCrystalDraftViewSchema = z
   });
 export type AssetImportCrystalDraftView = z.infer<typeof AssetImportCrystalDraftViewSchema>;
 
+export const BeadProductDraftViewSchema = z
+  .strictObject({
+    crystalName: z.string().trim().min(1).max(120).nullable(),
+    crystalId: IdentifierSchema.nullable(),
+    crystalDraftId: IdentifierSchema.nullable(),
+    displayName: z.string().trim().min(1).max(200).nullable(),
+    sku: IdentifierSchema.nullable(),
+    materialKey: IdentifierSchema.nullable(),
+    shape: BeadShapeSchema.nullable(),
+    diameterMm: MillimeterSchema.positive().nullable(),
+    lengthAlongStringMm: MillimeterSchema.positive().nullable(),
+    currency: CurrencySchema.nullable(),
+    unitPriceMinor: MinorAmountSchema.nullable(),
+    costMinor: MinorAmountSchema.nullable(),
+    availableQuantity: NonNegativeSafeIntegerSchema.nullable(),
+    qualityStatement: NonEmptyTextSchema.nullable(),
+    qualitySource: NonEmptyTextSchema.nullable(),
+    textureAssetKey: ApprovedAssetKeySchema.nullable(),
+    modelAssetKey: ApprovedAssetKeySchema.nullable(),
+    rightsHolder: NonEmptyTextSchema.nullable(),
+    usagePermission: AssetUsagePermissionSchema.nullable(),
+    isAuthenticPhotograph: z.boolean().nullable(),
+    allowAiTraining: z.boolean().nullable(),
+    allowCommercialUse: z.boolean().nullable(),
+    allowPublicDisplay: z.boolean().nullable(),
+    allowAiRecommendation: z.boolean().nullable()
+  })
+  .superRefine((draft, context) => {
+    if (draft.crystalId !== null && draft.crystalDraftId !== null) {
+      context.addIssue({
+        code: "custom",
+        message: "A product draft may reference an existing crystal or a crystal draft, not both",
+        path: ["crystalDraftId"]
+      });
+    }
+  });
+export type BeadProductDraftView = z.infer<typeof BeadProductDraftViewSchema>;
+
 export const AssetImportSessionGroupViewSchema = z
   .strictObject({
     groupId: IdentifierSchema,
@@ -447,7 +525,8 @@ export const AssetImportSessionGroupViewSchema = z
     crystalName: NonEmptyTextSchema.optional(),
     revision: PositiveSafeIntegerSchema,
     processedAssets: z.array(AssetImportProcessedAssetViewSchema),
-    crystalDraft: AssetImportCrystalDraftViewSchema.nullable()
+    crystalDraft: AssetImportCrystalDraftViewSchema.nullable(),
+    productDraft: BeadProductDraftViewSchema.nullable()
   })
   .superRefine((group, context) => {
     const ids = group.processedAssets.map((asset) => asset.processedAssetId);
@@ -506,6 +585,36 @@ export const ListAssetImportSessionsResponseSchema = z.strictObject({
   nextCursor: IdentifierSchema.nullable()
 });
 export type ListAssetImportSessionsResponse = z.infer<typeof ListAssetImportSessionsResponseSchema>;
+
+export const CRYSTAL_SEARCH_LIMIT_MAX = 20;
+export const CRYSTAL_SEARCH_QUERY_MAX_LENGTH = 200;
+
+/**
+ * A dedicated admin Crystal search: matches nameCn/nameEn/mineralName case-
+ * insensitively and returns only the minimal safe identity fields. It never
+ * derives from the public product catalog, so an existing Crystal with no
+ * product is still findable, and it never infers identity from an image.
+ */
+export const ListCrystalsQuerySchema = z.strictObject({
+  q: z.string().trim().min(1).max(CRYSTAL_SEARCH_QUERY_MAX_LENGTH),
+  limit: PositiveSafeIntegerSchema.min(1).max(CRYSTAL_SEARCH_LIMIT_MAX).optional(),
+  cursor: IdentifierSchema.optional()
+});
+export type ListCrystalsQuery = z.infer<typeof ListCrystalsQuerySchema>;
+
+export const CrystalSearchResultSchema = z.strictObject({
+  crystalId: IdentifierSchema,
+  nameCn: NonEmptyTextSchema,
+  nameEn: NonEmptyTextSchema.nullable(),
+  mineralName: NonEmptyTextSchema.nullable()
+});
+export type CrystalSearchResult = z.infer<typeof CrystalSearchResultSchema>;
+
+export const ListCrystalsResponseSchema = z.strictObject({
+  crystals: z.array(CrystalSearchResultSchema),
+  nextCursor: IdentifierSchema.nullable()
+});
+export type ListCrystalsResponse = z.infer<typeof ListCrystalsResponseSchema>;
 
 export const CancelAssetImportSessionParamsSchema = z.strictObject({
   sessionId: IdentifierSchema
@@ -692,17 +801,6 @@ export const SelectProcessedVersionResponseSchema = z.strictObject({
 export type SelectProcessedVersionResponse = z.infer<typeof SelectProcessedVersionResponseSchema>;
 
 /**
- * General draft permission vocabulary. UNKNOWN and PROHIBITED records may be
- * saved locally for review but can never be published; publication uses the
- * narrower PublishAssetUsagePermissionSchema below.
- */
-export const AssetUsagePermissionSchema = z.enum(["UNKNOWN", "OWNED", "GRANTED", "PROHIBITED"]);
-export type AssetUsagePermission = z.infer<typeof AssetUsagePermissionSchema>;
-
-export const PublishAssetUsagePermissionSchema = z.enum(["OWNED", "GRANTED"]);
-export type PublishAssetUsagePermission = z.infer<typeof PublishAssetUsagePermissionSchema>;
-
-/**
  * Automated QC and human approval are deliberately separate boundaries.
  * A successful worker result can only enter QC_PENDING; only the admin review
  * contract below can promote the current processed asset to APPROVED.
@@ -804,6 +902,7 @@ export const ReviewProcessedAssetResponseSchema = z
     reviewAction: ProcessedAssetReviewActionSchema,
     state: z.enum(["APPROVED", "RETIRED"]),
     revision: PositiveSafeIntegerSchema,
+    approvedAssetKey: ApprovedAssetKeySchema.nullable(),
     reviewedAt: IsoDateTimeSchema
   })
   .superRefine((response, context) => {
@@ -815,8 +914,46 @@ export const ReviewProcessedAssetResponseSchema = z
         path: ["state"]
       });
     }
+    if (response.reviewAction === "APPROVE" && response.approvedAssetKey === null) {
+      context.addIssue({
+        code: "custom",
+        message: "APPROVE must return the authoritative approved asset key",
+        path: ["approvedAssetKey"]
+      });
+    }
+    if (response.reviewAction === "REJECT" && response.approvedAssetKey !== null) {
+      context.addIssue({
+        code: "custom",
+        message: "REJECT must not return an approved asset key",
+        path: ["approvedAssetKey"]
+      });
+    }
   });
 export type ReviewProcessedAssetResponse = z.infer<typeof ReviewProcessedAssetResponseSchema>;
+
+/**
+ * Admin-only binary read for unpublished source and processed images. The
+ * rendition is a strict enum: a client can only ask for the server-derived
+ * main or thumbnail of an already-recorded processed asset, never a path.
+ */
+export const PROCESSED_ASSET_RENDITIONS = ["main", "thumbnail"] as const;
+export const ProcessedAssetRenditionSchema = z.enum(PROCESSED_ASSET_RENDITIONS);
+export type ProcessedAssetRendition = z.infer<typeof ProcessedAssetRenditionSchema>;
+
+export const ProcessedAssetContentParamsSchema = z.strictObject({
+  processedAssetId: IdentifierSchema
+});
+export type ProcessedAssetContentParams = z.infer<typeof ProcessedAssetContentParamsSchema>;
+
+export const ProcessedAssetContentQuerySchema = z.strictObject({
+  rendition: ProcessedAssetRenditionSchema.optional()
+});
+export type ProcessedAssetContentQuery = z.infer<typeof ProcessedAssetContentQuerySchema>;
+
+export const AssetFileContentParamsSchema = z.strictObject({
+  fileId: IdentifierSchema
+});
+export type AssetFileContentParams = z.infer<typeof AssetFileContentParamsSchema>;
 
 export const CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS = {
   nameCn: "NAME_CN",
@@ -828,20 +965,6 @@ export const CRYSTAL_DRAFT_CURATION_TO_COMPLETENESS = {
   priceLevel: "PRICE_LEVEL",
   complianceNote: "COMPLIANCE_NOTE"
 } as const satisfies Record<string, CrystalDraftCurationField>;
-
-export const CRYSTAL_DRAFT_TAG_LIMITS = {
-  colorTags: 20,
-  visualTags: 30,
-  styleTags: 30
-} as const;
-
-export const CRYSTAL_PRICE_LEVEL_RANGE = { min: 1, max: 5 } as const;
-export const CrystalPriceLevelSchema = z
-  .number()
-  .int()
-  .min(CRYSTAL_PRICE_LEVEL_RANGE.min)
-  .max(CRYSTAL_PRICE_LEVEL_RANGE.max);
-export type CrystalPriceLevel = z.infer<typeof CrystalPriceLevelSchema>;
 
 const CRYSTAL_DRAFT_PLACEHOLDERS = new Set([
   "unspecified",
@@ -1359,7 +1482,8 @@ export const ASSET_IMPORT_ERROR_CODES = [
   "MISSING_REFERENCE",
   "SKU_CONFLICT",
   "INVENTORY_VERSION_CONFLICT",
-  "PUBLISH_TRANSACTION_FAILED"
+  "PUBLISH_TRANSACTION_FAILED",
+  "SOURCE_PREVIEW_UNAVAILABLE"
 ] as const;
 
 export const AssetImportErrorCodeSchema = z.enum(ASSET_IMPORT_ERROR_CODES);
@@ -1380,7 +1504,8 @@ export const ASSET_IMPORT_ERROR_TRANSPORT_CODES: Record<AssetImportErrorCode, As
   MISSING_REFERENCE: "UNPROCESSABLE_ENTITY",
   SKU_CONFLICT: "CONFLICT",
   INVENTORY_VERSION_CONFLICT: "CONFLICT",
-  PUBLISH_TRANSACTION_FAILED: "INTERNAL_ERROR"
+  PUBLISH_TRANSACTION_FAILED: "INTERNAL_ERROR",
+  SOURCE_PREVIEW_UNAVAILABLE: "UNSUPPORTED_MEDIA_TYPE"
 };
 
 export const ASSET_IMPORT_ERROR_RECOVERY_ACTIONS = [
@@ -1416,7 +1541,8 @@ export const ASSET_IMPORT_ERROR_CATALOG: Record<
   MISSING_REFERENCE: { retryable: false, recoveryAction: "COMPLETE_DRAFT_FIELDS" },
   SKU_CONFLICT: { retryable: false, recoveryAction: "RESOLVE_SKU_CONFLICT" },
   INVENTORY_VERSION_CONFLICT: { retryable: true, recoveryAction: "RETRY_WITH_FRESH_INVENTORY" },
-  PUBLISH_TRANSACTION_FAILED: { retryable: true, recoveryAction: "RETRY_REQUEST" }
+  PUBLISH_TRANSACTION_FAILED: { retryable: true, recoveryAction: "RETRY_REQUEST" },
+  SOURCE_PREVIEW_UNAVAILABLE: { retryable: false, recoveryAction: "NO_RECOVERY" }
 };
 
 export const AssetImportFieldErrorSchema = z.strictObject({
