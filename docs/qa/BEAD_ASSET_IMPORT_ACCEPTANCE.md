@@ -4,16 +4,15 @@
 - 分支：`task/asset-qa-001-integration-gate`（worktree `.worktrees/asset-qa-001`，基线 `6e79b66`）
 - 执行：DeepSeek-V4-Flash（产品负责人 2026-09-09 授权接管最终 QA 修复，接替 GLM-5.3-Flash）
 - 终审：GLM-5.3（2026-09-09 产品负责人授权接管最终审查；独立复核候选 `ae24f3d` 的九项重点核验，未发现 QA 门禁自身 Critical 缺陷；修复本记录沿用的上一轮运行过期标识 8 处，见“五、17”）
-- 日期：2026-09-09 首次全真门禁；**2026-09-10 复跑（main@886f90f 三项 runtime 修复合入后）见“七”，其结论取代 2026-09-09 的 47 PASS / 4 FAIL / 0 SKIP / 0 MISSING 记录**（再此前 2026-09-08 的 35 PASS 记录与 2026-09-09 早间的 45 PASS / 4 FAIL / 1 MISSING 记录亦均已被取代 superseded）
-- 结论：**BLOCKED —— 复跑 review gate failed（45 PASS / 1 FAIL / 0 SKIP / 6 MISSING，required set INCOMPLETE，退出码 1），清理 0 错误；review 未通过**。原 FAIL ① 的目录可见半段已解除（FE-003 生效），但最终用户 `/crystal-library` 渲染暴露新 runtime 缺陷 ④；②③ 修复本轮**未获验证**（脚本 fatal 中断致 sources 段 4 项 MISSING）。
+- 日期：2026-09-09 首次全真门禁；2026-09-10 复跑（main@886f90f，见“七”，45 PASS / 1 FAIL / 0 SKIP / 6 MISSING）；**2026-09-10 最终复跑（FE-005 合入 main@ec5e6b6 后）全绿，见“八”，其结论取代此前所有运行记录**
+- 结论：**REVIEW —— 最终复跑 review gate PASSED（52 PASS / 0 FAIL / 0 SKIP / 0 MISSING，required set complete，退出码 0），清理 0 错误**。四个 runtime 修复（FE-003 modelAssetKey、FE-004 流式代理、WORKER-003 分组收敛、FE-005 目录独立渲染）全部经真实浏览器+权威 127 文件源集门禁验证；QA-001 转入 REVIEW 等待 Codex 终审。
 
 发布路径已升级为**真实浏览器驱动**（合成 OIDC 拓扑 + 真实最终用户登录回环 + 目录选择经真实
 `#bead-import-folder-input` 目录选择产生 manifest 与 PUT，全流程 UI）。目录可见性按产品负责人既定的
-“严格诚实 FAIL”裁定：必须先经真实 UI 发布、再断言目录；发布负载缺 `modelAssetKey` 使成品不出现在设计
-目录 → `flow/published-product-public` 与 `browser/approved-product-renders` **如实记 FAIL 并作为硬阻塞**，
-直至一个前端任务让发布负载携带 `modelAssetKey`。另两条 FAIL 是**真实规模下暴露的 runtime 缺陷**（Next
-10 MiB 路由体上限 + 真实源集自动分组不收敛），同样如实记录。本任务未修改任何 runtime 代码，
-只修复 QA 脚本自身缺陷并补充证据；全部 FAIL 的修复归属于后续 runtime 任务（见“四、四项 FAIL 与根因”）。
+“严格诚实 FAIL”裁定：必须先经真实 UI 发布、再断言目录。历史运行（2026-09-09 的 47 PASS / 4 FAIL
+与 2026-09-10 的 45 PASS / 1 FAIL / 6 MISSING）如实记录于“四/七”，全部 FAIL 已由后续 runtime 任务
+（FE-003/FE-004/WORKER-003/FE-005/GOV-003）修复并经“八”的最终门禁复验。本任务始终未修改任何
+runtime 代码，只构建/修复 QA 门禁自身并记录证据。
 
 ## 一、真实命令
 
@@ -275,3 +274,51 @@ MISSING（6，全部因该 FAIL 的 fatal 中断，未运行）：`browser/appro
 **行为级红绿证据（非仅源码字符串断言）**：`publish-public-continuation` 探针扩展 (e)——真实调用 `_published_product_public_detail(True/False)` 并驱动 `_final_user_library_checks` 收集全部 detail，断言当前函数相关诊断文本不含 "omits"/"payload omits modelAssetKey"/"surfaced runtime defect"（ppp detail）且陈述 server-approved modelAssetKey 与 QA-FLOW-008 两件事实。红（先提取旧文再断言，`/tmp/qa001-selftest-red3.log`，exit 1）：`ppp_detail_clean=False library_details_clean=False -> FAIL`——在真实过期文本上失败，非 NameError；绿（修复后，`/tmp/qa001-selftest-green3.log`，exit 0）：`ppp_detail_clean=True library_details_clean=True -> PASS`，六探针 aggregate PASS。
 
 修复后窄测：`py_compile` OK；`--self-test` 6/6 PASS（exit 0）；`node --test tests/bead-asset-import-architecture.test.mjs` 19/19；全套 `node --test tests/*.test.mjs` 39/39；`pnpm validate` 17/17（exit 0）；`git diff --check` clean。本轮改动仅 QA 脚本（detail 提取与文本、两处注释、镜像载荷一行）、本文档与 TASK_REGISTRY 本任务行；runtime 未动；127 文件门禁未重跑。runtime blocker ④（`design-diy-private` 404 → `/crystal-library` 渲染不出）与 ②③ 验证缺口仍在，**TASK-ASSET-QA-001 维持 BLOCKED**。
+
+## 八、2026-09-10 最终复跑记录（FE-005 合入后全绿，取代“七”的 45/1/6 结果）
+
+### 8.1 基线与窄测
+
+- 基线：Codex 将本地 `main@ec5e6b6`（TASK-ASSET-FE-005 `DONE`，`/crystal-library` 目录与固定设计请求独立结算）无损合入本分支，合并提交 `06c4960`；QA-001 重开 `IN_PROGRESS` 提交 `1e944a8`。FE-003 / FE-004 / WORKER-003 / FE-005 / GOV-003 均 `DONE`，四个 runtime 修复全部就位。
+- 窄测（先于门禁，全部通过）：`py_compile` OK；`--self-test` 6/6 PASS（exit 0，`/tmp/qa001-selftest-final.log`）；`node --test tests/bead-asset-import-architecture.test.mjs` 19/19；全套 `node --test tests/*.test.mjs` 39/39；`git diff --check` clean。
+- 运行前只读复核权威源集：`/Users/chenyanyan/Desktop/珠子图` 127 个 JPG/ARW 文件（65 JPG + 62 ARW，与 `sources/discovery` 基线一致）。
+
+### 8.2 门禁命令（完整门禁仅运行一次）
+
+```bash
+env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -u scripts/ui-qa/bead_import_flow.py
+```
+
+无 `--keep`、无 `--source-set`（权威路径强制）；源集全程只读。
+
+### 8.3 结果与 run identifiers
+
+**SUMMARY: 52 passed, 0 failed, 0 skipped; required set complete; cleanup errors: 0 — EXIT=0（finish() 仅在 0 FAIL/0 SKIP/无 MISSING/required complete/0 清理错误时退出 0；日志无任何 FAILED/SKIPPED/MISSING/CLEANUP ERROR 行）。review gate PASSED。**
+
+- 一次性库：`mystcrag_qa_flow_test_1788989115_263785`（运行后 DROP，`pg_database` 计数 0，见 8.6）
+- OIDC：provider tls `:63349` / admin `:63350` / relay `:63351`；backend `:4100`；next dev `:63343`；h2 代理 `:63410` → `:63343`
+- 会话 `cmtuly3h…`；crystalDraftId `cmtulyisb000…`；重启 PID：backend 40229→40424、worker 40230→40425
+- 发布：`publishedAssetKeys=['approved:13f65529a31493ceb09dc87a5bc66a22c7b6fdfcc7daf0c39727c760cf0c0ae8']`，inventorySnapshotId 有效（真实浏览器发布表单 loader → BFF → backend）
+- 证据日志：`/tmp/qa001-rerun-final.log`（完整 52 PASS 明细）
+
+### 8.4 四个 runtime 修复的最终验证（原 4 FAIL 全部解除）
+
+| 原 FAIL/缺口 | 验证结果 | 证据 |
+|---|---|---|
+| ①/④ 发布目录可见 + 最终用户渲染（FE-003 + FE-005） | `flow/published-product-public` PASS（认证目录含 `QA-FLOW-008`，server-approved modelAssetKey）；`flow/publish-public` PASS（最终用户 `/crystal-library` 渲染出已发布珠子 **QA水晶A**——一次性库不 seed `design-diy-private`，固定设计 404 场景被真实行使，FE-005 独立结算生效）；`browser/approved-product-renders` PASS（1 个 approved-asset `<img>` 真实解码 naturalWidth>0，资产 URL 响应 200） | 日志对应三行 PASS |
+| ② >10MiB ARW 管理代理（FE-004） | `sources/proxy-large-body-cap` PASS：**全部 127 个真实文件经真实管理代理上传，无 500/截断/连接错误**（含 62 个约 21MB ARW，远超旧 10MiB 上限） | 日志 sources/proxy-large-body-cap 行 |
+| ③ 127 文件分组收敛（WORKER-003） | `sources/grouping-pairs` PASS：**64 个组覆盖 127 个真实文件**，跨文件夹 stem `ZDX01535` 配对为一组，jpg-only 与 arw-only 组均在 | 日志 sources/grouping-pairs 行 |
+| 门禁完整性（无 FAIL/SKIP/MISSING） | `sources/discovery`（127 文件、26 目录、66 stems 基线匹配）、`sources/import-roundtrip`（127 文件 byte-identical 归档、sha256 逐一匹配、6 个抽样复核）、`mobile/status-reviews-viewport`（390=390）等全部 PASS；required set complete | SUMMARY 行 |
+
+### 8.5 全流程覆盖（52 项一览）
+
+env/fixtures/db → services（oidc/backend/worker/frontend/h2）→ browser（login+guard、create-session）→ http（manifest/upload）→ flow（restart-termination/new-pids/resume、auto-grouping、merge、split、arw-only-merge、primary-confirmed、naming、draft、curation、draft-refresh-persistence、processing-start、qc-verdict、qc-recovery-passed、qc-recovery-reprocess、qc-blocks-approval、human-approval、publish、published-product-public、public-approved-asset、catalog-requires-auth、draft-public-denial、publish-public）→ browser（groups/draft/review 页面渲染、final-user-login、approved-product-renders、qc-blocks-ui-approval-button）→ mobile/status-reviews-viewport → sources（discovery、proxy-large-body-cap、import-roundtrip、grouping-pairs）。真实浏览器登录、目录选择/manifest/代理上传、重启续传、分组/合并/拆分/命名/归类/QC/人工批准/发布及最终用户渲染全覆盖。
+
+### 8.6 清理证明（本轮自建物全部不存在，源照片未触碰）
+
+- 一次性库 `mystcrag_qa_flow_test_1788989115_263785`：脚本 `DROP DATABASE ... WITH (FORCE)` 后，`psql -h /tmp -d postgres` 的 `pg_database` 计数 **0**（不存在）。
+- 临时目录 `/tmp/mystcrag-qa-flow-*`：无残留（脚本 `CLEANUP | removed temporary directories` + `ls` 无匹配）。
+- 进程/端口：`bead_import_flow`/`asset-worker` 进程 0 个；端口 4100 无监听；日志 CLEANUP 段逐组记录进程组全部 stopped（backend/worker 重启前后共 4 组）。
+- 源照片 `/Users/chenyanyan/Desktop/珠子图`：门禁后复核仍为 127 个 JPG/ARW，全程只读（discovery/stat/hash/read 隔离子进程，无复制/修改/入库）。
+- 说明：机器上另存在两个 2026-09-09 早期运行的历史残留库（`mystcrag_qa_flow_test_1788959221_2f05b9`、`mystcrag_qa_flow_test_1788959879_c0bf2a`），**非本轮自建，未触碰**（本轮指令仅清理本轮自建物）。
+- 本轮改动：仅本文档（本节 + 头部结论）与 TASK_REGISTRY 本任务行（IN_PROGRESS→REVIEW）；QA 脚本、runtime、契约、Prisma、根配置、lockfile 均未改动；无 push/deploy。
