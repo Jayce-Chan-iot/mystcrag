@@ -71,6 +71,55 @@ function saveFavorites(favorites: ReadonlySet<string>): void {
   window.localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify([...favorites]));
 }
 
+function toVariantSelection(current: Record<string, string>, materials: readonly CatalogMaterialProduct[]): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const material of materials) {
+    const existing = current[material.crystalId];
+    next[material.crystalId] = typeof existing === "string" && materials.some((candidate) => candidate.beadProductId === existing)
+      ? existing
+      : material.beadProductId;
+  }
+  return next;
+}
+
+export type LibraryPageApi = Pick<typeof designApi, "get" | "materials">;
+
+export type LibraryPageLoadOutcome = {
+  design: PublicDesignV1 | null;
+  materials: CatalogMaterialProduct[];
+  accessories: CatalogAccessoryProduct[];
+  catalogNotice: FrontendErrorCode | null;
+  designNotice: FrontendErrorCode | null;
+};
+
+// The fixed design is optional context: its absence (for example a fresh
+// migrated, unseeded database returning 404) must not block the catalog.
+// A material-request failure stays fatal for the catalog view.
+export async function loadLibraryPageData(api: LibraryPageApi, designId = LIBRARY_DESIGN_ID): Promise<LibraryPageLoadOutcome> {
+  const [designResult, catalogResult] = await Promise.allSettled([
+    api.get(designId),
+    api.materials("CNY")
+  ]);
+  const design = designResult.status === "fulfilled" ? designResult.value : null;
+  const designNotice = designResult.status === "rejected" ? toFrontendApiError(designResult.reason).code : null;
+  if (catalogResult.status === "rejected") {
+    return {
+      design,
+      materials: [],
+      accessories: [],
+      catalogNotice: toFrontendApiError(catalogResult.reason).code,
+      designNotice
+    };
+  }
+  return {
+    design,
+    materials: catalogResult.value.materials,
+    accessories: catalogResult.value.accessories,
+    catalogNotice: null,
+    designNotice
+  };
+}
+
 function AccessoryGlyph({ accessoryType }: { accessoryType: string }) {
   if (accessoryType === "PENDANT") {
     return (
@@ -109,6 +158,7 @@ export function CrystalLibraryPage() {
   const [accessories, setAccessories] = React.useState<CatalogAccessoryProduct[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [notice, setNotice] = React.useState<FrontendErrorCode | null>(null);
+  const [designNotice, setDesignNotice] = React.useState<FrontendErrorCode | null>(null);
   const [message, setMessage] = React.useState("");
   const [isUpdating, setIsUpdating] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
@@ -125,29 +175,15 @@ export function CrystalLibraryPage() {
 
   React.useEffect(() => {
     let active = true;
-    void Promise.all([
-      designApi.get(LIBRARY_DESIGN_ID),
-      designApi.materials("CNY")
-    ]).then(([designResponse, catalogResponse]) => {
+    void loadLibraryPageData(designApi).then((outcome) => {
       if (!active) return;
       setFavorites(loadFavorites());
-      setDesign(designResponse);
-      setMaterials(catalogResponse.materials);
-      setAccessories(catalogResponse.accessories);
-      setVariantSelection((current) => {
-        const next: Record<string, string> = {};
-        for (const material of catalogResponse.materials) {
-          const existing = current[material.crystalId];
-          next[material.crystalId] = typeof existing === "string" && catalogResponse.materials.some((candidate) => candidate.beadProductId === existing)
-            ? existing
-            : material.beadProductId;
-        }
-        return next;
-      });
-      setNotice(null);
-    }).catch((error: unknown) => {
-      if (!active) return;
-      setNotice(toFrontendApiError(error).code);
+      setDesign(outcome.design);
+      setMaterials(outcome.materials);
+      setAccessories(outcome.accessories);
+      setNotice(outcome.catalogNotice);
+      setDesignNotice(outcome.designNotice);
+      setVariantSelection((current) => toVariantSelection(current, outcome.materials));
     }).finally(() => {
       if (active) setIsLoading(false);
     });
@@ -163,16 +199,13 @@ export function CrystalLibraryPage() {
   const retryLoad = () => {
     setIsLoading(true);
     setNotice(null);
-    void Promise.all([
-      designApi.get(LIBRARY_DESIGN_ID),
-      designApi.materials("CNY")
-    ]).then(([designResponse, catalogResponse]) => {
-      setDesign(designResponse);
-      setMaterials(catalogResponse.materials);
-      setAccessories(catalogResponse.accessories);
-      setNotice(null);
-    }).catch((error: unknown) => {
-      setNotice(toFrontendApiError(error).code);
+    void loadLibraryPageData(designApi).then((outcome) => {
+      setDesign(outcome.design);
+      setMaterials(outcome.materials);
+      setAccessories(outcome.accessories);
+      setNotice(outcome.catalogNotice);
+      setDesignNotice(outcome.designNotice);
+      setVariantSelection((current) => toVariantSelection(current, outcome.materials));
     }).finally(() => setIsLoading(false));
   };
 
@@ -384,7 +417,7 @@ export function CrystalLibraryPage() {
                     </button>
                     <button
                       className="min-h-11 flex-1 rounded-xl bg-[var(--accent-deep)] text-sm text-white transition hover:bg-[var(--accent)] disabled:opacity-55"
-                      disabled={isUpdating}
+                      disabled={isUpdating || !design}
                       onClick={() => void addAccessory(accessory)}
                       type="button"
                     >
@@ -456,7 +489,7 @@ export function CrystalLibraryPage() {
                   </button>
                   <button
                     className="min-h-11 flex-1 rounded-xl bg-[var(--accent-deep)] text-sm text-white transition hover:bg-[var(--accent)] disabled:opacity-55"
-                    disabled={isUpdating}
+                    disabled={isUpdating || !design}
                     onClick={() => void addMaterial(variant)}
                     type="button"
                   >
@@ -623,15 +656,15 @@ export function CrystalLibraryPage() {
     );
   }
 
-  if (!design) {
+  if (notice) {
     return (
       <main className="mx-auto min-h-[60vh] max-w-3xl px-5 py-16" data-library-page="error">
-        <FlowNotice code={notice ?? "EMPTY_STATE"} onAction={retryLoad} />
+        <FlowNotice code={notice} onAction={retryLoad} />
       </main>
     );
   }
 
-  const sortedBeads = [...design.beads].sort((left, right) => left.positionIndex - right.positionIndex);
+  const sortedBeads = design ? [...design.beads].sort((left, right) => left.positionIndex - right.positionIndex) : [];
   const hiddenBeadCount = Math.max(0, sortedBeads.length - PANEL_THUMBNAIL_LIMIT);
 
   return (
@@ -761,6 +794,7 @@ export function CrystalLibraryPage() {
           </section>
 
           <aside className="hidden lg:block">
+            {design ? (
             <div className="sticky top-[4.5rem] rounded-2xl border border-[var(--border)] bg-white p-4" data-current-design-panel="desktop">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-medium">当前设计</h2>
@@ -830,10 +864,18 @@ export function CrystalLibraryPage() {
               </div>
               <p className="mt-3 text-[0.68rem] leading-5 text-[var(--muted)]">*价格仅供参考，实际以结算为准</p>
             </div>
+            ) : (
+              <div className="sticky top-[4.5rem] rounded-2xl border border-[var(--border)] bg-white p-4" data-library-design-panel="unavailable">
+                <h2 className="text-sm font-medium">当前设计</h2>
+                <p className="mt-2 text-xs leading-5 text-[var(--muted)]">当前设计暂不可用，矿石目录不受影响，可先浏览与收藏。</p>
+                {designNotice ? <div className="mt-3"><FlowNotice code={designNotice} compact onAction={retryLoad} /></div> : null}
+              </div>
+            )}
           </aside>
         </div>
       </div>
 
+      {design ? (
       <div className="sticky bottom-[3.4rem] z-40 border-t border-[var(--border)] bg-white/97 backdrop-blur-xl lg:hidden" data-current-design-panel="mobile">
         <div className="mx-auto flex max-w-[92.5rem] items-center gap-3 px-4 py-2.5 sm:px-6">
           <div className="flex min-w-0 items-center gap-1">
@@ -868,6 +910,7 @@ export function CrystalLibraryPage() {
           </div>
         </div>
       </div>
+      ) : null}
     </main>
   );
 }
