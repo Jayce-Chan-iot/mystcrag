@@ -50,6 +50,7 @@ export type DraftRefusalReason =
   | "NOTHING_TO_SAVE"
   | "INVALID_INPUT"
   | "NO_CRYSTAL_DRAFT"
+  | "UNNAMED_GROUP"
   | "GROUP_LOCKED"
   | "CONFLICT_BLOCKED"
   | "IN_FLIGHT"
@@ -61,6 +62,7 @@ export const DRAFT_REFUSAL_MESSAGES: Readonly<Record<DraftRefusalReason, string>
   NOTHING_TO_SAVE: "没有需要保存的修改。",
   INVALID_INPUT: "填写的内容未通过校验，请先修正标出的字段。",
   NO_CRYSTAL_DRAFT: "该分组还没有水晶资料草稿，请先保存珠子命名内容。",
+  UNNAMED_GROUP: "该分组还没有人工命名的珠子名称，请先在确认分组步骤填写后再保存草稿。",
   GROUP_LOCKED: "导入任务已进入不可编辑阶段，无法再修改命名内容。",
   CONFLICT_BLOCKED: CONFLICT_NOTICE_MESSAGE,
   IN_FLIGHT: "正在提交，请等待完成后再试。",
@@ -198,11 +200,22 @@ export function createDraftLoader(deps: DraftLoaderDeps): DraftLoader {
     }
 
     const crystalDraft = crystalDraftViewFor(state, groupId);
+    const group = state.session?.groups.find((candidate) => candidate.groupId === groupId);
+    const linkedCrystalId = group?.productDraft?.crystalId ?? null;
+    // The CrystalDraft is created by the Backend from the name the operator
+    // human-confirmed through SET_NAME — never a retyped value or an inference.
+    // A group holding an existing Crystal reference needs no creation name.
+    const humanName =
+      crystalDraft === null && linkedCrystalId === null ? (group?.crystalName ?? null) : null;
+    if (crystalDraft === null && linkedCrystalId === null && (humanName === null || humanName.trim() === "")) {
+      return refused(groupId, "UNNAMED_GROUP");
+    }
     const issues = productDraftIssues(entry.form);
     const request = buildProductDraftRequest({
       form: entry.form,
       expectedGroupRevision: revision,
-      crystalDraftId: crystalDraft?.crystalDraftId ?? null
+      crystalDraftId: crystalDraft?.crystalDraftId ?? null,
+      crystalName: humanName
     });
     if (issues.length > 0 || request === null) {
       return refused(groupId, "INVALID_INPUT", issues);

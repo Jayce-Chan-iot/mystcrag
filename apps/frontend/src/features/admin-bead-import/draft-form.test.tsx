@@ -175,6 +175,54 @@ test("a staged save carries only what the operator filled", () => {
   });
 });
 
+test("a first save on a named group carries the operator-confirmed name for draft creation", () => {
+  const request = buildProductDraftRequest({
+    form: filledProductForm(),
+    expectedGroupRevision: 7,
+    crystalDraftId: null,
+    crystalName: "  白水晶  "
+  });
+
+  assert.ok(request !== null);
+  assert.equal(
+    request.crystalName,
+    "白水晶",
+    "the name is the trimmed SET_NAME value the operator confirmed in the review step, never retyped here"
+  );
+  const parsed = SaveBeadProductDraftRequestSchema.safeParse(request);
+  assert.equal(parsed.success, true, parsed.success ? "" : JSON.stringify(parsed.error.issues));
+});
+
+test("no creation name is sent for an unnamed group or one that already holds a crystal reference", () => {
+  const unnamed = buildProductDraftRequest({
+    form: filledProductForm(),
+    expectedGroupRevision: 7,
+    crystalDraftId: null,
+    crystalName: null
+  });
+  assert.ok(unnamed !== null);
+  assert.equal("crystalName" in unnamed, false);
+
+  const blank = buildProductDraftRequest({
+    form: filledProductForm(),
+    expectedGroupRevision: 7,
+    crystalDraftId: null,
+    crystalName: "   "
+  });
+  assert.ok(blank !== null);
+  assert.equal("crystalName" in blank, false);
+
+  const linked = buildProductDraftRequest({
+    form: filledProductForm(),
+    expectedGroupRevision: 7,
+    crystalDraftId: "draft-1",
+    crystalName: "白水晶"
+  });
+  assert.ok(linked !== null);
+  assert.equal(linked.crystalDraftId, "draft-1");
+  assert.equal("crystalName" in linked, false, "an existing draft reference stays the reference, never a re-creation");
+});
+
 test("an empty form produces no request instead of a body the contract rejects", () => {
   assert.equal(
     buildProductDraftRequest({ form: emptyProductDraftForm(), expectedGroupRevision: 3, crystalDraftId: null }),

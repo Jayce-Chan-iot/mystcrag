@@ -9,6 +9,7 @@ import {
   type AssetImportCrystalDraftView,
   type AssetImportSessionGroupView,
   type AssetImportSessionResponse,
+  type BeadProductDraftView,
   type CheckBeadProductDraftCompletenessResponse,
   type DraftCompletenessField,
   type SaveBeadProductDraftRequest,
@@ -131,6 +132,33 @@ function makeGroup(
     ...overrides
   };
 }
+
+const PRODUCT_DRAFT: BeadProductDraftView = {
+  crystalName: "白水晶",
+  crystalId: null,
+  crystalDraftId: null,
+  displayName: "白水晶圆珠 8mm",
+  sku: "MXJ-BEAD-QUARTZ-08",
+  materialKey: "quartz-round-v1",
+  shape: "ROUND",
+  diameterMm: 8,
+  lengthAlongStringMm: null,
+  currency: "CNY",
+  unitPriceMinor: 3990,
+  costMinor: 1200,
+  availableQuantity: 24,
+  qualityStatement: "天然白水晶，肉眼可见少量内含物。",
+  qualitySource: "供应商提供的批次说明，已由运营核对。",
+  textureAssetKey: null,
+  modelAssetKey: null,
+  rightsHolder: "玄矶水晶工作室",
+  usagePermission: "OWNED",
+  isAuthenticPhotograph: true,
+  allowAiTraining: false,
+  allowCommercialUse: true,
+  allowPublicDisplay: true,
+  allowAiRecommendation: true
+};
 
 function makeSession(
   overrides: Partial<AssetImportSessionResponse> = {}
@@ -499,6 +527,64 @@ test("a draft save is refused when the session has not loaded or the group is go
   assert.equal(unknown.outcome, "REFUSED");
   assert.equal(unknown.reason, "UNKNOWN_GROUP");
   assert.deepEqual(harness.drafts, []);
+});
+
+test("a first draft save on a named group carries the human-confirmed name and hydrates the created CrystalDraft", async () => {
+  const namedWithoutDraft = makeSession({
+    groups: [makeGroup({ crystalDraft: null })]
+  });
+  const harness = makeHarness({ session: namedWithoutDraft });
+  harness.dispatch({ type: "EDIT_PRODUCT_DRAFT", groupId: "group-1", patch: { text: { sku: "MXJ-2" } } });
+
+  const result = await harness.loader.saveProductDraft("group-1");
+
+  assert.equal(result.outcome, "APPLIED");
+  const request = harness.drafts[0]?.request;
+  assert.ok(request !== undefined);
+  assert.equal(request.crystalName, "白水晶", "the session group's SET_NAME value is sent on the first save");
+  assert.equal("crystalDraftId" in request, false);
+  assert.equal(harness.sessionCalls, 1, "the session is re-read so the created draft hydrates from the server");
+  assert.equal(
+    harness.latest().session?.groups[0]?.crystalDraft?.crystalDraftId,
+    "crystal-draft-1",
+    "the curation form becomes addressable from the refreshed authoritative session"
+  );
+});
+
+test("a draft save on an unnamed group is refused locally with zero network", async () => {
+  const unnamed = makeSession({
+    groups: [makeGroup({ crystalDraft: null, crystalName: undefined })]
+  });
+  const harness = makeHarness({ session: unnamed });
+
+  const result = await harness.loader.saveProductDraft("group-1");
+
+  assert.equal(result.outcome, "REFUSED");
+  assert.equal(result.reason, "UNNAMED_GROUP");
+  assert.deepEqual(harness.drafts, [], "no request leaves the browser when no human name exists to create the draft from");
+  assert.deepEqual(harness.dispatched, []);
+});
+
+test("a group linked to an existing crystal is saved without a creation name", async () => {
+  const linked = makeSession({
+    groups: [
+      makeGroup({
+        crystalDraft: null,
+        productDraft: { ...PRODUCT_DRAFT, crystalId: "crystal-77", crystalDraftId: null }
+      })
+    ]
+  });
+  const harness = makeHarness({ session: linked });
+  harness.setDraftResult(draftSaved({ crystalDraftId: null, crystalDraftRevision: null }));
+
+  const result = await harness.loader.saveProductDraft("group-1");
+
+  assert.equal(result.outcome, "APPLIED");
+  const request = harness.drafts[0]?.request;
+  assert.ok(request !== undefined);
+  assert.equal("crystalName" in request, false, "the picked crystal stays the reference");
+  assert.equal("crystalDraftId" in request, false);
+  assert.equal(harness.sessionCalls, 0, "no draft was created, so no re-read is needed");
 });
 
 test("a draft save sends the revision from the session, never one the operator typed", async () => {

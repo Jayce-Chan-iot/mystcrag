@@ -429,11 +429,16 @@ function coercedTextValue(
 function candidateRequest(
   form: ProductDraftForm,
   expectedGroupRevision: number,
-  crystalDraftId: string | null
+  crystalDraftId: string | null,
+  crystalName: string | null
 ): Record<string, unknown> {
   const candidate: Record<string, unknown> = { expectedGroupRevision };
   if (crystalDraftId !== null) {
     candidate.crystalDraftId = crystalDraftId;
+  } else if (crystalName !== null && crystalName.trim() !== "") {
+    // The Backend creates the group's CrystalDraft from the name the operator
+    // human-confirmed through SET_NAME; it is never retyped or inferred here.
+    candidate.crystalName = crystalName.trim();
   }
   for (const field of PRODUCT_DRAFT_TEXT_FIELDS) {
     const raw = form.text[field];
@@ -482,7 +487,7 @@ function rejectedRequestKeys(candidate: Record<string, unknown>): Set<string> {
  */
 export function productDraftIssues(form: ProductDraftForm): DraftIssue[] {
   const issues: DraftIssue[] = [];
-  for (const key of rejectedRequestKeys(candidateRequest(form, 1, null))) {
+  for (const key of rejectedRequestKeys(candidateRequest(form, 1, null, null))) {
     const field = REQUEST_KEY_TO_TEXT_FIELD[key];
     if (field === undefined) {
       continue;
@@ -496,8 +501,14 @@ export function buildProductDraftRequest(input: {
   form: ProductDraftForm;
   expectedGroupRevision: number;
   crystalDraftId: string | null;
+  crystalName?: string | null;
 }): SaveBeadProductDraftRequest | null {
-  const candidate = candidateRequest(input.form, input.expectedGroupRevision, input.crystalDraftId);
+  const candidate = candidateRequest(
+    input.form,
+    input.expectedGroupRevision,
+    input.crystalDraftId,
+    input.crystalName ?? null
+  );
   const rejected = rejectedRequestKeys(candidate);
   if (rejected.size === 0) {
     const parsed = SaveBeadProductDraftRequestSchema.safeParse(candidate);
