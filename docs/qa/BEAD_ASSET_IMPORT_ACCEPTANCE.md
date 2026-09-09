@@ -23,8 +23,11 @@
 # 1. 语法编译
 env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -m py_compile scripts/ui-qa/bead_import_flow.py
 
-# 2. 架构测试（6/6 通过）
+# 2. 架构测试（8/8 通过；含 2026-09-09 review-fix 新增的 2 条回归不变式）
 node --test tests/bead-asset-import-architecture.test.mjs
+
+# 2b. 内建单元自检（不起服务/不建库/不开浏览器；验证 finish() 先 cleanup、后判定退出码）
+env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -u scripts/ui-qa/bead_import_flow.py --self-test
 
 # 3. 完整集成验收（真实浏览器 + 真实 OIDC 登录 + 真实后端 + 真实 worker + 一次性测试库）
 env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -u scripts/ui-qa/bead_import_flow.py
@@ -149,6 +152,9 @@ RUN_EXIT=1
 2. **真实目录自动分组超时不应终止整场**：分组改为独立可报告检查（`sources/grouping-pairs`），超时/拒收记 FAIL 并附会话终态，而非把后续导入判定一并带崩。
 3. **>10 MiB 上传分层**：`http/upload` 主路径仍要求经真实代理（覆盖 BFF 链路）；超过 Next 10 MiB 上限的源文件改走同一后端内容路由并单独记为 `sources/proxy-large-body-cap` FAIL，保证归档/SHA/抽样仍覆盖每个真实文件。
 4. 前几轮沿用并保留的修复：`archive_root` 只赋值未建目录 → 显式 `mkdir`；真实 `--skip-browser` HTTP 模式（浏览器项记 SKIP 不折算 PASS）；按实际结果分支、两次独立读取验证哈希；独立进程组 + cleanup SIGTERM 后无条件补 SIGKILL（曾留孤儿 next-server 持 Next 项目锁）；成功路径打印 SUMMARY 并清理；浏览器选择器用 `button:has-text` + `expect_response` 捕获真实 BFF 响应；目录断言认证化 + 匿名 401 断言；`no_proxy=*`；诊断探针去掉与 `.backend()` 冲突的 `timeout` 参数。
+5. **2026-09-09 review-fix：`finish()` 先执行 cleanup、再冻结 problems / 打印 SUMMARY**（原 Important）：旧实现先冻结 `problems` 并打印 SUMMARY（恒为 “cleanup errors: 0”）再调 `cleanup()`，清理期新增的 `CLEANUP_ERRORS` 既不改变退出码、SUMMARY 也失真 → 改为先 `try: cleanup()`（异常同样记入 `CLEANUP_ERRORS`），再冻结 problems、打印 SUMMARY 并 `sys.exit`；任一清理错误必然 EXIT=1。记录性运行的 44P/4F/EXIT=1 结论不受影响（该轮清理确实 0 错误）。
+6. **2026-09-09 review-fix：processing-start 的 `expect_response` 必须包住 click**（原 Important）：旧实现先 `click("启动处理")`、再挂 `expect_response` 监听，点击触发的 POST 响应可能先于监听就绪而到达并被漏捕获 → 改为把 click 放进 `with page.expect_response(...) as processing_start_info:` 块内触发，消除漏响应竞态（浏览器路径的业务判据不变：非 200 仍失败）。
+7. **2026-09-09 review-fix 验证（未重跑 127 文件完整流程——本改动仅涉 QA 脚本/测试，业务结论不变）**：`py_compile` OK；`--self-test` PASS（模拟一次 cleanup 错误、业务全 PASS 且 required 集完整时，仍因该错误 EXIT=1、SUMMARY 报 “cleanup errors: 1”）；架构测试 8/8（新增 2 条回归不变式：cleanup() 文本序先于 problems 折叠 / SUMMARY / sys.exit；启动处理 click 文本序嵌套在 expect_response 块内）；`pnpm validate` 通过；`git diff --check` clean。
 
 ## 六、风险与建议
 

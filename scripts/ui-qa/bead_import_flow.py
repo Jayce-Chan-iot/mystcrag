@@ -173,6 +173,15 @@ def finish() -> None:
         for name in REQUIRED_RESULTS
         if name not in reported_names and not (SKIP_BROWSER and is_browser_only(name))
     ]
+    # 先执行 cleanup，再冻结 problems、打印 SUMMARY 并决定退出码：清理期间写入的
+    # CLEANUP_ERRORS 必须计入退出码（任一清理错误都应 EXIT=1），SUMMARY 的
+    # “cleanup errors: N” 也必须反映真实清理结果。旧实现先冻结 problems 并打印
+    # SUMMARY（恒为 “cleanup errors: 0”）再调 cleanup()，使清理错误既不改变退出码、
+    # SUMMARY 也失真。
+    try:
+        cleanup()
+    except Exception as exc:
+        CLEANUP_ERRORS.append(f"cleanup raised before summary: {repr(exc)[:200]}")
     problems = list(failed)
     problems.extend((name, False, "missing from the required result set") for name in missing)
     if not SKIP_BROWSER and SKIPPED:
@@ -198,7 +207,6 @@ def finish() -> None:
         print(f"  MISSING: {name}", flush=True)
     for detail in CLEANUP_ERRORS:
         print(f"  CLEANUP ERROR: {detail[:300]}", flush=True)
-    cleanup()
     sys.exit(1 if problems else 0)
 
 
@@ -1827,14 +1835,16 @@ def run_flow(args: argparse.Namespace) -> None:
             else:
                 goto_workflow_step(page, "处理、审核与发布")
                 page.wait_for_selector("text=处理、审核与发布", timeout=60_000)
-                page.get_by_role("button", name="启动处理", exact=True).click()
-                # 点击成功不证明请求生效；捕获真实 BFF 响应，非 200 即失败。
+                # 先挂上 expect_response 监听、再把 click 放进 with 块内触发：若先点击后
+                # 监听，点击立即发出的 POST 响应可能先于监听就绪而到达，真实 BFF 响应将
+                # 被漏捕获（“点击成功”并不证明请求已生效）。点击成功不证明请求生效；
+                # 捕获真实 BFF 响应，非 200 即失败。
                 with page.expect_response(
                     lambda r: r.url.split("?")[0].endswith(f"/sessions/{session_id}/processing/start")
                     and r.request.method == "POST",
                     timeout=30_000,
                 ) as processing_start_info:
-                    pass
+                    page.get_by_role("button", name="启动处理", exact=True).click()
                 if processing_start_info.value.status != 200:
                     raise RuntimeError(
                         f"processing start via UI failed: {processing_start_info.value.status} "
@@ -2564,6 +2574,45 @@ def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_
         )
 
 
+def _selftest_finish_order() -> bool:
+    """仅内建单元自检：验证 finish() 先执行 cleanup、再决定退出码/打印 SUMMARY。
+
+    不伪造任何业务 PASS —— RESULTS 里的 self/pass 只是占位基线，required 集完整、
+    无 FAIL 无 SKIP；唯一会让 EXIT=1 的是 cleanup() 在运行期写入的 CLEANUP_ERRORS。
+    若 finish() 回归为旧序（cleanup 之前就冻结 problems/打印 SUMMARY），本自检将
+    得到 EXIT=0 且 SUMMARY 恒为 “cleanup errors: 0” 而判 FAIL。
+    """
+    import contextlib
+    import io
+
+    globals()["RESULTS"][:] = [("self/pass", True, "unit baseline")]
+    globals()["SKIPPED"][:] = []
+    globals()["SKIP_BROWSER"] = False
+    globals()["PROCS"][:] = []
+    globals()["REQUIRED_RESULTS"][:] = ["self/pass"]
+    globals()["CLEANUP_ERRORS"][:] = []
+    globals()["cleanup"] = lambda: CLEANUP_ERRORS.append("simulated cleanup failure (unit)")
+
+    buf = io.StringIO()
+    code = None
+    try:
+        with contextlib.redirect_stdout(buf):
+            finish()
+    except SystemExit as exc:
+        code = exc.code
+    out = buf.getvalue()
+    ok = (
+        code == 1
+        and "required set complete" in out
+        and "cleanup errors: 1" in out
+        and "CLEANUP ERROR: simulated cleanup failure (unit)" in out
+    )
+    print(f"SELF-TEST finish-order: EXIT={code} -> {'PASS' if ok else 'FAIL'}", flush=True)
+    if not ok:
+        print(out, flush=True)
+    return ok
+
+
 def main() -> None:
     global KEEP_TEMP, SKIP_BROWSER
     parser = argparse.ArgumentParser(description="TASK-ASSET-QA-001 disposable integration gate")
@@ -2573,11 +2622,18 @@ def main() -> None:
     parser.add_argument("--keep", action="store_true", help="保留临时目录与数据库以便复查")
     parser.add_argument("--capture-dir", default=None, help="截图目录（默认临时目录内，不入库）")
     parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="仅内建单元自检：不起服务/不建库/不开浏览器，验证 finish() 先 cleanup 后判定退出码",
+    )
+    parser.add_argument(
         "--source-set",
         default="/Users/chenyanyan/Desktop/珠子图",
         help="只读探测的真实素材目录（绝不复制或修改）",
     )
     args = parser.parse_args()
+    if args.self_test:
+        sys.exit(0 if _selftest_finish_order() else 1)
     # 本脚本只与 127.0.0.1/localhost 上的自管服务通信；本机 shell 常驻外部代理
     # （HTTP_PROXY）会把回环请求劫走并返回 502，这里对脚本进程及其子进程禁用代理。
     os.environ["no_proxy"] = "*"

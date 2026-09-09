@@ -232,3 +232,61 @@ test("Git tracks no raw camera originals and no undocumented generated-resource 
     "the disposable browser gate script must exist beside the other UI QA scripts"
   );
 });
+
+test("finish() runs cleanup before freezing problems/summary so cleanup errors always change the exit code", () => {
+  const qaScript = readRepo("scripts/ui-qa/bead_import_flow.py");
+  const lines = qaScript.split("\n");
+  const finishLine = lines.findIndex((line) => line.trim().startsWith("def finish("));
+  assert.ok(finishLine !== -1, "finish() must exist");
+  const bodyEnd = lines.findIndex(
+    (line, i) => i > finishLine && /^def /.test(line) && !line.startsWith("def finish")
+  );
+  const body = lines.slice(finishLine + 1, bodyEnd === -1 ? undefined : bodyEnd);
+
+  const indexOfLine = (predicate) => body.findIndex(predicate);
+  const cleanupAt = indexOfLine((line) => line.trim() === "cleanup()");
+  const foldAt = indexOfLine((line) => line.includes("enumerate(CLEANUP_ERRORS)"));
+  const summaryAt = indexOfLine((line) => line.includes("SUMMARY:"));
+  const exitAt = indexOfLine((line) => line.includes("sys.exit(1 if problems else 0)"));
+  for (const [label, at] of [
+    ["cleanup() call", cleanupAt],
+    ["cleanup-error fold", foldAt],
+    ["SUMMARY print", summaryAt],
+    ["sys.exit decision", exitAt]
+  ]) {
+    assert.ok(at !== -1, `finish() must contain the ${label}`);
+  }
+  assert.ok(
+    cleanupAt < foldAt && foldAt < summaryAt && summaryAt < exitAt,
+    "cleanup() must run before CLEANUP_ERRORS are folded into problems, and that fold must precede the " +
+      "SUMMARY print and the exit-code decision; otherwise cleanup errors neither change EXIT nor the summary"
+  );
+});
+
+test("the processing-start 启动处理 click fires inside the expect_response window (no missed-response race)", () => {
+  const qaScript = readRepo("scripts/ui-qa/bead_import_flow.py");
+  const lines = qaScript.split("\n");
+
+  const clickLine = lines.findIndex((line) =>
+    line.includes('get_by_role("button", name="启动处理", exact=True).click()')
+  );
+  assert.ok(clickLine !== -1, "the 启动处理 button click must exist");
+  const clickIndent = (lines[clickLine].match(/^\s*/) ?? [""])[0].length;
+
+  // Anchor the window on its unique closer: the expect_response whose header
+  // terminates in `) as processing_start_info:`.
+  const asLine = lines.findIndex((line) => line.includes(") as processing_start_info:"));
+  assert.ok(asLine !== -1, "the processing-start window must close into processing_start_info");
+  const withLine = asLine;
+  const withIndent = (lines[withLine].match(/^\s*/) ?? [""])[0].length;
+  assert.ok(
+    lines.slice(0, withLine).some((line) => line.includes("with page.expect_response(")),
+    "the processing-start window must be opened with page.expect_response"
+  );
+
+  assert.ok(
+    withLine < clickLine && clickIndent > withIndent,
+    "the 启动处理 click must be nested inside the expect_response with-block (armed before the click, " +
+      "deeper than the with) so the BFF response cannot be missed; a click-then-listen ordering is a race"
+  );
+});
