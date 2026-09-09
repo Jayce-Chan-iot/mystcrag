@@ -580,3 +580,62 @@ test("a high-confidence group never leaks into review suggestions", () => {
     );
   }
 });
+
+// ---------------------------------------------------------------------------
+// Real-set convergence (TASK-ASSET-WORKER-003): the GROUP_SESSION completion
+// contract rejects a result that places one source file in two suggested
+// groups, so suggestions and review suggestions together must assign every
+// candidate exactly once.
+// ---------------------------------------------------------------------------
+
+test("suggestions and review suggestions together assign every candidate exactly once", () => {
+  // Real-set shape: jpg-only singletons whose visual signals agree (dHash
+  // distance 6, near-identical histograms) but whose 842 s capture gap exceeds
+  // the 60 s confident window become one low-confidence review group. Their
+  // stems have no ARW counterpart, so nothing pairs them confidently.
+  const nearDHash = "3000000300000003"; // popcount distance 6 from all-zero
+  const histogram = new Array<number>(64).fill(1 / 64);
+  const nearHistogram = histogram.map((value, index) => (index === 0 ? value + 0.01 : value));
+  const inputs = [
+    candidate("jpg-only-a", "dir-a/ZDX01441.JPG", HASH_A, {
+      dHash: "0".repeat(16),
+      histogram,
+      capturedAtMs: 1_000_000
+    }),
+    candidate("jpg-only-b", "dir-a/ZDX01449.JPG", HASH_B, {
+      dHash: nearDHash,
+      histogram: nearHistogram,
+      capturedAtMs: 1_842_000
+    }),
+    candidate("arw-only", "dir-b/ZDX01599.ARW", HASH_D, { kind: "ARW" })
+  ];
+
+  const forward = suggestGroups(inputs);
+  const reverse = suggestGroups([...inputs].reverse());
+  assert.deepEqual(forward, reverse, "reversing the input order must not change any output byte");
+
+  const review = forward.reviewSuggestions.find((item) => item.memberFileIds.length === 2);
+  assert.ok(review, "the visually near jpg-only shots form one review group");
+  assert.deepEqual(review!.memberFileIds, ["jpg-only-a", "jpg-only-b"]);
+  assert.equal(review!.confidence, "low");
+
+  const memberships = new Map<string, number>();
+  for (const group of [...forward.suggestions, ...forward.reviewSuggestions]) {
+    for (const member of group.memberFileIds) {
+      memberships.set(member, (memberships.get(member) ?? 0) + 1);
+    }
+  }
+  for (const input of inputs) {
+    assert.equal(
+      memberships.get(input.clientFileId),
+      1,
+      `${input.clientFileId} must belong to exactly one suggested or review group`
+    );
+  }
+
+  // The ARW-only file is borderline with nothing (no dHash), so it keeps its
+  // own singleton suggestion.
+  const arwGroup = forward.suggestions.find((item) => item.memberFileIds.includes("arw-only"));
+  assert.ok(arwGroup, "the ARW-only file keeps its own suggestion");
+  assert.deepEqual(arwGroup!.memberFileIds, ["arw-only"]);
+});

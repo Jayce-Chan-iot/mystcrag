@@ -446,9 +446,12 @@ export function suggestGroups(
 
   // 3b. Borderline pairs: visually near, but signals did not all agree.
   // Only items that are still singletons participate, so confident groups
-  // never leak into review suggestions. Each review group keeps a spanning
-  // tree of explanation edges — one edge recorded per actual merge — so
-  // evidence grows linearly with the number of files instead of quadratically.
+  // never leak into review suggestions. Joining a review group is an
+  // exclusive assignment: its members surface only as that low-confidence
+  // group, never additionally as singleton suggestions. Each review group
+  // keeps a spanning tree of explanation edges — one edge recorded per actual
+  // merge — so evidence grows linearly with the number of files instead of
+  // quadratically.
   const componentSizes = new Map<number, number>();
   for (let index = 0; index < n; index += 1) {
     const root = find(index);
@@ -511,9 +514,14 @@ export function suggestGroups(
     }
   }
 
-  // Assemble confident components as suggestions.
+  // Assemble confident components as suggestions. A candidate that joined a
+  // review group is already assigned there and must not also surface as a
+  // singleton suggestion: the GROUP_SESSION consumer contract requires every
+  // source file to belong to exactly one group across both lists, so an
+  // overlapping membership would reject the whole session result.
   const suggestionsByRoot = new Map<number, string[]>();
   for (let index = 0; index < sorted.length; index += 1) {
+    if (reviewParent.has(index)) continue;
     const root = find(index);
     const members = suggestionsByRoot.get(root) ?? [];
     members.push(sorted[index]!.clientFileId);
