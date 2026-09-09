@@ -4,8 +4,8 @@
 - 分支：`task/asset-qa-001-integration-gate`（worktree `.worktrees/asset-qa-001`，基线 `6e79b66`）
 - 执行：DeepSeek-V4-Flash（产品负责人 2026-09-09 授权接管最终 QA 修复，接替 GLM-5.3-Flash）
 - 终审：GLM-5.3（2026-09-09 产品负责人授权接管最终审查；独立复核候选 `ae24f3d` 的九项重点核验，未发现 QA 门禁自身 Critical 缺陷；修复本记录沿用的上一轮运行过期标识 8 处，见“五、17”）
-- 日期：2026-09-09（本记录；此前 2026-09-08 的 35 PASS 记录与 2026-09-09 的 45 PASS / 4 FAIL / 1 MISSING 记录均已被本轮真实浏览器结果**取代 superseded**）
-- 结论：**BLOCKED —— review gate failed（47 PASS / 4 FAIL / 0 SKIP / 0 MISSING，退出码 1），清理 0 错误；review 未通过**。
+- 日期：2026-09-09 首次全真门禁；**2026-09-10 复跑（main@886f90f 三项 runtime 修复合入后）见“七”，其结论取代 2026-09-09 的 47 PASS / 4 FAIL / 0 SKIP / 0 MISSING 记录**（再此前 2026-09-08 的 35 PASS 记录与 2026-09-09 早间的 45 PASS / 4 FAIL / 1 MISSING 记录亦均已被取代 superseded）
+- 结论：**BLOCKED —— 复跑 review gate failed（45 PASS / 1 FAIL / 0 SKIP / 6 MISSING，required set INCOMPLETE，退出码 1），清理 0 错误；review 未通过**。原 FAIL ① 的目录可见半段已解除（FE-003 生效），但最终用户 `/crystal-library` 渲染暴露新 runtime 缺陷 ④；②③ 修复本轮**未获验证**（脚本 fatal 中断致 sources 段 4 项 MISSING）。
 
 发布路径已升级为**真实浏览器驱动**（合成 OIDC 拓扑 + 真实最终用户登录回环 + 目录选择经真实
 `#bead-import-folder-input` 目录选择产生 manifest 与 PUT，全流程 UI）。目录可见性按产品负责人既定的
@@ -183,3 +183,64 @@ RUN_EXIT=1
 - 运行期间若脚本被强杀（kill -9），进程组兜底不会执行，可能留下孤儿 next-server 持有项目锁；下次运行前需手动清理。
 - 记录性运行证据：`/tmp/qa001-final.log`（完整输出，RUN_EXIT=1）；`pnpm validate`：`/tmp/qa001-validate.log`（如需）。截图与归档均在一次性临时目录内、随清理删除，未入库（治理要求）。
 - 本任务严格未修改 runtime 产品代码、契约、Prisma、根配置与 lockfile；改动限于 `scripts/ui-qa/bead_import_flow.py`、`tests/bead-asset-import-architecture.test.mjs`、本文档与 TASK_REGISTRY 本任务行。
+
+## 七、2026-09-10 复跑记录（main@886f90f 基线，取代上文 47/4/0/0 结果）
+
+### 7.1 基线与窄测
+
+- 基线：`main@886f90f`（TASK-ASSET-FE-003 / FE-004 / WORKER-003 均 DONE）经 merge 合入本分支，合并提交 `3e0edd3`（registry 冲突保留 QA 详细行 + IN_PROGRESS 与 main 四个新任务行，丢弃 main 侧遗留 QWEN 占位重复行）。
+- 窄测（全部先于门禁通过）：`py_compile` OK；`--self-test` 4/4 PASS（exit 0）；`node --test tests/bead-asset-import-architecture.test.mjs` 19/19；全套 `node --test tests/*.test.mjs` 39/39；`git diff --check` clean。
+
+### 7.2 门禁命令（完整门禁仅运行一次）
+
+```bash
+env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -u scripts/ui-qa/bead_import_flow.py
+```
+
+权威源集 `/Users/chenyanyan/Desktop/珠子图`（运行前只读复核 127 个 JPG/ARW 文件）；无 `--keep`。
+
+### 7.3 结果与 run identifiers
+
+**SUMMARY: 45 passed, 1 failed, 0 skipped; required set INCOMPLETE; cleanup errors: 0 — EXIT=1（FAIL，review 未通过）。**
+
+- 一次性库：`mystcrag_qa_flow_test_1788981122_e2b647`（运行后 DROP 并复核 absent，见 7.7）
+- OIDC：provider tls `:49356` / admin `:49357` / relay `:49358`；backend `:4100`；next dev `:49350`；h2 代理 `:49407`
+- 会话 `cmtuh6qm…`；crystalDraftId `cmtuh7622000…`；重启 PID：backend 5406→5620、worker 5407→5621
+- 发布：`publishedAssetKeys=['approved:13f65529a31493ceb09dc87a5bc66a22c7b6fdfcc7daf0c39727c760cf0c0ae8']`，inventorySnapshotId 有效
+- 证据：`/tmp/qa001-rerun-886f90f.log`（完整输出）
+
+FAILED（1）：
+
+| 检查 | 详情 |
+|---|---|
+| flow/publish-public | `TimeoutError: Page.wait_for_selector: Timeout 60000ms exceeded — waiting for locator("text=QA水晶A")`（最终用户 OIDC 登录后访问 `/crystal-library`，60 秒未见已发布商品；根因 ④ 见 7.4） |
+
+MISSING（6，全部因该 FAIL 的 fatal 中断，未运行）：`browser/approved-product-renders`、`mobile/status-reviews-viewport`、`sources/discovery`、`sources/proxy-large-body-cap`、`sources/import-roundtrip`、`sources/grouping-pairs`。
+
+### 7.4 原 4 FAIL 的验证状态
+
+| 原 FAIL | 状态 | 证据 |
+|---|---|---|
+| ① 发布缺 `modelAssetKey`（目录不可见） | **半解除**：`flow/published-product-public` FAIL→PASS（FE-003 生效：真实浏览器发布载荷携带 approved key，认证最终用户 `/api/catalog/materials?currency=CNY` 含 `sku=QA-FLOW-008`，为该检查首次真实通过）；但最终用户 `/crystal-library` **页面**仍渲染不出该商品 → 新 FAIL `flow/publish-public`（根因 ④） | `/tmp/qa001-rerun-886f90f.log` 第 52-53 行；根因 ④ 见 7.5 |
+| ② 62 个 ~21MB ARW 经管理代理 10MiB 截断（FE-004 修复） | **本轮未验证**：`sources/proxy-large-body-cap` MISSING（fatal 中断于其前） | 日志 MISSING 清单 |
+| ③ 127 文件 GROUP_SESSION 不收敛（WORKER-003 修复） | **本轮未验证**：`sources/grouping-pairs` MISSING | 同上 |
+| ④ 总结果无 FAIL/SKIP/MISSING | **未达成**：1 FAIL / 6 MISSING | SUMMARY 行 |
+
+### 7.5 新根因 ④（本轮唯一 FAIL，定位到层/请求/状态）
+
+- **层**：前端最终用户 `/crystal-library` 页面 —— `apps/frontend/src/features/library/components/crystal-library-page.tsx` 第 126-155 行。
+- **请求**：页面以 `Promise.all([designApi.get("design-diy-private"), designApi.materials("CNY")])` 加载；`LIBRARY_DESIGN_ID="design-diy-private"` 为硬编码（第 37 行），该设计仅存在于 `packages/database/prisma/seed.ts:36`。QA 门禁使用全新一次性库（只跑迁移、不跑 seed），QA 脚本也不创建该设计，故 `GET /api/design/design-diy-private` 由 backend 返回 `NOT_FOUND`（404，`apps/backend/src/modules/design/design.controller.ts`）。
+- **状态/后果**：该 404 使 `Promise.all` 整体 reject → catch 只设置错误 notice → `materials` 状态保持 `[]` → 页面永不渲染任何目录商品 → `QA水晶A` 不可见 → 脚本 `wait_for_selector` 60s 超时。目录 API 本身已含该商品（7.4 ①），缺陷在页面把目录渲染耦合于一个固定设计的存在。
+- **修复归属**：前端任务（crystal-library 页面：目录渲染不得因固定 `LIBRARY_DESIGN_ID` 缺失而整体失败，或 seed/初始化该设计）。本轮未修改任何 runtime 代码。
+
+### 7.6 QA 脚本自身缺陷（本轮暴露，未修，致 6 MISSING）
+
+`scripts/ui-qa/bead_import_flow.py` 第 2915 行 `wait_for_selector("text=QA水晶A", timeout=60_000)` 在 `published_visible=True` 分支超时抛 `TimeoutError`，被第 2956 行 `fatal("flow/publish-public", ...)` 捕获后**中断整个后半段**（mobile 段与 sources 段全部 MISSING）——与第 2900-2902 行注释“绝不 raise 把后续移动端/真实素材检查拖死——保证必需结果集无 MISSING”直接矛盾。上一轮因 `published_visible=False` 走 else 分支（仅 `wait_for_timeout(1500)`）而未触发。**后果：②（FE-004）与 ③（WORKER-003）的修复在本轮完全没有被门禁验证。** 修复归属：下一轮 QA 任务先将该等待改为如实 FAIL-不中断（与 approved-product-renders 同样的结构），再单次复跑完整门禁。本轮未修改脚本、未重跑。
+
+### 7.7 清理证明（本轮自建物全部不存在，源照片未触碰）
+
+- 一次性库 `mystcrag_qa_flow_test_1788981122_e2b647`：脚本 `DROP DATABASE ... WITH (FORCE)` 后，`psql -h /tmp` 的 `pg_database` 查询计数 **0**（不存在）。
+- 临时目录 `/tmp/mystcrag-qa-flow-*`：无残留（脚本 `removed temporary directories` + 复核 `ls` 无匹配）。
+- 进程/端口：backend `:4100` 无监听（lsof 0 行）；QA 脚本与 asset-worker 进程 0 个；日志 CLEANUP 段逐组记录 7 个进程组全部 stopped。
+- 源照片 `/Users/chenyanyan/Desktop/珠子图`：本轮 sources 段未运行；且脚本对源集全程只读（discovery/stat/hash/read 隔离子进程，无复制/修改/入库）。
+- 本轮改动：仅本文档与 TASK_REGISTRY 本任务行（状态 IN_PROGRESS→BLOCKED）；runtime、QA 脚本、契约、Prisma、根配置、lockfile 均未改动；无 push/deploy。
