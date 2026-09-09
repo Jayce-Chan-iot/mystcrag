@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   ASSET_IMPORT_TRANSPORT_STATUS_BY_CODE,
+  ASSET_MANIFEST_LIMITS,
   type AssetImportTransportErrorCode
 } from "@mystcrag/design-contract";
 import { NextResponse, type NextRequest } from "next/server";
@@ -18,6 +19,10 @@ import {
  * and never sends its own cookies upstream. Uploads are streamed straight from
  * the incoming request body to the Backend and Backend responses are streamed
  * straight back, so a 256 MiB photograph is never buffered in this process.
+ * The declared Content-Length is validated against the manifest limit before
+ * any Backend call, and the streamed body is cut off if it ever grows beyond
+ * that limit, so neither the framework-level clone cap nor this handler can
+ * be bypassed by a lying or absent Content-Length.
  */
 
 export const ASSET_ADMIN_BACKEND_PREFIX = "/api/admin/bead-import";
@@ -27,6 +32,10 @@ const ALLOWED_METHODS = new Set(["GET", "POST", "PATCH", "PUT"]);
 const SAFE_PATH_SEGMENT = /^[A-Za-z0-9._~-]+$/;
 const BODY_HEADER_ALLOWLIST = ["content-type", "content-length", "x-content-sha256"] as const;
 const RESPONSE_HEADER_ALLOWLIST = ["content-type", "content-length", "etag", "cache-control"] as const;
+/** Hard upload ceiling shared with the Backend manifest contract (256 MiB). */
+const MAX_UPLOAD_BYTES = ASSET_MANIFEST_LIMITS.maxFileBytes;
+/** Plain digit runs without signs, exponents or leading zeros, capped below 2^53. */
+const DECLARED_CONTENT_LENGTH_PATTERN = /^(0|[1-9][0-9]{0,15})$/;
 
 export type BeadImportProxyFetcher = (
   url: string,
@@ -72,6 +81,39 @@ function forwardedSearch(request: NextRequest): string {
   return search === "" ? "" : `?${search}`;
 }
 
+/**
+ * Streams the source through unchanged while counting transferred bytes; past
+ * `limitBytes` the stream errors and the source is cancelled. Cancellation
+ * from the consumer propagates back to the source, and nothing is buffered:
+ * each chunk is handed to the consumer before the next one is pulled.
+ */
+function boundedUploadStream(
+  source: ReadableStream<Uint8Array>,
+  limitBytes: number
+): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  let transferred = 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      transferred += value.byteLength;
+      if (transferred > limitBytes) {
+        void reader.cancel().catch(() => undefined);
+        controller.error(new RangeError("The uploaded body exceeded its allowed size."));
+        return;
+      }
+      controller.enqueue(value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    }
+  });
+}
+
 export async function handleBeadImportProxyRequest(
   request: NextRequest,
   path: string[],
@@ -104,6 +146,7 @@ export async function handleBeadImportProxyRequest(
   const carriesBody = method !== "GET";
   const headers = new Headers();
   headers.set("x-admin-key", adminKey);
+  let declaredBodyBytes: number | null = null;
   if (carriesBody) {
     for (const name of BODY_HEADER_ALLOWLIST) {
       const value = request.headers.get(name);
@@ -111,7 +154,27 @@ export async function handleBeadImportProxyRequest(
         headers.set(name, value);
       }
     }
+    // The declared size is checked before any Backend call: an oversize or
+    // malformed Content-Length must never open an upstream connection. An
+    // absent declaration (a streamed body) is bounded at transfer time instead.
+    const declared = request.headers.get("content-length");
+    if (declared !== null) {
+      if (!DECLARED_CONTENT_LENGTH_PATTERN.test(declared)) {
+        return proxyError("VALIDATION_ERROR", "The declared upload size is not a valid Content-Length.");
+      }
+      const declaredNumber = Number(declared);
+      if (declaredNumber > MAX_UPLOAD_BYTES) {
+        return proxyError("PAYLOAD_TOO_LARGE", "The uploaded file exceeds the bead import size limit.");
+      }
+      declaredBodyBytes = declaredNumber;
+    }
   }
+
+  // With a declaration the stream must match it exactly; without one the
+  // manifest limit still caps the transfer, so no upload path is unbounded.
+  const bodyLimitBytes = declaredBodyBytes ?? MAX_UPLOAD_BYTES;
+  const uploadBody =
+    carriesBody && request.body !== null ? boundedUploadStream(request.body, bodyLimitBytes) : null;
 
   const fetcher: BeadImportProxyFetcher = deps.fetcher ?? ((url, init) => fetch(url, init as RequestInit));
   let backendResponse: Response;
@@ -119,9 +182,12 @@ export async function handleBeadImportProxyRequest(
     backendResponse = await fetcher(`${origin}${ASSET_ADMIN_BACKEND_PREFIX}/${path.join("/")}${forwardedSearch(request)}`, {
       method,
       headers,
-      body: carriesBody ? request.body : null,
+      body: uploadBody,
       duplex: "half",
-      cache: "no-store"
+      cache: "no-store",
+      // A client disconnect aborts the upstream fetch immediately, even while
+      // the body is still streaming.
+      signal: request.signal
     });
   } catch {
     // The transport error is deliberately dropped: it can name the Backend origin.

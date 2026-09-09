@@ -665,6 +665,92 @@ test("handleGroupSession returns conservative suggestions with evidence and neve
   }
 });
 
+test("handleGroupSession surfaces visually near shots with a large capture gap as one review group, assigned exactly once", async () => {
+  const { store, cleanup } = makeStore();
+  try {
+    // Real-set shape behind TASK-ASSET-WORKER-003: two JPEGs of the same bead
+    // whose visual signals agree (small dHash distance, near-identical
+    // histogram) but whose 842 s capture gap exceeds the 60 s confident
+    // window. They may surface only as one low-confidence review group; before
+    // the fix the same files ALSO surfaced as singleton suggestions, so each
+    // file belonged to two groups, CompleteGroupSessionJobResultSchema
+    // rejected the result, every retry reproduced the contradiction, and the
+    // session ended PARTIALLY_FAILED with zero groups.
+    const nearA = await renderJpeg(beadSceneSvg("#3cb371"));
+    const nearB = await renderJpeg(`<svg xmlns="http://www.w3.org/2000/svg" width="${SOURCE_PX}" height="${SOURCE_PX}">
+      <rect width="${SOURCE_PX}" height="${SOURCE_PX}" fill="#f0f0f0"/>
+      <circle cx="402" cy="402" r="260" fill="#3cb371"/>
+      <circle cx="332" cy="332" r="60" fill="#ffffff" opacity="0.85"/>
+    </svg>`);
+    const other = await renderJpeg(beadSceneSvg("#8a2be2"));
+
+    const entries = [
+      { fileId: "file-near-a", relativePath: "imports/burst/ZDX01441.JPG", bytes: nearA, lastModifiedMs: 1_750_000_000_000 },
+      { fileId: "file-near-b", relativePath: "imports/burst/ZDX01449.JPG", bytes: nearB, lastModifiedMs: 1_750_842_000_000 },
+      { fileId: "file-other", relativePath: "imports/other/pendant.jpg", bytes: other, lastModifiedMs: 1_750_400_000_000 }
+    ];
+    const files = [];
+    for (const entry of entries) {
+      const sha256 = sha256OfBytes(entry.bytes);
+      const archiveKey = (
+        await store.putOriginal({ sessionId: SESSION, bytes: entry.bytes, sha256, extension: "jpg" })
+      ).archiveKey;
+      files.push({
+        ...GROUP_SESSION_FILE_BASE,
+        kind: "JPEG" as const,
+        fileId: entry.fileId,
+        clientFileId: `cf-${entry.fileId}`,
+        relativePath: entry.relativePath,
+        sha256,
+        archiveKey,
+        byteSize: entry.bytes.byteLength,
+        lastModifiedMs: entry.lastModifiedMs
+      });
+    }
+    assert.notEqual(files[0]!.sha256, files[1]!.sha256, "the near pair must not be exact duplicates");
+
+    const result = await handleGroupSession(store, { files });
+
+    assert.equal(result.kind, "GROUP_SESSION");
+    const memberships = new Map<string, number>();
+    for (const group of result.groups) {
+      assert.ok(
+        group.groupId.startsWith("sg-") || group.groupId.startsWith("rv-"),
+        "group ids follow the suggestion/review convention"
+      );
+      for (const fileId of group.memberFileIds) {
+        memberships.set(fileId, (memberships.get(fileId) ?? 0) + 1);
+      }
+    }
+    for (const file of files) {
+      assert.equal(
+        memberships.get(file.fileId),
+        1,
+        `${file.fileId} must belong to exactly one suggested group (the backend contract rejects overlaps)`
+      );
+    }
+
+    const review = result.groups.find(
+      (group) => group.memberFileIds.includes("file-near-a") && group.memberFileIds.includes("file-near-b")
+    );
+    assert.ok(review, "the visually near shots form one group");
+    assert.ok(review!.groupId.startsWith("rv-"), "the near shots surface as a review suggestion, never an auto-merge");
+    assert.deepEqual(review!.memberFileIds.slice().sort(), ["file-near-a", "file-near-b"]);
+    const evidence = review!.similarityEvidence as Array<{ confidence: string }>;
+    assert.ok(
+      evidence.length > 0 && evidence.every((item) => item.confidence === "low"),
+      "the review group carries low-confidence evidence for the human reviewer"
+    );
+
+    const otherGroup = result.groups.find((group) => group.memberFileIds.includes("file-other"));
+    assert.ok(otherGroup, "the distinct bead keeps its own suggestion");
+    assert.deepEqual(otherGroup!.memberFileIds, ["file-other"]);
+    assert.ok(otherGroup!.groupId.startsWith("sg-"));
+  } finally {
+    cleanup();
+  }
+});
+
 test("handleProcessGroup produces a MAIN output with QC evidence and lands both variants in the archive", async () => {
   const { store, cleanup } = makeStore();
   try {

@@ -493,8 +493,10 @@ export function createProcessingLoader(deps: ProcessingLoaderDeps): ProcessingLo
   /**
    * Publication assembles its body exclusively from the authoritative session:
    * every business field comes from the Backend's productDraft view and the
-   * texture key is the approved key the Backend wrote on the current APPROVED
-   * version. Nothing here derives, assembles or guesses an asset key. The two
+   * texture and model keys are the approved key the Backend wrote on the
+   * current APPROVED version — this 2D processed bead asset uses the same
+   * approved key for both bindings so the published catalog row survives a
+   * null-model filter. Nothing here derives, assembles or guesses an asset key. The two
    * affirmative grants are passed through verbatim from the saved draft after
    * being checked to be `true`, and the name / promotion confirmations are the
    * operator's own explicit choices — an unchecked box means zero network.
@@ -549,6 +551,7 @@ export function createProcessingLoader(deps: ProcessingLoaderDeps): ProcessingLo
       qualityStatement: draft.qualityStatement,
       qualitySource: draft.qualitySource,
       textureAssetKey: approved,
+      modelAssetKey: approved,
       currency: draft.currency,
       unitPriceMinor: draft.unitPriceMinor,
       costMinor: draft.costMinor,

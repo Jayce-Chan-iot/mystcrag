@@ -28,7 +28,7 @@ TASK-ASSET-WORKER-001 的模块接口、存储布局、配置与交付记录。�
 | `hash.ts` | `sha256OfBytes`, `sha256OfFile`, `FileDigest` |
 | `pairing.ts` | `pairRawAndJpeg(files): PairingOutcome`(跨目录同 stem RAW/JPG 配对) |
 | `storage.ts` | `ArchiveStore`(`putOriginal`/`putProcessed`/`putStaging`/`putStagingStream`/`removeStaging`/`read`/`verifiedRead`/`listSessionFiles`,原子 link+unlink、防符号链接越界、同 key 不同内容拒绝;流式暂存逐块限长并同步计算 SHA-256;仅 staging 可删除,raw/processed 不可变) |
-| `grouping.ts` | `computeDHash`, `computeColorHistogram`, `hammingDistance`, `histogramDistance`, `suggestGroups`, `GROUPING_THRESHOLDS`。候选必须携带 `kind`;同 stem 强配对按**原始候选数量**计数:仅"exactly one original ARW candidate and one original JPEG candidate"(恰好一个原始 ARW 候选 + 恰好一个原始 JPEG 候选,1+1)直接高置信配对,精确重复折叠后的组件数不参与判定(两个完全相同的 ARW 折叠成一个组件后仍按 2 个 ARW 计,不得借 stem 边并入 JPEG),2 ARW+1 JPEG、1+2、2+2 等歧义组合不凭 stem 合并;歧义同 stem 的跨类型对同样不得经**视觉高置信阶段**合并——即使 dHash/histogram/capturedAtMs 完全相同,JPEG 也不得并入重复 RAW 组件(重复 ARW 保留自身 duplicate group,JPEG 保持独立或仅在双方均为独立单例时进入低置信度复核);不同 stem 的真实连拍仍按视觉+时间阈值正常合并。两张 JPEG/PNG/WebP 同 stem 不得仅凭文件名高置信度合并。所有影响输出、成员、代表项与 evidence 顺序的排序使用 UTF-16 代码单元比较器(不依赖系统 locale,`é` 与 `e\u0301` 等在 localeCompare 下可能相等的 ID 顺序固定),建议与证据完全确定,与输入顺序无关 |
+| `grouping.ts` | `computeDHash`, `computeColorHistogram`, `hammingDistance`, `histogramDistance`, `suggestGroups`, `GROUPING_THRESHOLDS`。候选必须携带 `kind`;同 stem 强配对按**原始候选数量**计数:仅"exactly one original ARW candidate and one original JPEG candidate"(恰好一个原始 ARW 候选 + 恰好一个原始 JPEG 候选,1+1)直接高置信配对,精确重复折叠后的组件数不参与判定(两个完全相同的 ARW 折叠成一个组件后仍按 2 个 ARW 计,不得借 stem 边并入 JPEG),2 ARW+1 JPEG、1+2、2+2 等歧义组合不凭 stem 合并;歧义同 stem 的跨类型对同样不得经**视觉高置信阶段**合并——即使 dHash/histogram/capturedAtMs 完全相同,JPEG 也不得并入重复 RAW 组件(重复 ARW 保留自身 duplicate group,JPEG 保持独立或仅在双方均为独立单例时进入低置信度复核);不同 stem 的真实连拍仍按视觉+时间阈值正常合并。两张 JPEG/PNG/WebP 同 stem 不得仅凭文件名高置信度合并。所有影响输出、成员、代表项与 evidence 顺序的排序使用 UTF-16 代码单元比较器(不依赖系统 locale,`é` 与 `e\u0301` 等在 localeCompare 下可能相等的 ID 顺序固定),建议与证据完全确定,与输入顺序无关。进入低置信度复核组的候选为**排他分配**:只出现在该复核组,不再额外产出单例高置信度建议——suggestions 与 reviewSuggestions 合计把每个候选恰好分配一次,与 GROUP_SESSION 完成契约的唯一归属约束一致 |
 | `image-processor.ts` | `processBeadImage`(保真扣图,512/256 透明 WebP,`PROCESSOR_VERSION = "faithful-v1"`,不放大主体) |
 | `quality.ts` | `runQualityChecks`(11 项数值 QC,失败不静默通过) |
 
@@ -87,7 +87,7 @@ staging 清理与恢复顺序(§6):删除只发生在完成提交成功之后;�
 { "files": [{ "fileId", "clientFileId", "relativePath", "sha256", "archiveKey", "byteSize", "lastModifiedMs", "kind" }] }
 ```
 
-流程:逐个 `verifiedRead` 原片 → dHash + 颜色直方图 → `suggestGroups`(保守阈值)→ `completeJob({ kind, groups: [...] })`,groups 含成员、建议主图与相似度证据。数据库在同一完成事务中核对结果完整覆盖当前唯一归档文件,再物化 `bead_image_groups` 与文件归属,会话进入 `NEEDS_REVIEW`;Worker 自身不执行人工命名或确认。
+流程:逐个 `verifiedRead` 原片 → dHash + 颜色直方图 → `suggestGroups`(保守阈值)→ `completeJob({ kind, groups: [...] })`,groups 含成员、建议主图与相似度证据。建议(`sg-*`)与低置信度复核建议(`rv-*`)合计把每个归档文件**恰好分配到一组**:进入复核组的文件不再作为单例建议重复出现——数据库完成契约以唯一归属 + 完整覆盖双重核对,任何重叠都会使整个结果被拒。数据库在同一完成事务中核对结果完整覆盖当前唯一归档文件,再物化 `bead_image_groups` 与文件归属,会话进入 `NEEDS_REVIEW`;Worker 自身不执行人工命名或确认。
 
 ### 5.3 PROCESS_GROUP
 
@@ -145,7 +145,7 @@ staging 清理与恢复顺序(§6):删除只发生在完成提交成功之后;�
 | `histogramReview` | 0.35(L1) | 复核上限,超过即不视为相似 |
 | `captureGapConfidentMs` | 60 000 ms | 连拍窗口:同一珠子的连续拍摄通常在 1 分钟内 |
 
-高置信度合并要求视觉信号与拍摄时间**同时**满足;只有单项满足的进入低置信度复核建议。同 stem 强配对仅限**原始候选**恰好一个 ARW + 恰好一个 JPEG(exactly one original ARW candidate and one original JPEG candidate,原始+机内 JPEG 的 1+1;精确重复折叠后的组件数不参与判定);ARW/JPEG 任一侧出现多候选(如跨目录重复相机文件名的 2+1、1+2、2+2)即视为歧义,不凭 stem 自动合并,**也不得经视觉高置信阶段合并**——即使 dHash/histogram/拍摄时间完全相同,JPEG 也不得并入重复 RAW 组件(重复 ARW 保留自身 duplicate group,JPEG 保持独立,仅在双方均为独立单例时可进入低置信度复核证据),绝不静默择一。不同 stem 的真实连拍仍按上述视觉+时间阈值正常合并。两张 JPEG/PNG/WebP 即使同名也不凭文件名合并,必须走上述视觉+时间阈值。
+高置信度合并要求视觉信号与拍摄时间**同时**满足;只有单项满足的进入低置信度复核建议。同 stem 强配对仅限**原始候选**恰好一个 ARW + 一个 JPEG(exactly one original ARW candidate and one original JPEG candidate,原始+机内 JPEG 的 1+1;精确重复折叠后的组件数不参与判定);ARW/JPEG 任一侧出现多候选(如跨目录重复相机文件名的 2+1、1+2、2+2)即视为歧义,不凭 stem 自动合并,**也不得经视觉高置信阶段合并**——即使 dHash/histogram/拍摄时间完全相同,JPEG 也不得并入重复 RAW 组件(重复 ARW 保留自身 duplicate group,JPEG 保持独立,仅在双方均为独立单例时可进入低置信度复核证据),绝不静默择一。不同 stem 的真实连拍仍按上述视觉+时间阈值正常合并。两张 JPEG/PNG/WebP 即使同名也不凭文件名合并,必须走上述视觉+时间阈值。进入低置信度复核组的候选为**排他分配**:仅出现在该复核组,不再额外产出单例高置信度建议;suggestions 与 reviewSuggestions 合计把每个候选恰好分配一次。GROUP_SESSION 完成契约同时要求"每个源文件只能属于一个建议组"且完整覆盖全部归档文件——违反任一条,整个结果被拒、重试确定性复现同一矛盾、会话停在 `PARTIALLY_FAILED` 且 0 个物化分组(2026-09-10 TASK-ASSET-WORKER-003 修复的真实集非收敛,§10.8)。
 
 ### 8.2 QC 阈值(`QC_THRESHOLDS`,`quality.ts`)
 
@@ -426,6 +426,56 @@ Codex 接管后新增的红灯证据(旧实现 + 新测试,随后均已修复):
 G5(§7)仍是 TASK-ASSET-BE-001 的接口责任,本任务没有越界实现人工批准、发布或 HTTP API。
 
 本地集成记录:2026-09-05 用户选择本地合并;确认 `main` 与 `origin/main` 均为 `5d29f17`,且 `main` 是本任务分支祖先后,将 `main` 快进至 `b23f991`。合并态再次执行 `pnpm install --frozen-lockfile && pnpm validate`,冻结安装通过,lint/typecheck/test/build 各 17/17、架构测试 20/20。TASK-ASSET-WORKER-001 因此转为 DONE;本地 `main` 尚未推送。
+
+### 2026-09-10 真实集分组收敛修复(TASK-ASSET-WORKER-003,基线 `f7ee6fb`,分支 `task/asset-worker-003-real-set-grouping-convergence`,worktree `.worktrees/asset-worker-003`)
+
+TASK-ASSET-QA-001 在权威 127 文件真实源集上复现 `sources/grouping-pairs` 停在 `state=PARTIALLY_FAILED groups=0`(240 s 有界等待后)。本任务只读使用 QA 证据与真实集元数据做诊断,不改动 QA 证据、不复制、不提交任何照片。
+
+根因隔离(只读诊断脚本复算 127 文件特征并模拟完成契约核对):
+
+- 三个 jpg-only 单例(`1/ZDX01441.JPG`、`1/ZDX01449.JPG`、`1/ZDX01455.JPG`,两两 dHash 距离 6、直方图 L1 距离 0.0117、拍摄间隔 842 s 超出 60 s 置信窗口)按 §8.1 规则形成**一个**低置信度复核组,但 `suggestGroups` 又同时把它们各自作为单例建议输出;`handleGroupSession` 把两类建议合并进同一 `groups` 数组,每个文件因此属于两个组。
+- `CompleteGroupSessionJobResultSchema` 以"A source file may belong to only one suggested group"拒绝结果;运行时按可重试 `COMPLETION_REJECTED` 记账,但每次重试都确定性复现同一矛盾,重试耗尽后任务终态 FAILED,会话转 `PARTIALLY_FAILED`、0 个物化分组。性能与阈值均非肇因:`suggestGroups` 4 ms 完成、stems 0 分裂、覆盖完整——唯一缺陷是重叠归属。
+
+修复(仅 `packages/asset-pipeline/src/grouping.ts`):组装高置信建议时跳过已加入复核组的候选(排他分配,§8.1);复核组成员只出现在自己的低置信度复核组。保守阈值、人工主审、租约/幂等、重试与失败记账、路径/档案守卫全部不变。
+
+红优先回归(合成元数据/合成 JPEG 字节,从未复制或提交源照片):
+
+- `grouping.test.ts`:"suggestions and review suggestions together assign every candidate exactly once"——视觉相近但间隔 842 s 的 jpg-only 对形成唯一低置信复核组,断言每个候选合计恰好属于一组、ARW-only 保留单例建议、正反输入顺序结果 `deepEqual`。修复前红(`jpg-only-a` 属于 2 组),修复后绿。
+- `jobs.test.ts`:"handleGroupSession surfaces visually near shots with a large capture gap as one review group, assigned exactly once"——经真实归档 JPEG 字节走完整 `handleGroupSession` 路径,断言 `rv-*` 复核组唯一归属、低置信 evidence、`sg-*` 单例保留、组 id 约定。修复前红,修复后绿。
+
+真实集只读验证:127 文件,`suggestGroups` 4 ms,63 个建议(61 多成员)+ 1 个三成员复核组(ZDX01441/449/455),重叠归属 0、未覆盖 0、stems 分裂 0——结果同时满足唯一归属与完整覆盖约束,会话可达确定性 `NEEDS_REVIEW` 终态。
+
+本阶段真实执行记录:
+
+| 检查 | 结果 |
+| --- | --- |
+| `pnpm --filter @mystcrag/asset-pipeline test` | 143/143 通过(含新增红转绿回归),0 fail |
+| `pnpm --filter @mystcrag/asset-worker test`(无真库环境变量) | 113 tests:112 pass + 1 个按设计跳过的真库联调用例,0 fail |
+| Worker 真库联调(全新空库 `mystcrag_worker003_test`,15 个迁移全部应用后执行;初版误记 14 个迁移/123,独立复核更正) | 124/124 通过,0 fail,0 skipped |
+| 架构测试 `node --test tests/architecture.test.mjs` | 15/15 通过 |
+| `pnpm validate` | 通过:17/17 任务成功(前端 production build 成功) |
+| `git diff --check` | 干净 |
+| 变更边界 | 仅 `packages/asset-pipeline/src/grouping.ts`、两个测试文件、`docs/ASSET_PIPELINE.md` 与 TASK_REGISTRY 精确行;无数据库/Prisma/共享 Contract/后端/前端改动;无阈值放宽;无照片或二进制;未推送、未合并 |
+
+### 2026-09-10 QA 规模收敛验证(TASK-ASSET-WORKER-003 follow-up,状态转 REVIEW)
+
+第一轮交付(`7bd0403`)后,依据 QA 证据 `sources/discovery` 的事实(127 文件 = 65 JPG + 62 ARW、26 个顶级目录、66 stems、1 个跨目录 stem `ZDX01535`、4 个 jpg-only stem、1 个 arw-only stem)补做 QA 规模端到端验证。
+
+真实集 ground truth(只读复算,修复后):61 个 stem 配对组(含跨目录 `21/ZDX01535.JPG` + `22/ZDX01535.ARW` 的 1+1 配对)、3 张近距 jpg-only(`ZDX01441/449/455`)合成 1 个低置信复核组、第 4 个 jpg-only(`ZDX01541`)与 arw-only(`ZDX01531`)各留单例建议——合计 64 组,重叠归属 0、未覆盖 0。
+
+QA 规模回归(`apps/asset-worker/tests/worker.integration.test.ts` 新增单个顶层用例,合成字节复刻源集形状,永不复制源照片):61 对同 stem ARW+JPG(相邻对拍摄间隔 100 s,排除跨对置信合并;其一为跨目录 stem)+ 3 张近距 jpg-only(拍摄间隔 842 s/2230 s,复刻真实证据)+ 1 张独立 jpg-only + 1 个 arw-only,共 127 文件(65 JPEG + 62 ARW、66 stems)经真实归档、`startGrouping` 与真实 Worker 对全新 PostgreSQL 执行。红优先:临时撤销 `grouping.ts` 修复后,该用例精确复现 QA 症状(`job=FAILED session=PARTIALLY_FAILED groups=0`,重试耗尽终态);恢复修复后 3.0 s 收敛为 `NEEDS_REVIEW`、64 组物化、127 文件恰好各属一组(61 stem 配对 + 1 复核组 + 2 单例),断言远低于 240 s QA 窗口。
+
+follow-up 真实执行记录(全新空库 `mystcrag_worker003_test`,15 个迁移全部应用):
+
+| 检查 | 结果 |
+| --- | --- |
+| `pnpm --filter @mystcrag/asset-pipeline test` | 143/143 通过,0 fail,0 skipped |
+| `pnpm --filter @mystcrag/asset-worker test`(无真库环境变量) | 114 tests:112 pass + 2 个按设计跳过的真库联调用例,0 fail |
+| Worker 真库联调(含 QA 规模用例) | 125/125 通过,0 fail,0 skipped |
+| 架构测试 `node --test tests/architecture.test.mjs` | 15/15 通过 |
+| 变更边界 | follow-up 仅新增上述测试用例、修正本节数字与 TASK_REGISTRY 精确行;`grouping.ts` 修复保持 `7bd0403` 不变;临时撤销仅在本地验证红路径,已恢复;无照片或二进制;未推送、未合并 |
+
+任务状态转 `REVIEW`,等待 Codex 独立审查后再定 DONE。
 
 ## 11. 操作
 
