@@ -54,7 +54,7 @@ const STOCK_OPTIONS: Array<{ id: LibraryStockFilter; label: string }> = [
 
 const PRODUCT_TYPES: LibraryProductType[] = ["CRYSTAL", "NATURAL_STONE", "ACCESSORY"];
 
-function loadFavorites(): Set<string> {
+export function loadFavorites(): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
     const raw = window.localStorage.getItem(FAVORITES_STORAGE_KEY);
@@ -66,9 +66,16 @@ function loadFavorites(): Set<string> {
   }
 }
 
-function saveFavorites(favorites: ReadonlySet<string>): void {
+export function saveFavorites(favorites: ReadonlySet<string>): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify([...favorites]));
+}
+
+export function toggleFavoriteSelection(current: ReadonlySet<string>, productId: string): Set<string> {
+  const next = new Set(current);
+  if (next.has(productId)) next.delete(productId);
+  else next.add(productId);
+  return next;
 }
 
 function toVariantSelection(current: Record<string, string>, materials: readonly CatalogMaterialProduct[]): Record<string, string> {
@@ -84,40 +91,128 @@ function toVariantSelection(current: Record<string, string>, materials: readonly
 
 export type LibraryPageApi = Pick<typeof designApi, "get" | "materials">;
 
-export type LibraryPageLoadOutcome = {
+export type LibraryPageStatus = "loading" | "catalog-error" | "ready";
+
+export type LibraryPageState = {
+  status: LibraryPageStatus;
+  catalogNotice: FrontendErrorCode | null;
   design: PublicDesignV1 | null;
+  designNotice: FrontendErrorCode | null;
   materials: CatalogMaterialProduct[];
   accessories: CatalogAccessoryProduct[];
-  catalogNotice: FrontendErrorCode | null;
-  designNotice: FrontendErrorCode | null;
+  operationNotice: FrontendErrorCode | null;
 };
 
-// The fixed design is optional context: its absence (for example a fresh
-// migrated, unseeded database returning 404) must not block the catalog.
-// A material-request failure stays fatal for the catalog view.
-export async function loadLibraryPageData(api: LibraryPageApi, designId = LIBRARY_DESIGN_ID): Promise<LibraryPageLoadOutcome> {
-  const [designResult, catalogResult] = await Promise.allSettled([
-    api.get(designId),
-    api.materials("CNY")
-  ]);
-  const design = designResult.status === "fulfilled" ? designResult.value : null;
-  const designNotice = designResult.status === "rejected" ? toFrontendApiError(designResult.reason).code : null;
-  if (catalogResult.status === "rejected") {
-    return {
-      design,
-      materials: [],
-      accessories: [],
-      catalogNotice: toFrontendApiError(catalogResult.reason).code,
-      designNotice
-    };
+export const INITIAL_LIBRARY_PAGE_STATE: LibraryPageState = {
+  status: "loading",
+  catalogNotice: null,
+  design: null,
+  designNotice: null,
+  materials: [],
+  accessories: [],
+  operationNotice: null
+};
+
+export type LibraryPageEvent =
+  | { type: "load-started" }
+  | { type: "catalog-resolved"; materials: CatalogMaterialProduct[]; accessories: CatalogAccessoryProduct[] }
+  | { type: "catalog-failed"; code: FrontendErrorCode }
+  | { type: "design-resolved"; design: PublicDesignV1 }
+  | { type: "design-failed"; code: FrontendErrorCode }
+  | { type: "operation-started" }
+  | { type: "operation-failed"; code: FrontendErrorCode }
+  | { type: "operation-notice-dismissed" };
+
+export function reduceLibraryPage(state: LibraryPageState, event: LibraryPageEvent): LibraryPageState {
+  switch (event.type) {
+    case "load-started":
+      return { ...INITIAL_LIBRARY_PAGE_STATE };
+    case "catalog-resolved":
+      return { ...state, status: "ready", catalogNotice: null, materials: event.materials, accessories: event.accessories };
+    case "catalog-failed":
+      return { ...state, status: "catalog-error", catalogNotice: event.code };
+    case "design-resolved":
+      return { ...state, design: event.design, designNotice: null };
+    case "design-failed":
+      return { ...state, design: null, designNotice: event.code };
+    case "operation-started":
+      return { ...state, operationNotice: null };
+    case "operation-failed":
+      return { ...state, operationNotice: event.code };
+    case "operation-notice-dismissed":
+      return { ...state, operationNotice: null };
   }
+}
+
+export type LibraryLoadAttempt = { isCurrent(): boolean };
+
+export function createLibraryLoadAttempts(): { begin(): LibraryLoadAttempt } {
+  let latest = 0;
   return {
-    design,
-    materials: catalogResult.value.materials,
-    accessories: catalogResult.value.accessories,
-    catalogNotice: null,
-    designNotice
+    begin() {
+      const id = ++latest;
+      return { isCurrent: () => id === latest };
+    }
   };
+}
+
+// The fixed design is optional context and must never gate the catalog: each
+// request settles independently, so a slow or never-settling design cannot keep
+// the catalog loading, and only a catalog failure produces the page-level error.
+// A design failure just degrades the design panel. Stale attempts (retry races,
+// strict-mode remounts) are dropped instead of overriding newer state.
+export function runLibraryLoad(
+  api: LibraryPageApi,
+  dispatch: (event: LibraryPageEvent) => void,
+  attempts: { begin(): LibraryLoadAttempt },
+  designId = LIBRARY_DESIGN_ID
+): void {
+  const attempt = attempts.begin();
+  dispatch({ type: "load-started" });
+  void api.materials("CNY").then(
+    (response) => {
+      if (!attempt.isCurrent()) return;
+      dispatch({ type: "catalog-resolved", materials: response.materials, accessories: response.accessories });
+    },
+    (error: unknown) => {
+      if (!attempt.isCurrent()) return;
+      dispatch({ type: "catalog-failed", code: toFrontendApiError(error).code });
+    }
+  );
+  void api.get(designId).then(
+    (design) => {
+      if (!attempt.isCurrent()) return;
+      dispatch({ type: "design-resolved", design });
+    },
+    (error: unknown) => {
+      if (!attempt.isCurrent()) return;
+      dispatch({ type: "design-failed", code: toFrontendApiError(error).code });
+    }
+  );
+}
+
+export function LibraryDesignUnavailableNotice({
+  designNotice,
+  onRetry
+}: {
+  designNotice: FrontendErrorCode | null;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-[var(--border)] bg-white p-4" data-library-design-notice="unavailable" role="status">
+      <h2 className="text-sm font-medium">当前设计</h2>
+      <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+        当前设计暂不可用{designNotice ? `（${designNotice}）` : ""}，矿石目录不受影响，可先浏览与收藏；设计恢复后即可加入。
+      </p>
+      <button
+        className="mt-3 flex min-h-10 w-full items-center justify-center rounded-xl border border-[var(--border)] text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+        onClick={onRetry}
+        type="button"
+  >
+        重新加载设计
+      </button>
+    </div>
+  );
 }
 
 function AccessoryGlyph({ accessoryType }: { accessoryType: string }) {
@@ -153,12 +248,9 @@ function AccessoryGlyph({ accessoryType }: { accessoryType: string }) {
 }
 
 export function CrystalLibraryPage() {
-  const [design, setDesign] = React.useState<PublicDesignV1 | null>(null);
-  const [materials, setMaterials] = React.useState<CatalogMaterialProduct[]>([]);
-  const [accessories, setAccessories] = React.useState<CatalogAccessoryProduct[]>([]);
-  const [isLoading, setIsLoading] = React.useState(true);
-  const [notice, setNotice] = React.useState<FrontendErrorCode | null>(null);
-  const [designNotice, setDesignNotice] = React.useState<FrontendErrorCode | null>(null);
+  const [state, rawDispatch] = React.useReducer(reduceLibraryPage, INITIAL_LIBRARY_PAGE_STATE);
+  const [attempts] = React.useState(createLibraryLoadAttempts);
+  const mountedRef = React.useRef(true);
   const [message, setMessage] = React.useState("");
   const [isUpdating, setIsUpdating] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
@@ -173,22 +265,21 @@ export function CrystalLibraryPage() {
   const [variantSelection, setVariantSelection] = React.useState<Record<string, string>>({});
   const [favorites, setFavorites] = React.useState<Set<string>>(() => new Set());
 
-  React.useEffect(() => {
-    let active = true;
-    void loadLibraryPageData(designApi).then((outcome) => {
-      if (!active) return;
+  const { design, materials, accessories, designNotice } = state;
+
+  const dispatch = React.useCallback((event: LibraryPageEvent) => {
+    if (event.type === "catalog-resolved") {
+      setVariantSelection((current) => toVariantSelection(current, event.materials));
       setFavorites(loadFavorites());
-      setDesign(outcome.design);
-      setMaterials(outcome.materials);
-      setAccessories(outcome.accessories);
-      setNotice(outcome.catalogNotice);
-      setDesignNotice(outcome.designNotice);
-      setVariantSelection((current) => toVariantSelection(current, outcome.materials));
-    }).finally(() => {
-      if (active) setIsLoading(false);
-    });
-    return () => { active = false; };
+    }
+    if (mountedRef.current) rawDispatch(event);
   }, []);
+
+  React.useEffect(() => {
+    mountedRef.current = true;
+    runLibraryLoad(designApi, dispatch, attempts);
+    return () => { mountedRef.current = false; };
+  }, [dispatch, attempts]);
 
   React.useEffect(() => {
     if (!message) return;
@@ -197,16 +288,7 @@ export function CrystalLibraryPage() {
   }, [message]);
 
   const retryLoad = () => {
-    setIsLoading(true);
-    setNotice(null);
-    void loadLibraryPageData(designApi).then((outcome) => {
-      setDesign(outcome.design);
-      setMaterials(outcome.materials);
-      setAccessories(outcome.accessories);
-      setNotice(outcome.catalogNotice);
-      setDesignNotice(outcome.designNotice);
-      setVariantSelection((current) => toVariantSelection(current, outcome.materials));
-    }).finally(() => setIsLoading(false));
+    runLibraryLoad(designApi, dispatch, attempts);
   };
 
   const allGroups = React.useMemo(() => groupMaterialsByCrystal(materials), [materials]);
@@ -244,9 +326,7 @@ export function CrystalLibraryPage() {
 
   const toggleFavorite = (productId: string) => {
     setFavorites((current) => {
-      const next = new Set(current);
-      if (next.has(productId)) next.delete(productId);
-      else next.add(productId);
+      const next = toggleFavoriteSelection(current, productId);
       saveFavorites(next);
       return next;
     });
@@ -258,15 +338,15 @@ export function CrystalLibraryPage() {
   ) => {
     if (!design) return;
     setIsUpdating(true);
-    setNotice(null);
+    dispatch({ type: "operation-started" });
     setMessage("");
     setSavedAt(null);
     try {
       const response = await designApi.update(request);
-      setDesign(response.design);
+      dispatch({ type: "design-resolved", design: response.design });
       setMessage(successMessage);
     } catch (error) {
-      setNotice(toFrontendApiError(error).code);
+      dispatch({ type: "operation-failed", code: toFrontendApiError(error).code });
     } finally {
       setIsUpdating(false);
     }
@@ -326,14 +406,14 @@ export function CrystalLibraryPage() {
   const saveDesign = async () => {
     if (!design) return;
     setIsSaving(true);
-    setNotice(null);
+    dispatch({ type: "operation-started" });
     try {
       const response = await designApi.save(design);
-      setDesign(response.design);
+      dispatch({ type: "design-resolved", design: response.design });
       setSavedAt(response.savedAt);
       setMessage("设计已保存。");
     } catch (error) {
-      setNotice(toFrontendApiError(error).code);
+      dispatch({ type: "operation-failed", code: toFrontendApiError(error).code });
     } finally {
       setIsSaving(false);
     }
@@ -648,18 +728,18 @@ export function CrystalLibraryPage() {
     </>
   );
 
-  if (isLoading) {
+  if (state.status === "loading") {
     return (
       <main className="mx-auto grid min-h-[60vh] max-w-7xl place-items-center px-5 py-16" data-library-page="loading" aria-live="polite">
-        <p className="text-sm text-[var(--muted)]">正在从 Backend 加载矿石目录与当前设计…</p>
+        <p className="text-sm text-[var(--muted)]">正在从 Backend 加载矿石目录…</p>
       </main>
     );
   }
 
-  if (notice) {
+  if (state.status === "catalog-error") {
     return (
       <main className="mx-auto min-h-[60vh] max-w-3xl px-5 py-16" data-library-page="error">
-        <FlowNotice code={notice} onAction={retryLoad} />
+        <FlowNotice code={state.catalogNotice ?? "NETWORK_ERROR"} onAction={retryLoad} />
       </main>
     );
   }
@@ -785,7 +865,13 @@ export function CrystalLibraryPage() {
               <p className="mt-2 text-xs text-[var(--muted)] lg:hidden" aria-live="polite">共 {totalCount} 件</p>
             ) : null}
 
-            {notice ? <div className="mt-4"><FlowNotice code={notice} compact onAction={() => setNotice(null)} /></div> : null}
+            {!design ? (
+              <div className="mt-4 lg:hidden" data-library-design-notice="mobile">
+                <LibraryDesignUnavailableNotice designNotice={designNotice} onRetry={retryLoad} />
+              </div>
+            ) : null}
+
+            {state.operationNotice ? <div className="mt-4"><FlowNotice code={state.operationNotice} compact onAction={() => dispatch({ type: "operation-notice-dismissed" })} /></div> : null}
             {message ? (
               <p className="mt-4 rounded-full bg-[var(--accent-soft)] px-5 py-2 text-sm text-[var(--success)]" role="status" data-library-toast="true">{message}</p>
             ) : null}
@@ -865,10 +951,8 @@ export function CrystalLibraryPage() {
               <p className="mt-3 text-[0.68rem] leading-5 text-[var(--muted)]">*价格仅供参考，实际以结算为准</p>
             </div>
             ) : (
-              <div className="sticky top-[4.5rem] rounded-2xl border border-[var(--border)] bg-white p-4" data-library-design-panel="unavailable">
-                <h2 className="text-sm font-medium">当前设计</h2>
-                <p className="mt-2 text-xs leading-5 text-[var(--muted)]">当前设计暂不可用，矿石目录不受影响，可先浏览与收藏。</p>
-                {designNotice ? <div className="mt-3"><FlowNotice code={designNotice} compact onAction={retryLoad} /></div> : null}
+              <div className="sticky top-[4.5rem]">
+                <LibraryDesignUnavailableNotice designNotice={designNotice} onRetry={retryLoad} />
               </div>
             )}
           </aside>
