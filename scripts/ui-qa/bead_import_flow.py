@@ -1525,6 +1525,12 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
                 # 且 disabled，天然防止重复创建。直至真实导航发生或超时。
                 def _click_new_import_until_navigated() -> None:
                     deadline = time.time() + 100
+                    # 用 role=button 精确命中“新建导入”按钮。空态提示文案
+                    # “还没有导入任务。选择“新建导入”后…”也含“新建导入”四字，
+                    # 若用 text=新建导入 会同时命中按钮与提示段落，触发 Playwright
+                    # strict-mode 冲突（resolved to 2 elements），异常被 except 吞掉后
+                    # 每次点击都落空、永不导航，最终 100s 超时。这里只点真正的按钮。
+                    create_button = page.get_by_role("button", name="新建导入", exact=True)
                     while time.time() < deadline:
                         try:
                             page.wait_for_url("**/admin/bead-import/*", timeout=1_000)
@@ -1532,7 +1538,8 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
                         except Exception:
                             pass
                         try:
-                            page.click("text=新建导入", timeout=4_000)
+                            if not create_button.is_disabled():
+                                create_button.click(timeout=4_000)
                         except Exception:
                             pass  # 尚未水合或正在创建(disabled)：无操作，进入下一轮
                         try:
@@ -1554,6 +1561,20 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
                 assert cookie_header, "the admin session cookie must be issued to the browser"
         except Exception as exc:
             fatal("browser/login-create", repr(exc))
+
+        if args.stop_after_login_create:
+            # 聚焦冒烟：只验证 登录+新建导入 是否真实导航。到此为止前面的步骤
+            # 均已 PASS（任一失败会经 fatal() 提前退出），故仅需确认无 FAIL 后
+            # 直接 cleanup 并退出，不再跑后续阶段；不调用 finish()，避免按完整
+            # REQUIRED_RESULTS 打印成片 MISSING（冒烟只看 login-create 一个信号）。
+            passed = all(ok for _, ok, _ in RESULTS)
+            try:
+                cleanup()
+            except Exception as exc:
+                CLEANUP_ERRORS.append(f"smoke cleanup: {repr(exc)[:200]}")
+                passed = False
+            print(f"SMOKE login-create: {'PASS' if passed else 'FAIL'}", flush=True)
+            sys.exit(0 if passed else 1)
 
         # 4. manifest + 上传。完整（浏览器）模式：必须由真实浏览器经
         #    #bead-import-folder-input 目录选择完成——真实页面读取所选文件夹并产出
@@ -2523,6 +2544,20 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
                 )
             report("flow/qc-recovery-passed", True, f"rescue primary v{rescue_asset['processingVersion']} is QC_PENDING")
 
+            if not args.skip_browser:
+                # 后端已到达 NEEDS_REVIEW（拯救版 QC_PENDING），但浏览器 DOM 可能仍是
+                # reprocess 期间 in-flight 的旧态：canOperate=!locked&&!blockedByConflict
+                # 为 false 时审批表单整体不渲染，此时逐组 fill 会在 #bead-import-review-*-note
+                # 上干等直至超时。刷新并等到拯救版审批表单真实渲染后再逐组审批，绝不在旧 DOM 上 fill。
+                page.reload(wait_until="domcontentloaded")
+                page.wait_for_selector(
+                    '#bead-import-workflow-heading:has-text("处理、审核与发布")', timeout=60_000
+                )
+                page.wait_for_selector(
+                    f'#bead-import-review-{poor_group_id}-{rescue_asset["processedAssetId"]}-note',
+                    timeout=60_000,
+                )
+
             # 会话到达 READY_TO_PUBLISH 要求每组都已人工批准：逐组在浏览器表单里审批
             # （含差组拯救版）。AdminClient 只读核验状态。
             approved_asset_key: str | None = None
@@ -3425,6 +3460,11 @@ def main() -> None:
     global KEEP_TEMP, SKIP_BROWSER
     parser = argparse.ArgumentParser(description="TASK-ASSET-QA-001 disposable integration gate")
     parser.add_argument("--skip-browser", action="store_true", help="仅 HTTP 层（仍需后端/worker/前端）；浏览器专属断言记为 SKIP")
+    parser.add_argument(
+        "--stop-after-login-create",
+        action="store_true",
+        help="聚焦冒烟：跑完 登录+新建导入 导航后即清理并退出，不执行后续阶段",
+    )
     parser.add_argument("--backend-port", type=int, default=None, help="后端临时端口（默认 4100；默认端口被占用时自动改用临时端口，显式指定则冲突即报错）")
     parser.add_argument("--frontend-port", type=int, default=None, help="前端临时端口（默认 3100；默认端口被占用时自动改用临时端口，显式指定则冲突即报错）")
     parser.add_argument("--keep", action="store_true", help="保留临时目录与数据库以便复查")
