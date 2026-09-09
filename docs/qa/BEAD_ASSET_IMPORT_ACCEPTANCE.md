@@ -3,6 +3,7 @@
 - 任务：`TASK-ASSET-QA-001`（一次性集成 / 架构 / 本地验收门，计划 Task 7）
 - 分支：`task/asset-qa-001-integration-gate`（worktree `.worktrees/asset-qa-001`，基线 `6e79b66`）
 - 执行：DeepSeek-V4-Flash（产品负责人 2026-09-09 授权接管最终 QA 修复，接替 GLM-5.3-Flash）
+- 终审：GLM-5.3（2026-09-09 产品负责人授权接管最终审查；独立复核候选 `ae24f3d` 的九项重点核验，未发现 QA 门禁自身 Critical 缺陷；修复本记录沿用的上一轮运行过期标识 8 处，见“五、17”）
 - 日期：2026-09-09（本记录；此前 2026-09-08 的 35 PASS 记录与 2026-09-09 的 45 PASS / 4 FAIL / 1 MISSING 记录均已被本轮真实浏览器结果**取代 superseded**）
 - 结论：**BLOCKED —— review gate failed（47 PASS / 4 FAIL / 0 SKIP / 0 MISSING，退出码 1），清理 0 错误；review 未通过**。
 
@@ -46,7 +47,7 @@ RUN_EXIT=1
 ## 二、一次性测试数据库与环境
 
 - 每次运行自动创建 `mystcrag_qa_flow_test_<unixtime>_<rand6>`（名称含 `test`），跑完 `DROP DATABASE ... WITH (FORCE)`。
-- 本轮记录运行的测试库：`mystcrag_qa_flow_test_1788960980_bbb000`（已随脚本清理删除并复核 absent）。
+- 本轮记录运行的测试库：`mystcrag_qa_flow_test_1788967781_59e71f`（已随脚本清理删除并复核 absent）。
 - 认证：**合成 OIDC 拓扑** —— auth0 issuer 挂在 `synthetic.auth006.internal`；Node 预载
   `NODE_OPTIONS --require`；浏览器经 CONNECT relay 直达提供方；自签 CA 经 `NODE_EXTRA_CA_CERTS`；
   最终用户走真实 PKCE S256 authorize + redirect 回环（`browser/final-user-login` PASS）。管理台走独立
@@ -63,23 +64,23 @@ RUN_EXIT=1
 |---|---|---|---|
 | 1 | env/postgres | PASS | `psql -h /tmp` 可达 |
 | 2 | fixtures/synthetic | PASS | 11 个合成文件：同 stem 对、跨目录同 stem、重复哈希、纯 jpg、纯 ARW、差背景 + 拯救片 |
-| 3 | db/fresh-test-database | PASS | `mystcrag_qa_flow_test_1788960980_bbb000` |
-| 4 | services/oidc-provider | PASS | provider tls `:51529`、admin `:51530`、relay `:51531`；discovery 经 CONNECT relay + 自签 CA 验证 |
+| 3 | db/fresh-test-database | PASS | `mystcrag_qa_flow_test_1788967781_59e71f` |
+| 4 | services/oidc-provider | PASS | provider tls `:62642`、admin `:62643`、relay `:62644`；discovery 经 CONNECT relay + 自签 CA 验证 |
 | 5 | services/backend | PASS | backend `:4100` HTTP-ready |
 | 5b | services/worker | PASS | asset-worker 存活且无 fatal 启动错误（worker 无端口，存活+无 fatal 即已进入轮询；poll 1000ms） |
-| 6 | services/frontend | PASS | next dev `:51524` |
-| 7 | services/frontend-h2 | PASS | https/h2 反向代理 `:51569` → next dev `:51524` |
+| 6 | services/frontend | PASS | next dev `:62620` |
+| 7 | services/frontend-h2 | PASS | https/h2 反向代理 `:62687` → next dev `:62620` |
 
 登录 / 建任务 / 上传 / 重启恢复：
 
 | # | 检查项 | 结果 | 说明 |
 |---|---|---|---|
 | 8 | browser/login+guard | PASS | guard 重定向到登录页；admin key 被接受进入管理台 |
-| 9 | browser/create-session | PASS | 经 Dashboard 按钮真实创建会话（`cmtu56rj…`） |
+| 9 | browser/create-session | PASS | 经 Dashboard 按钮真实创建会话（`cmtu98sz…`） |
 | 10 | http/manifest | PASS | 11 文件登记；manifest POST 确由浏览器经目录选择真实发出（浏览器可见 1 次） |
 | 11 | http/upload | PASS | 真实目录选择 `#bead-import-folder-input` 登记并暂存 11 文件；1 个文件 content PUT 被 h2 反代精确拦截一次（可重试网络失败），其余由 worker 归档 |
 | 12 | flow/restart-termination | PASS | backend 进程组与 worker 进程组经 `killpg(pgid,0)` 探测确认整组消失（不止 leader 退出；worker 无端口，组消失探测是唯一证明）；4100 端口验证关闭 |
-| 13 | flow/restart-new-pids | PASS | backend 3834→3934；worker 3836→3935 |
+| 13 | flow/restart-new-pids | PASS | backend 36765→36895；worker 36766→36896 |
 | 14 | flow/restart-resume | PASS | 会话与文件状态跨重启恢复（ARCHIVED/PENDING/SKIPPED_DUPLICATE） |
 | 15 | flow/resume-upload-completes | PASS | 经 UI“重试上传”按钮恢复被拦截文件（1 次点击后归档） |
 | 16 | flow/resume-archive-settles | PASS | 归档结算后会话进入 ARCHIVING（files=11） |
@@ -103,7 +104,7 @@ RUN_EXIT=1
 
 | # | 检查项 | 结果 | 说明 |
 |---|---|---|---|
-| 27 | flow/draft | PASS | 经浏览器草稿表单保存；crystalDraftId `cmtu577z2000…` |
+| 27 | flow/draft | PASS | 经浏览器草稿表单保存；crystalDraftId `cmtu997pa000…` |
 | 28 | flow/catalog-requires-auth | PASS | 匿名目录请求被 401 拒绝（protected route） |
 | 29 | flow/draft-public-denial | PASS | 发布前草稿 SKU 不出现在认证目录 |
 | 30 | flow/curation | PASS | 水晶八项 curation 字段人工填写并接受 |
@@ -170,6 +171,7 @@ RUN_EXIT=1
 14. **源操作全部进 5s 可强杀子进程**：`_discover_source_set` 在子进程内返回 `is_dir` 与每文件 size/mtime；主进程 manifest 复用 discovery 的 size/mtime，删除主进程的 `source_set.is_dir()` 与逐文件 `path.stat()`。
 15. **完整验收强制权威路径**：`--source-set` 非 `/Users/chenyanyan/Desktop/珠子图` 时 `sources/discovery` 如实 FAIL（diagnostic-only，不得让完整门禁退出 0），且基线精确核对 26 目录/127 文件/65 JPG/62 ARW。
 16. **PASS 收紧**：`flow/merge` 验证合并组成员全集 == 两源组并集；`flow/split` 验证分区全集/互斥/无串组；`flow/primary-confirmed` 重读权威 session 逐组复核 primaryFileId（不再硬编码 True）；`flow/publish` 要求 `inventorySnapshotId` 有效非空（任意非空错误 JSON 不得 PASS）；`services/backend+worker` 拆为 `services/backend` + `services/worker`（worker 就绪 = 存活且无 fatal）；`sources/proxy-large-body-cap` 加入 `REQUIRED_RESULTS`。
+17. **终审标识勘误（GLM-5.3，2026-09-09）**：本记录此前把上一轮（已被取代的 45 PASS / 4 FAIL / 1 MISSING 运行）的一次性库名、OIDC/前端/h2 端口、会话 ID、重启 PID 对与 crystalDraftId 共 8 行过期标识误写进“本轮记录性运行”的正文与表格；已按 `/tmp/qa001-final.log` 第 3/4/7/8/10/14/28 行逐项订正（库名 `mystcrag_qa_flow_test_1788967781_59e71f`、provider `:62642`/`:62643`/`:62644`、next dev `:62620`、h2 `:62687`、会话 `cmtu98sz…`、backend 36765→36895 / worker 36766→36896、crystalDraftId `cmtu997pa000…`）。QA 脚本、架构测试与门禁结果（47/4/0/0，EXIT=1）不变。
 
 本轮验证：`py_compile` OK；`--self-test` 四探针 PASS；架构测试 19/19；`pnpm validate` 17/17；`git diff --check` clean；最终门禁 47 PASS / 4 FAIL / 0 SKIP / 0 MISSING，cleanup errors 0，EXIT=1。
 
