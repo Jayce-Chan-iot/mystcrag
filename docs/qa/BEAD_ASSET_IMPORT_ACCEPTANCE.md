@@ -322,3 +322,43 @@ env/fixtures/db → services（oidc/backend/worker/frontend/h2）→ browser（l
 - 源照片 `/Users/chenyanyan/Desktop/珠子图`：门禁后复核仍为 127 个 JPG/ARW，全程只读（discovery/stat/hash/read 隔离子进程，无复制/修改/入库）。
 - 说明：机器上另存在两个 2026-09-09 早期运行的历史残留库（`mystcrag_qa_flow_test_1788959221_2f05b9`、`mystcrag_qa_flow_test_1788959879_c0bf2a`），**非本轮自建，未触碰**（本轮指令仅清理本轮自建物）。
 - 本轮改动：仅本文档（本节 + 头部结论）与 TASK_REGISTRY 本任务行（IN_PROGRESS→REVIEW）；QA 脚本、runtime、契约、Prisma、根配置、lockfile 均未改动；无 push/deploy。
+
+## 九、最终验收归档（TASK-ASSET-REVIEW-001，2026-09-10）
+
+### 9.1 归档基线与验收提交链
+
+- 归档基线：本地 `main@a6296ee`（`docs(tasks): accept TASK-ASSET-QA-001 at 48f96f7 and set DONE`）。
+- QA accepted candidate：`48f96f7`。
+- 验收提交链：`09c219d`（QA-001 记录最终绿门禁并转 REVIEW）→ `48f96f7`（门禁日志声明为结果行前缀语义）→ `a6296ee`（接受 QA-001 并置 DONE）。
+- 本归档在 `task/asset-review-001-acceptance-archive`（自 `2714b64` 起步）完成；全程无 push / deploy / merge。
+
+### 9.2 被归档的门禁事实（TASK-ASSET-QA-001 最终结果，见 §八）
+
+- 真实 127 文件源集（65 JPG + 62 ARW，`/Users/chenyanyan/Desktop/珠子图`）全程只读；完整门禁仅运行一次。
+- **52 PASS / 0 FAIL / 0 SKIP / 0 MISSING；required set complete；cleanup errors 0 — EXIT=0**；一次性测试库 DROP 后复核不存在；源照片门禁后仍为 127 个文件。
+
+### 9.3 归档轮独立复核（REVIEW-001 本轮真实运行）
+
+- `node --test tests/bead-asset-import-architecture.test.mjs`：**19/19 PASS**（fresh 架构测试）。
+- `node --test tests/*.test.mjs`：**39/39 PASS**（连续两次串行复跑；其中一次早期运行中 `tests/auth-ci-database-url.test.mjs` 出现瞬态失败——单独复跑 4/4 PASS、全套串行复跑 39/39 ×2，判定为并行运行间的瞬态干扰，与本功能无关，如实记录）。
+- `pnpm validate`：**17/17 successful**。
+- `git diff --check`：clean。
+- 文档内引用的全部路径逐一存在性复核通过（见 9.4）。
+
+### 9.4 产品事实（只读核实，未改任何 runtime）
+
+| 链路环节 | 只读核实结果 |
+|---|---|
+| 独立管理入口 | `apps/frontend/app/admin/bead-import/`（`page.tsx`、`[sessionId]`、`proxy`、`login`、`layout.tsx`） |
+| 管理 API | `apps/backend/src/modules/bead-asset-import/`（routes / service / auth / runtime） |
+| asset worker / pipeline | `apps/asset-worker/src/`（index / runtime / config）+ `packages/asset-pipeline/src/`（grouping / pairing / quality / image-processor / storage） |
+| 数据库持久化 | `packages/database/prisma/schema.prisma`（AssetImportSession、bead_image_groups、BeadGroupPublication 等模型）+ `packages/database/prisma/migrations/20260831_add_bead_asset_import/` + `packages/database/src/repositories/asset-import.repository.ts` |
+| approved-key resolver | `apps/backend/src/modules/product-assets/`（`apps/backend/src/modules/product-assets/product-asset.service.ts` `resolve(assetKey)` + `/api/assets/**` 交付路由）；前端 `apps/frontend/src/features/design/model/visual-assets.ts` 以 approved 资产为 primary、静态摄影映射为回退 |
+| 最终用户消费 | `/api/catalog/materials` 返回 server-approved `modelAssetKey`（`apps/backend/src/modules/design/design.routes.ts` + `apps/backend/src/modules/design/design-api.service.ts`）→ `apps/frontend/app/crystal-library/page.tsx` → `CrystalLibraryPage` 渲染 approved-asset `<img>`（门禁 `browser/approved-product-renders` 已验证 naturalWidth>0） |
+
+### 9.5 归档动作与证据边界
+
+- `docs/governance/FEATURE_REGISTRY.md` FEAT-026：PLANNED → **ACTIVE**（生产组合根、路由与 worker 入口齐备，按上表只读核实；Owner 记为 FRONTEND/BACKEND/DATABASE DAG，Gaps 无本任务阻塞，记录 QA-001 真实 127 文件门禁通过）。
+- 本文档历史失败与修复章节（§一–§七）**保留为审计证据**，未删改；§八 为最终绿门禁记录。
+- `/tmp` 日志与截图**不复制入库**；证据仅以本仓库文档记录为准。
+- 本轮改动仅：`docs/governance/FEATURE_REGISTRY.md`（FEAT-026 行）、本文档（本节）与 `docs/tasks/TASK_REGISTRY.md`（REVIEW-001 行 IN_PROGRESS→REVIEW）。无 push / deploy。
