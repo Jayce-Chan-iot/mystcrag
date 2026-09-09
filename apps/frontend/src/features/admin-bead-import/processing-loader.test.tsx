@@ -573,6 +573,32 @@ test("publish builds the request from the authoritative session and the approved
   assert.ok(harness.calls.some((call) => call.startsWith("publish:group-1:5")));
 });
 
+test("publish binds the server-approved key as both the texture and the model asset key", async () => {
+  const harness = makeHarness({ session: publishReadySession() });
+  const result = await harness.loader.publishGroup("group-1", {
+    crystalNameConfirmed: true,
+    crystalDraftPromotionConfirmed: true
+  });
+  assert.equal(result.outcome, "APPLIED");
+
+  const request = harness.requests[0] as PublishBeadImageGroupRequest;
+  assert.equal(
+    PublishBeadImageGroupRequestSchema.safeParse(request).success,
+    true,
+    "the request keeps passing the existing contract schema"
+  );
+  assert.equal(
+    request.textureAssetKey,
+    APPROVED_KEY,
+    "the required texture key is the Backend's approved key on the current APPROVED version"
+  );
+  assert.equal(
+    request.modelAssetKey,
+    APPROVED_KEY,
+    "the optional model key is the same Backend-approved key, so the published catalog row is not dropped for a null model binding"
+  );
+});
+
 test("publish uses the existing crystal reference when the draft resolves one", async () => {
   const harness = makeHarness({
     session: publishReadySession({}, {
