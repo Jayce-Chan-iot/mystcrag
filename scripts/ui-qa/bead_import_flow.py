@@ -2778,9 +2778,11 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
             group = next(g for g in session["groups"] if g["groupId"] == good_group_id)
             draft_view = group.get("productDraft") or {}
             if args.skip_browser:
-                # HTTP 层诊断模式：载荷形状与真实浏览器 loader 完全一致——尤其绝不
-                # 注入 loader 不会发送的 modelAssetKey。旧版本靠注入它让“目录可见性”
-                # 伪造成 PASS，那正是本任务禁止的直接 API 捷径。
+                # HTTP 层诊断模式：载荷形状与真实浏览器 loader 完全一致——loader
+                # （TASK-ASSET-FE-003 后）把后端返回的 server-approved key 同时作为
+                # textureAssetKey 与 modelAssetKey 发出，镜像同步携带；绝不注入
+                # loader 不发送的字段、绝不客户端派生 key（那正是本任务禁止的直接
+                # API 捷径）。
                 published = client.proxy(
                     "POST", f"/groups/{good_group_id}/publish",
                     json={
@@ -2798,6 +2800,7 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
                         "qualityStatement": "合成样本，人工目检通过。",
                         "qualitySource": "QA 集成验收记录。",
                         "textureAssetKey": approved_asset_key,
+                        "modelAssetKey": approved_asset_key,
                         "currency": "CNY", "unitPriceMinor": 1200, "costMinor": 600,
                         "availableQuantity": 3,
                         "allowPublicDisplay": True, "allowAiTraining": False,
@@ -2850,18 +2853,14 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
             published_visible = any(
                 product.get("sku") == "QA-FLOW-008" for product in catalog_after.json().get("materials", [])
             )
-            # 目录可见性如实报告：真实发布（浏览器 loader 或 HTTP 镜像）都不发送
-            # modelAssetKey，而 /api/catalog/materials 的完整性过滤要求它非空
-            # （design-api.service.ts materials()）。因此按真实运行时结果断言——当前
-            # 运行期应得 FAIL，暴露“导入控制台发布的产品不会出现在设计目录”这一
-            # runtime 缺陷（loader 本应把已批准主图同时作为同资产 modelAssetKey 发出，
-            # 后端显式支持该路径；发布 payload 单元测试也锁定 loader 现不发送它）。
-            # 绝不再注入 modelAssetKey 把这项伪造成 PASS（严格如实门）。
+            # 目录可见性如实报告：TASK-ASSET-FE-003 后真实浏览器 loader 把后端
+            # 返回的 server-approved key 同时作为 textureAssetKey 与 modelAssetKey
+            # 发出（skip-browser 诊断镜像载荷形状一致），/api/catalog/materials 的
+            # 非空 model 过滤因此不再丢行。本断言只报告可观察结果——认证目录是否
+            # 含 QA-FLOW-008——绝不注入任何字段把结果伪造成 PASS（严格如实门）。
             report(
                 "flow/published-product-public", published_visible,
-                "published product visible in the authenticated design catalog (protected route): "
-                f"{published_visible} — publish payload omits modelAssetKey which the catalog requires non-null; "
-                "surfaced runtime defect (no modelAssetKey injection)",
+                _published_product_public_detail(published_visible),
             )
 
             if args.skip_browser:
@@ -3655,6 +3654,24 @@ def _selftest_cross_pair_ok() -> bool:
     return ok
 
 
+def _published_product_public_detail(published_visible):
+    """flow/published-product-public 的 detail：只陈述当前可观察事实。
+
+    TASK-ASSET-FE-003 后真实浏览器 loader 把后端返回的 server-approved key 同时
+    作为 textureAssetKey 与 modelAssetKey 发出（skip-browser 诊断镜像保持载荷形状
+    一致）。本 detail 不得再含 2026-09-10 前的过期断言（"payload omits
+    modelAssetKey / surfaced runtime defect"——该日复跑本检查已 PASS），只报告发布
+    请求使用的 server-approved modelAssetKey 与认证目录对 QA-FLOW-008 的观察结果。
+    """
+    return (
+        "authenticated design catalog (protected route) contains sku QA-FLOW-008: "
+        f"{published_visible} — the publish request uses the server-approved "
+        "modelAssetKey (real loader behavior since FE-003; mirrored in skip-browser "
+        "diagnostics; no injection, no client-derived key); the observed catalog "
+        "result is reported as-is"
+    )
+
+
 def _final_user_library_checks(page, report_fn, published_visible, approved_hex, capture_dir):
     """最终用户 /crystal-library 公开渲染核验（页面级失败绝不 fatal）。
 
@@ -3957,12 +3974,31 @@ def _selftest_publish_public_continuation() -> bool:
             and "omits" not in empty_fail[2]
             and f"catalog visible=True" in empty_fail[2]
         )
+        # (e) 当前函数相关诊断文本不得再含过期 omits-modelAssetKey 断言：FE-003 已
+        # 生效、2026-09-10 复跑 flow/published-product-public 已 PASS——detail 只能
+        # 陈述当前可观察事实（发布请求使用 server-approved modelAssetKey；认证目录
+        # 是否含 QA-FLOW-008），不得暗示 payload 仍缺字段。
+        detail_true = _published_product_public_detail(True)
+        detail_false = _published_product_public_detail(False)
+        ppp_detail_clean = all(
+            "omits" not in detail and "surfaced runtime defect" not in detail
+            for detail in (detail_true, detail_false)
+        ) and all(
+            "modelAssetKey" in detail and "QA-FLOW-008" in detail
+            for detail in (detail_true, detail_false)
+        )
+        all_details = [detail_true, detail_false] + [row[2] for row in empty_recorded]
+        library_details_clean = all(
+            "omits modelAssetKey" not in detail and "payload omits" not in detail
+            for detail in all_details
+        )
         fixed_error = ""
     except Exception as exc:
         fixed_error = repr(exc)[:200]
 
     ok = old_interrupted and new_no_raise and fail_kept and renders_fail_kept \
-        and continued and success_path_pass and no_render_message_clean and not fixed_error
+        and continued and success_path_pass and no_render_message_clean \
+        and ppp_detail_clean and library_details_clean and not fixed_error
     if fixed_error:
         print(
             f"SELF-TEST publish-public-continuation: old_interrupted={old_interrupted} "
@@ -3975,7 +4011,9 @@ def _selftest_publish_public_continuation() -> bool:
             f"new_no_raise={new_no_raise} fail_kept={fail_kept} "
             f"renders_fail_kept={renders_fail_kept} continued={continued} "
             f"success_path_pass={success_path_pass} "
-            f"no_render_message_clean={no_render_message_clean} -> {'PASS' if ok else 'FAIL'}",
+            f"no_render_message_clean={no_render_message_clean} "
+            f"ppp_detail_clean={ppp_detail_clean} "
+            f"library_details_clean={library_details_clean} -> {'PASS' if ok else 'FAIL'}",
             flush=True,
         )
     return ok

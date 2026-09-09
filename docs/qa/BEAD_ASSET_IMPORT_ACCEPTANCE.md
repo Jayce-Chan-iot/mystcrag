@@ -262,3 +262,16 @@ MISSING（6，全部因该 FAIL 的 fatal 中断，未运行）：`browser/appro
 **行为级红绿证据（非字符串断言）**：① `publish-public-continuation` 探针新增 (d) 无渲染路径断言（FakePage 渲染 0 个 approved `<img>`，捕获详情文本）：红（修复前，`/tmp/qa001-selftest-red2.log`）`no_render_message_clean=False -> FAIL`（旧消息含过期 modelAssetKey 断言）；绿（修复后，`/tmp/qa001-selftest-green2.log`）`no_render_message_clean=True -> PASS`。② 新增第 6 探针 `mobile-viewport-continuation`（FakeBrowser/FakeMobilePage 同形 selector 超时驱动）：(a) 旧控制流形状——中断、必需步名从未被记录、evaluate 永不执行；(b) 真实 `_mobile_status_reviews_checks`——不抛出、按正确步名记 `mobile/status-reviews-viewport` FAIL、失败路径 context 仍关闭、函数正常返回使 continuation（sources）得以执行；(c) 成功路径——PASS 且 context 关闭。红：`NameError("_mobile_status_reviews_checks" is not defined) -> FAIL`；绿：`old_interrupted=True new_no_raise=True fail_kept=True context_closed=True continued=True success_pass=True -> PASS`。
 
 修复后窄测：`py_compile` OK；`--self-test` 6/6 PASS（exit 0）；`node --test tests/bead-asset-import-architecture.test.mjs` 19/19；全套 `node --test tests/*.test.mjs` 39/39；`pnpm validate` 17/17（exit 0）；`git diff --check` clean。本轮改动仅 QA 脚本、本文档与 TASK_REGISTRY 本任务行；runtime 未动；127 文件门禁未重跑。runtime blocker ④（`design-diy-private` 404）与 ②③ 的验证缺口仍在，**TASK-ASSET-QA-001 维持 BLOCKED**。
+
+### 7.9 Codex 复核修复轮（2026-09-10，候选 `1fa34a5` 最后 1 个证据完整性 Important，仅最小补正，不碰 runtime、未重跑门禁）
+
+**Important —— published-product-public 前的旧注释与 detail 仍冒充过期根因**：`flow/published-product-public` 前的目录可见性注释与其 report detail（旧文 "publish payload omits modelAssetKey which the catalog requires non-null; surfaced runtime defect"）与当前证据直接矛盾——该检查在 2026-09-10 复跑已 PASS、FE-003 已生效（§7.4 ①），不止上一轮已修的 no-render 消息。修复（最小补正，共四处，均只陈述当前可观察事实）：
+
+1. detail 提取为 `_published_product_public_detail(published_visible)`，新文只报告两件事实——认证目录（protected route）是否含 `sku QA-FLOW-008`（`{published_visible}`，结果原样报告）与发布请求使用 server-approved modelAssetKey（真实 loader 自 FE-003 起的行为；skip-browser 诊断镜像同步携带；无注入、无客户端派生 key）；不含 "omits"/"surfaced runtime defect"，不暗示 payload 仍缺字段。断言语义不变（仍按 `published_visible` 判定）。
+2. 目录可见性注释改为：FE-003 后真实 loader 把后端返回的 server-approved key 同时作为 textureAssetKey 与 modelAssetKey 发出，catalog 非空 model 过滤不再丢行；本断言只报告可观察结果，绝不注入字段伪造 PASS。
+3. skip-browser 镜像注释同步（旧文“绝不注入 loader 不会发送的 modelAssetKey”已过期——loader 现已发送）；镜像载荷补 `"modelAssetKey": approved_asset_key`（与 loader 载荷形状一致的既定承诺，非注入捷径：loader 真实发送同一 server-approved key）。
+4. 历史文档证据（§7.4/§7.5 及此前各节记录的旧运行 FAIL 明细）**一字未改**——过期断言只从当前诊断文本中清除，历史运行证据保留原样。
+
+**行为级红绿证据（非仅源码字符串断言）**：`publish-public-continuation` 探针扩展 (e)——真实调用 `_published_product_public_detail(True/False)` 并驱动 `_final_user_library_checks` 收集全部 detail，断言当前函数相关诊断文本不含 "omits"/"payload omits modelAssetKey"/"surfaced runtime defect"（ppp detail）且陈述 server-approved modelAssetKey 与 QA-FLOW-008 两件事实。红（先提取旧文再断言，`/tmp/qa001-selftest-red3.log`，exit 1）：`ppp_detail_clean=False library_details_clean=False -> FAIL`——在真实过期文本上失败，非 NameError；绿（修复后，`/tmp/qa001-selftest-green3.log`，exit 0）：`ppp_detail_clean=True library_details_clean=True -> PASS`，六探针 aggregate PASS。
+
+修复后窄测：`py_compile` OK；`--self-test` 6/6 PASS（exit 0）；`node --test tests/bead-asset-import-architecture.test.mjs` 19/19；全套 `node --test tests/*.test.mjs` 39/39；`pnpm validate` 17/17（exit 0）；`git diff --check` clean。本轮改动仅 QA 脚本（detail 提取与文本、两处注释、镜像载荷一行）、本文档与 TASK_REGISTRY 本任务行；runtime 未动；127 文件门禁未重跑。runtime blocker ④（`design-diy-private` 404 → `/crystal-library` 渲染不出）与 ②③ 验证缺口仍在，**TASK-ASSET-QA-001 维持 BLOCKED**。
