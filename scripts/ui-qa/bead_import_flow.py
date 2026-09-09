@@ -2897,61 +2897,18 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
 
                 # crystal-library（最终用户视图）渲染已发布珠子：断言已批准资产
                 # URL 请求成功（200）且 <img> 完成真实解码（naturalWidth/Height>0）。
-                # 珠子不在目录里（published_visible=False）时不可能出现对应 <img>：
-                # 这时如实记 FAIL（非环境 SKIP、不伪造 PASS）并继续，绝不 raise 把
-                # 后续移动端/真实素材检查拖死——保证必需结果集无 MISSING。
+                # 页面级失败（目录已可见但等待超时 / 导航 / 求值失败）由
+                # _final_user_library_checks 如实记 FAIL 并继续 mobile/sources，
+                # 绝不 fatal 造成 MISSING；珠子不在目录里时 flow/published-product-public
+                # 已如实 FAIL，本段同样继续。仅登录/浏览器上下文等前置失败才 fatal。
                 approved_hex = approved_asset_key.split(":", 1)[1]
-                asset_responses: list[tuple[str, int]] = []
-
-                def track_asset_response(response):
-                    if approved_hex in response.url:
-                        asset_responses.append((response.url.split("?")[0], response.status))
-
-                final_page.on("response", track_asset_response)
-                final_page.goto(
-                    f"http://localhost:{FRONTEND_PORT}/crystal-library", wait_until="domcontentloaded"
+                _final_user_library_checks(
+                    final_page, report, published_visible, approved_hex, capture_dir
                 )
-                if published_visible:
-                    final_page.wait_for_selector("text=QA水晶A", timeout=60_000)
-                    final_page.wait_for_timeout(400)
-                else:
-                    # 给目录请求与首屏一个落地窗口，再用真实空结果佐证“不可见”。
-                    final_page.wait_for_timeout(1500)
-                final_page.screenshot(path=str(capture_dir / "desktop-07-library.png"))
-                render = final_page.evaluate(
-                    """(hexPart) => {
-                        const imgs = [...document.querySelectorAll('img')].filter(
-                            (img) => decodeURIComponent(img.currentSrc || img.src || '').includes(hexPart)
-                        );
-                        return imgs.map((img) => ({
-                            src: img.src,
-                            naturalWidth: img.naturalWidth,
-                            naturalHeight: img.naturalHeight,
-                            complete: img.complete
-                        }));
-                    }""",
-                    approved_hex,
-                )
-                if not render:
-                    report(
-                        "browser/approved-product-renders", False,
-                        "no <img> on /crystal-library references the published approved asset "
-                        f"(catalog visible={published_visible}): the bead is absent from the design "
-                        "catalog because the publish payload omits modelAssetKey; surfaced runtime defect",
-                    )
-                else:
-                    decoded_ok = all(
-                        image["naturalWidth"] > 0 and image["naturalHeight"] > 0 for image in render
-                    )
-                    request_ok = bool(asset_responses) and all(
-                        status == 200 for _, status in asset_responses
-                    )
-                    report(
-                        "browser/approved-product-renders", decoded_ok and request_ok,
-                        f"{len(render)} approved-asset <img> decoded (naturalWidth>0); "
-                        f"asset URL responses: {asset_responses[:4]}",
-                    )
-                final_context.close()
+                try:
+                    final_context.close()
+                except Exception:
+                    pass  # 关闭失败不阻断 mobile/sources——页面级失败绝不造成 MISSING
         except Exception as exc:
             fatal("flow/publish-public", repr(exc))
 
@@ -3717,12 +3674,264 @@ def _selftest_cross_pair_ok() -> bool:
     return ok
 
 
+def _final_user_library_checks(page, report_fn, published_visible, approved_hex, capture_dir):
+    """最终用户 /crystal-library 公开渲染核验（页面级失败绝不 fatal）。
+
+    目录已可见（published_visible=True）时给出 flow/publish-public 的真实结论：页面
+    渲染出已发布商品为 PASS；wait_for_selector 超时或导航/求值失败如实记 FAIL。任何
+    页面级失败都只记 FAIL 并继续完成 screenshot/evaluate 与
+    browser/approved-product-renders 的如实结论，绝不向上抛出把 mobile/sources 拖成
+    MISSING（2026-09-10 复跑实测的旧缺陷：True 分支等待超时直接逃逸进
+    fatal("flow/publish-public")，6 项检查 MISSING）。目录不可见时不重复记
+    publish-public（flow/published-product-public 已如实 FAIL）。仅基础设施/前置失败
+    （登录、浏览器上下文）仍由调用方 fatal。
+    """
+    asset_responses: list[tuple[str, int]] = []
+
+    def track_asset_response(response):
+        if approved_hex in response.url:
+            asset_responses.append((response.url.split("?")[0], response.status))
+
+    try:
+        page.on("response", track_asset_response)
+    except Exception:
+        pass  # 响应追踪失败只损失 request_ok 证据，不阻断核验
+    try:
+        page.goto(
+            f"http://localhost:{FRONTEND_PORT}/crystal-library", wait_until="domcontentloaded"
+        )
+    except Exception as exc:
+        report_fn(
+            "flow/publish-public", False,
+            f"/crystal-library navigation failed before rendering checks (honest FAIL, "
+            f"continuing to approved-product-renders/mobile/sources): {exc!r}",
+        )
+        report_fn(
+            "browser/approved-product-renders", False,
+            "no <img> could be inspected: /crystal-library navigation failed",
+        )
+        return
+    if published_visible:
+        try:
+            page.wait_for_selector("text=QA水晶A", timeout=60_000)
+            report_fn(
+                "flow/publish-public", True,
+                "final user /crystal-library rendered the published bead QA水晶A",
+            )
+        except Exception as exc:
+            report_fn(
+                "flow/publish-public", False,
+                f"/crystal-library did not render the published bead within the bounded wait "
+                f"(honest FAIL, continuing to approved-product-renders/mobile/sources): {exc!r}",
+            )
+        try:
+            page.wait_for_timeout(400)
+        except Exception:
+            pass
+    else:
+        # 给目录请求与首屏一个落地窗口，再用真实空结果佐证“不可见”。
+        try:
+            page.wait_for_timeout(1500)
+        except Exception:
+            pass
+    try:
+        page.screenshot(path=str(capture_dir / "desktop-07-library.png"))
+    except Exception:
+        pass  # 截图失败只损失证据图，不改变结论
+    try:
+        render = page.evaluate(
+            """(hexPart) => {
+                const imgs = [...document.querySelectorAll('img')].filter(
+                    (img) => decodeURIComponent(img.currentSrc || img.src || '').includes(hexPart)
+                );
+                return imgs.map((img) => ({
+                    src: img.src,
+                    naturalWidth: img.naturalWidth,
+                    naturalHeight: img.naturalHeight,
+                    complete: img.complete
+                }));
+            }""",
+            approved_hex,
+        )
+    except Exception as exc:
+        report_fn(
+            "browser/approved-product-renders", False,
+            f"/crystal-library page evaluation failed (honest FAIL, continuing): {exc!r}",
+        )
+        return
+    if not render:
+        report_fn(
+            "browser/approved-product-renders", False,
+            "no <img> on /crystal-library references the published approved asset "
+            f"(catalog visible={published_visible}): the bead is absent from the design "
+            "catalog because the publish payload omits modelAssetKey; surfaced runtime defect",
+        )
+    else:
+        decoded_ok = all(
+            image["naturalWidth"] > 0 and image["naturalHeight"] > 0 for image in render
+        )
+        request_ok = bool(asset_responses) and all(
+            status == 200 for _, status in asset_responses
+        )
+        report_fn(
+            "browser/approved-product-renders", decoded_ok and request_ok,
+            f"{len(render)} approved-asset <img> decoded (naturalWidth>0); "
+            f"asset URL responses: {asset_responses[:4]}",
+        )
+
+
+def _selftest_publish_public_continuation() -> bool:
+    """flow/publish-public 页面级失败必须如实 FAIL 并继续（行为级红绿证明）。
+
+    旧实现（2026-09-10 复跑实测，证据 /tmp/qa001-rerun-886f90f.log）：目录已可见
+    （published_visible=True）但 /crystal-library 的 wait_for_selector 超时直接逃逸进
+    fatal("flow/publish-public")，把 approved-product-renders / mobile / sources 共
+    6 项拖成 MISSING。本探针用同形 FakePage（wait_for_selector 抛 TimeoutError）驱动：
+    (a) 旧控制流形状（裸等待 + except→fatal 中止）——证明会中断，后续标记与
+        screenshot/evaluate 永不执行；
+    (b) 真实 _final_user_library_checks——证明不抛出、如实记 flow/publish-public FAIL、
+        继续完成 screenshot/evaluate 并如实记 browser/approved-product-renders FAIL；
+    (c) 成功路径 FakePage（等待命中 + 已解码 <img> + 200 资产响应）——
+        flow/publish-public PASS 且 approved-product-renders 按真实解码/请求判定 PASS。
+    """
+    class _FakeTimeout(Exception):
+        pass
+
+    class _Abort(Exception):
+        """旧 fatal() 的中止语义：记 FAIL 后不可继续。"""
+
+    class _FakeResponse:
+        def __init__(self, url, status):
+            self.url = url
+            self.status = status
+
+    class _FakePage:
+        def __init__(self, *, timeout=False, imgs=None, responses=()):
+            self.calls: list[tuple] = []
+            self.timeout = timeout
+            self.imgs = imgs or []
+            self.responses = list(responses)
+
+        def on(self, event, handler):
+            self.calls.append(("on", event))
+            for response in self.responses:
+                handler(response)
+
+        def goto(self, url, wait_until=None):
+            self.calls.append(("goto", url))
+
+        def wait_for_selector(self, selector, timeout=None):
+            self.calls.append(("wait_for_selector", selector, timeout))
+            if self.timeout:
+                raise _FakeTimeout(f"Page.wait_for_selector: Timeout {timeout}ms exceeded.")
+            return None
+
+        def wait_for_timeout(self, ms):
+            self.calls.append(("wait_for_timeout", ms))
+
+        def screenshot(self, path=None):
+            self.calls.append(("screenshot", path))
+
+        def evaluate(self, script, *args):
+            self.calls.append(("evaluate",))
+            return list(self.imgs)
+
+    approved_hex = "f" * 64
+
+    # (a) 旧控制流见证：同形超时 → 逃逸进 fatal 中止；continuation 标记永不执行。
+    old_page = _FakePage(timeout=True)
+    old_recorded: list[tuple[str, bool]] = []
+    old_continued = False
+    old_aborted = False
+    try:
+        try:
+            if True:  # published_visible=True，与 2026-09-10 复跑同形
+                old_page.wait_for_selector("text=QA水晶A", timeout=60_000)
+                old_page.wait_for_timeout(400)
+        except Exception as exc:
+            old_recorded.append(("flow/publish-public", False))
+            raise _Abort(repr(exc))  # 旧 fatal：记 FAIL 后中止一切后续检查
+        old_continued = True
+    except _Abort:
+        old_aborted = True
+    old_interrupted = (
+        old_aborted
+        and not old_continued
+        and ("flow/publish-public", False) in old_recorded
+        and not any(call[0] in ("screenshot", "evaluate") for call in old_page.calls)
+    )
+
+    # (b)/(c) 修复路径：真实函数驱动（红阶段 _final_user_library_checks 尚不存在，
+    # 探针必须 FAIL 而不是崩溃——由下方 except 捕获并如实打印）。
+    new_no_raise = fail_kept = renders_fail_kept = continued = success_path_pass = False
+    try:
+        new_page = _FakePage(timeout=True)
+        new_recorded: list[tuple[str, bool]] = []
+        try:
+            _final_user_library_checks(
+                new_page,
+                lambda step, ok, detail="": new_recorded.append((step, bool(ok))),
+                True,
+                approved_hex,
+                Path("/tmp"),
+            )
+        except Exception:
+            new_no_raise = False
+        else:
+            new_no_raise = True
+        fail_kept = ("flow/publish-public", False) in new_recorded
+        renders_fail_kept = ("browser/approved-product-renders", False) in new_recorded
+        continued = new_no_raise and any(
+            call[0] == "screenshot" for call in new_page.calls
+        ) and any(call[0] == "evaluate" for call in new_page.calls)
+        ok_page = _FakePage(
+            imgs=[{"src": "x", "naturalWidth": 64, "naturalHeight": 64, "complete": True}],
+            responses=[
+                _FakeResponse(f"http://localhost:1/api/assets/approved:{approved_hex}?v=1", 200)
+            ],
+        )
+        ok_recorded: list[tuple[str, bool]] = []
+        _final_user_library_checks(
+            ok_page,
+            lambda step, ok, detail="": ok_recorded.append((step, bool(ok))),
+            True,
+            approved_hex,
+            Path("/tmp"),
+        )
+        success_path_pass = (
+            ("flow/publish-public", True) in ok_recorded
+            and ("browser/approved-product-renders", True) in ok_recorded
+        )
+        fixed_error = ""
+    except Exception as exc:
+        fixed_error = repr(exc)[:200]
+
+    ok = old_interrupted and new_no_raise and fail_kept and renders_fail_kept \
+        and continued and success_path_pass and not fixed_error
+    if fixed_error:
+        print(
+            f"SELF-TEST publish-public-continuation: old_interrupted={old_interrupted} "
+            f"fixed-path raised {fixed_error} -> FAIL",
+            flush=True,
+        )
+    else:
+        print(
+            f"SELF-TEST publish-public-continuation: old_interrupted={old_interrupted} "
+            f"new_no_raise={new_no_raise} fail_kept={fail_kept} "
+            f"renders_fail_kept={renders_fail_kept} continued={continued} "
+            f"success_path_pass={success_path_pass} -> {'PASS' if ok else 'FAIL'}",
+            flush=True,
+        )
+    return ok
+
+
 def run_self_tests() -> bool:
     tests = [
         ("finish-order", _selftest_finish_order),
         ("cleanup-two-phase", _selftest_cleanup_two_phase),
         ("process-group-termination", _selftest_process_group_termination),
         ("cross-pair-ok", _selftest_cross_pair_ok),
+        ("publish-public-continuation", _selftest_publish_public_continuation),
     ]
     results: list[str] = []
     for name, fn in tests:

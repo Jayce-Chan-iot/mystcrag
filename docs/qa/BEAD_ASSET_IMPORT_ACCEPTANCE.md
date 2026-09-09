@@ -28,7 +28,7 @@ env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -m py_compile scripts/
 # 2. 架构测试（19/19 通过）
 node --test tests/bead-asset-import-architecture.test.mjs
 
-# 2b. 内建单元自检（不起服务/不建库/不开浏览器；finish-order + cleanup-two-phase + cross-pair-ok + process-group-termination 四个探针）
+# 2b. 内建单元自检（不起服务/不建库/不开浏览器；finish-order + cleanup-two-phase + cross-pair-ok + process-group-termination + publish-public-continuation 五个探针）
 env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -u scripts/ui-qa/bead_import_flow.py --self-test
 
 # 3. 完整集成验收（真实浏览器 + 真实 OIDC 登录 + 真实后端 + 真实 worker + 一次性测试库）
@@ -233,9 +233,17 @@ MISSING（6，全部因该 FAIL 的 fatal 中断，未运行）：`browser/appro
 - **状态/后果**：该 404 使 `Promise.all` 整体 reject → catch 只设置错误 notice → `materials` 状态保持 `[]` → 页面永不渲染任何目录商品 → `QA水晶A` 不可见 → 脚本 `wait_for_selector` 60s 超时。目录 API 本身已含该商品（7.4 ①），缺陷在页面把目录渲染耦合于一个固定设计的存在。
 - **修复归属**：前端任务（crystal-library 页面：目录渲染不得因固定 `LIBRARY_DESIGN_ID` 缺失而整体失败，或 seed/初始化该设计）。本轮未修改任何 runtime 代码。
 
-### 7.6 QA 脚本自身缺陷（本轮暴露，未修，致 6 MISSING）
+### 7.6 QA 脚本自身缺陷（2026-09-10 复跑暴露；同日已按产品负责人指令修复，未重跑门禁）
 
-`scripts/ui-qa/bead_import_flow.py` 第 2915 行 `wait_for_selector("text=QA水晶A", timeout=60_000)` 在 `published_visible=True` 分支超时抛 `TimeoutError`，被第 2956 行 `fatal("flow/publish-public", ...)` 捕获后**中断整个后半段**（mobile 段与 sources 段全部 MISSING）——与第 2900-2902 行注释“绝不 raise 把后续移动端/真实素材检查拖死——保证必需结果集无 MISSING”直接矛盾。上一轮因 `published_visible=False` 走 else 分支（仅 `wait_for_timeout(1500)`）而未触发。**后果：②（FE-004）与 ③（WORKER-003）的修复在本轮完全没有被门禁验证。** 修复归属：下一轮 QA 任务先将该等待改为如实 FAIL-不中断（与 approved-product-renders 同样的结构），再单次复跑完整门禁。本轮未修改脚本、未重跑。
+**缺陷（复跑实测）**：`scripts/ui-qa/bead_import_flow.py` 旧版第 2915 行 `wait_for_selector("text=QA水晶A", timeout=60_000)` 在 `published_visible=True` 分支超时抛 `TimeoutError`，被第 2956 行 `fatal("flow/publish-public", ...)` 捕获后**中断整个后半段**（mobile 段与 sources 段全部 MISSING）——与第 2900-2902 行注释“绝不 raise 把后续移动端/真实素材检查拖死——保证必需结果集无 MISSING”直接矛盾。上一轮因 `published_visible=False` 走 else 分支（仅 `wait_for_timeout(1500)`）而未触发。**后果：②（FE-004）与 ③（WORKER-003）的修复在该轮完全没有被门禁验证。**
+
+**修复（2026-09-10，测试先行，仅 QA harness，不碰 runtime，未重跑 127 文件门禁）**：最终用户 `/crystal-library` 核验提取为 `_final_user_library_checks(page, report, published_visible, approved_hex, capture_dir)`——目录已可见时给出 `flow/publish-public` 真实结论（渲染出商品 PASS；`wait_for_selector` 超时/导航/求值失败如实 FAIL），任何页面级失败只记 FAIL 并继续完成 screenshot/evaluate 与 `browser/approved-product-renders` 的如实结论，随后 mobile 与全部 sources 检查照常执行，绝不 fatal 造成 MISSING；仅基础设施/前置失败（provider admin、浏览器上下文、最终用户登录）保留 fatal。`final_context.close()` 失败同样不再阻断。
+
+**行为级红绿证据（非字符串断言）**：新增可执行 self-test 探针 `publish-public-continuation`（`--self-test` 第 5 探针），用同形 FakePage（`wait_for_selector` 抛 TimeoutError）驱动：(a) 旧控制流形状（裸等待 + except→fatal 中止）——证明中断且 continuation 标记与 screenshot/evaluate 永不执行；(b) 真实 `_final_user_library_checks`——不抛出、记 `flow/publish-public` FAIL、继续 screenshot/evaluate 并如实记 `browser/approved-product-renders` FAIL；(c) 成功路径 FakePage——`flow/publish-public` PASS 且 `approved-product-renders` 按真实解码/200 资产请求判 PASS。红（修复前，`/tmp/qa001-selftest-red.log`）：探针 FAIL——`old_interrupted=True fixed-path raised NameError("_final_user_library_checks" is not defined) -> FAIL`，aggregate FAIL；绿（修复后，`/tmp/qa001-selftest-green.log`）：`old_interrupted=True new_no_raise=True fail_kept=True renders_fail_kept=True continued=True success_path_pass=True -> PASS`，五探针 aggregate PASS，exit 0。
+
+修复后窄测：`py_compile` OK；`--self-test` 5/5 PASS（exit 0）；`node --test tests/bead-asset-import-architecture.test.mjs` 19/19；全套 `node --test tests/*.test.mjs` 39/39；`pnpm validate` 17/17（exit 0）；`git diff --check` clean。已知残留（未在本轮范围内）：mobile 段自身的 `fatal("mobile/viewport")` 语义未变（本轮未被触发、未被要求修改）——若未来 mobile 段页面失败仍可能拖缺 sources，留待下一轮 QA 任务处理。
+
+**runtime blocker ④ 仍在**（见 7.5，`design-diy-private` 404 → `/crystal-library` 渲染不出商品）：本轮只修 QA harness；按产品负责人指令**未第二次运行 127 文件门禁**，②③ 在合并基线上的门禁级验证仍待下一次（且仅一次）复跑。TASK-ASSET-QA-001 维持 **BLOCKED**。
 
 ### 7.7 清理证明（本轮自建物全部不存在，源照片未触碰）
 
