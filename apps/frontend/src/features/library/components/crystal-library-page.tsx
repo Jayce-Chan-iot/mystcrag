@@ -146,12 +146,50 @@ export function reduceLibraryPage(state: LibraryPageState, event: LibraryPageEve
 
 export type LibraryLoadAttempt = { isCurrent(): boolean };
 
-export function createLibraryLoadAttempts(): { begin(): LibraryLoadAttempt } {
-  let latest = 0;
+export type LibraryLoadAttempts = {
+  beginCatalog(): LibraryLoadAttempt;
+  beginDesign(): LibraryLoadAttempt;
+};
+
+export function createLibraryLoadAttempts(): LibraryLoadAttempts {
+  let latestCatalog = 0;
+  let latestDesign = 0;
   return {
-    begin() {
-      const id = ++latest;
-      return { isCurrent: () => id === latest };
+    beginCatalog() {
+      const id = ++latestCatalog;
+      return { isCurrent: () => id === latestCatalog };
+    },
+    beginDesign() {
+      const id = ++latestDesign;
+      return { isCurrent: () => id === latestDesign };
+    }
+  };
+}
+
+export type LibraryDispatchSideEffects = {
+  onCatalogResolved: (materials: readonly CatalogMaterialProduct[]) => void;
+};
+
+export type LibraryDispatcher = {
+  dispatch: (event: LibraryPageEvent) => void;
+  setMounted: (mounted: boolean) => void;
+};
+
+// The mounted check runs before every side effect so an unmounted dispatch
+// touches neither component state nor localStorage.
+export function createLibraryDispatch(
+  rawDispatch: (event: LibraryPageEvent) => void,
+  sideEffects: LibraryDispatchSideEffects
+): LibraryDispatcher {
+  let mounted = true;
+  return {
+    setMounted(next: boolean) {
+      mounted = next;
+    },
+    dispatch(event: LibraryPageEvent) {
+      if (!mounted) return;
+      if (event.type === "catalog-resolved") sideEffects.onCatalogResolved(event.materials);
+      rawDispatch(event);
     }
   };
 }
@@ -164,21 +202,46 @@ export function createLibraryLoadAttempts(): { begin(): LibraryLoadAttempt } {
 export function runLibraryLoad(
   api: LibraryPageApi,
   dispatch: (event: LibraryPageEvent) => void,
-  attempts: { begin(): LibraryLoadAttempt },
+  attempts: LibraryLoadAttempts,
   designId = LIBRARY_DESIGN_ID
 ): void {
-  const attempt = attempts.begin();
+  const catalogAttempt = attempts.beginCatalog();
+  const designAttempt = attempts.beginDesign();
   dispatch({ type: "load-started" });
   void api.materials("CNY").then(
     (response) => {
-      if (!attempt.isCurrent()) return;
+      if (!catalogAttempt.isCurrent()) return;
       dispatch({ type: "catalog-resolved", materials: response.materials, accessories: response.accessories });
     },
     (error: unknown) => {
-      if (!attempt.isCurrent()) return;
+      if (!catalogAttempt.isCurrent()) return;
       dispatch({ type: "catalog-failed", code: toFrontendApiError(error).code });
     }
   );
+  void api.get(designId).then(
+    (design) => {
+      if (!designAttempt.isCurrent()) return;
+      dispatch({ type: "design-resolved", design });
+    },
+    (error: unknown) => {
+      if (!designAttempt.isCurrent()) return;
+      dispatch({ type: "design-failed", code: toFrontendApiError(error).code });
+    }
+  );
+}
+
+// Design-only retry for the degraded panel: re-fetches just the optional
+// design. It never resets page state, never re-requests the catalog, and a
+// failure stays a design-only degradation — the ready catalog is untouched.
+// Beginning a new design attempt also invalidates any in-flight design result
+// from an earlier load, so late resolutions cannot override the newest retry.
+export function runDesignLoad(
+  api: LibraryPageApi,
+  dispatch: (event: LibraryPageEvent) => void,
+  attempts: LibraryLoadAttempts,
+  designId = LIBRARY_DESIGN_ID
+): void {
+  const attempt = attempts.beginDesign();
   void api.get(designId).then(
     (design) => {
       if (!attempt.isCurrent()) return;
@@ -250,7 +313,6 @@ function AccessoryGlyph({ accessoryType }: { accessoryType: string }) {
 export function CrystalLibraryPage() {
   const [state, rawDispatch] = React.useReducer(reduceLibraryPage, INITIAL_LIBRARY_PAGE_STATE);
   const [attempts] = React.useState(createLibraryLoadAttempts);
-  const mountedRef = React.useRef(true);
   const [message, setMessage] = React.useState("");
   const [isUpdating, setIsUpdating] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
@@ -267,19 +329,22 @@ export function CrystalLibraryPage() {
 
   const { design, materials, accessories, designNotice } = state;
 
-  const dispatch = React.useCallback((event: LibraryPageEvent) => {
-    if (event.type === "catalog-resolved") {
-      setVariantSelection((current) => toVariantSelection(current, event.materials));
-      setFavorites(loadFavorites());
-    }
-    if (mountedRef.current) rawDispatch(event);
-  }, []);
+  // Lazily created once: the reducer dispatch and setters are stable, so the
+  // dispatcher identity never changes and never re-triggers the load effect.
+  const [dispatcher] = React.useState(() =>
+    createLibraryDispatch(rawDispatch, {
+      onCatalogResolved: (resolvedMaterials) => {
+        setVariantSelection((current) => toVariantSelection(current, resolvedMaterials));
+        setFavorites(loadFavorites());
+      }
+    })
+  );
 
   React.useEffect(() => {
-    mountedRef.current = true;
-    runLibraryLoad(designApi, dispatch, attempts);
-    return () => { mountedRef.current = false; };
-  }, [dispatch, attempts]);
+    dispatcher.setMounted(true);
+    runLibraryLoad(designApi, dispatcher.dispatch, attempts);
+    return () => { dispatcher.setMounted(false); };
+  }, [dispatcher, attempts]);
 
   React.useEffect(() => {
     if (!message) return;
@@ -288,7 +353,11 @@ export function CrystalLibraryPage() {
   }, [message]);
 
   const retryLoad = () => {
-    runLibraryLoad(designApi, dispatch, attempts);
+    runLibraryLoad(designApi, dispatcher.dispatch, attempts);
+  };
+
+  const retryDesign = () => {
+    runDesignLoad(designApi, dispatcher.dispatch, attempts);
   };
 
   const allGroups = React.useMemo(() => groupMaterialsByCrystal(materials), [materials]);
@@ -338,15 +407,15 @@ export function CrystalLibraryPage() {
   ) => {
     if (!design) return;
     setIsUpdating(true);
-    dispatch({ type: "operation-started" });
+    dispatcher.dispatch({ type: "operation-started" });
     setMessage("");
     setSavedAt(null);
     try {
       const response = await designApi.update(request);
-      dispatch({ type: "design-resolved", design: response.design });
+      dispatcher.dispatch({ type: "design-resolved", design: response.design });
       setMessage(successMessage);
     } catch (error) {
-      dispatch({ type: "operation-failed", code: toFrontendApiError(error).code });
+      dispatcher.dispatch({ type: "operation-failed", code: toFrontendApiError(error).code });
     } finally {
       setIsUpdating(false);
     }
@@ -406,14 +475,14 @@ export function CrystalLibraryPage() {
   const saveDesign = async () => {
     if (!design) return;
     setIsSaving(true);
-    dispatch({ type: "operation-started" });
+    dispatcher.dispatch({ type: "operation-started" });
     try {
       const response = await designApi.save(design);
-      dispatch({ type: "design-resolved", design: response.design });
+      dispatcher.dispatch({ type: "design-resolved", design: response.design });
       setSavedAt(response.savedAt);
       setMessage("设计已保存。");
     } catch (error) {
-      dispatch({ type: "operation-failed", code: toFrontendApiError(error).code });
+      dispatcher.dispatch({ type: "operation-failed", code: toFrontendApiError(error).code });
     } finally {
       setIsSaving(false);
     }
@@ -867,11 +936,11 @@ export function CrystalLibraryPage() {
 
             {!design ? (
               <div className="mt-4 lg:hidden" data-library-design-notice="mobile">
-                <LibraryDesignUnavailableNotice designNotice={designNotice} onRetry={retryLoad} />
+                <LibraryDesignUnavailableNotice designNotice={designNotice} onRetry={retryDesign} />
               </div>
             ) : null}
 
-            {state.operationNotice ? <div className="mt-4"><FlowNotice code={state.operationNotice} compact onAction={() => dispatch({ type: "operation-notice-dismissed" })} /></div> : null}
+            {state.operationNotice ? <div className="mt-4"><FlowNotice code={state.operationNotice} compact onAction={() => dispatcher.dispatch({ type: "operation-notice-dismissed" })} /></div> : null}
             {message ? (
               <p className="mt-4 rounded-full bg-[var(--accent-soft)] px-5 py-2 text-sm text-[var(--success)]" role="status" data-library-toast="true">{message}</p>
             ) : null}
@@ -952,7 +1021,7 @@ export function CrystalLibraryPage() {
             </div>
             ) : (
               <div className="sticky top-[4.5rem]">
-                <LibraryDesignUnavailableNotice designNotice={designNotice} onRetry={retryLoad} />
+                <LibraryDesignUnavailableNotice designNotice={designNotice} onRetry={retryDesign} />
               </div>
             )}
           </aside>

@@ -13,11 +13,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { FrontendApiError } from "../../../lib/api/frontend-api-error";
 import { mockDesignOptions } from "../../design/fixtures/mock-design-options";
 import {
+  createLibraryDispatch,
   createLibraryLoadAttempts,
   INITIAL_LIBRARY_PAGE_STATE,
   LibraryDesignUnavailableNotice,
   loadFavorites,
   reduceLibraryPage,
+  runDesignLoad,
   runLibraryLoad,
   saveFavorites,
   toggleFavoriteSelection,
@@ -252,6 +254,110 @@ test("favorites toggle and persist through localStorage without regression", () 
   assert.deepEqual([...loadFavorites()], []);
 });
 
+test("design-only retry re-fetches the design without re-requesting or clearing the ready catalog", async () => {
+  const events: LibraryPageEvent[] = [];
+  const attempts = createLibraryLoadAttempts();
+  let materialsCalls = 0;
+  let designSucceeds = false;
+  const api = {
+    get: async () => {
+      if (designSucceeds) return DESIGN;
+      throw new FrontendApiError("NOT_FOUND", "design absent in a fresh database");
+    },
+    materials: async () => {
+      materialsCalls += 1;
+      return CATALOG;
+    }
+  };
+
+  runLibraryLoad(api, (event) => events.push(event), attempts);
+  await settle();
+  assert.equal(materialsCalls, 1);
+  assert.equal(replay(events).status, "ready");
+
+  designSucceeds = true;
+  runDesignLoad(api, (event) => events.push(event), attempts);
+  await settle();
+
+  assert.equal(materialsCalls, 1, "design-only retry must not re-request the catalog");
+  assert.equal(events.filter((event) => event.type === "load-started").length, 1, "design-only retry must not reset page state");
+  const state = replay(events);
+  assert.equal(state.status, "ready");
+  assert.equal(state.design, DESIGN);
+  assert.equal(state.designNotice, null);
+  assert.equal(state.catalogNotice, null);
+  assert.deepEqual(
+    state.materials.map((item) => item.crystalId),
+    ["crystal-clear-quartz", "crystal-amethyst"]
+  );
+});
+
+test("design-only retry failure keeps the ready catalog and stays a design-only degradation", async () => {
+  const events: LibraryPageEvent[] = [];
+  const attempts = createLibraryLoadAttempts();
+  const api = {
+    get: async () => {
+      throw new FrontendApiError("NETWORK_ERROR", "design unreachable");
+    },
+    materials: async () => CATALOG
+  };
+
+  runLibraryLoad(api, (event) => events.push(event), attempts);
+  await settle();
+  runDesignLoad(api, (event) => events.push(event), attempts);
+  await settle();
+
+  const state = replay(events);
+  assert.equal(state.status, "ready");
+  assert.equal(state.design, null);
+  assert.equal(state.designNotice, "NETWORK_ERROR");
+  assert.equal(state.catalogNotice, null);
+  assert.equal(state.materials.length, 2);
+});
+
+test("a stale design result cannot override the newest design attempt", async () => {
+  const firstDesign = defer<PublicDesignV1>();
+  const retryDesign = defer<PublicDesignV1>();
+  let getCall = 0;
+  const events: LibraryPageEvent[] = [];
+  const attempts = createLibraryLoadAttempts();
+  const api = {
+    get: () => {
+      getCall += 1;
+      return getCall === 1 ? firstDesign.promise : retryDesign.promise;
+    },
+    materials: async () => CATALOG
+  };
+
+  runLibraryLoad(api, (event) => events.push(event), attempts);
+  runDesignLoad(api, (event) => events.push(event), attempts);
+  retryDesign.resolve(DESIGN);
+  firstDesign.resolve({ ...DESIGN, designId: "stale-design" });
+  await settle();
+
+  assert.equal(events.filter((event) => event.type === "design-resolved").length, 1);
+  assert.equal(replay(events).design, DESIGN);
+});
+
+test("dispatch is inert once unmounted and side effects only run while mounted", () => {
+  let sideEffectCalls = 0;
+  let dispatchCalls = 0;
+  const dispatcher = createLibraryDispatch(
+    () => { dispatchCalls += 1; },
+    { onCatalogResolved: () => { sideEffectCalls += 1; } }
+  );
+
+  dispatcher.dispatch({ type: "catalog-resolved", materials: CATALOG.materials, accessories: [] });
+  assert.equal(sideEffectCalls, 1);
+  assert.equal(dispatchCalls, 1);
+
+  dispatcher.setMounted(false);
+  dispatcher.dispatch({ type: "catalog-resolved", materials: CATALOG.materials, accessories: [] });
+  dispatcher.dispatch({ type: "design-failed", code: "NOT_FOUND" });
+  assert.equal(sideEffectCalls, 1, "unmounted dispatch must not touch state or storage");
+  assert.equal(dispatchCalls, 1);
+});
+
 test("page never awaits the optional design together with the catalog and gates errors on catalog status only", () => {
   const source = readFileSync(new URL("./crystal-library-page.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(source, /Promise\.all/);
@@ -259,4 +365,7 @@ test("page never awaits the optional design together with the catalog and gates 
   assert.doesNotMatch(source, /if \(!design\) \{\s*return \(/);
   // The mobile degraded notice must exist outside the desktop-only aside.
   assert.match(source, /lg:hidden"[^>]*data-library-design-notice="mobile"/);
+  // Only the catalog error may trigger a full reload; degraded design notices retry the design alone.
+  assert.match(source, /onRetry=\{retryDesign\}/);
+  assert.match(source, /onAction=\{retryLoad\}/);
 });
