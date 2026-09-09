@@ -358,7 +358,7 @@ env/fixtures/db → services（oidc/backend/worker/frontend/h2）→ browser（l
 
 ### 9.5 归档动作与证据边界
 
-- `docs/governance/FEATURE_REGISTRY.md` FEAT-026：PLANNED → **ACTIVE**（生产组合根、路由与 worker 入口齐备，按上表只读核实；Owner 记为 FRONTEND/BACKEND/DATABASE DAG，Gaps 无本任务阻塞，记录 QA-001 真实 127 文件门禁通过）。
+- `docs/governance/FEATURE_REGISTRY.md` FEAT-026：PLANNED → **ACTIVE**（生产组合根、路由与 worker 入口齐备，按上表只读核实；Owner 记为 `SOL -> GLM/QWEN/QA DAG`，与 `docs/governance/MODULE_OWNERS.md` 执行治理口径一致——SOL 仅负责规划、验收记录与归档（不执行 runtime 实现），GLM/QWEN 为本功能已登记任务的实现执行者（GLM：database/backend/storage/pipeline/worker，QWEN：frontend/UI/resolver 及前端向集成），QA 为验收门禁；该 DAG 是单一问责链的登记表达，不暗示任何共享写权限。Gaps 无本任务阻塞，记录 QA-001 真实 127 文件门禁通过）。
 - 本文档历史失败与修复章节（§一–§七）**保留为审计证据**，未删改；§八 为最终绿门禁记录。
 - `/tmp` 日志与截图**不复制入库**；证据仅以本仓库文档记录为准。
 - 本轮改动仅：`docs/governance/FEATURE_REGISTRY.md`（FEAT-026 行）、本文档（本节）与 `docs/tasks/TASK_REGISTRY.md`（REVIEW-001 行 IN_PROGRESS→REVIEW）。无 push / deploy。
