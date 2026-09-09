@@ -485,3 +485,110 @@ test("the QC-block gate locks exactly HTTP 409 + CONFLICT and proves the UI sepa
     "the UI proof must decompose into failure badge + issue text + absence of the approve button on that version"
   );
 });
+
+test("process-group termination is proven by killpg(pgid,0) group-liveness, never unconditional SIGKILL on an exited PGID", () => {
+  const qaScript = readRepo("scripts/ui-qa/bead_import_flow.py");
+  assert.ok(
+    qaScript.includes("def _process_group_alive(pgid: int) -> bool:"),
+    "a killpg(pgid,0) group-liveness probe must exist"
+  );
+  assert.ok(qaScript.includes("os.killpg(pgid, 0)"), "the probe must use the no-op signal 0");
+  const stop = qaScript.slice(qaScript.indexOf("def stop_process_group("), qaScript.indexOf("def wait_for_http("));
+  assert.ok(
+    stop.includes("signalled and _process_group_alive(pgid)"),
+    "the SIGKILL after leader exit must be guarded by both signalled and group-liveness, never fired unconditionally"
+  );
+  assert.ok(
+    stop.includes("still has live members after SIGTERM+SIGKILL (grandchild survived)"),
+    "a surviving grandchild must fail stop_process_group, not be silently ignored"
+  );
+});
+
+test("a stuck-reservation 409 triggers a bounded wait that re-reads the authoritative session before judging stuck", () => {
+  const qaScript = readRepo("scripts/ui-qa/bead_import_flow.py");
+  assert.ok(qaScript.includes("def _source_file_state("), "the helper must re-read the authoritative session file state");
+  assert.ok(qaScript.includes("def _wait_upload_released("), "a bounded-wait helper must exist");
+  const phase = qaScript.slice(qaScript.indexOf("def run_source_set_phase("));
+  assert.ok(
+    phase.includes("_wait_upload_released(client, src_session_id, relative, timeout_s=20)"),
+    "the 409 handler must do a bounded wait, never infer terminal UPLOADING from a single 409"
+  );
+  assert.ok(
+    phase.includes('settled_state in ("FAILED", "PENDING")'),
+    "a FAILED/PENDING transition must trigger the allowed real retry"
+  );
+  assert.ok(
+    phase.includes("still {settled_state} after 20s bounded wait"),
+    "only timeout-still-UPLOADING may be judged stuck"
+  );
+});
+
+test("source-set discovery reports is_dir + size/mtime from the subprocess and the manifest reuses them without main-process stat", () => {
+  const qaScript = readRepo("scripts/ui-qa/bead_import_flow.py");
+  const phase = qaScript.slice(qaScript.indexOf("def run_source_set_phase("));
+  assert.ok(
+    qaScript.includes("is_dir") && qaScript.includes("int(st.st_mtime*1000)"),
+    "discovery must report is_dir and mtime inside the 5s killable subprocess"
+  );
+  assert.ok(
+    phase.includes("size_mtime_by_relative[relative]"),
+    "manifest byteSize/lastModifiedMs must reuse discovery size/mtime"
+  );
+  assert.ok(!phase.includes("stat = path.stat()"), "no main-process per-file stat may remain");
+});
+
+test("the full acceptance gate enforces the authoritative source-set path; a custom --source-set is diagnostic-only", () => {
+  const qaScript = readRepo("scripts/ui-qa/bead_import_flow.py");
+  const phase = qaScript.slice(qaScript.indexOf("def run_source_set_phase("));
+  assert.ok(
+    phase.includes("if str(source_set) != REAL_SOURCE_SET_PATH:"),
+    "the authoritative-path enforcement must gate on the real path"
+  );
+  assert.ok(
+    phase.includes("non-authoritative source set"),
+    "a non-authoritative source set must FAIL sources/discovery"
+  );
+  assert.ok(
+    phase.includes("--source-set is diagnostic-only and must not PASS the full gate"),
+    "the diagnostic-only FAIL must be explicit, so a custom source set cannot exit 0"
+  );
+});
+
+test("merge/split/primary/publish PASS are semantic, not count-only or hardcoded", () => {
+  const qaScript = readRepo("scripts/ui-qa/bead_import_flow.py");
+  const flow = qaScript.slice(qaScript.indexOf("def run_flow("));
+  assert.ok(
+    flow.includes("expected_merge_union = pre_merge_members[merge_target] | pre_merge_members[merge_source]"),
+    "merge must verify the full union of the two source member sets"
+  );
+  assert.ok(flow.includes("merge_union_ok"), "the merge union check must gate flow/merge");
+  assert.ok(
+    flow.includes("partition_union == merged_member_set") && flow.includes("split_disjoint"),
+    "split must verify partition union completeness and mutual exclusion"
+  );
+  assert.ok(flow.includes("primary_unconfirmed"), "primary-confirmed must re-read the authoritative session");
+  assert.ok(
+    !flow.includes('report("flow/primary-confirmed", True,'),
+    "primary-confirmed must not be a hardcoded PASS"
+  );
+  assert.ok(
+    qaScript.includes("isinstance(pr_snapshot, str) and bool(pr_snapshot.strip())"),
+    "publish-result must require a valid non-empty inventorySnapshotId, never any non-empty error JSON"
+  );
+});
+
+test("the required result set mandates the large-body-cap gate and separates backend vs worker readiness", () => {
+  const qaScript = readRepo("scripts/ui-qa/bead_import_flow.py");
+  const requiredBlock = qaScript.slice(
+    qaScript.indexOf("REQUIRED_RESULTS = ["),
+    qaScript.indexOf("def is_browser_only(")
+  );
+  assert.ok(requiredBlock.includes('"services/backend"'), "backend readiness must be its own required result");
+  assert.ok(requiredBlock.includes('"services/worker"'), "worker readiness must be its own required result");
+  assert.ok(!requiredBlock.includes('"services/backend+worker"'), "the combined backend+worker result must be gone");
+  assert.ok(requiredBlock.includes('"sources/proxy-large-body-cap"'), "the large-body-cap gate must be mandatory");
+  assert.ok(
+    qaScript.includes("def worker_ready("),
+    "a real worker readiness check (alive + no fatal startup error) must exist for the portless worker"
+  );
+});

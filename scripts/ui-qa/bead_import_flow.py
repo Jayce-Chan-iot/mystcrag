@@ -101,7 +101,8 @@ REQUIRED_RESULTS = [
     "fixtures/synthetic",
     "db/fresh-test-database",
     "services/oidc-provider",
-    "services/backend+worker",
+    "services/backend",
+    "services/worker",
     "services/frontend",
     "browser/login+guard",
     "browser/create-session",
@@ -143,6 +144,7 @@ REQUIRED_RESULTS = [
     "browser/approved-product-renders",
     "mobile/status-reviews-viewport",
     "sources/discovery",
+    "sources/proxy-large-body-cap",
     "sources/import-roundtrip",
     "sources/grouping-pairs",
 ]
@@ -281,6 +283,27 @@ def cleanup() -> None:
             CLEANUP_ERRORS.append(
                 f"process {name} (pid {proc.pid}) still alive after termination (cleanup)"
             )
+        elif proc.pid in signalled_pids and _process_group_alive(proc.pid):
+            # leader 已退出但进程组仍存活（孙进程无视信号）：对本次发过信号的组补一发
+            # SIGKILL 并再次探测，仍未消失才记 CLEANUP_ERROR。绝不对未发过信号的旧
+            # PGID 探测（其 PGID 可能已被回收重用，探测会误判/误杀无关进程组）。
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            except Exception as exc:
+                CLEANUP_ERRORS.append(
+                    f"cleanup: SIGKILL group {name} (pgid {proc.pid}) after leader exit failed: {repr(exc)[:160]}"
+                )
+            for _ in range(30):
+                if not _process_group_alive(proc.pid):
+                    break
+                time.sleep(0.3)
+            if _process_group_alive(proc.pid):
+                CLEANUP_ERRORS.append(
+                    f"process group {name} (pgid {proc.pid}) still has live members after "
+                    "SIGTERM+SIGKILL (grandchild survived)"
+                )
         print(f"CLEANUP | stopped {name}", flush=True)
     # 阶段三：全部进程终止后再对去重端口逐一检查关闭。同一端口被多个进程名共用时只
     # 检查一次（旧 backend 与 backend-2 共用 4100：必须等两者都停后再查，不得误报）。
@@ -524,30 +547,67 @@ def spawn(name: str, command: list[str], env: dict, log_path: Path, port: int | 
     return proc
 
 
+def _process_group_alive(pgid: int) -> bool:
+    """探测进程组是否存在（killpg(pgid, 0)，无副作用）。
+
+    返回 True 表示组内仍有至少一个进程（含 leader 已退、孙进程仍活的情况）；
+    返回 False 表示组已消失。这是“整组终止”的唯一权威证据：仅凭 leader 退出
+    不足以证明组内孙进程已死，尤其对无端口的 worker 没有端口可查。
+    """
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # 组存在但当前进程无权限发信号（0 信号本应始终允许），保守视为仍存活。
+        return True
+
+
 def stop_process_group(name: str, proc: subprocess.Popen, port: int | None = None, timeout_s: int = 25) -> None:
-    """终止并验证整个进程组：进程退出 + 端口关闭；任一超时即失败。"""
+    """终止并验证整个进程组：leader 与孙进程全部消失（killpg(pgid,0) 证明），
+    有端口再验证端口关闭；任一超时即失败。
+
+    关键不变量：
+      - leader 可能对 SIGTERM 先退，但组内孙进程（next-server/worker）仍活；必须用
+        killpg(pgid,0) 证明整组消失，而非仅凭 proc.wait() 返回就宣称终止。
+      - 绝不对已消失的旧 PGID 无条件补发 SIGKILL：只在“本次确实发过信号且组仍存活”
+        时才补 SIGKILL，避免 PGID 被系统回收重用后误杀无关进程组。
+    """
+    pgid = proc.pid
+    signalled = False
     if proc.poll() is None:
         try:
-            os.killpg(proc.pid, signal.SIGTERM)
+            os.killpg(pgid, signal.SIGTERM)
+            signalled = True
         except ProcessLookupError:
             pass
     try:
         proc.wait(timeout=timeout_s)
     except subprocess.TimeoutExpired:
+        # leader 无视 SIGTERM：补一发 SIGKILL（含孙进程），再等待。
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except Exception:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
             pass
         proc.wait(timeout=10)
-    else:
-        # pnpm 主进程可能已对 SIGTERM 先退，但组内 next-server/worker 孙进程仍在；
-        # 无条件补一发 SIGKILL 再验证端口，端口未关即失败。
+    # leader 已退出后，孙进程可能仍在；仅当组确实仍存活且本次发过信号时才补 SIGKILL。
+    if signalled and _process_group_alive(pgid):
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except Exception:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
             pass
     if proc.poll() is None:
-        raise RuntimeError(f"{name}: process did not exit after SIGTERM+SIGKILL")
+        raise RuntimeError(f"{name}: leader (pid {pgid}) did not exit after SIGTERM+SIGKILL")
+    # 证明整个进程组已消失（覆盖 leader 先退、孙进程仍活的情况）；worker 无端口时
+    # 这是唯一的“旧组消失”证明。有界等待后仍存活即失败。
+    deadline = time.time() + 15
+    while _process_group_alive(pgid) and time.time() < deadline:
+        time.sleep(0.3)
+    if _process_group_alive(pgid):
+        raise RuntimeError(
+            f"{name}: process group {pgid} still has live members after SIGTERM+SIGKILL (grandchild survived)"
+        )
     if port is not None:
         wait_port_closed(port, timeout_s=15)
 
@@ -573,6 +633,27 @@ def wait_port_closed(port: int, timeout_s: int = 20) -> None:
     """端口必须在超时内关闭，否则视为终止失败（fail-fast，不再静默返回）。"""
     if not port_is_closed(port, timeout_s=timeout_s):
         raise RuntimeError(f"port {port} still accepting connections after {timeout_s}s")
+
+
+def worker_ready(worker: subprocess.Popen, worker_log: Path, timeout_s: int = 20) -> None:
+    """无端口 worker 的就绪证据：进程存活 + 日志未出现 fatal 启动错误。
+
+    asset-worker 在进入 poll 循环前会依次构造 ArchiveStore、连 Prisma、进入 run()；
+    任何一步失败都立即 fatal 退出或写 fatal 日志。因此“存活且无 fatal”即证明它已
+    完成启动并进入轮询（worker 无端口，这是唯一可观测的就绪信号）。有界等待一个
+    启动窗口：期间若进程退出或日志出现 fatal 即判未就绪，绝不静默放行。
+    """
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if worker.poll() is not None:
+            tail = worker_log.read_text(errors="replace")[-400:] if worker_log.exists() else ""
+            raise RuntimeError(
+                f"asset-worker exited during startup (rc={worker.returncode}): {tail}"
+            )
+        if worker_log.exists() and "fatal" in worker_log.read_text(errors="replace").lower():
+            tail = worker_log.read_text(errors="replace")[-400:]
+            raise RuntimeError(f"asset-worker logged a fatal error during startup: {tail}")
+        time.sleep(0.5)
 
 
 def create_database(temp_root: Path) -> tuple[str, str]:
@@ -931,6 +1012,34 @@ def get_session(client: AdminClient, session_id: str) -> dict:
     return response.json()
 
 
+def _source_file_state(client: AdminClient, session_id: str, relative: str) -> str:
+    """重读权威 session，返回该 relativePath 文件的状态（未知返回空串）。"""
+    snapshot = get_session(client, session_id)
+    for file in snapshot.get("files", []):
+        if file.get("relativePath") == relative:
+            return file.get("state", "")
+    return ""
+
+
+def _wait_upload_released(
+    client: AdminClient, session_id: str, relative: str, timeout_s: int = 20
+) -> str:
+    """有界等待并重读权威 session：文件一旦离开 UPLOADING（转 FAILED/PENDING 等可重试
+    态，说明上传保留已释放）即返回该状态；超时仍 UPLOADING 返回 "UPLOADING"。
+
+    这用于取代“即时 409 即判终态 UPLOADING/永不释放”的推断：409 只说明“此刻”仍
+    占用，不说明“永不”释放。只有有界等待后仍 UPLOADING 才能如实判 stuck。
+    """
+    deadline = time.time() + timeout_s
+    state = "UPLOADING"
+    while time.time() < deadline:
+        state = _source_file_state(client, session_id, relative)
+        if state != "UPLOADING":
+            return state
+        time.sleep(1.0)
+    return state
+
+
 def reserve_port(preferred: int, explicitly_requested: bool) -> int:
     """默认端口被占用（本机常有其他 worktree 的 dev server 并行）时改用临时端口，
     避免把请求发给别的 worktree 的服务；显式指定的端口冲突则报错，绝不静默重定位。"""
@@ -1263,7 +1372,12 @@ def run_flow(args: argparse.Namespace) -> None:
     probe = requests.Session()
     try:
         wait_for_http(f"http://127.0.0.1:{BACKEND_PORT}/api/assets/approved:{'0'*64}", 120, probe)
-        report("services/backend+worker", True, f"backend :{BACKEND_PORT}; worker poll {WORKER_POLL_MS}ms")
+        report("services/backend", True, f"backend :{BACKEND_PORT} HTTP-ready")
+        worker_ready(worker, worker_log, timeout_s=20)
+        report(
+            "services/worker", True,
+            f"asset-worker alive (pid {worker.pid}) with no fatal startup error; poll {WORKER_POLL_MS}ms",
+        )
         wait_for_http(f"http://localhost:{FRONTEND_PORT}/", 240, probe)
         report("services/frontend", True, f"next dev :{FRONTEND_PORT}")
     except Exception as exc:
@@ -1701,8 +1815,10 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
             stop_process_group("asset-worker", worker, timeout_s=25)
             report(
                 "flow/restart-termination", True,
-                f"backend group (pid {old_backend_pid}) and worker group (pid {old_worker_pid}) "
-                f"terminated; port {BACKEND_PORT} verified closed",
+                f"backend group (pgid {old_backend_pid}) and worker group (pgid {old_worker_pid}) "
+                f"terminated (killpg(pgid,0) probes confirmed both whole groups gone, not just "
+                f"leader exit; worker has no port so its group-liveness probe is the only proof); "
+                f"port {BACKEND_PORT} verified closed",
             )
             backend2 = spawn("backend-2", ["pnpm", "--filter", "@mystcrag/backend", "exec", "tsx", "src/index.ts"], backend_env, backend_log, port=BACKEND_PORT)
             worker2 = spawn("asset-worker-2", ["pnpm", "--filter", "@mystcrag/asset-worker", "start"], worker_env, worker_log)
@@ -1924,6 +2040,10 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
                 if g["groupId"] != poor_group_id and not _group_is_arw_only(g)
             ]
             merge_target, merge_source = merge_candidates[0], merge_candidates[1]
+            pre_merge_members = {
+                g["groupId"]: set(g["memberFileIds"]) for g in session["groups"]
+            }
+            expected_merge_union = pre_merge_members[merge_target] | pre_merge_members[merge_source]
             if args.skip_browser:
                 revision = next(g["revision"] for g in session["groups"] if g["groupId"] == merge_target)
                 merged = client.proxy(
@@ -1943,14 +2063,19 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
                 merge_groups_via_ui(page, merge_target, merge_source)
             session = get_session(client, session_id)
             after_merge = [g["groupId"] for g in session["groups"]]
+            merged_group = next(g for g in session["groups"] if g["groupId"] == merge_target)
+            merge_union_ok = set(merged_group["memberFileIds"]) == expected_merge_union
             report(
-                "flow/merge", len(after_merge) == len(initial_group_ids) - 1,
+                "flow/merge",
+                len(after_merge) == len(initial_group_ids) - 1 and merge_union_ok,
                 f"{len(initial_group_ids)} -> {len(after_merge)} groups via "
-                + ("the BFF proxy (skip-browser)" if args.skip_browser else "the browser group editor"),
+                + ("the BFF proxy (skip-browser)" if args.skip_browser else "the browser group editor")
+                + f"; merged member union complete={merge_union_ok} "
+                f"({len(merged_group['memberFileIds'])} members == union of the two source groups)",
             )
 
-            merged_group = next(g for g in session["groups"] if g["groupId"] == merge_target)
             members = merged_group["memberFileIds"]
+            merged_member_set = set(members)
             half = max(1, len(members) // 2)
             revision = merged_group["revision"]
             if args.skip_browser:
@@ -1964,10 +2089,24 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
                 split_group_via_ui(page, merge_target, members[:half])
             session = get_session(client, session_id)
             after_split_count = len(session["groups"])
+            split_partitions = [
+                set(g["memberFileIds"]) & merged_member_set
+                for g in session["groups"]
+                if set(g["memberFileIds"]) & merged_member_set
+            ]
+            partition_union = set().union(*split_partitions) if split_partitions else set()
+            split_disjoint = len(split_partitions) == 2 and not (split_partitions[0] & split_partitions[1])
+            split_ok = (
+                len(split_partitions) == 2
+                and partition_union == merged_member_set
+                and split_disjoint
+            )
             report(
-                "flow/split", after_split_count == len(initial_group_ids),
+                "flow/split",
+                after_split_count == len(initial_group_ids) and split_ok,
                 f"{len(after_merge)} -> {after_split_count} groups (must return to {len(initial_group_ids)}; "
-                "a no-op split is a failure)",
+                f"a no-op split is a failure); partition union={partition_union == merged_member_set} "
+                f"disjoint={split_disjoint} partitions={len(split_partitions)}",
             )
 
             # 6b. ARW-only 组没有可处理栅格，worker 必然终态失败（UNSUPPORTED_SOURCE_KIND）
@@ -2022,6 +2161,7 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
                 report("flow/arw-only-merge", True, "ARW-only group merged into a raster group (operator path)")
 
             session = get_session(client, session_id)
+            expected_primary: dict[str, str] = {}
             for group in session["groups"]:
                 if group["groupId"] == poor_group_id:
                     # 差背景组先确认差样本为主片（触发 QC 失败演示）；拯救片留给恢复路径。
@@ -2033,6 +2173,7 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
                     primary = _raster_primary(group)
                 if primary is None:
                     raise RuntimeError(f"group {group['groupId']} has no raster member to confirm as primary")
+                expected_primary[group["groupId"]] = primary
                 current = group.get("primaryFileId")
                 if current == primary:
                     continue
@@ -2048,8 +2189,23 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
                     if set_primary.status_code != 200:
                         raise RuntimeError(f"set primary refused: {set_primary.status_code} {set_primary.text[:200]}")
                 else:
+                    # 浏览器人工确认动作：点击真实“将 X 设为主图”按钮（ui_mutation 捕获
+                    # 真实 PATCH 并断言 200）；结果仍需重读权威 session 复核。
                     set_primary_via_ui(page, group["groupId"], relative_by_file_id[primary])
-            report("flow/primary-confirmed", True, "every group carries a human-confirmed raster primary")
+            # 重读权威 session，逐组复核 primaryFileId 与人工确认的主片一致（不能只凭
+            # “已发送 PATCH”就宣称确认成功）。
+            confirmed_session = get_session(client, session_id)
+            primary_unconfirmed = [
+                g["groupId"] for g in confirmed_session["groups"]
+                if g.get("primaryFileId") != expected_primary.get(g["groupId"])
+            ]
+            report(
+                "flow/primary-confirmed",
+                not primary_unconfirmed,
+                f"every group carries a human-confirmed raster primary; authoritative primaryFileId "
+                f"re-verified on all {len(expected_primary)} groups"
+                + (f"; UNCONFIRMED={primary_unconfirmed[:4]}" if primary_unconfirmed else ""),
+            )
             if args.skip_browser:
                 skipped("browser/groups-page-render", "--skip-browser: 确认分组页渲染为浏览器专属")
             else:
@@ -2660,15 +2816,22 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
                 # 构造发布请求。
                 published_response = publish_via_ui(page, good_group_id)
                 published_body = published_response.json()
-            has_snapshot = bool(published_body.get("inventorySnapshotId")) or bool(
-                client.proxy("GET", f"/groups/{good_group_id}/publish-result").json()
-            )
+            snapshot_id = published_body.get("inventorySnapshotId")
+            has_snapshot = isinstance(snapshot_id, str) and bool(snapshot_id.strip())
+            if not has_snapshot:
+                # 反查权威 publish-result：只有 inventorySnapshotId 有效非空才算通过；
+                # 任意非空错误 JSON（无该字段或为空）不得折算为 PASS。
+                pr = client.proxy("GET", f"/groups/{good_group_id}/publish-result")
+                if pr.status_code == 200:
+                    pr_body = pr.json() if pr.text.strip() else {}
+                    pr_snapshot = pr_body.get("inventorySnapshotId") if isinstance(pr_body, dict) else None
+                    has_snapshot = isinstance(pr_snapshot, str) and bool(pr_snapshot.strip())
             report(
                 "flow/publish",
                 published_body.get("publishedAssetKeys") == [approved_asset_key] and has_snapshot,
                 "publication via " + ("the real browser publish form (loader → BFF → backend)" if not args.skip_browser else "the BFF proxy mirror (skip-browser)")
                 + f"; publishedAssetKeys={published_body.get('publishedAssetKeys')} "
-                + f"inventory snapshot present={bool(has_snapshot)}",
+                + f"inventorySnapshotId valid={has_snapshot}",
             )
 
             public_asset = client.direct("GET", f"/api/assets/{approved_asset_key}")
@@ -2871,27 +3034,30 @@ def _read_and_sha(path: Path, timeout_s: int = 5) -> tuple[bytes, str]:
     return result.stdout, hashlib.sha256(result.stdout).hexdigest()
 
 
-def _discover_source_set(source_set: Path, timeout_s: int = 5) -> list[tuple[str, str, int, str]]:
-    """只读发现（rglob + stat，不读文件内容）隔离在带 5s 超时的子进程里执行。
+def _discover_source_set(source_set: Path, timeout_s: int = 5) -> dict:
+    """只读发现（is_dir + rglob + stat，不读文件内容）隔离在带 5s 超时的子进程里执行。
 
     超时即整组终止并抛 subprocess.TimeoutExpired；源文件绝不被读取内容/写入/移动。
-    返回 [(relativePath, 绝对路径, byteSize, kind)]，只含 .jpg/.arw。
+    返回 {"is_dir": bool, "files": [(relativePath, 绝对路径, byteSize, mtimeMs, kind)]}，
+    只含 .jpg/.arw。is_dir 与每个文件的 size/mtime 都在子进程内 stat，主进程据此复用
+    （manifest 的 byteSize/lastModifiedMs 不再回主进程重复 stat）。
     """
     import subprocess as sp
 
     code = (
         "import json,sys\n"
         "from pathlib import Path\n"
-        "root=Path(sys.argv[1]); out=[]\n"
-        "for path in sorted(root.rglob('*')):\n"
-        "    if not path.is_file():\n"
-        "        continue\n"
-        "    ext=path.suffix.lower()\n"
-        "    if ext not in ('.jpg','.arw'):\n"
-        "        continue\n"
-        "    st=path.stat()\n"
-        "    kind='JPEG' if ext=='.jpg' else 'ARW'\n"
-        "    out.append((path.relative_to(root).as_posix(), str(path), st.st_size, kind))\n"
+        "root=Path(sys.argv[1]); out={'is_dir': root.is_dir(), 'files': []}\n"
+        "if out['is_dir']:\n"
+        "    for path in sorted(root.rglob('*')):\n"
+        "        if not path.is_file():\n"
+        "            continue\n"
+        "        ext=path.suffix.lower()\n"
+        "        if ext not in ('.jpg','.arw'):\n"
+        "            continue\n"
+        "        st=path.stat()\n"
+        "        kind='JPEG' if ext=='.jpg' else 'ARW'\n"
+        "        out['files'].append((path.relative_to(root).as_posix(), str(path), st.st_size, int(st.st_mtime*1000), kind))\n"
         "print(json.dumps(out))\n"
     )
     result = sp.run(
@@ -2939,13 +3105,13 @@ def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_
     """
     source_set = Path(args.source_set)
     files: list[tuple[str, Path, str]] = []  # (relativePath, path, kind)
+    # 每个文件的 size/mtime 由子进程发现一次性带回，主进程 manifest 直接复用，不再逐
+    # 文件回主进程 stat（源操作全部在 5s 可强杀子进程内，主进程零源 IO）。
+    size_mtime_by_relative: dict[str, tuple[int, int]] = {}
 
     try:
-        if not source_set.is_dir():
-            report("sources/discovery", False, f"source set not found: {source_set}")
-            return
-        # 只读发现（rglob + stat，不读文件内容）隔离在可强杀子进程里执行；5s 阶段
-        # 超时即如实记 FAIL 并整组终止，绝不无限阻塞主进程（挂起存储），也不伪造结果。
+        # 只读发现（is_dir + rglob + stat，不读文件内容）隔离在可强杀子进程里执行；5s
+        # 阶段超时即如实记 FAIL 并整组终止，绝不无限阻塞主进程（挂起存储），也不伪造。
         try:
             discovered = _discover_source_set(source_set, timeout_s=5)
         except subprocess.TimeoutExpired:
@@ -2955,7 +3121,27 @@ def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_
                 "forcibly terminated (stat/rglob on a stalled store); no composition was inferred below",
             )
             return
-        files = [(relative, Path(abs_path), kind) for relative, abs_path, _, kind in discovered]
+        if not discovered.get("is_dir"):
+            report("sources/discovery", False, f"source set not found or not a directory: {source_set}")
+            return
+        # 完整验收强制权威路径；自定义 --source-set 仅诊断用途，必须如实 FAIL 并停止本
+        # 阶段（不得让完整门禁以非权威源集退出 0，也不伪造 PASS）。
+        if str(source_set) != REAL_SOURCE_SET_PATH:
+            report(
+                "sources/discovery", False,
+                f"non-authoritative source set {source_set}: the full acceptance gate requires "
+                f"{REAL_SOURCE_SET_PATH} with the exact baseline {REAL_SOURCE_SET_BASELINE}; a custom "
+                f"--source-set is diagnostic-only and must not PASS the full gate",
+            )
+            return
+        files = [
+            (relative, Path(abs_path), kind)
+            for relative, abs_path, _, _, kind in discovered["files"]
+        ]
+        size_mtime_by_relative = {
+            relative: (size, mtime)
+            for relative, _, size, mtime, _ in discovered["files"]
+        }
         if not files:
             report("sources/discovery", False, "source set contains no .jpg/.arw files")
             return
@@ -2971,9 +3157,9 @@ def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_
         jpg_count = sum(1 for _, _, kind in files if kind == "JPEG")
         top_dirs = {relative.split("/")[0] for relative, _, _ in files}
         actual = {"dirs": len(top_dirs), "files": len(files), "jpg": jpg_count, "arw": len(files) - jpg_count}
-        # E：真实桌面素材库强制基线（26 目录 / 127 文件 / 65 JPG / 62 ARW）；任何偏差
-        # 都如实 FAIL 并给出实际/期望对照。指向其它源目录时仍报告实际构成，不做伪造。
-        if str(source_set) == REAL_SOURCE_SET_PATH and actual != REAL_SOURCE_SET_BASELINE:
+        # 完整验收强制精确基线（26 目录 / 127 文件 / 65 JPG / 62 ARW）；任何偏差都如实
+        # FAIL 并给出实际/期望对照。
+        if actual != REAL_SOURCE_SET_BASELINE:
             report(
                 "sources/discovery", False,
                 f"real source-set baseline mismatch: actual={actual} expected={REAL_SOURCE_SET_BASELINE} "
@@ -2985,9 +3171,8 @@ def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_
             f"{len(files)} files ({jpg_count} JPG + {len(files) - jpg_count} ARW) in {len(top_dirs)} "
             f"top-level directories, {len(stem_dirs)} stems, {len(cross_stems)} cross-folder stems "
             f"({sorted(cross_stems)[:3]}), {len(jpg_only_stems)} jpg-only stems, "
-            f"{len(arw_only_stems)} arw-only stems (read-only isolated enumeration, ≤5s/op)"
-            + ("" if str(source_set) != REAL_SOURCE_SET_PATH
-               else f"; baseline dirs/files/JPG/ARW={actual} matched"),
+            f"{len(arw_only_stems)} arw-only stems (read-only isolated enumeration, ≤5s/op); "
+            f"baseline dirs/files/JPG/ARW={actual} matched",
         )
     except Exception as exc:
         report("sources/discovery", False, f"probe failed: {repr(exc)[:200]}")
@@ -3007,12 +3192,12 @@ def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_
         src_session_id = created.json().get("sessionId")
         entries = []
         for relative, path, kind in files:
-            stat = path.stat()
+            byte_size, mtime = size_mtime_by_relative[relative]
             entries.append({
                 "clientFileId": "src-" + hashlib.sha256(relative.encode()).hexdigest()[:16],
                 "relativePath": relative,
-                "byteSize": stat.st_size,
-                "lastModifiedMs": int(stat.st_mtime * 1000),
+                "byteSize": byte_size,
+                "lastModifiedMs": mtime,
                 "kind": kind,
             })
         manifest = client.proxy(
@@ -3056,26 +3241,55 @@ def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_
                 try:
                     result = upload_direct_backend(client, src_session_id, file_id, data)
                 except Exception as direct_exc:
-                    # 代理截断已把该文件保留为 UPLOADING（后端在流中断时未释放上传保留——
-                    # 第二个真实缺陷），直连同一 content 路由因此返回 409。如实记录并继续，
-                    # 后续同样大小的 ARW 命中同一缺陷时逐个记录，绝不静默崩掉整个阶段。
-                    direct_backend_failures.append(
-                        f"{relative} ({type(direct_exc).__name__}: {str(direct_exc)[:120]})"
-                    )
-                    upload_failures.append(f"{relative}:DIRECT_BACKEND_FAILED")
-                    continue
+                    # 即时 409 不能推断“终态 UPLOADING/永不释放”：代理截断确实把文件留成
+                    # UPLOADING（后端流中断未释放保留——真实缺陷），但 409 只证明“此刻”
+                    # 占用。有界等待并重读权威 session：文件转 FAILED/PENDING（保留已释放）
+                    # 则走允许的真实重试；等待期间被归档则视为成功；只有超时仍 UPLOADING
+                    # 才如实判 stuck。绝不把单个即时 409 当作“永不释放”的终态证据。
+                    settled_state = _wait_upload_released(client, src_session_id, relative, timeout_s=20)
+                    if settled_state in ("FAILED", "PENDING"):
+                        try:
+                            result = upload_direct_backend(client, src_session_id, file_id, data)
+                        except Exception as retry_exc:
+                            direct_backend_failures.append(
+                                f"{relative} (retry after {settled_state} -> "
+                                f"{type(retry_exc).__name__}: {str(retry_exc)[:120]})"
+                            )
+                            upload_failures.append(f"{relative}:DIRECT_BACKEND_FAILED")
+                            continue
+                    elif settled_state in ("ARCHIVED", "SKIPPED_DUPLICATE"):
+                        # 等待期间 worker 已归档（保留释放并落账）：视为成功，不记失败。
+                        continue
+                    else:
+                        direct_backend_failures.append(
+                            f"{relative} (still {settled_state} after 20s bounded wait; "
+                            f"upload reservation not released)"
+                        )
+                        upload_failures.append(f"{relative}:STUCK_{settled_state}")
+                        continue
             if result["uploadStatus"] not in ("UPLOADING", "ARCHIVED"):
                 upload_failures.append(f"{relative}:{result['uploadStatus']}")
         if proxy_failures:
-            report(
-                "sources/proxy-large-body-cap", False,
+            fallback_ok = len(proxy_failures) - len(direct_backend_failures)
+            detail = (
                 f"{len(proxy_failures)}/{total_files} real files failed through the real admin proxy "
                 f"(observed error, never inferred from file size): first={proxy_failures[0][0]} "
-                f"@ {proxy_failures[0][1]} bytes -> {proxy_failures[0][2]}. Each failed file was then "
-                f"uploaded direct to the same backend content route only to continue diagnostics, so "
-                f"archive/SHA/grouping integrity below still covers every real file. When the frontend "
-                f"server body cap is raised above the ARW raw sizes this gate auto-PASSes.",
+                f"@ {proxy_failures[0][1]} bytes -> {proxy_failures[0][2]}. "
             )
+            if fallback_ok:
+                detail += (
+                    f"{fallback_ok} of them were then uploaded direct to the same backend content route "
+                    f"and ARE covered by archive/SHA/grouping integrity below. "
+                )
+            if direct_backend_failures:
+                detail += (
+                    f"{len(direct_backend_failures)} of them also failed the direct-backend fallback "
+                    f"(stuck reservation), so archive/SHA/grouping integrity does NOT cover those files. "
+                )
+            detail += (
+                "When the frontend server body cap is raised above the ARW raw sizes this gate auto-PASSes."
+            )
+            report("sources/proxy-large-body-cap", False, detail)
         else:
             report(
                 "sources/proxy-large-body-cap", True,
@@ -3084,15 +3298,15 @@ def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_
             )
 
         if direct_backend_failures:
-            # 存在被代理截断卡死在 UPLOADING 的文件：归档永不结算，settle 轮询会白等
-            # 600s。诚实快速失败——import-roundtrip 判 FAIL（真实缺陷：前端 body cap <
-            # ARW 原始字节 + 后端流中断未释放上传保留），grouping-pairs 因归档不完整
-            # 无法评估（留给 SUMMARY 记 MISSING），绝不伪造通过。
+            # 存在经有界等待（重读权威 session）后仍 UPLOADING 的文件：其上传保留在观察
+            # 窗口内未释放（后端流中断未释放保留——真实缺陷），归档不会结算。诚实快速
+            # 失败——import-roundtrip 判 FAIL，grouping-pairs 因归档不完整无法评估（留给
+            # SUMMARY 记 MISSING），绝不伪造通过。
             report(
                 "sources/import-roundtrip", False,
-                f"{len(direct_backend_failures)} real files left stuck UPLOADING after the admin "
-                f"proxy aborted their bodies mid-stream AND the backend never released the upload "
-                f"reservation (direct-backend retry -> 409 CONFLICT). "
+                f"{len(direct_backend_failures)} real files remained UPLOADING after a 20s bounded "
+                f"wait re-reading the authoritative session (the backend did not release the upload "
+                f"reservation after the admin proxy aborted their bodies mid-stream). "
                 f"first={direct_backend_failures[0]}. Real runtime defect: frontend body cap < ARW "
                 f"raw size and reservation not released on stream abort — not a QA inference.",
             )
@@ -3409,6 +3623,72 @@ def _selftest_cleanup_two_phase() -> bool:
     return ok
 
 
+def _selftest_process_group_termination() -> bool:
+    """真实进程组终止语义回归：leader 先退出但孙进程（无视 SIGTERM）仍活时，
+    stop_process_group 必须证明整个组消失（killpg(pgid,0)），绝不仅凭 leader 退出就
+    宣称已终止。无端口的 worker 同类证明也走同一条路径。"""
+    import subprocess as sp
+
+    # 孙进程：捕获 SIGTERM 忽略之，只对 SIGKILL 退；打印 PID 供主进程验证其生死。
+    grandchild_code = (
+        "import signal,time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "print('ready', flush=True)\n"
+        "time.sleep(300)\n"
+    )
+    # leader：start_new_session 使 leader.pid == PGID；孙进程继承同一进程组。leader 在
+    # 收到 SIGTERM 前一直存活，收到后立即退出（模拟“leader 先退、孙进程仍活”）。
+    leader_code = (
+        "import subprocess,sys,time,signal\n"
+        f"gc=subprocess.Popen([sys.executable,'-c',{grandchild_code!r}], stdout=subprocess.PIPE, text=True)\n"
+        "line=gc.stdout.readline().strip()\n"
+        "print(gc.pid, flush=True)\n"
+        "def _h(s,f): sys.exit(0)\n"
+        "signal.signal(signal.SIGTERM, _h)\n"
+        "time.sleep(300)\n"
+    )
+    leader = sp.Popen(
+        [sys.executable, "-c", leader_code], stdout=sp.PIPE, text=True, start_new_session=True
+    )
+    pgid = leader.pid
+    grandchild_pid = 0
+    ok = False
+    try:
+        grandchild_pid = int(leader.stdout.readline().strip())
+        # 有界等待孙进程真正进入忽略-SIGTERM 循环（读 PID 只说明其已 fork，未必已装 handler）。
+        time.sleep(0.5)
+        stop_process_group("selftest-grandchild", leader, port=None, timeout_s=15)
+        leader_gone = leader.poll() is not None
+        gc_gone = False
+        try:
+            os.kill(grandchild_pid, 0)
+        except ProcessLookupError:
+            gc_gone = True
+        ok = leader_gone and gc_gone
+        print(
+            f"SELF-TEST process-group-termination: leader_gone={leader_gone} "
+            f"grandchild_gone={gc_gone} -> {'PASS' if ok else 'FAIL'}",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"SELF-TEST process-group-termination: raised {repr(exc)[:200]} -> FAIL", flush=True)
+        ok = False
+    finally:
+        # 兜底：无论断言结果，确保孙进程组被清场（不留下孤儿进程污染后续自检）。
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        except Exception:
+            pass
+        try:
+            if grandchild_pid:
+                os.kill(grandchild_pid, signal.SIGKILL)
+        except Exception:
+            pass
+    return ok
+
+
 def _selftest_cross_pair_ok() -> bool:
     """成功分组路径必须得到真正的布尔值（旧代码 `all(单个 bool)` 直接抛
     TypeError），且跨目录同 stem 分组正确判定 True/False。"""
@@ -3441,6 +3721,7 @@ def run_self_tests() -> bool:
     tests = [
         ("finish-order", _selftest_finish_order),
         ("cleanup-two-phase", _selftest_cleanup_two_phase),
+        ("process-group-termination", _selftest_process_group_termination),
         ("cross-pair-ok", _selftest_cross_pair_ok),
     ]
     results: list[str] = []

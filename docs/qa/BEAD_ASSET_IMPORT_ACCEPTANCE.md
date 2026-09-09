@@ -3,15 +3,15 @@
 - 任务：`TASK-ASSET-QA-001`（一次性集成 / 架构 / 本地验收门，计划 Task 7）
 - 分支：`task/asset-qa-001-integration-gate`（worktree `.worktrees/asset-qa-001`，基线 `6e79b66`）
 - 执行：DeepSeek-V4-Flash（产品负责人 2026-09-09 授权接管最终 QA 修复，接替 GLM-5.3-Flash）
-- 日期：2026-09-09（本记录；此前 2026-09-08 的 35 PASS 记录与 2026-09-09 的 44 PASS / 4 FAIL 记录均已被本轮真实浏览器结果**取代 superseded**）
-- 结论：**BLOCKED —— review gate failed（45 PASS / 4 FAIL / 0 SKIP / 1 MISSING，退出码 1），清理 0 错误；review 未通过**。
+- 日期：2026-09-09（本记录；此前 2026-09-08 的 35 PASS 记录与 2026-09-09 的 45 PASS / 4 FAIL / 1 MISSING 记录均已被本轮真实浏览器结果**取代 superseded**）
+- 结论：**BLOCKED —— review gate failed（47 PASS / 4 FAIL / 0 SKIP / 0 MISSING，退出码 1），清理 0 错误；review 未通过**。
 
 发布路径已升级为**真实浏览器驱动**（合成 OIDC 拓扑 + 真实最终用户登录回环 + 目录选择经真实
 `#bead-import-folder-input` 目录选择产生 manifest 与 PUT，全流程 UI）。目录可见性按产品负责人既定的
 “严格诚实 FAIL”裁定：必须先经真实 UI 发布、再断言目录；发布负载缺 `modelAssetKey` 使成品不出现在设计
 目录 → `flow/published-product-public` 与 `browser/approved-product-renders` **如实记 FAIL 并作为硬阻塞**，
 直至一个前端任务让发布负载携带 `modelAssetKey`。另两条 FAIL 是**真实规模下暴露的 runtime 缺陷**（Next
-10 MiB 路由体上限 + 后端在代理流中断时未释放上传保留），同样如实记录。本任务未修改任何 runtime 代码，
+10 MiB 路由体上限 + 真实源集自动分组不收敛），同样如实记录。本任务未修改任何 runtime 代码，
 只修复 QA 脚本自身缺陷并补充证据；全部 FAIL 的修复归属于后续 runtime 任务（见“四、四项 FAIL 与根因”）。
 
 ## 一、真实命令
@@ -24,10 +24,10 @@
 # 1. 语法编译
 env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -m py_compile scripts/ui-qa/bead_import_flow.py
 
-# 2. 架构测试（13/13 通过）
+# 2. 架构测试（19/19 通过）
 node --test tests/bead-asset-import-architecture.test.mjs
 
-# 2b. 内建单元自检（不起服务/不建库/不开浏览器；finish-order + cleanup-two-phase + cross-pair-ok 三个探针）
+# 2b. 内建单元自检（不起服务/不建库/不开浏览器；finish-order + cleanup-two-phase + cross-pair-ok + process-group-termination 四个探针）
 env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -u scripts/ui-qa/bead_import_flow.py --self-test
 
 # 3. 完整集成验收（真实浏览器 + 真实 OIDC 登录 + 真实后端 + 真实 worker + 一次性测试库）
@@ -37,11 +37,11 @@ env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -u scripts/ui-qa/bead_
 最终通过的记录性运行（干净一次性，无 `--keep`）结果：
 
 ```
-SUMMARY: 45 passed, 4 failed, 0 skipped; required set INCOMPLETE; cleanup errors: 0
+SUMMARY: 47 passed, 4 failed, 0 skipped; required set complete; cleanup errors: 0
 RUN_EXIT=1
 ```
 
-结束后数据库、全部子进程与临时目录均被清理（CLEANUP 日志逐项确认；测试库删除后经 `pg_database` 复核 absent）。
+结束后数据库、全部进程组（含孙进程）与临时目录均被清理：每个启动的进程组都经 `killpg(pgid,0)` 探测确认整组消失（leader 与孙进程，不止 leader 退出；无端口的 worker 以组消失探测为唯一证明），测试库删除后经 `pg_database` 复核 absent。
 
 ## 二、一次性测试数据库与环境
 
@@ -65,7 +65,8 @@ RUN_EXIT=1
 | 2 | fixtures/synthetic | PASS | 11 个合成文件：同 stem 对、跨目录同 stem、重复哈希、纯 jpg、纯 ARW、差背景 + 拯救片 |
 | 3 | db/fresh-test-database | PASS | `mystcrag_qa_flow_test_1788960980_bbb000` |
 | 4 | services/oidc-provider | PASS | provider tls `:51529`、admin `:51530`、relay `:51531`；discovery 经 CONNECT relay + 自签 CA 验证 |
-| 5 | services/backend+worker | PASS | backend `:4100`；worker poll 1000ms |
+| 5 | services/backend | PASS | backend `:4100` HTTP-ready |
+| 5b | services/worker | PASS | asset-worker 存活且无 fatal 启动错误（worker 无端口，存活+无 fatal 即已进入轮询；poll 1000ms） |
 | 6 | services/frontend | PASS | next dev `:51524` |
 | 7 | services/frontend-h2 | PASS | https/h2 反向代理 `:51569` → next dev `:51524` |
 
@@ -77,7 +78,7 @@ RUN_EXIT=1
 | 9 | browser/create-session | PASS | 经 Dashboard 按钮真实创建会话（`cmtu56rj…`） |
 | 10 | http/manifest | PASS | 11 文件登记；manifest POST 确由浏览器经目录选择真实发出（浏览器可见 1 次） |
 | 11 | http/upload | PASS | 真实目录选择 `#bead-import-folder-input` 登记并暂存 11 文件；1 个文件 content PUT 被 h2 反代精确拦截一次（可重试网络失败），其余由 worker 归档 |
-| 12 | flow/restart-termination | PASS | backend 进程组 (pid 3834) 与 worker 进程组 (pid 3836) 被终止；4100 端口验证关闭 |
+| 12 | flow/restart-termination | PASS | backend 进程组与 worker 进程组经 `killpg(pgid,0)` 探测确认整组消失（不止 leader 退出；worker 无端口，组消失探测是唯一证明）；4100 端口验证关闭 |
 | 13 | flow/restart-new-pids | PASS | backend 3834→3934；worker 3836→3935 |
 | 14 | flow/restart-resume | PASS | 会话与文件状态跨重启恢复（ARCHIVED/PENDING/SKIPPED_DUPLICATE） |
 | 15 | flow/resume-upload-completes | PASS | 经 UI“重试上传”按钮恢复被拦截文件（1 次点击后归档） |
@@ -133,9 +134,9 @@ RUN_EXIT=1
 | # | 检查项 | 结果 | 说明 |
 |---|---|---|---|
 | 47 | sources/discovery | PASS | 127 文件（65 JPG + 62 ARW）、26 顶层目录、66 stem、跨目录 stem `['ZDX01535']`、4 个 jpg-only stem、1 个 arw-only stem；基线 dirs/files/JPG/ARW=`{26, 127, 65, 62}` 精确匹配 |
-| 48 | sources/proxy-large-body-cap | **FAIL** | 62/127 个真实文件（首个 `1/ZDX01448.ARW` 21,190,656 字节）经真实管理代理失败（500 `INTERNAL_ERROR: The bead import service did not respond`，前端 10 MiB 路由体上限截断）。每个失败文件改经同一后端内容路由直传仅作诊断。见“四、根因 ②” |
-| 49 | sources/import-roundtrip | **FAIL** | 55 个真实文件被代理截断卡死在 UPLOADING——后端在流中断时未释放上传保留，直连重试得 409 CONFLICT，归档永不结算。见“四、根因 ③” |
-| 50 | sources/grouping-pairs | **MISSING** | 因 import-roundtrip 失败（归档不完整）而无法评估自动分组，本项未运行；上一轮记录性运行的 worker 分组收敛缺陷本运行未重新触发 |
+| 48 | sources/proxy-large-body-cap | **FAIL** | 62/127 个真实文件（首个 `1/ZDX01448.ARW` 21,190,656 字节）经真实管理代理失败（500 `INTERNAL_ERROR: The bead import service did not respond`，前端 10 MiB 路由体上限截断）。62 个全部直连回退到同一后端内容路由成功并被归档/哈希/分组完整性核对覆盖（import-roundtrip 已 PASS）。见“四、根因 ②” |
+| 49 | sources/import-roundtrip | PASS | 127 个真实文件字节一致归档（65 经真实管理代理无错误；62 直连回退——经 20s 有界等待重读权威 session 转 FAILED/PENDING 后成功重试）；权威 sha256 逐文件匹配，6 个抽样归档文件重哈希字节一致 |
+| 50 | sources/grouping-pairs | **FAIL** | 127 个真实文件触发自动分组后，240s 有界等待内状态停在 `PARTIALLY_FAILED` 且 `groups=0`（worker 从未产出任何分组）。见“四、根因 ③” |
 
 ## 四、四项 FAIL 与根因（全部如实记录，硬阻塞，未在本任务修复）
 
@@ -143,18 +144,18 @@ RUN_EXIT=1
 |---|---|---|---|---|
 | ① 发布负载缺 `modelAssetKey` | flow/published-product-public；browser/approved-product-renders | 本条运行第 43/45 行；`apps/frontend/.../admin-bead-import/processing-loader.ts`（发布候选只带 `textureAssetKey`，无 `modelAssetKey`）；`design-api.service.ts` 目录 `materials()` 过滤丢弃 `modelAssetKey` 为空的行；仓库 `modelAssetKey ?? null` | 真实 UI 发布成功、`/api/assets` 200，但成品从认证目录与 `/crystal-library` 消失 | **前端任务**：让发布负载发送 `modelAssetKey=<已批准主图>`（与 `textureAssetKey` 同一已批准主图，后端显式支持的同资产路径）；修复后两条 FAIL 应变 PASS |
 | ② Next 默认 10 MiB 路由体上限 | sources/proxy-large-body-cap | frontend.log `Request body exceeded 10MB …`；`next.config.ts` 无体积覆盖；解析后服务端配置 `proxyClientMaxBodySize: 10485760`；代理 500 “The bead import service did not respond.”；后端 Fastify 上限实为 256 MiB | 62 个 ~21 MB Sony ARW 无法经管理代理上传；后端与 worker 直连收 21 MB 完全正常 | **前端服务器配置任务**：上调路由体上限至 ≥256 MiB（或特征级每文件上限），使 ARW 可经代理走完整 BFF 链路 |
-| ③ 后端在代理流中断时未释放上传保留 | sources/import-roundtrip | 55 个文件终态 UPLOADING；直连重试 409 `error.code='CONFLICT'`（`resolveUploadTarget` 对非 PENDING/FAILED 文件拒绝，`failUploadReservation` 未在代理流中断时触发） | 代理截断把 ~21 MB ARW 留成 UPLOADING，后端保留从未释放，归档永不结算，导入无法完成 | **后端/worker 任务**：代理流中断时释放上传保留（或对滞留 UPLOADING 做确定性结算转 FAILED），使导入可在代理上限修复后完整收敛 |
+| ③ 真实源集自动分组不收敛 | sources/grouping-pairs | 127 个真实文件触发自动分组后，240s 有界等待内状态停在 `PARTIALLY_FAILED` 且 `groups=0`（worker 从未产出任何分组） | 真实 127 文件整包导入已字节一致归档，但自动分组无法结算，分组/配对无法评估 | **worker 任务**：修复 127 文件真实源集下的自动分组收敛（11 文件合成集能收敛，127 文件真实集停在 PARTIALLY_FAILED） |
 
-“严格诚实”说明：第 43/45 两条按产品负责人裁定**不折算、不跳过**——成品目录可见性必须以真实 UI 发布为前置并如实断言；
-正因为此诚实断言，① 号加载器缺陷才作为硬阻塞浮出。第 48/49 项是真实规模下的代理体上限缺陷（②）及其连带后果（③）：
-62 个 >10 MiB 文件经代理失败、其中 55 个因保留未释放而卡死，故 import-roundtrip 如实记 FAIL（不是绕过后宣称完整）。
-上一轮记录性运行（44 PASS / 4 FAIL）中 `sources/import-roundtrip` 曾 PASS、`sources/grouping-pairs` 曾 FAIL，其结论**已被本轮取代**：
-本轮 import-roundtrip 因保留未释放而 FAIL，grouping-pairs 因归档不完整而 MISSING（未重新触发 worker 分组收敛缺陷）。
+“严格诚实”说明：`flow/published-product-public` 与 `browser/approved-product-renders` 两条按产品负责人裁定**不折算、不跳过**——成品目录可见性必须以真实 UI 发布为前置并如实断言；
+正因为此诚实断言，① 号加载器缺陷才作为硬阻塞浮出。`sources/proxy-large-body-cap` 是真实规模下的代理体上限缺陷（②）：62 个 >10 MiB 文件经代理失败后，
+直连回退对有界等待（20s）重读权威 session 后转 FAILED/PENDING（保留确已释放）的文件成功重试，故 `sources/import-roundtrip` 如实 PASS（127 文件字节一致归档，不是绕过后宣称完整）。
+上一轮记录性运行（45 PASS / 4 FAIL / 1 MISSING）中 `sources/import-roundtrip` 曾因单次 409 误判保留未释放而 FAIL、`sources/grouping-pairs` 曾 MISSING，其结论**已被本轮取代**：
+本轮 import-roundtrip 因保留确已释放（有界等待后转 FAILED/PENDING 并成功重试）而 PASS，grouping-pairs 因 127 文件真实源集自动分组 240s 不收敛（`PARTIALLY_FAILED` `groups=0`）而 FAIL。
 
 ## 五、执行中发现并修复的脚本缺陷（仅改 QA 脚本与文档，未动 runtime）
 
 1. **`flow/arw-only-merge` 回归修复**：`merge` 演练的候选集合此前包含纯 ARW 组，合并+对半切会把纯 ARW 组并进栅格组、破坏后续 arw-only-merge 定位。现合并演练只允许含栅格成员的组参与（`_group_is_arw_only` 过滤），纯 ARW 组留给专门的 arw-only-merge 路径 → 本项 PASS。
-2. **sources 上传循环崩溃修复**：直连后端诊断路径此前未捕获异常，首个滞留 UPLOADING 文件的 409 会崩掉整个 sources 阶段、令 `sources/proxy-large-body-cap` 永远不报告。现直连失败被 `direct_backend_failures` 捕获并逐个记录，`sources/proxy-large-body-cap` 如实报告 62 个代理失败，`sources/import-roundtrip` 如实报告 55 个滞留文件并快速失败（不再白等 600s 结算）。
+2. **sources 上传循环崩溃修复**：直连后端诊断路径此前未捕获异常，首个滞留 UPLOADING 文件的 409 会崩掉整个 sources 阶段、令 `sources/proxy-large-body-cap` 永远不报告。现直连失败被 `direct_backend_failures` 捕获并逐个记录，`sources/proxy-large-body-cap` 如实报告 62 个代理失败，`sources/import-roundtrip` 对每个 409 做 20s 有界等待重读权威 session，仍 UPLOADING 才判 stuck 并快速失败（不再白等 600s 结算，也不再凭单次 409 断言“永不释放”）。
 3. **`finish()` 先执行 cleanup、再冻结 problems / 打印 SUMMARY**：清理期新增的 `CLEANUP_ERRORS` 必然改变退出码与 SUMMARY（不再恒为 “cleanup errors: 0”）。
 4. **processing-start 的 `expect_response` 包住 click**：消除点击后监听导致漏响应竞态。
 5. **cleanup 两阶段 + 去重端口检查**：只对本次启动且仍存活的进程组发信号、统一收割、最后对去重端口检查关闭；绝不对已退出的旧 PGID 无条件 killpg。
@@ -163,13 +164,19 @@ RUN_EXIT=1
 8. **QC 负向守卫**：锁定 HTTP 409 + `error.code='CONFLICT'`；401/400/404 不算 PASS；UI 无批准按钮单独证明。
 9. **真实源发现/stat/hash/read 隔离在 5s 可强杀子进程**：超时诚实 FAIL 且 cleanup 运行。
 10. **cross_pair_ok 的 `all(bool)` TypeError 修复**：改回确定性布尔聚合，新增成功分组回归。
+11. **进程组终止证明（含孙进程/无端口 worker/PID-PGID 重用防护）**：新增 `_process_group_alive(pgid)`（`killpg(pgid,0)` 探测）；`stop_process_group` 与 `cleanup()` 都在 leader 退出后继续证明整组消失，孙进程仍活则补 SIGKILL；只有“本次确实发过信号且组仍存活”才补 SIGKILL，绝不对已消失旧 PGID 无条件 killpg。无端口的 worker 以组消失探测为唯一“旧组消失”证明。新增 `--self-test` 探针 `process-group-termination`（leader 先退、孙进程无视 SIGTERM 仍活 → 整组被杀）。
+12. **stuck 判定改为有界等待 + 重读权威 session**：直连 409 不再推断“终态 UPLOADING/永不释放”；`_wait_upload_released` 有界等待重读 session，转 FAILED/PENDING（保留释放）则走允许的真实重试，只有超时仍 UPLOADING 才判 stuck（前端修复后本门自动 PASS）。
+13. **proxy-large-body-cap 文案收紧**：只宣称直连回退**成功**的文件被归档/哈希/分组覆盖；回退失败的文件如实声明不被覆盖，不再宣称“every real file covered”。
+14. **源操作全部进 5s 可强杀子进程**：`_discover_source_set` 在子进程内返回 `is_dir` 与每文件 size/mtime；主进程 manifest 复用 discovery 的 size/mtime，删除主进程的 `source_set.is_dir()` 与逐文件 `path.stat()`。
+15. **完整验收强制权威路径**：`--source-set` 非 `/Users/chenyanyan/Desktop/珠子图` 时 `sources/discovery` 如实 FAIL（diagnostic-only，不得让完整门禁退出 0），且基线精确核对 26 目录/127 文件/65 JPG/62 ARW。
+16. **PASS 收紧**：`flow/merge` 验证合并组成员全集 == 两源组并集；`flow/split` 验证分区全集/互斥/无串组；`flow/primary-confirmed` 重读权威 session 逐组复核 primaryFileId（不再硬编码 True）；`flow/publish` 要求 `inventorySnapshotId` 有效非空（任意非空错误 JSON 不得 PASS）；`services/backend+worker` 拆为 `services/backend` + `services/worker`（worker 就绪 = 存活且无 fatal）；`sources/proxy-large-body-cap` 加入 `REQUIRED_RESULTS`。
 
-本轮验证（记录性运行之前全部通过）：`py_compile` OK；`--self-test` 三探针 PASS；架构测试 13/13；`pnpm validate` 17/17；`git diff --check` clean。
+本轮验证：`py_compile` OK；`--self-test` 四探针 PASS；架构测试 19/19；`pnpm validate` 17/17；`git diff --check` clean；最终门禁 47 PASS / 4 FAIL / 0 SKIP / 0 MISSING，cleanup errors 0，EXIT=1。
 
 ## 六、风险与建议
 
 - **硬阻塞（发布类）**：在 ① 修复前，真实发布的产品对设计目录与 `/crystal-library` 不可见；这是前端 loader 的发布负载缺口，与后端正向接受路径无关。
-- **规模缺陷**：② 影响任何 >10 MiB 的真实 ARW（本机桌面集 62/127 个）；③ 是②的连带后果（代理流中断不释放上传保留）——三者（①②③）修复前，真实 127 文件整包导入无法完成、自动分组无法评估。
+- **规模缺陷**：② 影响任何 >10 MiB 的真实 ARW（本机桌面集 62/127 个），只能经直连回退归档（import-roundtrip 已 PASS）；③ 是 127 文件真实源集下的自动分组收敛缺陷——三者（①②③）修复前，成品目录不可见、>10 MiB ARW 无法经管理代理上传、真实源集自动分组无法结算。
 - 集成脚本依赖本机 Homebrew PostgreSQL（`psql -h /tmp`）与已安装的 pnpm 依赖，非 CI 可重放环境；前端 dev 冷启动偶发超 240 秒。
 - 运行期间若脚本被强杀（kill -9），进程组兜底不会执行，可能留下孤儿 next-server 持有项目锁；下次运行前需手动清理。
 - 记录性运行证据：`/tmp/qa001-final.log`（完整输出，RUN_EXIT=1）；`pnpm validate`：`/tmp/qa001-validate.log`（如需）。截图与归档均在一次性临时目录内、随清理删除，未入库（治理要求）。
