@@ -2916,34 +2916,15 @@ server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + list
         if args.skip_browser:
             skipped("mobile/status-reviews-viewport", "--skip-browser: 移动端视口度量需要真实浏览器")
         else:
+            # 页面级失败（超时/导航/求值）由 _mobile_status_reviews_checks 如实按
+            # 正确步名记 FAIL 并继续 sources，绝不 fatal 造成 MISSING。
+            _mobile_status_reviews_checks(
+                browser, cookie_header, session_id, capture_dir, report
+            )
             try:
-                mobile = browser.new_context(viewport={"width": 390, "height": 844})
-                mobile.add_cookies(
-                    [{
-                        "name": "mystcrag_asset_admin",
-                        "value": cookie_header,
-                        "domain": "localhost",
-                        "path": "/admin/bead-import",
-                    }]
-                )
-                mobile_page = mobile.new_page()
-                mobile_page.goto(
-                    f"http://localhost:{FRONTEND_PORT}/admin/bead-import/{session_id}",
-                    wait_until="domcontentloaded",
-                )
-                mobile_page.wait_for_selector("text=处理、审核与发布", timeout=60_000)
-                mobile_page.screenshot(path=str(capture_dir / "mobile-01-status-review.png"))
-                metrics = mobile_page.evaluate(
-                    "({sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth})"
-                )
-                report(
-                    "mobile/status-reviews-viewport", metrics["sw"] <= metrics["cw"] + 2,
-                    f"scrollWidth={metrics['sw']} clientWidth={metrics['cw']} at 390x844",
-                )
-                mobile.close()
-            except Exception as exc:
-                fatal("mobile/viewport", repr(exc))
-            browser.close()
+                browser.close()
+            except Exception:
+                pass  # 关闭失败不阻断 sources——sources 段自建 client，不依赖此浏览器
 
     # 11. 真实素材只读端到端导入（一次性库 + 临时 archive；源文件绝不改动）
     run_source_set_phase(args, client, archive_root)
@@ -3763,8 +3744,10 @@ def _final_user_library_checks(page, report_fn, published_visible, approved_hex,
         report_fn(
             "browser/approved-product-renders", False,
             "no <img> on /crystal-library references the published approved asset "
-            f"(catalog visible={published_visible}): the bead is absent from the design "
-            "catalog because the publish payload omits modelAssetKey; surfaced runtime defect",
+            f"(catalog visible={published_visible}): the page did not render the approved "
+            "asset bead despite the observation above; candidate runtime causes include a "
+            "page-level load failure and the fixed design 404 — no root-cause claim beyond "
+            "the recorded evidence; surfaced runtime defect",
         )
     else:
         decoded_ok = all(
@@ -3778,6 +3761,56 @@ def _final_user_library_checks(page, report_fn, published_visible, approved_hex,
             f"{len(render)} approved-asset <img> decoded (naturalWidth>0); "
             f"asset URL responses: {asset_responses[:4]}",
         )
+
+
+def _mobile_status_reviews_checks(browser, cookie_header, session_id, capture_dir, report_fn):
+    """mobile/status-reviews-viewport 核验（页面级失败绝不 fatal）。
+
+    旧缺陷：mobile 段任何异常进入 fatal("mobile/viewport")——记录的 FAIL 步名不在
+    必需结果集（必需项是 mobile/status-reviews-viewport，于是它 MISSING），并中断
+    整个后半段把 sources 4 项拖成 MISSING。现任何页面级失败（导航/选择器超时/截图/
+    求值，含 context 创建失败）都按正确步名如实记 FAIL 并返回，让调用方继续
+    sources；context 在 finally 中尽力关闭。仅真正无法运行后续 sources 的基础设施
+    前置失败才由调用方 fatal（sources 段自建 client，不依赖本浏览器，故本段无
+    fatal 路径）。
+    """
+    mobile = None
+    try:
+        mobile = browser.new_context(viewport={"width": 390, "height": 844})
+        mobile.add_cookies(
+            [{
+                "name": "mystcrag_asset_admin",
+                "value": cookie_header,
+                "domain": "localhost",
+                "path": "/admin/bead-import",
+            }]
+        )
+        mobile_page = mobile.new_page()
+        mobile_page.goto(
+            f"http://localhost:{FRONTEND_PORT}/admin/bead-import/{session_id}",
+            wait_until="domcontentloaded",
+        )
+        mobile_page.wait_for_selector("text=处理、审核与发布", timeout=60_000)
+        mobile_page.screenshot(path=str(capture_dir / "mobile-01-status-review.png"))
+        metrics = mobile_page.evaluate(
+            "({sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth})"
+        )
+        report_fn(
+            "mobile/status-reviews-viewport", metrics["sw"] <= metrics["cw"] + 2,
+            f"scrollWidth={metrics['sw']} clientWidth={metrics['cw']} at 390x844",
+        )
+    except Exception as exc:
+        report_fn(
+            "mobile/status-reviews-viewport", False,
+            f"mobile 390x844 status/review viewport check failed at page level "
+            f"(honest FAIL, continuing to sources): {exc!r}",
+        )
+    finally:
+        if mobile is not None:
+            try:
+                mobile.close()
+            except Exception:
+                pass  # 尽力关闭：关闭失败不改变已记录结论
 
 
 def _selftest_publish_public_continuation() -> bool:
@@ -3902,12 +3935,34 @@ def _selftest_publish_public_continuation() -> bool:
             ("flow/publish-public", True) in ok_recorded
             and ("browser/approved-product-renders", True) in ok_recorded
         )
+        # (d) 无渲染详情不得冒充已过期根因：FE-003 修复、目录已可见后，
+        # "publish payload omits modelAssetKey" 是过期断言——消息必须只陈述
+        # 可观察证据（目录可见但页面未渲染 approved asset）。
+        empty_page = _FakePage(imgs=[])
+        empty_recorded: list[tuple[str, bool, str]] = []
+        _final_user_library_checks(
+            empty_page,
+            lambda step, ok_flag, detail="": empty_recorded.append((step, bool(ok_flag), detail)),
+            True,
+            approved_hex,
+            Path("/tmp"),
+        )
+        empty_fail = next(
+            (row for row in empty_recorded
+             if row[0] == "browser/approved-product-renders" and not row[1]),
+            None,
+        )
+        no_render_message_clean = empty_fail is not None and (
+            "modelAssetKey" not in empty_fail[2]
+            and "omits" not in empty_fail[2]
+            and f"catalog visible=True" in empty_fail[2]
+        )
         fixed_error = ""
     except Exception as exc:
         fixed_error = repr(exc)[:200]
 
     ok = old_interrupted and new_no_raise and fail_kept and renders_fail_kept \
-        and continued and success_path_pass and not fixed_error
+        and continued and success_path_pass and no_render_message_clean and not fixed_error
     if fixed_error:
         print(
             f"SELF-TEST publish-public-continuation: old_interrupted={old_interrupted} "
@@ -3919,7 +3974,141 @@ def _selftest_publish_public_continuation() -> bool:
             f"SELF-TEST publish-public-continuation: old_interrupted={old_interrupted} "
             f"new_no_raise={new_no_raise} fail_kept={fail_kept} "
             f"renders_fail_kept={renders_fail_kept} continued={continued} "
-            f"success_path_pass={success_path_pass} -> {'PASS' if ok else 'FAIL'}",
+            f"success_path_pass={success_path_pass} "
+            f"no_render_message_clean={no_render_message_clean} -> {'PASS' if ok else 'FAIL'}",
+            flush=True,
+        )
+    return ok
+
+
+def _selftest_mobile_viewport_continuation() -> bool:
+    """mobile/status-reviews-viewport 页面级失败必须如实 FAIL 并继续（行为级红绿证明）。
+
+    旧实现：mobile 段任何异常（wait_for_selector 超时等页面级失败）进入
+    fatal("mobile/viewport")——记录的 FAIL 步名根本不在必需结果集（必需项是
+    mobile/status-reviews-viewport），且中断整个后半段把 sources 4 项拖成
+    MISSING。本探针用同形 FakeBrowser/FakePage 驱动：
+    (a) 旧控制流形状（try + except→fatal 中止）——证明中断，continuation 不执行；
+    (b) 真实 _mobile_status_reviews_checks，selector 超时——不抛出、如实按正确步名
+        记 mobile/status-reviews-viewport FAIL、context 尽力关闭、返回后 continuation
+        得以执行；
+    (c) 成功路径——mobile/status-reviews-viewport PASS、context 关闭。
+    """
+    class _MobileTimeout(Exception):
+        pass
+
+    class _Abort(Exception):
+        """旧 fatal() 的中止语义：记 FAIL 后不可继续。"""
+
+    class _FakeMobilePage:
+        def __init__(self, fail):
+            self.fail = fail
+            self.calls: list[tuple] = []
+
+        def goto(self, url, wait_until=None):
+            self.calls.append(("goto", url))
+
+        def wait_for_selector(self, selector, timeout=None):
+            self.calls.append(("wait_for_selector", selector))
+            if self.fail:
+                raise _MobileTimeout(f"Page.wait_for_selector: Timeout {timeout}ms exceeded.")
+
+        def screenshot(self, path=None):
+            self.calls.append(("screenshot", path))
+
+        def evaluate(self, script):
+            self.calls.append(("evaluate",))
+            return {"sw": 390, "cw": 390}
+
+    class _FakeMobileContext:
+        def __init__(self, page):
+            self.page = page
+            self.cookies_added = False
+            self.closed = False
+
+        def add_cookies(self, cookies):
+            self.cookies_added = True
+
+        def new_page(self):
+            return self.page
+
+        def close(self):
+            self.closed = True
+
+    class _FakeBrowser:
+        def __init__(self, context):
+            self.context = context
+
+        def new_context(self, viewport=None):
+            return self.context
+
+    # (a) 旧控制流见证：同形 selector 超时 → fatal 中止；continuation 不执行。
+    old_page = _FakeMobilePage(fail=True)
+    old_recorded: list[str] = []
+    old_continued = False
+    old_aborted = False
+    try:
+        try:
+            old_page.goto("http://localhost:1/session")
+            old_page.wait_for_selector("text=处理、审核与发布", timeout=60_000)
+        except Exception as exc:
+            old_recorded.append("mobile/viewport")  # 旧 fatal：错误步名 + 中止
+            raise _Abort(repr(exc))
+        old_continued = True
+    except _Abort:
+        old_aborted = True
+    old_interrupted = (
+        old_aborted
+        and not old_continued
+        and "mobile/status-reviews-viewport" not in old_recorded  # 必需步名从未被记录
+        and not any(call[0] == "evaluate" for call in old_page.calls)
+    )
+
+    # (b)/(c) 修复路径：真实函数驱动（红阶段 _mobile_status_reviews_checks 尚不存在，
+    # 探针必须 FAIL 而不是崩溃——由下方 except 捕获并如实打印）。
+    new_no_raise = fail_kept = context_closed = continued = success_pass = False
+    try:
+        fail_ctx = _FakeMobileContext(_FakeMobilePage(fail=True))
+        fail_recorded: list[tuple[str, bool]] = []
+        try:
+            _mobile_status_reviews_checks(
+                _FakeBrowser(fail_ctx), "cookie-value", "session-x", Path("/tmp"),
+                lambda step, ok_flag, detail="": fail_recorded.append((step, bool(ok_flag))),
+            )
+        except Exception:
+            new_no_raise = False
+        else:
+            new_no_raise = True
+        fail_kept = ("mobile/status-reviews-viewport", False) in fail_recorded
+        context_closed = fail_ctx.closed  # 尽力关闭：失败路径同样关闭 context
+        continued = new_no_raise  # 函数正常返回 == 调用方可继续 sources
+        ok_ctx = _FakeMobileContext(_FakeMobilePage(fail=False))
+        ok_recorded: list[tuple[str, bool]] = []
+        _mobile_status_reviews_checks(
+            _FakeBrowser(ok_ctx), "cookie-value", "session-x", Path("/tmp"),
+            lambda step, ok_flag, detail="": ok_recorded.append((step, bool(ok_flag))),
+        )
+        success_pass = (
+            ("mobile/status-reviews-viewport", True) in ok_recorded and ok_ctx.closed
+        )
+        fixed_error = ""
+    except Exception as exc:
+        fixed_error = repr(exc)[:200]
+
+    ok = old_interrupted and new_no_raise and fail_kept and context_closed \
+        and continued and success_pass and not fixed_error
+    if fixed_error:
+        print(
+            f"SELF-TEST mobile-viewport-continuation: old_interrupted={old_interrupted} "
+            f"fixed-path raised {fixed_error} -> FAIL",
+            flush=True,
+        )
+    else:
+        print(
+            f"SELF-TEST mobile-viewport-continuation: old_interrupted={old_interrupted} "
+            f"new_no_raise={new_no_raise} fail_kept={fail_kept} "
+            f"context_closed={context_closed} continued={continued} "
+            f"success_pass={success_pass} -> {'PASS' if ok else 'FAIL'}",
             flush=True,
         )
     return ok
@@ -3932,6 +4121,7 @@ def run_self_tests() -> bool:
         ("process-group-termination", _selftest_process_group_termination),
         ("cross-pair-ok", _selftest_cross_pair_ok),
         ("publish-public-continuation", _selftest_publish_public_continuation),
+        ("mobile-viewport-continuation", _selftest_mobile_viewport_continuation),
     ]
     results: list[str] = []
     for name, fn in tests:

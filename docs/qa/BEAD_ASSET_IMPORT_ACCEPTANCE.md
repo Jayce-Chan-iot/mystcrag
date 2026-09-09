@@ -28,7 +28,7 @@ env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -m py_compile scripts/
 # 2. 架构测试（19/19 通过）
 node --test tests/bead-asset-import-architecture.test.mjs
 
-# 2b. 内建单元自检（不起服务/不建库/不开浏览器；finish-order + cleanup-two-phase + cross-pair-ok + process-group-termination + publish-public-continuation 五个探针）
+# 2b. 内建单元自检（不起服务/不建库/不开浏览器；finish-order + cleanup-two-phase + cross-pair-ok + process-group-termination + publish-public-continuation + mobile-viewport-continuation 六个探针）
 env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -u scripts/ui-qa/bead_import_flow.py --self-test
 
 # 3. 完整集成验收（真实浏览器 + 真实 OIDC 登录 + 真实后端 + 真实 worker + 一次性测试库）
@@ -241,7 +241,7 @@ MISSING（6，全部因该 FAIL 的 fatal 中断，未运行）：`browser/appro
 
 **行为级红绿证据（非字符串断言）**：新增可执行 self-test 探针 `publish-public-continuation`（`--self-test` 第 5 探针），用同形 FakePage（`wait_for_selector` 抛 TimeoutError）驱动：(a) 旧控制流形状（裸等待 + except→fatal 中止）——证明中断且 continuation 标记与 screenshot/evaluate 永不执行；(b) 真实 `_final_user_library_checks`——不抛出、记 `flow/publish-public` FAIL、继续 screenshot/evaluate 并如实记 `browser/approved-product-renders` FAIL；(c) 成功路径 FakePage——`flow/publish-public` PASS 且 `approved-product-renders` 按真实解码/200 资产请求判 PASS。红（修复前，`/tmp/qa001-selftest-red.log`）：探针 FAIL——`old_interrupted=True fixed-path raised NameError("_final_user_library_checks" is not defined) -> FAIL`，aggregate FAIL；绿（修复后，`/tmp/qa001-selftest-green.log`）：`old_interrupted=True new_no_raise=True fail_kept=True renders_fail_kept=True continued=True success_path_pass=True -> PASS`，五探针 aggregate PASS，exit 0。
 
-修复后窄测：`py_compile` OK；`--self-test` 5/5 PASS（exit 0）；`node --test tests/bead-asset-import-architecture.test.mjs` 19/19；全套 `node --test tests/*.test.mjs` 39/39；`pnpm validate` 17/17（exit 0）；`git diff --check` clean。已知残留（未在本轮范围内）：mobile 段自身的 `fatal("mobile/viewport")` 语义未变（本轮未被触发、未被要求修改）——若未来 mobile 段页面失败仍可能拖缺 sources，留待下一轮 QA 任务处理。
+修复后窄测：`py_compile` OK；`--self-test` 5/5 PASS（exit 0）；`node --test tests/bead-asset-import-architecture.test.mjs` 19/19；全套 `node --test tests/*.test.mjs` 39/39；`pnpm validate` 17/17（exit 0）；`git diff --check` clean。已知残留（当时未在本轮范围内）：mobile 段自身的 `fatal("mobile/viewport")` 语义未变——**已于同日 Codex 审查修复轮（见 7.8）一并修复**。
 
 **runtime blocker ④ 仍在**（见 7.5，`design-diy-private` 404 → `/crystal-library` 渲染不出商品）：本轮只修 QA harness；按产品负责人指令**未第二次运行 127 文件门禁**，②③ 在合并基线上的门禁级验证仍待下一次（且仅一次）复跑。TASK-ASSET-QA-001 维持 **BLOCKED**。
 
@@ -252,3 +252,13 @@ MISSING（6，全部因该 FAIL 的 fatal 中断，未运行）：`browser/appro
 - 进程/端口：backend `:4100` 无监听（lsof 0 行）；QA 脚本与 asset-worker 进程 0 个；日志 CLEANUP 段逐组记录 7 个进程组全部 stopped。
 - 源照片 `/Users/chenyanyan/Desktop/珠子图`：本轮 sources 段未运行；且脚本对源集全程只读（discovery/stat/hash/read 隔离子进程，无复制/修改/入库）。
 - 本轮改动：仅本文档与 TASK_REGISTRY 本任务行（状态 IN_PROGRESS→BLOCKED）；runtime、QA 脚本、契约、Prisma、根配置、lockfile 均未改动；无 push/deploy。
+
+### 7.8 Codex 独立审查修复轮（2026-09-10，候选 `4ccea01` 两个 Important，测试先行，不碰 runtime、未重跑门禁）
+
+**Important 1 —— no-render 详情冒充过期根因**：`_final_user_library_checks` 的无渲染详情仍声称 "the publish payload omits modelAssetKey"，但 2026-09-10 复跑中 `flow/published-product-public` 已 PASS、FE-003 已修复，该断言与证据矛盾。修复：详情改为只陈述可观察证据——"the page did not render the approved asset bead despite the observation above; candidate runtime causes include a page-level load failure and the fixed design 404 — no root-cause claim beyond the recorded evidence"——不含 "modelAssetKey"/"omits"，不冒充根因。
+
+**Important 2 —— mobile 段 fatal 拖缺 sources**：mobile 段任何页面级异常进入 `fatal("mobile/viewport")`——记录的 FAIL 步名不在必需结果集（必需项是 `mobile/status-reviews-viewport`，于是它 MISSING），且中断后半段把 sources 4 项拖成 MISSING。修复：提取为 `_mobile_status_reviews_checks(browser, cookie_header, session_id, capture_dir, report_fn)`——任何页面级失败（导航/选择器超时/截图/求值，含 context 创建失败）按正确步名如实记 `mobile/status-reviews-viewport` FAIL 并返回，调用方继续 `run_source_set_phase`；context 在 `finally` 中尽力关闭；`browser.close()` 失败同样不阻断（sources 段自建 client，不依赖该浏览器）。本段无 fatal 路径——仅真正无法运行后续 sources 的基础设施前置失败才允许 fatal，而本段不存在此类失败（sources 不依赖本浏览器）。
+
+**行为级红绿证据（非字符串断言）**：① `publish-public-continuation` 探针新增 (d) 无渲染路径断言（FakePage 渲染 0 个 approved `<img>`，捕获详情文本）：红（修复前，`/tmp/qa001-selftest-red2.log`）`no_render_message_clean=False -> FAIL`（旧消息含过期 modelAssetKey 断言）；绿（修复后，`/tmp/qa001-selftest-green2.log`）`no_render_message_clean=True -> PASS`。② 新增第 6 探针 `mobile-viewport-continuation`（FakeBrowser/FakeMobilePage 同形 selector 超时驱动）：(a) 旧控制流形状——中断、必需步名从未被记录、evaluate 永不执行；(b) 真实 `_mobile_status_reviews_checks`——不抛出、按正确步名记 `mobile/status-reviews-viewport` FAIL、失败路径 context 仍关闭、函数正常返回使 continuation（sources）得以执行；(c) 成功路径——PASS 且 context 关闭。红：`NameError("_mobile_status_reviews_checks" is not defined) -> FAIL`；绿：`old_interrupted=True new_no_raise=True fail_kept=True context_closed=True continued=True success_pass=True -> PASS`。
+
+修复后窄测：`py_compile` OK；`--self-test` 6/6 PASS（exit 0）；`node --test tests/bead-asset-import-architecture.test.mjs` 19/19；全套 `node --test tests/*.test.mjs` 39/39；`pnpm validate` 17/17（exit 0）；`git diff --check` clean。本轮改动仅 QA 脚本、本文档与 TASK_REGISTRY 本任务行；runtime 未动；127 文件门禁未重跑。runtime blocker ④（`design-diy-private` 404）与 ②③ 的验证缺口仍在，**TASK-ASSET-QA-001 维持 BLOCKED**。
