@@ -293,7 +293,7 @@ env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -u scripts/ui-qa/bead_
 
 ### 8.3 结果与 run identifiers
 
-**SUMMARY: 52 passed, 0 failed, 0 skipped; required set complete; cleanup errors: 0 — EXIT=0（finish() 仅在 0 FAIL/0 SKIP/无 MISSING/required complete/0 清理错误时退出 0；日志无任何 FAILED/SKIPPED/MISSING/CLEANUP ERROR 行）。review gate PASSED。**
+**SUMMARY: 52 passed, 0 failed, 0 skipped; required set complete; cleanup errors: 0 — EXIT=0（finish() 仅在 0 FAIL/0 SKIP/无 MISSING/required complete/0 清理错误时退出 0）。日志按结果行前缀语义核验：权威日志 `/tmp/qa001-rerun-final.log` 中以 `FAIL | `、`SKIP | `、`MISSING | ` 或 `CLEANUP ERROR | ` 开头的结果行共 **0** 行，SUMMARY 为 52/0/0、required set complete、cleanup errors 0（rg 验证）。PASS 行描述中出现的领域状态词——`SKIPPED_DUPLICATE`（flow/restart-resume 的文件状态）与 `QC_FAILED`（flow/qc-verdict 等的断言对象）——是被测数据的真实状态，不构成 FAIL/SKIP/MISSING/CLEANUP-ERROR 结果行。review gate PASSED。**
 
 - 一次性库：`mystcrag_qa_flow_test_1788989115_263785`（运行后 DROP，`pg_database` 计数 0，见 8.6）
 - OIDC：provider tls `:63349` / admin `:63350` / relay `:63351`；backend `:4100`；next dev `:63343`；h2 代理 `:63410` → `:63343`
