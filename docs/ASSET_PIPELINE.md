@@ -451,11 +451,31 @@ TASK-ASSET-QA-001 在权威 127 文件真实源集上复现 `sources/grouping-pa
 | --- | --- |
 | `pnpm --filter @mystcrag/asset-pipeline test` | 143/143 通过(含新增红转绿回归),0 fail |
 | `pnpm --filter @mystcrag/asset-worker test`(无真库环境变量) | 113 tests:112 pass + 1 个按设计跳过的真库联调用例,0 fail |
-| Worker 真库联调(全新空库 `mystcrag_worker003_test`,14 个迁移全部应用后执行) | 123/123 通过,0 fail,0 skipped |
+| Worker 真库联调(全新空库 `mystcrag_worker003_test`,15 个迁移全部应用后执行;初版误记 14 个迁移/123,独立复核更正) | 124/124 通过,0 fail,0 skipped |
 | 架构测试 `node --test tests/architecture.test.mjs` | 15/15 通过 |
 | `pnpm validate` | 通过:17/17 任务成功(前端 production build 成功) |
 | `git diff --check` | 干净 |
 | 变更边界 | 仅 `packages/asset-pipeline/src/grouping.ts`、两个测试文件、`docs/ASSET_PIPELINE.md` 与 TASK_REGISTRY 精确行;无数据库/Prisma/共享 Contract/后端/前端改动;无阈值放宽;无照片或二进制;未推送、未合并 |
+
+### 2026-09-10 QA 规模收敛验证(TASK-ASSET-WORKER-003 follow-up,状态转 REVIEW)
+
+第一轮交付(`7bd0403`)后,依据 QA 证据 `sources/discovery` 的事实(127 文件 = 65 JPG + 62 ARW、26 个顶级目录、66 stems、1 个跨目录 stem `ZDX01535`、4 个 jpg-only stem、1 个 arw-only stem)补做 QA 规模端到端验证。
+
+真实集 ground truth(只读复算,修复后):61 个 stem 配对组(含跨目录 `21/ZDX01535.JPG` + `22/ZDX01535.ARW` 的 1+1 配对)、3 张近距 jpg-only(`ZDX01441/449/455`)合成 1 个低置信复核组、第 4 个 jpg-only(`ZDX01541`)与 arw-only(`ZDX01531`)各留单例建议——合计 64 组,重叠归属 0、未覆盖 0。
+
+QA 规模回归(`apps/asset-worker/tests/worker.integration.test.ts` 新增单个顶层用例,合成字节复刻源集形状,永不复制源照片):61 对同 stem ARW+JPG(相邻对拍摄间隔 100 s,排除跨对置信合并;其一为跨目录 stem)+ 3 张近距 jpg-only(拍摄间隔 842 s/2230 s,复刻真实证据)+ 1 张独立 jpg-only + 1 个 arw-only,共 127 文件(65 JPEG + 62 ARW、66 stems)经真实归档、`startGrouping` 与真实 Worker 对全新 PostgreSQL 执行。红优先:临时撤销 `grouping.ts` 修复后,该用例精确复现 QA 症状(`job=FAILED session=PARTIALLY_FAILED groups=0`,重试耗尽终态);恢复修复后 3.0 s 收敛为 `NEEDS_REVIEW`、64 组物化、127 文件恰好各属一组(61 stem 配对 + 1 复核组 + 2 单例),断言远低于 240 s QA 窗口。
+
+follow-up 真实执行记录(全新空库 `mystcrag_worker003_test`,15 个迁移全部应用):
+
+| 检查 | 结果 |
+| --- | --- |
+| `pnpm --filter @mystcrag/asset-pipeline test` | 143/143 通过,0 fail,0 skipped |
+| `pnpm --filter @mystcrag/asset-worker test`(无真库环境变量) | 114 tests:112 pass + 2 个按设计跳过的真库联调用例,0 fail |
+| Worker 真库联调(含 QA 规模用例) | 125/125 通过,0 fail,0 skipped |
+| 架构测试 `node --test tests/architecture.test.mjs` | 15/15 通过 |
+| 变更边界 | follow-up 仅新增上述测试用例、修正本节数字与 TASK_REGISTRY 精确行;`grouping.ts` 修复保持 `7bd0403` 不变;临时撤销仅在本地验证红路径,已恢复;无照片或二进制;未推送、未合并 |
+
+任务状态转 `REVIEW`,等待 Codex 独立审查后再定 DONE。
 
 ## 11. 操作
 

@@ -741,3 +741,356 @@ test(
     }
   }
 );
+
+/**
+ * QA-scale regression for TASK-ASSET-WORKER-003. TASK-ASSET-QA-001 observed the
+ * real 127-file source set (`sources/discovery` in the QA evidence: 127 files
+ * = 65 JPG + 62 ARW across 26 top-level directories, 66 stems, 1 cross-folder
+ * stem ZDX01535, 4 jpg-only stems, 1 arw-only stem) fail `sources/grouping-pairs`:
+ * GROUP_SESSION never settled within the bounded 240 s window and the session
+ * ended state=PARTIALLY_FAILED groups=0. This fixture reproduces that exact
+ * source-set SHAPE with synthetic bytes only — no source photograph is ever
+ * copied or committed — and drives the real worker against live PostgreSQL
+ * until the GROUP_SESSION job reaches a terminal state, asserting the
+ * deterministic convergence the QA gate requires.
+ */
+test(
+  "QA-scale GROUP_SESSION: the real 127-file source-set shape converges within the bounded workflow",
+  { skip: !databaseUrl || !archiveRoot ? "requires DATABASE_URL and MYSTCRAG_ASSET_ARCHIVE_ROOT" : undefined },
+  async () => {
+    const prisma = createPrismaClient(databaseUrl);
+    const repository = new AssetImportRepository(prisma);
+    const store = new ArchiveStore({
+      root: mkdtempSync(join(tmpdir(), "asset-worker-qa-scale-")),
+      repositoryRoots: []
+    });
+    const prefix = `assetworker-qascale-${Date.now()}`;
+
+    async function jpegBead(color: string, cx: number, cy: number): Promise<Uint8Array> {
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800">
+        <rect width="800" height="800" fill="#f0f0f0"/>
+        <circle cx="${cx}" cy="${cy}" r="300" fill="${color}"/>
+        <circle cx="${cx - 70}" cy="${cy - 70}" r="40" fill="#ffffff"/>
+      </svg>`;
+      return new Uint8Array(await sharp(Buffer.from(svg)).jpeg().toBuffer());
+    }
+
+    /**
+     * Minimal structurally valid Sony ARW with an extra ImageWidth entry whose
+     * value varies per seed, so every fixture ARW has a distinct sha256 while
+     * still carrying the CFA photometric + "SONY" Make evidence the detector
+     * requires. Sharp cannot decode ARW sensor data, so the ARW path must never
+     * require a raster decode.
+     */
+    function minimalSonyArw(seed: number): Uint8Array {
+      const ifdOffset = 8;
+      const ifdSize = 2 + 3 * 12 + 4;
+      const makeOffset = ifdOffset + ifdSize;
+      const entries = [
+        { tag: 0x0100, type: 3, count: 1, inline: 4000 + seed },
+        { tag: 0x0106, type: 3, count: 1, inline: 32803 },
+        { tag: 0x010f, type: 2, count: 5, offset: makeOffset }
+      ];
+      const buffer = Buffer.alloc(makeOffset + 5);
+      const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+      buffer.set([0x49, 0x49, 0x2a, 0x00], 0);
+      view.setUint32(4, ifdOffset, true);
+      view.setUint16(ifdOffset, entries.length, true);
+      let at = ifdOffset + 2;
+      for (const entry of entries) {
+        view.setUint16(at, entry.tag, true);
+        view.setUint16(at + 2, entry.type, true);
+        view.setUint32(at + 4, entry.count, true);
+        if (entry.inline !== undefined) view.setUint16(at + 8, entry.inline, true);
+        else view.setUint32(at + 8, entry.offset!, true);
+        at += 12;
+      }
+      view.setUint32(at, 0, true);
+      buffer.set(Buffer.from("SONY\0", "latin1"), makeOffset);
+      return new Uint8Array(buffer);
+    }
+
+    function hexColor(hue: number): string {
+      const saturation = 0.65;
+      const lightness = 0.45;
+      const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+      const huePrime = hue / 60;
+      const x = chroma * (1 - Math.abs((huePrime % 2) - 1));
+      let rgb: [number, number, number];
+      if (huePrime < 1) rgb = [chroma, x, 0];
+      else if (huePrime < 2) rgb = [x, chroma, 0];
+      else if (huePrime < 3) rgb = [0, chroma, x];
+      else if (huePrime < 4) rgb = [0, x, chroma];
+      else if (huePrime < 5) rgb = [x, 0, chroma];
+      else rgb = [chroma, 0, x];
+      const shift = lightness - chroma / 2;
+      const channel = (value: number) =>
+        Math.round((value + shift) * 255)
+          .toString(16)
+          .padStart(2, "0");
+      return `#${channel(rgb[0])}${channel(rgb[1])}${channel(rgb[2])}`;
+    }
+
+    try {
+      await prisma.$connect();
+
+      type FixtureFile = {
+        stem: string;
+        kind: "ARW" | "JPEG";
+        dir: string;
+        bytes: Uint8Array;
+        lastModifiedMs: number;
+      };
+      const fixtures: FixtureFile[] = [];
+      const baseMs = 1_750_000_000_000;
+
+      // 61 same-stem ARW+JPEG pairs; adjacent pairs are 100 s apart so no
+      // cross-pair visual merge can ever satisfy the 60 s confident window.
+      const pairStems: string[] = [];
+      for (let number = 1500; pairStems.length < 60; number += 1) {
+        const stem = `ZDX0${number}`;
+        if (stem !== "ZDX01531" && stem !== "ZDX01535" && stem !== "ZDX01541") pairStems.push(stem);
+      }
+      pairStems.push("ZDX01535");
+      for (const [index, stem] of pairStems.entries()) {
+        const dir = String((index % 26) + 1).padStart(2, "0");
+        const ms = baseMs + index * 100_000;
+        const crossFolder = stem === "ZDX01535";
+        fixtures.push({
+          stem,
+          kind: "ARW",
+          dir: crossFolder ? "22" : dir,
+          bytes: minimalSonyArw(index + 1),
+          lastModifiedMs: ms
+        });
+        fixtures.push({
+          stem,
+          kind: "JPEG",
+          dir: crossFolder ? "21" : dir,
+          bytes: await jpegBead(hexColor((index * 360) / 61), 400, 400),
+          lastModifiedMs: ms
+        });
+      }
+
+      // The 4 jpg-only stems: the three visually near shots whose capture gaps
+      // (842 s and 2230 s) exceed the 60 s confident window form one
+      // low-confidence review group; the distinct fourth stays a singleton.
+      const trioMs = baseMs + 61 * 100_000;
+      const trioShots = [
+        { stem: "ZDX01441", shift: 0, ms: trioMs },
+        { stem: "ZDX01449", shift: 2, ms: trioMs + 842_000 },
+        { stem: "ZDX01455", shift: 1, ms: trioMs + 842_000 + 2_230_000 }
+      ];
+      for (const shot of trioShots) {
+        fixtures.push({
+          stem: shot.stem,
+          kind: "JPEG",
+          dir: "01",
+          bytes: await jpegBead("#3cb371", 400 + shot.shift, 400 + shot.shift),
+          lastModifiedMs: shot.ms
+        });
+      }
+      fixtures.push({
+        stem: "ZDX01541",
+        kind: "JPEG",
+        dir: "24",
+        bytes: await jpegBead("#8a2be2", 400, 400),
+        lastModifiedMs: trioMs + 10_000_000
+      });
+      fixtures.push({
+        stem: "ZDX01531",
+        kind: "ARW",
+        dir: "20",
+        bytes: minimalSonyArw(63),
+        lastModifiedMs: trioMs + 10_000_000
+      });
+
+      assert.equal(fixtures.length, 127);
+      assert.equal(fixtures.filter((f) => f.kind === "JPEG").length, 65);
+      assert.equal(fixtures.filter((f) => f.kind === "ARW").length, 62);
+      assert.equal(new Set(fixtures.map((f) => f.stem)).size, 66);
+      assert.equal(new Set(fixtures.map((f) => sha256OfBytes(f.bytes))).size, 127);
+
+      const session = await repository.createSession({ idempotencyKey: `${prefix}-session` });
+      const registered = await repository.registerManifest(session.sessionId, {
+        idempotencyKey: `${prefix}-manifest`,
+        files: fixtures.map((fixture, index) => ({
+          clientFileId: `cf-${index + 1}`,
+          relativePath: `sources/${fixture.dir}/${fixture.stem}.${fixture.kind === "ARW" ? "ARW" : "JPG"}`,
+          byteSize: fixture.bytes.byteLength,
+          lastModifiedMs: fixture.lastModifiedMs,
+          kind: fixture.kind
+        }))
+      });
+      const fileIdByIndex = registered.files.map((file) => file.fileId);
+      assert.equal(fileIdByIndex.length, 127);
+      const fileIdOf = (stem: string, kind: "ARW" | "JPEG"): string => {
+        const index = fixtures.findIndex((fixture) => fixture.stem === stem && fixture.kind === kind);
+        return fileIdByIndex[index]!;
+      };
+
+      for (const [index, fixture] of fixtures.entries()) {
+        const sha256 = sha256OfBytes(fixture.bytes);
+        const { archiveKey } = await store.putOriginal({
+          sessionId: session.sessionId,
+          bytes: fixture.bytes,
+          sha256,
+          extension: fixture.kind === "ARW" ? "arw" : "jpg"
+        });
+        await prisma.assetSourceFile.update({
+          where: { id: fileIdByIndex[index]! },
+          data: {
+            state: "ARCHIVED",
+            sha256,
+            archiveKey,
+            storageProvider: "local-fs",
+            archivedAt: new Date()
+          }
+        });
+      }
+      await prisma.assetImportSession.update({
+        where: { id: session.sessionId },
+        data: {
+          state: "ARCHIVING",
+          archivedFileCount: fixtures.length,
+          uploadedBytes: fixtures.reduce((total, fixture) => total + BigInt(fixture.bytes.byteLength), 0n),
+          lastVerifiedCheckpoint: "ARCHIVED"
+        }
+      });
+
+      // A tiny transient retry delay keeps the bounded retry loop tight; on the
+      // fixed path the job completes on the first attempt and never retries.
+      const qaWorker = new AssetWorker({
+        repository,
+        handlers: createJobHandlers({ store, repository }),
+        workerId: `${prefix}-worker`,
+        leaseMs: 60_000,
+        heartbeatMs: 25,
+        pollMs: 5,
+        shutdownGraceMs: 5_000,
+        transientRetryDelayMs: 25
+      });
+
+      const startedAt = Date.now();
+      const started = await repository.startGrouping(session.sessionId, {
+        idempotencyKey: `${prefix}-grouping-start`
+      });
+      assert.equal(started.queuedJobCount, 1);
+      assert.equal(await prisma.beadImageGroup.count({ where: { sessionId: session.sessionId } }), 0);
+
+      let jobRow = await prisma.assetProcessingJob.findFirstOrThrow({
+        where: { sessionId: session.sessionId, jobType: "GROUP_SESSION" }
+      });
+      for (let spin = 0; jobRow.state !== "COMPLETED" && jobRow.state !== "FAILED" && spin < 16; spin += 1) {
+        await qaWorker.runOnce();
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        jobRow = await prisma.assetProcessingJob.findFirstOrThrow({
+          where: { sessionId: session.sessionId, jobType: "GROUP_SESSION" }
+        });
+      }
+      const elapsedMs = Date.now() - startedAt;
+
+      const sessionRow = await prisma.assetImportSession.findUniqueOrThrow({
+        where: { id: session.sessionId }
+      });
+      const materializedCount = await prisma.beadImageGroup.count({ where: { sessionId: session.sessionId } });
+      assert.ok(
+        jobRow.state === "COMPLETED" && sessionRow.state === "NEEDS_REVIEW",
+        `GROUP_SESSION must reach the deterministic terminal state within the bounded workflow (observed job=${jobRow.state} session=${sessionRow.state} groups=${materializedCount} after ${elapsedMs}ms)`
+      );
+      assert.ok(elapsedMs < 240_000, `grouping must settle inside the 240s QA window (observed ${elapsedMs}ms)`);
+      assert.equal(jobRow.errorCode, null);
+      assert.equal(sessionRow.lastVerifiedCheckpoint, "GROUPED");
+
+      const result = jobRow.result as {
+        kind: string;
+        groups: Array<{
+          groupId: string;
+          memberFileIds: string[];
+          similarityEvidence: Array<{
+            stemPairedWith: string | null;
+            confidence: string;
+            dHashDistance: number | null;
+            histogramDistance: number | null;
+            captureGapMs: number | null;
+          }>;
+        }>;
+      };
+      assert.equal(result.kind, "GROUP_SESSION");
+      assert.equal(result.groups.length, 64);
+      assert.equal(result.groups.filter((group) => group.groupId.startsWith("sg-")).length, 63);
+      assert.equal(result.groups.filter((group) => group.groupId.startsWith("rv-")).length, 1);
+
+      const memberships = new Map<string, number>();
+      for (const group of result.groups) {
+        for (const fileId of group.memberFileIds) {
+          memberships.set(fileId, (memberships.get(fileId) ?? 0) + 1);
+        }
+      }
+      assert.equal(memberships.size, 127, "every archived file is covered");
+      assert.deepEqual(
+        [...memberships.values()].filter((count) => count !== 1),
+        [],
+        "every archived file belongs to exactly one suggested or review group"
+      );
+
+      const stemPairedGroups = result.groups.filter((group) =>
+        group.similarityEvidence.some((evidence) => evidence.stemPairedWith !== null)
+      );
+      assert.equal(stemPairedGroups.length, 61, "the 61 same-stem ARW+JPEG pairs each form one group");
+
+      const crossFolderGroup = result.groups.find((group) =>
+        group.memberFileIds.includes(fileIdOf("ZDX01535", "JPEG"))
+      );
+      assert.ok(crossFolderGroup, "the cross-folder stem still pairs");
+      assert.ok(crossFolderGroup!.groupId.startsWith("sg-"));
+      assert.deepEqual(crossFolderGroup!.memberFileIds.slice().sort(), [
+        fileIdOf("ZDX01535", "ARW"),
+        fileIdOf("ZDX01535", "JPEG")
+      ]);
+      assert.ok(
+        crossFolderGroup!.similarityEvidence.some((evidence) => evidence.stemPairedWith !== null)
+      );
+
+      const reviewGroup = result.groups.find((group) => group.groupId.startsWith("rv-"));
+      assert.ok(reviewGroup, "the visually near jpg-only trio surfaces as one review group");
+      assert.deepEqual(reviewGroup!.memberFileIds.slice().sort(), [
+        fileIdOf("ZDX01441", "JPEG"),
+        fileIdOf("ZDX01449", "JPEG"),
+        fileIdOf("ZDX01455", "JPEG")
+      ]);
+      assert.ok(reviewGroup!.similarityEvidence.length >= 2, "the spanning tree carries one edge per merge");
+      assert.ok(
+        reviewGroup!.similarityEvidence.every((evidence) => evidence.confidence === "low"),
+        "the review group keeps human-primary low-confidence evidence"
+      );
+
+      for (const [stem, kind] of [
+        ["ZDX01541", "JPEG"],
+        ["ZDX01531", "ARW"]
+      ] as const) {
+        const singleton = result.groups.find((group) =>
+          group.memberFileIds.includes(fileIdOf(stem, kind))
+        );
+        assert.ok(singleton, `${stem} keeps its own suggestion`);
+        assert.ok(singleton!.groupId.startsWith("sg-"));
+        assert.deepEqual(singleton!.memberFileIds, [fileIdOf(stem, kind)]);
+      }
+
+      const materialized = await prisma.beadImageGroup.findMany({
+        where: { sessionId: session.sessionId },
+        include: { files: true }
+      });
+      assert.equal(materialized.length, 64);
+      assert.ok(materialized.every((group) => group.state === "SUGGESTED"));
+      assert.ok(materialized.every((group) => group.similarityEvidence !== null));
+      assert.deepEqual(
+        materialized.flatMap((group) => group.files.map((file) => file.id)).sort(),
+        [...fileIdByIndex].sort()
+      );
+    } finally {
+      await prisma.$disconnect().catch(() => undefined);
+      rmSync(store.root, { recursive: true, force: true });
+    }
+  }
+);
