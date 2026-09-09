@@ -63,8 +63,87 @@ PROCESS_TIMEOUT_S = 300
 RESULTS: list[tuple[str, bool, str]] = []
 SKIPPED: list[tuple[str, str]] = []
 PROCS: list[tuple[str, subprocess.Popen]] = []
+PROC_PORTS: dict[str, int] = {}
 TEMP_PATHS: list[Path] = []
 DB_NAME: str | None = None
+CLEANUP_ERRORS: list[str] = []
+SKIP_BROWSER = False
+KEEP_TEMP = False
+
+# ---- 合成 OIDC 提供器（复用 tests/auth-e2e 的 fixtures，不新建任何文件到仓库）----
+# 后端的 auth0 校验只接受规范 HTTPS DNS 主机名（拒绝 IP/localhost/端口），故沿用
+# AUTH-006 的既有拓扑：提供器 TLS 监听高位回环端口，Node 侧经 node-connect-preload
+# 重写 connect()，浏览器侧经 browser-relay CONNECT 隧道，TLS 端到端 + 自签 CA。
+SYNTHETIC_HOST = "synthetic.auth006.internal"
+SYNTHETIC_ISSUER = f"https://{SYNTHETIC_HOST}/"
+SYNTHETIC_AUDIENCE = "https://api.mystcrag.auth006.internal/"
+SYNTHETIC_CLIENT_ID = "auth006-synthetic-client"
+SYNTHETIC_CLIENT_SECRET = "qa-flow-synthetic-client-secret"
+PROVIDER_ADMIN_TOKEN = "qa-flow-provider-admin-token"
+PRELOAD_PATH = REPO_ROOT / "tests/auth-e2e" / "fixtures" / "node-connect-preload.cjs"
+AUTH_E2E_FIXTURES = REPO_ROOT / "tests/auth-e2e" / "fixtures"
+PROVIDER_TLS_PORT = 0
+PROVIDER_ADMIN_PORT = 0
+BROWSER_RELAY_PORT = 0
+TLS_CERT_PATH: Path | None = None
+FINAL_USER_TOKEN: str | None = None
+
+# 完整验收的精确必需结果集：任何缺项、SKIP 或 FAIL 都令整次运行失败。
+# 浏览器/移动端专属项在 --skip-browser 诊断模式下显式豁免（记 SKIP），
+# 但完整模式下它们缺失或被 SKIP 同样失败。
+REQUIRED_RESULTS = [
+    "env/postgres",
+    "fixtures/synthetic",
+    "db/fresh-test-database",
+    "services/oidc-provider",
+    "services/backend+worker",
+    "services/frontend",
+    "browser/login+guard",
+    "browser/create-session",
+    "http/manifest",
+    "http/upload",
+    "flow/sha256-archive-roundtrip",
+    "flow/restart-termination",
+    "flow/restart-new-pids",
+    "flow/restart-resume",
+    "flow/resume-upload-completes",
+    "flow/resume-archive-settles",
+    "flow/worker-advanced-after-restart",
+    "browser/grouping-start",
+    "flow/auto-grouping",
+    "flow/merge",
+    "flow/split",
+    "flow/arw-only-merge",
+    "flow/primary-confirmed",
+    "browser/groups-page-render",
+    "flow/naming",
+    "flow/draft",
+    "flow/catalog-requires-auth",
+    "flow/draft-public-denial",
+    "flow/curation",
+    "flow/draft-refresh-persistence",
+    "browser/draft-page-render",
+    "flow/processing-start",
+    "flow/qc-verdict",
+    "flow/qc-blocks-approval",
+    "flow/qc-recovery-reprocess",
+    "flow/qc-recovery-passed",
+    "flow/human-approval",
+    "browser/review-page-render",
+    "flow/publish",
+    "flow/public-approved-asset",
+    "flow/published-product-public",
+    "browser/final-user-login",
+    "browser/approved-product-renders",
+    "mobile/status-reviews-viewport",
+    "sources/discovery",
+    "sources/import-roundtrip",
+    "sources/grouping-pairs",
+]
+
+
+def is_browser_only(name: str) -> bool:
+    return name.startswith("browser/") or name.startswith("mobile/")
 
 
 def report(step: str, ok: bool, detail: str = "") -> None:
@@ -85,20 +164,58 @@ def fatal(step: str, detail: str) -> None:
 
 def finish() -> None:
     failed = [r for r in RESULTS if not r[1]]
+    # MISSING 只应表示“从头到尾没有给出任何结论（PASS/FAIL/SKIP 均未报告）”的必需项；
+    # 一个 FAILED 的必需项已经在 failed 里算过了，不能再重复计为 MISSING，否则
+    # required set 永远 INCOMPLETE，掩盖“已如实给出 FAIL 结论”的事实。
+    reported_names = {name for name, _, _ in RESULTS} | {name for name, _ in SKIPPED}
+    missing = [
+        name
+        for name in REQUIRED_RESULTS
+        if name not in reported_names and not (SKIP_BROWSER and is_browser_only(name))
+    ]
+    problems = list(failed)
+    problems.extend((name, False, "missing from the required result set") for name in missing)
+    if not SKIP_BROWSER and SKIPPED:
+        # 完整验收：任何 SKIP 都不是通过项（--skip-browser 仅诊断模式豁免浏览器项）。
+        problems.extend(
+            (name, False, f"skipped in the full flow: {detail}") for name, detail in SKIPPED
+        )
+    problems.extend(
+        (f"cleanup/{index}", False, detail) for index, detail in enumerate(CLEANUP_ERRORS)
+    )
     print("", flush=True)
     print(
-        f"SUMMARY: {len(RESULTS) - len(failed)} passed, {len(failed)} failed, {len(SKIPPED)} skipped",
+        f"SUMMARY: {len(RESULTS) - len(failed)} passed, {len(failed)} failed, {len(SKIPPED)} skipped"
+        f"; required set {'complete' if not missing else 'INCOMPLETE'}"
+        f"; cleanup errors: {len(CLEANUP_ERRORS)}",
         flush=True,
     )
     for step, _, detail in failed:
         print(f"  FAILED: {step}: {detail[:300]}", flush=True)
     for step, detail in SKIPPED:
         print(f"  SKIPPED: {step}: {detail[:300]}", flush=True)
+    for name in missing:
+        print(f"  MISSING: {name}", flush=True)
+    for detail in CLEANUP_ERRORS:
+        print(f"  CLEANUP ERROR: {detail[:300]}", flush=True)
     cleanup()
-    sys.exit(1 if failed else 0)
+    sys.exit(1 if problems else 0)
+
+
+def port_is_closed(port: int, timeout_s: int = 20) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        with socket.socket() as sock:
+            sock.settimeout(0.4)
+            if sock.connect_ex(("127.0.0.1", port)) != 0:
+                return True
+        time.sleep(0.4)
+    return False
 
 
 def cleanup() -> None:
+    # 清理失败必须影响退出码：进程未死、端口未关、库未删、目录残留都记入
+    # CLEANUP_ERRORS，由 finish() 折算为非零退出。
     for name, proc in PROCS:
         if proc.poll() is None:
             try:
@@ -115,16 +232,52 @@ def cleanup() -> None:
             proc.wait(timeout=10)
         except Exception:
             pass
+        if proc.poll() is None:
+            CLEANUP_ERRORS.append(f"process {name} (pid {proc.pid}) still alive after SIGTERM+SIGKILL")
+        port = PROC_PORTS.get(name)
+        if port is not None and not port_is_closed(port, timeout_s=15):
+            CLEANUP_ERRORS.append(f"port {port} for {name} still accepting connections after termination")
         print(f"CLEANUP | stopped {name}", flush=True)
     if DB_NAME is not None:
-        subprocess.run(
-            ["psql", "-h", "/tmp", "-d", "postgres", "-Atc", f'DROP DATABASE IF EXISTS "{DB_NAME}" WITH (FORCE)'],
-            capture_output=True, text=True, timeout=30,
-        )
-        print(f"CLEANUP | dropped database {DB_NAME}", flush=True)
+        if KEEP_TEMP:
+            kept = subprocess.run(
+                ["psql", "-h", "/tmp", "-d", DB_NAME, "-Atc", "SELECT 1"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if kept.returncode != 0:
+                CLEANUP_ERRORS.append(
+                    f"--keep requested but database {DB_NAME} is not reachable: {kept.stderr.strip()[:200]}"
+                )
+            else:
+                print(f"CLEANUP | kept database {DB_NAME} (verified reachable)", flush=True)
+        else:
+            drop = subprocess.run(
+                ["psql", "-h", "/tmp", "-d", "postgres", "-Atc",
+                 f'DROP DATABASE IF EXISTS "{DB_NAME}" WITH (FORCE)'],
+                capture_output=True, text=True, timeout=30,
+            )
+            if drop.returncode != 0:
+                CLEANUP_ERRORS.append(
+                    f"drop database {DB_NAME} failed: {drop.stderr.strip()[:200]}"
+                )
+            else:
+                verify = subprocess.run(
+                    ["psql", "-h", "/tmp", "-d", "postgres", "-Atc",
+                     f"SELECT 1 FROM pg_database WHERE datname = '{DB_NAME}'"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if verify.returncode != 0 or verify.stdout.strip():
+                    CLEANUP_ERRORS.append(f"database {DB_NAME} still present after DROP")
+                else:
+                    print(f"CLEANUP | dropped database {DB_NAME} (verified absent)", flush=True)
     if not KEEP_TEMP:
         for path in TEMP_PATHS:
-            shutil.rmtree(path, ignore_errors=True)
+            try:
+                shutil.rmtree(path)
+            except Exception as exc:
+                CLEANUP_ERRORS.append(f"rmtree {path} failed: {exc}")
+            if path.exists():
+                CLEANUP_ERRORS.append(f"temporary path {path} still exists after rmtree")
         print("CLEANUP | removed temporary directories", flush=True)
     else:
         print(f"CLEANUP | kept temporary paths: {[str(p) for p in TEMP_PATHS]}", flush=True)
@@ -297,7 +450,7 @@ def sh(command: list[str], env: dict | None = None, timeout: int = 300, cwd: Pat
     return result.stdout
 
 
-def spawn(name: str, command: list[str], env: dict, log_path: Path) -> subprocess.Popen:
+def spawn(name: str, command: list[str], env: dict, log_path: Path, port: int | None = None) -> subprocess.Popen:
     log = open(log_path, "ab")
     # 独立进程组：pnpm→next dev→next-server 是多层孙进程链，仅 SIGTERM 直接子进程
     # 会把 next-server / worker 留成孤儿（曾用案例：孤儿持有 Next 项目锁，令后续
@@ -307,7 +460,37 @@ def spawn(name: str, command: list[str], env: dict, log_path: Path) -> subproces
         stdout=log, stderr=log, start_new_session=True,
     )
     PROCS.append((name, proc))
+    if port is not None:
+        PROC_PORTS[name] = port
     return proc
+
+
+def stop_process_group(name: str, proc: subprocess.Popen, port: int | None = None, timeout_s: int = 25) -> None:
+    """终止并验证整个进程组：进程退出 + 端口关闭；任一超时即失败。"""
+    if proc.poll() is None:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    try:
+        proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            pass
+        proc.wait(timeout=10)
+    else:
+        # pnpm 主进程可能已对 SIGTERM 先退，但组内 next-server/worker 孙进程仍在；
+        # 无条件补一发 SIGKILL 再验证端口，端口未关即失败。
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            pass
+    if proc.poll() is None:
+        raise RuntimeError(f"{name}: process did not exit after SIGTERM+SIGKILL")
+    if port is not None:
+        wait_port_closed(port, timeout_s=15)
 
 
 def wait_for_http(url: str, timeout_s: int, session) -> None:
@@ -328,13 +511,9 @@ def wait_for_http(url: str, timeout_s: int, session) -> None:
 
 
 def wait_port_closed(port: int, timeout_s: int = 20) -> None:
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        with socket.socket() as sock:
-            sock.settimeout(0.4)
-            if sock.connect_ex(("127.0.0.1", port)) != 0:
-                return
-        time.sleep(0.4)
+    """端口必须在超时内关闭，否则视为终止失败（fail-fast，不再静默返回）。"""
+    if not port_is_closed(port, timeout_s=timeout_s):
+        raise RuntimeError(f"port {port} still accepting connections after {timeout_s}s")
 
 
 def create_database(temp_root: Path) -> tuple[str, str]:
@@ -379,41 +558,309 @@ class AdminClient:
         return self.session.request(method, f"{self.backend_origin}{path}", timeout=90, **kwargs)
 
 
-SIGNED_TEST_SECRET = "qa-integration-signed-test-secret-0123456789abcdef"
+# ----------------------------------------------------- synthetic OIDC provider ---
+
+def free_port() -> int:
+    with socket.socket() as picker:
+        picker.bind(("127.0.0.1", 0))
+        return int(picker.getsockname()[1])
 
 
-def signed_test_token(subject: str = "qa-catalog-observer") -> str:
-    """与后端 SignedTestTokenAuthProvider.signTestAccessToken 同构的 HS256 JWT。
-    /api/catalog/* 是登录用户（protectedRoute）视图，不是匿名公开端点；验收必须
-    以认证身份查询目录，否则 401 空列表会让断言静默失真。"""
+def start_synthetic_provider(temp_root: Path, callback_url: str, logout_url: str) -> None:
+    """启动 tests/auth-e2e 的合成 OIDC 提供器 + 浏览器 CONNECT relay（复用 fixtures）。
+
+    runner .mts 写进一次性临时目录（不进仓库、不进可写路径清单）；tsx 由 backend
+    工作区提供。提供器 TLS 监听回环高位端口，主机名 synthetic.auth006.internal 经
+    preload（Node）/relay（浏览器）映射。访问令牌有效期放长到 1 小时，覆盖全流程
+    断言窗口（fixtures 默认 12 秒会中途过期）。"""
+    global PROVIDER_TLS_PORT, PROVIDER_ADMIN_PORT, BROWSER_RELAY_PORT, TLS_CERT_PATH
+    import requests
+
+    PROVIDER_TLS_PORT = free_port()
+    PROVIDER_ADMIN_PORT = free_port()
+    BROWSER_RELAY_PORT = free_port()
+    tls_dir = temp_root / "tls"
+    TLS_CERT_PATH = tls_dir / "synthetic-provider.cert.pem"
+
+    # fixtures 的 .mts 之间用无扩展名相对导入（./ports 等），只有 Playwright 的
+    # esbuild 打包能解析；直接 tsx 运行会 ERR_MODULE_NOT_FOUND。在临时目录生成
+    # 一个 Module.registerHooks 解析钩子做扩展名补全（不改 fixtures——不在本任务
+    # 可写路径内），runner 加载 fixtures 前先注册钩子。
+    resolver = temp_root / "extension-resolver.cjs"
+    resolver.write_text(
+        "const Module = require(\"node:module\");\n"
+        "const path = require(\"node:path\");\n"
+        "const fs = require(\"node:fs\");\n"
+        "const { fileURLToPath, pathToFileURL } = require(\"node:url\");\n"
+        "const EXTENSIONS = [\"\", \".mts\", \".ts\", \".mjs\", \".js\", \".cjs\"];\n"
+        "Module.registerHooks({\n"
+        "  resolve(specifier, context, nextResolve) {\n"
+        "    try {\n"
+        "      return nextResolve(specifier, context);\n"
+        "    } catch (error) {\n"
+        "      if (specifier.startsWith(\".\") && context.parentURL?.startsWith(\"file:\")) {\n"
+        "        const base = path.resolve(path.dirname(fileURLToPath(context.parentURL)), specifier);\n"
+        "        for (const ext of EXTENSIONS) {\n"
+        "          const candidate = base + ext;\n"
+        "          if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {\n"
+        "            return { url: pathToFileURL(candidate).href, shortCircuit: true,\n"
+        "                     format: ext === \".cjs\" ? \"commonjs\" : \"module\" };\n"
+        "          }\n"
+        "        }\n"
+        "      }\n"
+        "      throw error;\n"
+        "    }\n"
+        "  }\n"
+        "});\n"
+    )
+
+    runner = temp_root / "provider-runner.mts"
+    runner.write_text(
+        "/* 由 bead_import_flow.py 写入一次性临时目录：复用 tests/auth-e2e fixtures。 */\n"
+        "import { pathToFileURL } from \"node:url\";\n"
+        "const [resolverPath, tlsPort, adminPort, relayPort, tlsDir, fixturesDir, callbackUrl, logoutUrl, adminToken, clientSecret] = process.argv.slice(2);\n"
+        "await import(pathToFileURL(resolverPath).href);\n"
+        "const fixtures = pathToFileURL(fixturesDir + \"/\").href;\n"
+        "const [{ ensureSyntheticTlsCertificate }, { createSyntheticProvider }, { startBrowserRelay }] =\n"
+        "  await Promise.all([\n"
+        "    import(fixtures + \"tls-cert.mts\"),\n"
+        "    import(fixtures + \"synthetic-provider.mts\"),\n"
+        "    import(fixtures + \"browser-relay.mts\"),\n"
+        "  ]);\n"
+        "const { keyPath, certPath } = await ensureSyntheticTlsCertificate(tlsDir);\n"
+        "const relay = await startBrowserRelay({\n"
+        "  port: Number(relayPort),\n"
+        "  allowlist: [{ host: \"synthetic.auth006.internal\", port: 443, upstreamPort: Number(tlsPort) }],\n"
+        "});\n"
+        "const provider = createSyntheticProvider({\n"
+        "  issuer: \"https://synthetic.auth006.internal/\",\n"
+        "  audience: \"https://api.mystcrag.auth006.internal/\",\n"
+        "  clientId: \"auth006-synthetic-client\",\n"
+        "  clientSecret,\n"
+        "  callbackUrl,\n"
+        "  logoutUrl,\n"
+        "  tlsPort: Number(tlsPort),\n"
+        "  adminPort: Number(adminPort),\n"
+        "  adminToken,\n"
+        "  tlsKey: keyPath,\n"
+        "  tlsCert: certPath,\n"
+        "  accessTokenLifetimeSeconds: 3600,\n"
+        "  relayStats: () => relay.stats(),\n"
+        "});\n"
+        "await provider.start();\n"
+        "process.stdout.write(`PROVIDER_READY relay=${relay.port} cert=${certPath}\\n`);\n"
+        "setInterval(() => {}, 1 << 30);\n"
+    )
+    provider_log = temp_root / "oidc-provider.log"
+    spawn(
+        "oidc-provider",
+        ["pnpm", "--filter", "@mystcrag/backend", "exec", "tsx", str(runner),
+         str(resolver), str(PROVIDER_TLS_PORT), str(PROVIDER_ADMIN_PORT), str(BROWSER_RELAY_PORT),
+         str(tls_dir), str(AUTH_E2E_FIXTURES), callback_url, logout_url,
+         PROVIDER_ADMIN_TOKEN, SYNTHETIC_CLIENT_SECRET],
+        {}, provider_log, port=PROVIDER_ADMIN_PORT,
+    )
+    # 就绪验证：管理面（明文回环）返回 200，且经 relay 的真实 TLS 发现端点可
+    # 以自签 CA 校验——与浏览器登录走的完全同一条通路。
+    deadline = time.time() + 90
+    admin_ok = tls_ok = False
+    relay_session = requests.Session()
+    relay_session.trust_env = False
+    relay_session.proxies = {"https": f"http://127.0.0.1:{BROWSER_RELAY_PORT}"}
+    relay_session.verify = str(TLS_CERT_PATH)
+    while time.time() < deadline and not (admin_ok and tls_ok):
+        if not admin_ok:
+            try:
+                stats = requests.get(
+                    f"http://127.0.0.1:{PROVIDER_ADMIN_PORT}/admin/stats",
+                    headers={"authorization": f"Bearer {PROVIDER_ADMIN_TOKEN}"},
+                    timeout=3,
+                )
+                admin_ok = stats.status_code == 200
+            except Exception:
+                pass
+        if not tls_ok and TLS_CERT_PATH.exists():
+            try:
+                discovery = relay_session.get(
+                    f"{SYNTHETIC_ISSUER}.well-known/openid-configuration", timeout=5
+                )
+                tls_ok = discovery.status_code == 200 and discovery.json().get("issuer") == SYNTHETIC_ISSUER
+            except Exception:
+                pass
+        time.sleep(1.0)
+    if not (admin_ok and tls_ok):
+        tail = provider_log.read_text(errors="replace")[-600:] if provider_log.exists() else ""
+        raise RuntimeError(f"synthetic OIDC provider not ready: admin={admin_ok} tls={tls_ok}; log tail: {tail}")
+    report(
+        "services/oidc-provider", True,
+        f"provider tls :{PROVIDER_TLS_PORT} admin :{PROVIDER_ADMIN_PORT} relay :{BROWSER_RELAY_PORT}; "
+        "discovery verified through the CONNECT relay with the self-signed CA",
+    )
+
+
+def final_user_access_token() -> str:
+    """经真实 OIDC 授权码 + PKCE（S256）交换取得最终用户访问令牌。
+
+    管理面选定用户 → /authorize（PKCE 挑战）→ 302 回调取 code → /oauth/token
+    交换。请求走与浏览器相同的 CONNECT relay + CA 校验；后端对返回的令牌经
+    JWKS 真实验签，目录断言因此使用与最终用户完全一致的信任链。"""
+    global FINAL_USER_TOKEN
     import base64
-    import hmac as hmac_module
+    import secrets as secrets_module
 
-    def b64url(payload: bytes) -> str:
-        return base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+    import requests
+    from urllib.parse import parse_qs, urlparse
 
-    now = int(time.time())
-    header = b64url(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
-    claims = b64url(json.dumps({
-        "sub": subject, "iss": "mystcrag-local", "aud": "mystcrag-backend",
-        "exp": now + 3600, "iat": now,
-    }, separators=(",", ":")).encode())
-    signing_input = f"{header}.{claims}"
-    signature = b64url(hmac_module.new(SIGNED_TEST_SECRET.encode(), signing_input.encode(), "sha256").digest())
-    return f"{signing_input}.{signature}"
+    if FINAL_USER_TOKEN:
+        return FINAL_USER_TOKEN
+
+    requests.post(
+        f"http://127.0.0.1:{PROVIDER_ADMIN_PORT}/admin/next-user",
+        json={"sub": "qa-final-user-001", "email": "qa-final-user@example.com",
+              "emailVerified": True, "name": "QA 最终用户"},
+        headers={"authorization": f"Bearer {PROVIDER_ADMIN_TOKEN}"},
+        timeout=15,
+    ).raise_for_status()
+
+    verifier = base64.urlsafe_b64encode(secrets_module.token_bytes(48)).rstrip(b"=").decode("ascii")
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode("ascii")).digest()
+    ).rstrip(b"=").decode("ascii")
+    state = secrets_module.token_urlsafe(16)
+    nonce = secrets_module.token_urlsafe(16)
+    callback_url = f"http://localhost:{FRONTEND_PORT}/auth/callback"
+
+    relay_session = requests.Session()
+    relay_session.trust_env = False
+    relay_session.proxies = {"https": f"http://127.0.0.1:{BROWSER_RELAY_PORT}"}
+    relay_session.verify = str(TLS_CERT_PATH)
+    authorized = relay_session.get(
+        f"{SYNTHETIC_ISSUER}authorize",
+        params={
+            "client_id": SYNTHETIC_CLIENT_ID,
+            "redirect_uri": callback_url,
+            "response_type": "code",
+            "scope": "openid profile email",
+            "state": state,
+            "nonce": nonce,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        },
+        allow_redirects=False,
+        timeout=15,
+    )
+    if authorized.status_code != 302:
+        raise RuntimeError(f"authorize did not redirect: {authorized.status_code} {authorized.text[:200]}")
+    redirected = urlparse(authorized.headers["location"])
+    query = parse_qs(redirected.query)
+    code = query.get("code", [None])[0]
+    if not code or query.get("state", [None])[0] != state:
+        raise RuntimeError(f"authorize redirect missing code/state: {authorized.headers['location'][:200]}")
+
+    exchanged = relay_session.post(
+        f"{SYNTHETIC_ISSUER}oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": callback_url,
+            "code_verifier": verifier,
+            "client_id": SYNTHETIC_CLIENT_ID,
+            "client_secret": SYNTHETIC_CLIENT_SECRET,
+        },
+        timeout=15,
+    )
+    if exchanged.status_code != 200:
+        raise RuntimeError(f"token exchange failed: {exchanged.status_code} {exchanged.text[:200]}")
+    FINAL_USER_TOKEN = exchanged.json()["access_token"]
+    return FINAL_USER_TOKEN
 
 
 # -------------------------------------------------------------------- flow ---
 
-def upload_file(client: AdminClient, session_id: str, file_id: str, data: bytes) -> dict:
-    response = client.proxy(
+def upload_file(client: AdminClient, session_id: str, file_id: str, data: bytes, attempts: int = 6, label: str = "") -> dict:
+    # 大批量上传（真实素材 127 文件经 Next dev 代理转发）下，前端代理对后端偶尔
+    # 瞬时 fetch 失败返回 5xx（“service did not respond”），并非应用层拒绝。后端按
+    # clientFileId 幂等（已 ARCHIVED 再 PUT 返回既有状态），故对 5xx/连接错误做有界
+    # 递增退避重试；4xx 是真实拒绝不重试。全部尝试仍失败时，直连后端探活，区分
+    # “后端进程本身不可达/已死”与“仅前端代理层转发失败”，照实写进异常以便归因。
+    who = label or file_id
+    last_error: str | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = client.proxy(
+                "PUT",
+                f"/sessions/{session_id}/files/{file_id}/content",
+                data=data,
+                headers={"content-type": "application/octet-stream", "content-length": str(len(data))},
+            )
+        except Exception as exc:
+            last_error = f"connection error: {repr(exc)[:200]}"
+        else:
+            if response.status_code == 200:
+                return response.json()
+            last_error = f"{response.status_code} {response.text[:300]}"
+            if response.status_code < 500:
+                break  # 4xx/3xx 为真实拒绝，重试无意义
+        if attempt < attempts:
+            time.sleep(0.6 * attempt)
+    probe = "backend-direct=no-probe"
+    try:
+        probe_resp = client.backend("GET", f"/api/assets/approved:{'0' * 64}")
+        probe = f"backend-direct={probe_resp.status_code}"
+    except Exception as probe_exc:
+        probe = f"backend-direct=unreachable ({repr(probe_exc)[:120]})"
+    # 层隔离诊断：同字节绕过 Next 代理直连后端再 PUT 一次。若后端可达且直连 PUT
+    # 成功，则缺陷定位在前端代理传输层（真实 21MB ARW 上传将同样失败，属前端缺陷）；
+    # 若直连 PUT 同样失败/后端不可达，则缺陷定位在后端/Fastify 层。
+    direct_diag = "direct-backend-put=no-probe"
+    try:
+        direct_resp = client.backend(
+            "PUT",
+            f"/api/admin/bead-import/sessions/{session_id}/files/{file_id}/content",
+            data=data,
+            headers={
+                "x-admin-key": ADMIN_KEY,
+                "content-type": "application/octet-stream",
+                "content-length": str(len(data)),
+            },
+        )
+        direct_diag = f"direct-backend-put={direct_resp.status_code} {direct_resp.text[:200]}"
+    except Exception as direct_exc:
+        direct_diag = f"direct-backend-put=error ({repr(direct_exc)[:150]})"
+    raise RuntimeError(
+        f"upload {who} failed after {attempts} attempts: {last_error}; {probe}; {direct_diag}"
+    )
+
+
+# Next 服务器对 route-handler 入站请求体的默认上限（10MiB，见 frontend.log
+# “Request body exceeded 10MB ... middlewareClientMaxBodySize”）。真实 Sony ARW
+# 原片约 21MB，经管理台代理 PUT 时请求体在 Next 侧被截断为 10MiB → undici 传输
+# 失败 → 代理 500 “service did not respond”，后端永远收不到完整字节（backend.log
+# 中对应 PUT 只记 incoming、从不 completed）。这是前端服务器默认配置缺口，非后端
+# 缺陷；后端 Fastify 上限 256MB 且直连可正常接收。QA 脚本不得改动 runtime 配置，
+# 故对本任务无法抬升该上限——按层拆分取证：≤上限经真实代理全链路，>上限直连同一
+# 后端 content 路由验证字节完整性，并单独记为失败缺陷（sources/proxy-large-body-cap）。
+NEXT_ROUTE_BODY_CAP_BYTES = 10 * 1024 * 1024
+
+
+def upload_direct_backend(client: AdminClient, session_id: str, file_id: str, data: bytes) -> dict:
+    """直连后端内容端点（前端代理转发到的同一条后端路由），用于超过 Next 默认
+    10MiB 路由体上限的真实 ARW。仍走真实 manifest → content → worker 归档管线，
+    仅绕过被 10MiB 截断的 Next 服务器那一跳。"""
+    response = client.backend(
         "PUT",
-        f"/sessions/{session_id}/files/{file_id}/content",
+        f"/api/admin/bead-import/sessions/{session_id}/files/{file_id}/content",
         data=data,
-        headers={"content-type": "application/octet-stream", "content-length": str(len(data))},
+        headers={
+            "x-admin-key": ADMIN_KEY,
+            "content-type": "application/octet-stream",
+            "content-length": str(len(data)),
+        },
     )
     if response.status_code != 200:
-        raise RuntimeError(f"upload {file_id} failed: {response.status_code} {response.text[:300]}")
+        raise RuntimeError(
+            f"direct backend upload {file_id} failed: {response.status_code} {response.text[:300]}"
+        )
     return response.json()
 
 
@@ -469,6 +916,182 @@ def poll_until(predicate, timeout_s: int, description: str, interval_s: float = 
     raise RuntimeError(f"timed out after {timeout_s}s waiting for {description}; last={last[:200]}")
 
 
+# --------------------------------------------------------------- UI helpers ---
+# 审查要求：合并/拆分/命名/八字段编辑/处理/QC/批准/发布必须由 Playwright 在真实
+# 浏览器里完成，并断言请求与页面状态；AdminClient 只做环境准备与只读核验。
+
+
+def ui_mutation(page, description: str, method: str, url_suffix: str, action, timeout_ms: int = 30_000, settle_card: str | None = None):
+    """浏览器驱动的变更：捕获真实 BFF 请求响应，非 200 即失败。
+
+    settle_card：响应 200 后等待该卡片 article 脱离 aria-busy（in-flight 清
+    除、权威状态已重读）。不等它，紧接的下一个浏览器变更会被前端以 IN_FLIGHT
+    静默拒绝（不发请求），Playwright 只能等响应超时。
+    等不到响应时先抓取页面现场（role=alert/status 文本、in-flight 卡片数、
+    当前步骤）再失败——前端对被拒提交是静默不发请求（REFUSED），没有现场
+    就无法区分选择器错、按钮无效果还是客户端拒绝。"""
+    try:
+        with page.expect_response(
+            lambda r: r.url.split("?")[0].endswith(url_suffix) and r.request.method == method,
+            timeout=timeout_ms,
+        ) as response_info:
+            action()
+    except Exception as exc:
+        try:
+            scene = page.evaluate(
+                """() => ({
+                    url: location.pathname,
+                    alerts: [...document.querySelectorAll('[role="alert"], [role="status"]')]
+                        .map((el) => el.textContent.trim()).filter(Boolean).slice(0, 8),
+                    busyCards: document.querySelectorAll('article[aria-busy="true"]').length,
+                    groupCards: document.querySelectorAll('article[aria-labelledby^="bead-import-group-"]').length,
+                    nameInputs: document.querySelectorAll('input[id^="bead-import-group-"][id$="-name"]').length,
+                    headings: [...document.querySelectorAll('h1, h2, h3')]
+                        .map((el) => el.textContent.trim()).filter(Boolean).slice(0, 10),
+                    bodyHead: document.body.textContent.trim().slice(0, 300),
+                })"""
+            )
+            page.screenshot(path="/tmp/bead_import_ui_failure.png", full_page=False)
+        except Exception:
+            scene = {"url": "(page gone)"}
+        raise RuntimeError(
+            f"{description}: no {method} response for {url_suffix} within {timeout_ms}ms; "
+            f"page scene: {scene}"
+        ) from exc
+    response = response_info.value
+    if response.status != 200:
+        raise RuntimeError(
+            f"{description} via the browser UI failed: {response.status} {response.text()[:300]}"
+        )
+    if settle_card is not None:
+        page.wait_for_selector(f"{settle_card}:not([aria-busy])", timeout=timeout_ms)
+    return response
+
+
+def group_card(page, group_id: str):
+    return page.locator(f'article[aria-labelledby="bead-import-group-{group_id}-heading"]')
+
+
+def processing_card(page, group_id: str):
+    return page.locator(f'article[aria-labelledby="bead-import-processing-{group_id}-heading"]')
+
+
+def draft_card(page, group_id: str):
+    return page.locator(f'article[aria-labelledby="bead-import-draft-{group_id}-heading"]')
+
+
+def merge_groups_via_ui(page, target_group_id: str, source_group_id: str):
+    # 前端在合并后不清空“选择用于合并”的勾选（selection 是组件本地状态），
+    # 残留的已消失组会被下一次合并带进 sourceGroupIds 而被后端 404。真实
+    # 操作员会先取消残留勾选再选新组——这里做同样的操作。
+    for checkbox in page.locator('label:has-text("选择用于合并") input').all():
+        if checkbox.is_checked():
+            checkbox.uncheck()
+    for group_id in (target_group_id, source_group_id):
+        group_card(page, group_id).locator('label:has-text("选择用于合并") input').check()
+    return ui_mutation(
+        page, "merge groups", "PATCH", f"/proxy/groups/{target_group_id}",
+        lambda: page.get_by_role("button", name="合并所选分组").click(),
+        settle_card=f'article[aria-labelledby="bead-import-group-{target_group_id}-heading"]',
+    )
+
+
+def split_group_via_ui(page, group_id: str, file_ids: list[str]):
+    for file_id in file_ids:
+        page.locator(f"#bead-import-group-{group_id}-file-{file_id}").check()
+    return ui_mutation(
+        page, "split group", "PATCH", f"/proxy/groups/{group_id}",
+        lambda: group_card(page, group_id).get_by_role("button", name="拆分为新分组").click(),
+        settle_card=f'article[aria-labelledby="bead-import-group-{group_id}-heading"]',
+    )
+
+
+def set_group_name_via_ui(page, group_id: str, name: str):
+    page.fill(f"#bead-import-group-{group_id}-name", name)
+    return ui_mutation(
+        page, "set group name", "PATCH", f"/proxy/groups/{group_id}",
+        lambda: group_card(page, group_id).get_by_role("button", name="保存名称").click(),
+        settle_card=f'article[aria-labelledby="bead-import-group-{group_id}-heading"]',
+    )
+
+
+def set_primary_via_ui(page, group_id: str, relative_path: str):
+    return ui_mutation(
+        page, "set primary", "PATCH", f"/proxy/groups/{group_id}",
+        lambda: page.get_by_role("button", name=f"将 {relative_path} 设为主图").click(),
+        settle_card=f'article[aria-labelledby="bead-import-group-{group_id}-heading"]',
+    )
+
+
+def save_product_draft_via_ui(page, group_id: str, values: dict[str, str], selects: dict[str, str]):
+    for field, value in values.items():
+        page.fill(f"#bead-import-draft-{group_id}-{field}", value)
+    for field, value in selects.items():
+        page.select_option(f"#bead-import-draft-{group_id}-{field}", value)
+    return ui_mutation(
+        page, "save product draft", "POST", f"/proxy/groups/{group_id}/draft",
+        lambda: draft_card(page, group_id).get_by_role("button", name="保存草稿").click(),
+        settle_card=f'article[aria-labelledby="bead-import-draft-{group_id}-heading"]',
+    )
+
+
+def save_curation_via_ui(page, crystal_draft_id: str, values: dict[str, str]):
+    for field, value in values.items():
+        page.fill(f"#bead-import-curation-{crystal_draft_id}-{field}", value)
+    return ui_mutation(
+        page, "save curation", "PATCH", f"/proxy/crystal-drafts/{crystal_draft_id}",
+        lambda: page.get_by_role("button", name="保存水晶资料").click(),
+    )
+
+
+def approve_via_ui(page, group_id: str, asset_id: str):
+    prefix = f"bead-import-review-{group_id}-{asset_id}"
+    page.fill(f"#{prefix}-note", "人工确认边缘、颜色与授权")
+    page.fill(f"#{prefix}-holder", "QA 集成验收")
+    page.select_option(f"#{prefix}-usage", "OWNED")
+    page.select_option(f"#{prefix}-isAuthenticPhotograph", "true")
+    page.select_option(f"#{prefix}-allowAiTraining", "false")
+    page.select_option(f"#{prefix}-allowCommercialUse", "true")
+    page.select_option(f"#{prefix}-allowPublicDisplay", "true")
+    page.select_option(f"#{prefix}-allowAiRecommendation", "false")
+    return ui_mutation(
+        page, "human approval", "POST", f"/processed-assets/{asset_id}/review",
+        lambda: processing_card(page, group_id).get_by_role("button", name="提交批准").click(),
+        settle_card=f'article[aria-labelledby="bead-import-processing-{group_id}-heading"]',
+    )
+
+
+def reprocess_via_ui(page, group_id: str):
+    return ui_mutation(
+        page, "reprocess", "POST", f"/proxy/groups/{group_id}/reprocess",
+        lambda: processing_card(page, group_id).get_by_role("button", name="提交重新处理").click(),
+        settle_card=f'article[aria-labelledby="bead-import-processing-{group_id}-heading"]',
+    )
+
+
+def publish_via_ui(page, group_id: str):
+    page.locator(f"#bead-import-publish-{group_id}-name").check()
+    promotion = page.locator(f"#bead-import-publish-{group_id}-promotion")
+    if promotion.count() > 0:
+        promotion.first.check()
+    return ui_mutation(
+        page, "publish", "POST", f"/proxy/groups/{group_id}/publish",
+        lambda: processing_card(page, group_id).get_by_role("button", name="确认并发布").click(),
+        settle_card=f'article[aria-labelledby="bead-import-processing-{group_id}-heading"]',
+    )
+
+
+def goto_workflow_step(page, step_title: str):
+    """通过真实步骤条导航（第 N 步按钮），不得绕过页面直达。
+
+    步骤条按钮 disabled={!reachable || current}：当前步骤的按钮自身是禁用
+    的（不能点击自己），已在目标步骤时无需导航，跳过点击。"""
+    button = page.locator(f'button[aria-label*="：{step_title}"]')
+    if button.is_disabled():
+        return
+    button.click()
+
+
 def run_flow(args: argparse.Namespace) -> None:
     import requests
 
@@ -513,8 +1136,31 @@ def run_flow(args: argparse.Namespace) -> None:
     backend_log = temp_root / "backend.log"
     worker_log = temp_root / "worker.log"
     frontend_log = temp_root / "frontend.log"
-    # signed-test 认证的最小安全合成配置（仓库 .env.example 的本地开发模板同款值域，
-    # 仅注入本脚本的子进程环境；不创建/修改 .env，不使用任何真实凭据）。
+
+    # 2b. 合成 OIDC 提供器（tests/auth-e2e fixtures 复用）：最终用户登录、目录
+    # 认证断言与后端 JWKS 验签都走这一条真实信任链。先于 backend/frontend 启动。
+    try:
+        start_synthetic_provider(
+            temp_root,
+            callback_url=f"http://localhost:{FRONTEND_PORT}/auth/callback",
+            logout_url=f"http://localhost:{FRONTEND_PORT}",
+        )
+    except Exception as exc:
+        fatal("services/oidc-provider", repr(exc))
+
+    # auth0 提供器（合成 issuer）：Node 侧经 node-connect-preload 把
+    # synthetic.auth006.internal:443 重写到提供器 TLS 高位端口，自签 CA 经
+    # NODE_EXTRA_CA_CERTS 信任。全部仅注入本脚本子进程，不改 .env。
+    # NODE_OPTIONS 必须带 --require 前缀（与 tests/auth-e2e stack.mts 相同形式）。
+    # json.dumps 默认 ensure_ascii=True 会把路径中的中文转义成 \uXXXX 字面量，
+    # Node 不解释 NODE_OPTIONS 里的 \u 转义 → MODULE_NOT_FOUND；必须用
+    # ensure_ascii=False（等同 JS JSON.stringify），路径原样传递。
+    preload_env = {
+        "NODE_OPTIONS": f"--require {json.dumps(str(PRELOAD_PATH), ensure_ascii=False)}",
+        "AUTH006_SYNTHETIC_HOST": SYNTHETIC_HOST,
+        "AUTH006_SYNTHETIC_PORT": str(PROVIDER_TLS_PORT),
+        "NODE_EXTRA_CA_CERTS": str(TLS_CERT_PATH),
+    }
     backend_env = {
         "DATABASE_URL": database_url,
         "MYSTCRAG_ASSET_ARCHIVE_ROOT": str(archive_root),
@@ -522,11 +1168,10 @@ def run_flow(args: argparse.Namespace) -> None:
         "ASSET_ADMIN_API_KEY": ADMIN_KEY,
         "BACKEND_PORT": str(BACKEND_PORT),
         "NODE_ENV": "development",
-        "MYSTCRAG_AUTH_PROVIDER": "signed-test",
-        "MYSTCRAG_ENABLE_SIGNED_TEST_AUTH": "true",
-        "MYSTCRAG_AUTH_SIGNING_SECRET": "qa-integration-signed-test-secret-0123456789abcdef",
-        "MYSTCRAG_AUTH_ISSUER": "mystcrag-local",
-        "MYSTCRAG_AUTH_AUDIENCE": "mystcrag-backend",
+        "MYSTCRAG_AUTH_PROVIDER": "auth0",
+        "MYSTCRAG_AUTH_ISSUER": SYNTHETIC_ISSUER,
+        "MYSTCRAG_AUTH_AUDIENCE": SYNTHETIC_AUDIENCE,
+        **preload_env,
     }
     worker_env = {
         "DATABASE_URL": database_url,
@@ -536,27 +1181,24 @@ def run_flow(args: argparse.Namespace) -> None:
     frontend_env = {
         "MYSTCRAG_BACKEND_ORIGIN": f"http://127.0.0.1:{BACKEND_PORT}",
         "MYSTCRAG_ASSET_ADMIN_KEY": ADMIN_KEY,
-        # 前端 proxy.ts 对所有页面导航强制走 Auth0 SDK 滚动会话中间件；signed-test
-        # 提供器会令每个页面 fail-closed 500。这里注入合成的 auth0 形态配置：会话
-        # cookie 由本地密钥签名/加密，匿名页面导航不联网联系 issuer；本验收不
-        # 演练最终用户登录（珠子导入台使用独立的 admin key 门）。
         "MYSTCRAG_APP_ORIGIN": f"http://localhost:{FRONTEND_PORT}",
         "MYSTCRAG_AUTH_PROVIDER": "auth0",
-        "MYSTCRAG_AUTH_ISSUER": "https://qa-synthetic.auth0.example.com/",
-        "MYSTCRAG_AUTH_AUDIENCE": "mystcrag-backend",
-        "MYSTCRAG_AUTH_CLIENT_ID": "qa-synthetic-client-id",
-        "MYSTCRAG_AUTH_CLIENT_SECRET": "qa-synthetic-client-secret",
+        "MYSTCRAG_AUTH_ISSUER": SYNTHETIC_ISSUER,
+        "MYSTCRAG_AUTH_AUDIENCE": SYNTHETIC_AUDIENCE,
+        "MYSTCRAG_AUTH_CLIENT_ID": SYNTHETIC_CLIENT_ID,
+        "MYSTCRAG_AUTH_CLIENT_SECRET": SYNTHETIC_CLIENT_SECRET,
         "MYSTCRAG_AUTH_CALLBACK_URL": f"http://localhost:{FRONTEND_PORT}/auth/callback",
         "MYSTCRAG_AUTH_LOGOUT_URL": f"http://localhost:{FRONTEND_PORT}",
         "MYSTCRAG_AUTH_SESSION_SECRET": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        **preload_env,
     }
 
-    backend = spawn("backend", ["pnpm", "--filter", "@mystcrag/backend", "exec", "tsx", "src/index.ts"], backend_env, backend_log)
+    backend = spawn("backend", ["pnpm", "--filter", "@mystcrag/backend", "exec", "tsx", "src/index.ts"], backend_env, backend_log, port=BACKEND_PORT)
     worker = spawn("asset-worker", ["pnpm", "--filter", "@mystcrag/asset-worker", "start"], worker_env, worker_log)
     frontend = spawn(
         "frontend",
         ["pnpm", "--filter", "@mystcrag/frontend", "exec", "next", "dev", "-p", str(FRONTEND_PORT)],
-        frontend_env, frontend_log,
+        frontend_env, frontend_log, port=FRONTEND_PORT,
     )
     probe = requests.Session()
     try:
@@ -582,8 +1224,18 @@ def run_flow(args: argparse.Namespace) -> None:
             from playwright.sync_api import sync_playwright
 
             playwright = stack.enter_context(sync_playwright())
-            browser = playwright.chromium.launch()
-            desktop = browser.new_context(viewport={"width": 1440, "height": 900})
+            # Chromium 无法用 --host-resolver-rules 重映射端口，synthetic issuer
+            # (synthetic.auth006.internal:443) 必须经严格白名单 CONNECT relay；
+            # 本地服务直连绕过。与 tests/auth-e2e 的浏览器拓扑完全一致。
+            browser = playwright.chromium.launch(
+                proxy={
+                    "server": f"http://127.0.0.1:{BROWSER_RELAY_PORT}",
+                    "bypass": "localhost,127.0.0.1",
+                },
+            )
+            desktop = browser.new_context(
+                viewport={"width": 1440, "height": 900}, ignore_https_errors=True
+            )
             page = desktop.new_page()
             page.set_default_timeout(45_000)
         try:
@@ -678,16 +1330,26 @@ def run_flow(args: argparse.Namespace) -> None:
         except Exception as exc:
             fatal("http/manifest-upload", repr(exc))
 
-        # 5. 重启恢复：杀后端+worker → 重启 → 会话与状态还在
+        # 5. 重启恢复：整组终止 backend+worker（进程退出+端口关闭，超时即失败）→
+        #    重启 → 断言新 PID → 断言新 worker 真正推进（held-back 文件被新 worker 归档落账）。
         try:
-            backend.send_signal(signal.SIGTERM)
-            worker.send_signal(signal.SIGTERM)
-            backend.wait(timeout=20)
-            worker.wait(timeout=20)
-            wait_port_closed(BACKEND_PORT)
-            backend2 = spawn("backend-2", ["pnpm", "--filter", "@mystcrag/backend", "exec", "tsx", "src/index.ts"], backend_env, backend_log)
+            old_backend_pid, old_worker_pid = backend.pid, worker.pid
+            worker_log_size_before = worker_log.stat().st_size if worker_log.exists() else 0
+            stop_process_group("backend", backend, port=BACKEND_PORT, timeout_s=25)
+            stop_process_group("asset-worker", worker, timeout_s=25)
+            report(
+                "flow/restart-termination", True,
+                f"backend group (pid {old_backend_pid}) and worker group (pid {old_worker_pid}) "
+                f"terminated; port {BACKEND_PORT} verified closed",
+            )
+            backend2 = spawn("backend-2", ["pnpm", "--filter", "@mystcrag/backend", "exec", "tsx", "src/index.ts"], backend_env, backend_log, port=BACKEND_PORT)
             worker2 = spawn("asset-worker-2", ["pnpm", "--filter", "@mystcrag/asset-worker", "start"], worker_env, worker_log)
             wait_for_http(f"http://127.0.0.1:{BACKEND_PORT}/api/assets/approved:{'0'*64}", 120, probe)
+            report(
+                "flow/restart-new-pids",
+                backend2.pid != old_backend_pid and worker2.pid != old_worker_pid,
+                f"backend {old_backend_pid} -> {backend2.pid}; worker {old_worker_pid} -> {worker2.pid}",
+            )
 
             if args.skip_browser:
                 skipped("browser/session-page-after-restart", "--skip-browser: 重启后会话页渲染为浏览器专属")
@@ -717,6 +1379,16 @@ def run_flow(args: argparse.Namespace) -> None:
                 return f"state={snapshot['state']} files={sorted(set(states))}"
             poll_until(archive_settled, GROUP_TIMEOUT_S, "worker archive settlement")
             report("flow/resume-archive-settles", True, "held-back file archived; session reached ARCHIVING")
+
+            # 新 worker 推进的权威证据：重启后的 worker 把 held-back 文件落账归档，
+            # 且 worker 日志在重启后有新增输出（旧进程组已死，只能是新组写的）。
+            worker_log_size_after = worker_log.stat().st_size if worker_log.exists() else 0
+            report(
+                "flow/worker-advanced-after-restart",
+                worker_log_size_after > worker_log_size_before,
+                f"worker log grew {worker_log_size_before} -> {worker_log_size_after} bytes after restart "
+                "while the restarted worker archived the held-back file",
+            )
 
             if args.skip_browser:
                 started = client.proxy(
@@ -759,7 +1431,7 @@ def run_flow(args: argparse.Namespace) -> None:
         except Exception as exc:
             fatal("flow/restart-grouping", repr(exc))
 
-        # 6. 分组出现 → 合并/拆分
+        # 6. 分组出现 → 合并/拆分（浏览器模式：Playwright 操作 + 断言请求与页面状态）
         try:
             def groups_ready():
                 session = get_session(client, session_id)
@@ -790,29 +1462,51 @@ def run_flow(args: argparse.Namespace) -> None:
                 g["groupId"] for g in session["groups"] if g["groupId"] != poor_group_id
             ]
             merge_target, merge_source = merge_candidates[0], merge_candidates[1]
-            revision = next(g["revision"] for g in session["groups"] if g["groupId"] == merge_target)
-            merged = client.proxy(
-                "PATCH", f"/groups/{merge_target}",
-                json={"action": "MERGE_GROUPS", "expectedGroupRevision": revision, "sourceGroupIds": [merge_target, merge_source]},
-            )
-            if merged.status_code != 200:
-                raise RuntimeError(f"merge refused: {merged.status_code} {merged.text[:200]}")
+            if args.skip_browser:
+                revision = next(g["revision"] for g in session["groups"] if g["groupId"] == merge_target)
+                merged = client.proxy(
+                    "PATCH", f"/groups/{merge_target}",
+                    json={"action": "MERGE_GROUPS", "expectedGroupRevision": revision, "sourceGroupIds": [merge_target, merge_source]},
+                )
+                if merged.status_code != 200:
+                    raise RuntimeError(f"merge refused: {merged.status_code} {merged.text[:200]}")
+            else:
+                # 分组完成会话页自动进入“确认分组”步骤；等分组编辑器真实渲染。
+                page.wait_for_selector("text=整理分组", timeout=60_000)
+                page.wait_for_selector(
+                    f'article[aria-labelledby="bead-import-group-{merge_target}-heading"]',
+                    timeout=60_000,
+                )
+                # 勾选顺序即 sourceGroupIds 顺序：第一个勾选的是合并目标。
+                merge_groups_via_ui(page, merge_target, merge_source)
             session = get_session(client, session_id)
             after_merge = [g["groupId"] for g in session["groups"]]
-            report("flow/merge", len(after_merge) == len(initial_group_ids) - 1, f"{len(initial_group_ids)} -> {len(after_merge)} groups")
+            report(
+                "flow/merge", len(after_merge) == len(initial_group_ids) - 1,
+                f"{len(initial_group_ids)} -> {len(after_merge)} groups via "
+                + ("the BFF proxy (skip-browser)" if args.skip_browser else "the browser group editor"),
+            )
 
             merged_group = next(g for g in session["groups"] if g["groupId"] == merge_target)
             members = merged_group["memberFileIds"]
             half = max(1, len(members) // 2)
             revision = merged_group["revision"]
-            split = client.proxy(
-                "PATCH", f"/groups/{merge_target}",
-                json={"action": "SPLIT_GROUP", "expectedGroupRevision": revision, "partitions": [members[:half], members[half:]]},
-            )
-            if split.status_code != 200:
-                raise RuntimeError(f"split refused: {split.status_code} {split.text[:200]}")
+            if args.skip_browser:
+                split = client.proxy(
+                    "PATCH", f"/groups/{merge_target}",
+                    json={"action": "SPLIT_GROUP", "expectedGroupRevision": revision, "partitions": [members[:half], members[half:]]},
+                )
+                if split.status_code != 200:
+                    raise RuntimeError(f"split refused: {split.status_code} {split.text[:200]}")
+            else:
+                split_group_via_ui(page, merge_target, members[:half])
             session = get_session(client, session_id)
-            report("flow/split", True, f"back to {len(session['groups'])} groups")
+            after_split_count = len(session["groups"])
+            report(
+                "flow/split", after_split_count == len(initial_group_ids),
+                f"{len(after_merge)} -> {after_split_count} groups (must return to {len(initial_group_ids)}; "
+                "a no-op split is a failure)",
+            )
 
             # 6b. ARW-only 组没有可处理栅格，worker 必然终态失败（UNSUPPORTED_SOURCE_KIND）
             #     并把会话打成 PARTIALLY_FAILED、阻断一切人工审批。操作员路径是把它并入
@@ -844,16 +1538,25 @@ def run_flow(args: argparse.Namespace) -> None:
                     g for g in session["groups"]
                     if g["groupId"] != arw_only["groupId"] and _raster_primary(g) is not None
                 )
-                arw_merge = client.proxy(
-                    "PATCH", f"/groups/{host['groupId']}",
-                    json={
-                        "action": "MERGE_GROUPS",
-                        "expectedGroupRevision": host["revision"],
-                        "sourceGroupIds": [host["groupId"], arw_only["groupId"]],
-                    },
-                )
-                if arw_merge.status_code != 200:
-                    raise RuntimeError(f"arw-only merge refused: {arw_merge.status_code} {arw_merge.text[:200]}")
+                if args.skip_browser:
+                    arw_merge = client.proxy(
+                        "PATCH", f"/groups/{host['groupId']}",
+                        json={
+                            "action": "MERGE_GROUPS",
+                            "expectedGroupRevision": host["revision"],
+                            "sourceGroupIds": [host["groupId"], arw_only["groupId"]],
+                        },
+                    )
+                    if arw_merge.status_code != 200:
+                        raise RuntimeError(f"arw-only merge refused: {arw_merge.status_code} {arw_merge.text[:200]}")
+                else:
+                    # 前端的“选择用于合并”是组件本地状态，合并后不清除；已消失组的
+                    # 残留勾选在 UI 上没有可取消的复选框，会被下一次合并带进请求
+                    # （后端 404）或顶到 target 位被静默拒绝。真实操作员的处置是刷
+                    # 新页面让选择归零——走同一条路，不绕过页面。
+                    page.reload(wait_until="domcontentloaded")
+                    page.wait_for_selector("text=整理分组", timeout=60_000)
+                    merge_groups_via_ui(page, host["groupId"], arw_only["groupId"])
                 report("flow/arw-only-merge", True, "ARW-only group merged into a raster group (operator path)")
 
             session = get_session(client, session_id)
@@ -871,23 +1574,35 @@ def run_flow(args: argparse.Namespace) -> None:
                 current = group.get("primaryFileId")
                 if current == primary:
                     continue
-                set_primary = client.proxy(
-                    "PATCH", f"/groups/{group['groupId']}",
-                    json={
-                        "action": "SET_PRIMARY",
-                        "expectedGroupRevision": group["revision"],
-                        "primaryFileId": primary,
-                    },
-                )
-                if set_primary.status_code != 200:
-                    raise RuntimeError(f"set primary refused: {set_primary.status_code} {set_primary.text[:200]}")
+                if args.skip_browser:
+                    set_primary = client.proxy(
+                        "PATCH", f"/groups/{group['groupId']}",
+                        json={
+                            "action": "SET_PRIMARY",
+                            "expectedGroupRevision": group["revision"],
+                            "primaryFileId": primary,
+                        },
+                    )
+                    if set_primary.status_code != 200:
+                        raise RuntimeError(f"set primary refused: {set_primary.status_code} {set_primary.text[:200]}")
+                else:
+                    set_primary_via_ui(page, group["groupId"], relative_by_file_id[primary])
             report("flow/primary-confirmed", True, "every group carries a human-confirmed raster primary")
             if args.skip_browser:
                 skipped("browser/groups-page-render", "--skip-browser: 确认分组页渲染为浏览器专属")
             else:
                 page.reload(wait_until="domcontentloaded")
-                page.wait_for_selector("text=确认分组", timeout=60_000)
-                page.screenshot(path=str(capture_dir / "desktop-03-groups.png"))
+                # 用当前步骤面板标题（#bead-import-workflow-heading，仅当前步骤一个）
+                # 而非模糊 text=：步骤标题同时出现在每个步骤条按钮上。
+                page.wait_for_selector(
+                    '#bead-import-workflow-heading:has-text("确认分组")', timeout=60_000
+                )
+                shot = str(capture_dir / "desktop-03-groups.png")
+                page.screenshot(path=shot)
+                report(
+                    "browser/groups-page-render", True,
+                    f"确认分组 panel rendered in the real browser (screenshot {Path(shot).name})",
+                )
         except Exception as exc:
             fatal("flow/merge-split", repr(exc))
 
@@ -913,58 +1628,117 @@ def run_flow(args: argparse.Namespace) -> None:
                 if g["groupId"] != poor_group_id and "bead-good-a.jpg" in " ".join(group_files(g))
             )
             for index, group in enumerate(groups):
-                named = client.proxy(
-                    "PATCH", f"/groups/{group['groupId']}",
-                    json={
-                        "action": "SET_NAME",
-                        "expectedGroupRevision": group["revision"],
-                        "crystalName": f"QA水晶{index}",
-                    },
-                )
-                if named.status_code != 200:
-                    raise RuntimeError(f"naming refused: {named.status_code} {named.text[:200]}")
-            report("flow/naming", True, f"{len(groups)} groups named")
+                name = f"QA水晶{index}"
+                if args.skip_browser:
+                    named = client.proxy(
+                        "PATCH", f"/groups/{group['groupId']}",
+                        json={
+                            "action": "SET_NAME",
+                            "expectedGroupRevision": group["revision"],
+                            "crystalName": name,
+                        },
+                    )
+                    if named.status_code != 200:
+                        raise RuntimeError(f"naming refused: {named.status_code} {named.text[:200]}")
+                else:
+                    # 后端 SET_NAME 任意一组即把 checkpoint 推进到 LABELED。第一组
+                    # 命名时 requestedStep 尚为空，页面会随 refresh 自动切到“命名
+                    # 与草稿”（第 3 步，该步骤只读名称、不能编辑）——先等第 3 步
+                    # 面板真正渲染（refresh 落地），再经步骤条回到“确认分组”
+                    # （REQUEST_STEP 会被 refresh 保留，此后页面稳定在第 2 步）。
+                    if index == 1:
+                        page.wait_for_selector(
+                            'article[aria-labelledby^="bead-import-draft-"]', timeout=60_000
+                        )
+                        goto_workflow_step(page, "确认分组")
+                    page.wait_for_selector(f"#bead-import-group-{group['groupId']}-name", timeout=60_000)
+                    set_group_name_via_ui(page, group["groupId"], name)
+            report("flow/naming", True, f"{len(groups)} groups named via "
+                    + ("the BFF proxy (skip-browser)" if args.skip_browser else "the browser group editor"))
 
             session = get_session(client, session_id)
             group = next(g for g in session["groups"] if g["groupId"] == good_group_id)
-            draft = client.proxy(
-                "POST", f"/groups/{good_group_id}/draft",
-                json={
-                    "expectedGroupRevision": group["revision"],
-                    "crystalName": group["crystalName"],
-                    "displayName": "QA 流程验证珠 8mm",
-                    "sku": "QA-FLOW-008",
-                    "materialKey": "qa-flow-material-8",
-                    "shape": "ROUND",
-                    "diameterMm": 8,
-                    "currency": "CNY",
-                    "unitPriceMinor": 1200,
-                    "costMinor": 600,
-                    "availableQuantity": 3,
-                    "qualityStatement": "合成样本，人工目检通过。",
-                    "qualitySource": "QA 集成验收记录。",
-                    "rightsHolder": "QA 集成验收",
-                    "usagePermission": "OWNED",
-                    "isAuthenticPhotograph": True,
-                    "allowCommercialUse": True,
-                    "allowPublicDisplay": True,
-                    "allowAiTraining": False,
-                    "allowAiRecommendation": False,
-                },
-            )
-            if draft.status_code != 200:
-                raise RuntimeError(f"draft refused: {draft.status_code} {draft.text[:300]}")
-            crystal_draft_id = draft.json().get("crystalDraftId")
+            if args.skip_browser:
+                draft = client.proxy(
+                    "POST", f"/groups/{good_group_id}/draft",
+                    json={
+                        "expectedGroupRevision": group["revision"],
+                        "crystalName": group["crystalName"],
+                        "displayName": "QA 流程验证珠 8mm",
+                        "sku": "QA-FLOW-008",
+                        "materialKey": "qa-flow-material-8",
+                        "shape": "ROUND",
+                        "diameterMm": 8,
+                        "currency": "CNY",
+                        "unitPriceMinor": 1200,
+                        "costMinor": 600,
+                        "availableQuantity": 3,
+                        "qualityStatement": "合成样本，人工目检通过。",
+                        "qualitySource": "QA 集成验收记录。",
+                        "rightsHolder": "QA 集成验收",
+                        "usagePermission": "OWNED",
+                        "isAuthenticPhotograph": True,
+                        "allowCommercialUse": True,
+                        "allowPublicDisplay": True,
+                        "allowAiTraining": False,
+                        "allowAiRecommendation": False,
+                    },
+                )
+                if draft.status_code != 200:
+                    raise RuntimeError(f"draft refused: {draft.status_code} {draft.text[:300]}")
+                draft_body = draft.json()
+            else:
+                goto_workflow_step(page, "命名与草稿")
+                page.wait_for_selector("text=命名与草稿", timeout=60_000)
+                page.wait_for_selector(
+                    f'article[aria-labelledby="bead-import-draft-{good_group_id}-heading"]',
+                    timeout=60_000,
+                )
+                draft_response = save_product_draft_via_ui(
+                    page, good_group_id,
+                    values={
+                        "displayName": "QA 流程验证珠 8mm",
+                        "sku": "QA-FLOW-008",
+                        "materialKey": "qa-flow-material-8",
+                        "diameterMm": "8",
+                        "unitPrice": "12.00",
+                        "cost": "6.00",
+                        "availableQuantity": "3",
+                        "qualityStatement": "合成样本，人工目检通过。",
+                        "qualitySource": "QA 集成验收记录。",
+                        "rightsHolder": "QA 集成验收",
+                    },
+                    selects={
+                        "shape": "ROUND",
+                        "currency": "CNY",
+                        "usage": "OWNED",
+                        "isAuthenticPhotograph": "true",
+                        "allowAiTraining": "false",
+                        "allowCommercialUse": "true",
+                        "allowPublicDisplay": "true",
+                        "allowAiRecommendation": "false",
+                    },
+                )
+                draft_body = draft_response.json()
+            crystal_draft_id = draft_body.get("crystalDraftId")
+            # 发布请求必须携带权威 crystalDraftId：缺失即失败（required-result）。
+            if not crystal_draft_id:
+                raise RuntimeError(
+                    f"draft response missing crystalDraftId: {json.dumps(draft_body)[:300]}"
+                )
+            report("flow/draft", True, f"product draft saved via "
+                    + ("the BFF proxy" if args.skip_browser else "the browser draft form")
+                    + f"; crystalDraftId {crystal_draft_id[:12]}…")
 
             # 目录是登录用户（protectedRoute）视图：匿名请求恒 401、materials 为空，
             # 不能用来证明“草稿未泄露”。先用匿名请求证明目录确有认证门槛，
-            # 再以 signed-test 认证身份确认草稿 SKU 不在目录里。
+            # 再以合成 OIDC+PKCE 换取的最终用户令牌确认草稿 SKU 不在目录里。
             anonymous_catalog = client.backend("GET", "/api/catalog/materials?currency=CNY")
             report(
                 "flow/catalog-requires-auth", anonymous_catalog.status_code == 401,
                 f"anonymous catalog request rejected with {anonymous_catalog.status_code} (protected route)",
             )
-            auth_headers = {"authorization": f"Bearer {signed_test_token()}"}
+            auth_headers = {"authorization": f"Bearer {final_user_access_token()}"}
             catalog_before = client.backend(
                 "GET", "/api/catalog/materials?currency=CNY", headers=auth_headers
             )
@@ -978,11 +1752,22 @@ def run_flow(args: argparse.Namespace) -> None:
             )
             report("flow/draft-public-denial", draft_leaked is False, "draft sku absent from the authenticated catalog before publish")
 
-            if crystal_draft_id:
-                crystal_draft = next(
-                    (g["crystalDraft"] for g in session["groups"] if g.get("crystalDraft")), None
-                )
-                expected_revision = (crystal_draft or {}).get("revision", 1)
+            session = get_session(client, session_id)
+            crystal_draft = next(
+                (g["crystalDraft"] for g in session["groups"] if g.get("crystalDraft")), None
+            )
+            expected_revision = (crystal_draft or {}).get("revision", 1)
+            curation_values = {
+                "nameCn": "QA水晶A",
+                "nameEn": "QA Crystal A",
+                "mineralName": "Quartz",
+                "colorTags": "clear",
+                "visualTags": "round",
+                "styleTags": "classic",
+                "priceLevel": "2",
+                "complianceNote": "仅描述材质与外观，不涉及任何功效。",
+            }
+            if args.skip_browser:
                 curated = client.proxy(
                     "PATCH", f"/crystal-drafts/{crystal_draft_id}",
                     json={
@@ -1000,7 +1785,16 @@ def run_flow(args: argparse.Namespace) -> None:
                 )
                 if curated.status_code != 200:
                     raise RuntimeError(f"curation refused: {curated.status_code} {curated.text[:300]}")
-                report("flow/curation", curated.json().get("curationComplete") is True, "eight curation fields accepted")
+                curation_complete = curated.json().get("curationComplete") is True
+            else:
+                # 保存商品草稿后，同一卡片内的水晶资料（八项）表单才会出现。
+                page.wait_for_selector(
+                    f"#bead-import-curation-{crystal_draft_id}-nameCn", timeout=60_000
+                )
+                curation_response = save_curation_via_ui(page, crystal_draft_id, curation_values)
+                curation_complete = curation_response.json().get("curationComplete") is True
+            report("flow/curation", curation_complete, "eight curation fields accepted via "
+                    + ("the BFF proxy" if args.skip_browser else "the browser curation form"))
 
             hydrated = get_session(client, session_id)
             hydrated_group = next(g for g in hydrated["groups"] if g["groupId"] == good_group_id)
@@ -1012,16 +1806,42 @@ def run_flow(args: argparse.Namespace) -> None:
                 skipped("browser/draft-page-render", "--skip-browser: 命名与草稿页渲染为浏览器专属")
             else:
                 page.reload(wait_until="domcontentloaded")
-                page.wait_for_selector("text=命名与草稿", timeout=60_000)
-                page.screenshot(path=str(capture_dir / "desktop-04-draft.png"))
+                page.wait_for_selector(
+                    '#bead-import-workflow-heading:has-text("命名与草稿")', timeout=60_000
+                )
+                shot = str(capture_dir / "desktop-04-draft.png")
+                page.screenshot(path=shot)
+                report(
+                    "browser/draft-page-render", True,
+                    f"命名与草稿 panel rendered in the real browser (screenshot {Path(shot).name})",
+                )
         except Exception as exc:
             fatal("flow/naming-draft", repr(exc))
 
         # 8. 处理 + QC 阻断 + 人工批准
         try:
-            started = client.proxy("POST", f"/sessions/{session_id}/processing/start", json={"idempotencyKey": str(uuid.uuid4())})
-            if started.status_code != 200:
-                raise RuntimeError(f"processing start refused: {started.status_code} {started.text[:300]}")
+            if args.skip_browser:
+                started = client.proxy("POST", f"/sessions/{session_id}/processing/start", json={"idempotencyKey": str(uuid.uuid4())})
+                if started.status_code != 200:
+                    raise RuntimeError(f"processing start refused: {started.status_code} {started.text[:300]}")
+            else:
+                goto_workflow_step(page, "处理、审核与发布")
+                page.wait_for_selector("text=处理、审核与发布", timeout=60_000)
+                page.get_by_role("button", name="启动处理", exact=True).click()
+                # 点击成功不证明请求生效；捕获真实 BFF 响应，非 200 即失败。
+                with page.expect_response(
+                    lambda r: r.url.split("?")[0].endswith(f"/sessions/{session_id}/processing/start")
+                    and r.request.method == "POST",
+                    timeout=30_000,
+                ) as processing_start_info:
+                    pass
+                if processing_start_info.value.status != 200:
+                    raise RuntimeError(
+                        f"processing start via UI failed: {processing_start_info.value.status} "
+                        f"{processing_start_info.value.text()[:300]}"
+                    )
+            report("flow/processing-start", True, "processing started via "
+                    + ("the BFF proxy (skip-browser)" if args.skip_browser else "the browser button"))
 
             def processed():
                 # 权威判据：最后一个 PROCESS_GROUP 完成后由后端转 NEEDS_REVIEW
@@ -1039,7 +1859,7 @@ def run_flow(args: argparse.Namespace) -> None:
 
             session = poll_until(processed, PROCESS_TIMEOUT_S, "worker processing + QC")
             assets_by_group = {
-                group["groupId"]: group["processedAssets"] for group in session["groups"]
+                group["groupId"]: group.get("processedAssets", []) for group in session["groups"]
             }
             poor_assets = assets_by_group.get(poor_group_id, [])
             good_assets = assets_by_group.get(good_group_id, [])
@@ -1056,6 +1876,32 @@ def run_flow(args: argparse.Namespace) -> None:
                 f"poor-background version state: {poor_asset['state']} (isCurrent={poor_asset['isCurrent']})",
             )
             poor_asset_id = poor_asset["processedAssetId"]
+
+            # UI 页面状态断言：QC_FAILED 版本必须显示“质检未通过”与具体问题，
+            # 且该版本不渲染批准表单（批准入口被阻断）。HTTP 负向探测验证后端守卫。
+            ui_blocks_approval = True
+            if not args.skip_browser:
+                # 后端 processed() 轮询只证明数据库已写 QC_FAILED；浏览器 DOM 可能仍
+                # 是 in-flight 的旧状态（后端/DOM 竞态）。刷新页面并等到真实的
+                # “质检未通过”徽标在该组处理卡上渲染后再断言——等不到就失败，
+                # 绝不拿旧 DOM 冒充“已呈现 QC_FAILED”。
+                page.reload(wait_until="domcontentloaded")
+                page.wait_for_selector(
+                    '#bead-import-workflow-heading:has-text("处理、审核与发布")',
+                    timeout=60_000,
+                )
+                page.wait_for_selector(
+                    f'article[aria-labelledby="bead-import-processing-{poor_group_id}-heading"]'
+                    ':has-text("质检未通过")',
+                    timeout=60_000,
+                )
+                poor_card = processing_card(page, poor_group_id)
+                poor_card.scroll_into_view_if_needed()
+                ui_blocks_approval = (
+                    poor_card.locator("text=质检未通过").count() > 0
+                    and poor_card.locator("text=质检问题").count() > 0
+                    and poor_card.get_by_role("button", name="提交批准").count() == 0
+                )
             blocked = client.proxy(
                 "POST", f"/groups/{poor_group_id}/processed-assets/{poor_asset_id}/review",
                 json={
@@ -1071,8 +1917,9 @@ def run_flow(args: argparse.Namespace) -> None:
                 },
             )
             report(
-                "flow/qc-blocks-approval", 400 <= blocked.status_code < 500,
-                f"approve on QC_FAILED refused with {blocked.status_code}",
+                "flow/qc-blocks-approval", 400 <= blocked.status_code < 500 and ui_blocks_approval,
+                f"approve on QC_FAILED refused with {blocked.status_code}"
+                + ("" if args.skip_browser else "; the browser shows the QC failure and no approval form for that version"),
             )
 
             # 操作员恢复路径：差组 SET_PRIMARY 切到拯救片（结构编辑会作废既有
@@ -1084,25 +1931,53 @@ def run_flow(args: argparse.Namespace) -> None:
                 if relative_by_file_id.get(file_id, "").endswith("poor-background-rescue.jpg")
             )
             if poor_group.get("primaryFileId") != rescue_file_id:
-                rescue_primary = client.proxy(
-                    "PATCH", f"/groups/{poor_group_id}",
-                    json={
-                        "action": "SET_PRIMARY",
-                        "expectedGroupRevision": poor_group["revision"],
-                        "primaryFileId": rescue_file_id,
-                    },
-                )
-                if rescue_primary.status_code != 200:
-                    raise RuntimeError(f"rescue set primary refused: {rescue_primary.status_code} {rescue_primary.text[:300]}")
+                if args.skip_browser:
+                    rescue_primary = client.proxy(
+                        "PATCH", f"/groups/{poor_group_id}",
+                        json={
+                            "action": "SET_PRIMARY",
+                            "expectedGroupRevision": poor_group["revision"],
+                            "primaryFileId": rescue_file_id,
+                        },
+                    )
+                    if rescue_primary.status_code != 200:
+                        raise RuntimeError(f"rescue set primary refused: {rescue_primary.status_code} {rescue_primary.text[:300]}")
+                else:
+                    # 步骤条真实回退到“确认分组”（第 2 步），在分组编辑器里人工切换
+                    # 主图；随后经“命名与草稿”（第 3 步）逐级前进到“处理、审核与发布”
+                    # （第 4 步）。步骤条只允许前进到 currentIndex+1：停在“确认分组”
+                    # 时直接点第 4 步是 disabled 的（goto_workflow_step 静默返回），旧代码
+                    # 停在原地却当成功，后续 reprocess 必然超时。每一步都以当前步骤
+                    # 面板标题（#bead-import-workflow-heading，唯一）确认该步真实渲染，
+                    # 而非模糊 text=（标题同样出现在每个步骤条按钮上）。
+                    goto_workflow_step(page, "确认分组")
+                    page.wait_for_selector(
+                        '#bead-import-workflow-heading:has-text("确认分组")', timeout=60_000
+                    )
+                    set_primary_via_ui(
+                        page, poor_group_id, relative_by_file_id[rescue_file_id]
+                    )
+                    goto_workflow_step(page, "命名与草稿")
+                    page.wait_for_selector(
+                        '#bead-import-workflow-heading:has-text("命名与草稿")', timeout=60_000
+                    )
+                    goto_workflow_step(page, "处理、审核与发布")
+                    page.wait_for_selector(
+                        '#bead-import-workflow-heading:has-text("处理、审核与发布")', timeout=60_000
+                    )
             session = get_session(client, session_id)
             poor_group = next(g for g in session["groups"] if g["groupId"] == poor_group_id)
-            reprocess = client.proxy(
-                "POST", f"/groups/{poor_group_id}/reprocess",
-                json={"idempotencyKey": str(uuid.uuid4()), "expectedGroupRevision": poor_group["revision"]},
-            )
-            if reprocess.status_code != 200:
-                raise RuntimeError(f"reprocess refused: {reprocess.status_code} {reprocess.text[:300]}")
-            report("flow/qc-recovery-reprocess", True, "operator switched primary to the rescue shot and reprocessed")
+            if args.skip_browser:
+                reprocess = client.proxy(
+                    "POST", f"/groups/{poor_group_id}/reprocess",
+                    json={"idempotencyKey": str(uuid.uuid4()), "expectedGroupRevision": poor_group["revision"]},
+                )
+                if reprocess.status_code != 200:
+                    raise RuntimeError(f"reprocess refused: {reprocess.status_code} {reprocess.text[:300]}")
+            else:
+                reprocess_via_ui(page, poor_group_id)
+            report("flow/qc-recovery-reprocess", True, "operator switched primary to the rescue shot and reprocessed via "
+                    + ("the BFF proxy" if args.skip_browser else "the browser"))
 
             session = poll_until(processed, PROCESS_TIMEOUT_S, "poor group reprocess + QC")
             poor_assets = next(g for g in session["groups"] if g["groupId"] == poor_group_id)["processedAssets"]
@@ -1115,7 +1990,8 @@ def run_flow(args: argparse.Namespace) -> None:
                 )
             report("flow/qc-recovery-passed", True, f"rescue primary v{rescue_asset['processingVersion']} is QC_PENDING")
 
-            # 会话到达 READY_TO_PUBLISH 要求每组都已人工批准：逐组审批（含差组拯救版）。
+            # 会话到达 READY_TO_PUBLISH 要求每组都已人工批准：逐组在浏览器表单里审批
+            # （含差组拯救版）。AdminClient 只读核验状态。
             approved_asset_key: str | None = None
             for group in session["groups"]:
                 current = next(
@@ -1130,31 +2006,45 @@ def run_flow(args: argparse.Namespace) -> None:
                         f"group {group['groupId']} current asset state={current['state']} "
                         f"issues={current.get('qcIssues')}; fixture needs tuning"
                     )
-                reviewed = client.proxy(
-                    "POST", f"/groups/{group['groupId']}/processed-assets/{current['processedAssetId']}/review",
-                    json={
-                        "idempotencyKey": str(uuid.uuid4()),
-                        "expectedGroupRevision": group["revision"],
-                        "processedAssetId": current["processedAssetId"],
-                        "action": "APPROVE",
-                        "reviewNote": "人工确认边缘、颜色与授权",
-                        "rightsHolder": "QA 集成验收", "usagePermission": "OWNED",
-                        "isAuthenticPhotograph": True, "allowAiTraining": False,
-                        "allowCommercialUse": True, "allowPublicDisplay": True,
-                        "allowAiRecommendation": False,
-                    },
-                )
-                if reviewed.status_code != 200:
-                    raise RuntimeError(f"review refused: {reviewed.status_code} {reviewed.text[:300]}")
+                if args.skip_browser:
+                    reviewed = client.proxy(
+                        "POST", f"/groups/{group['groupId']}/processed-assets/{current['processedAssetId']}/review",
+                        json={
+                            "idempotencyKey": str(uuid.uuid4()),
+                            "expectedGroupRevision": group["revision"],
+                            "processedAssetId": current["processedAssetId"],
+                            "action": "APPROVE",
+                            "reviewNote": "人工确认边缘、颜色与授权",
+                            "rightsHolder": "QA 集成验收", "usagePermission": "OWNED",
+                            "isAuthenticPhotograph": True, "allowAiTraining": False,
+                            "allowCommercialUse": True, "allowPublicDisplay": True,
+                            "allowAiRecommendation": False,
+                        },
+                    )
+                    if reviewed.status_code != 200:
+                        raise RuntimeError(f"review refused: {reviewed.status_code} {reviewed.text[:300]}")
+                    review_body = reviewed.json()
+                else:
+                    review_response = approve_via_ui(page, group["groupId"], current["processedAssetId"])
+                    review_body = review_response.json()
                 if group["groupId"] == good_group_id:
-                    approved_asset_key = reviewed.json()["approvedAssetKey"]
-            report("flow/human-approval", bool(approved_asset_key), "all groups approved; authoritative approvedAssetKey returned")
+                    approved_asset_key = review_body.get("approvedAssetKey")
+            report("flow/human-approval", bool(approved_asset_key), "all groups approved via "
+                    + ("the BFF proxy (skip-browser)" if args.skip_browser else "the browser review form")
+                    + "; authoritative approvedAssetKey returned")
             if args.skip_browser:
                 skipped("browser/review-page-render", "--skip-browser: 处理、审核与发布页渲染为浏览器专属")
             else:
                 page.reload(wait_until="domcontentloaded")
-                page.wait_for_selector("text=处理、审核与发布", timeout=60_000)
-                page.screenshot(path=str(capture_dir / "desktop-05-review.png"))
+                page.wait_for_selector(
+                    '#bead-import-workflow-heading:has-text("处理、审核与发布")', timeout=60_000
+                )
+                shot = str(capture_dir / "desktop-05-review.png")
+                page.screenshot(path=shot)
+                report(
+                    "browser/review-page-render", True,
+                    f"处理、审核与发布 panel rendered in the real browser (screenshot {Path(shot).name})",
+                )
         except Exception as exc:
             fatal("flow/processing-qc-review", repr(exc))
 
@@ -1163,43 +2053,54 @@ def run_flow(args: argparse.Namespace) -> None:
             session = get_session(client, session_id)
             group = next(g for g in session["groups"] if g["groupId"] == good_group_id)
             draft_view = group.get("productDraft") or {}
-            published = client.proxy(
-                "POST", f"/groups/{good_group_id}/publish",
-                json={
-                    "idempotencyKey": str(uuid.uuid4()),
-                    "expectedGroupRevision": group["revision"],
-                    "crystalDraftId": draft_view.get("crystalDraftId"),
-                    "crystalDraftPromotionConfirmed": True,
-                    "crystalName": draft_view.get("crystalName") or group.get("crystalName"),
-                    "crystalNameConfirmedByOperator": True,
-                    "displayName": "QA 流程验证珠 8mm",
-                    "sku": "QA-FLOW-008",
-                    "materialKey": "qa-flow-material-8",
-                    "shape": "ROUND",
-                    "diameterMm": 8,
-                    "qualityStatement": "合成样本，人工目检通过。",
-                    "qualitySource": "QA 集成验收记录。",
-                    "textureAssetKey": approved_asset_key,
-                    # 目录完整性过滤要求 modelAssetKey 非空；本流程同一已批准主图
-                    # 同时充当模型引用是后端显式支持的同资产路径（不重复绑定）。
-                    "modelAssetKey": approved_asset_key,
-                    "currency": "CNY", "unitPriceMinor": 1200, "costMinor": 600,
-                    "availableQuantity": 3,
-                    "allowPublicDisplay": True, "allowAiTraining": False,
-                    "allowAiRecommendation": False, "allowCommercialUse": True,
-                    "rightsHolder": "QA 集成验收", "usagePermission": "OWNED",
-                    "isAuthenticPhotograph": True,
-                },
-            )
-            if published.status_code != 200:
-                raise RuntimeError(f"publish refused: {published.status_code} {published.text[:400]}")
-            published_body = published.json()
+            if args.skip_browser:
+                # HTTP 层诊断模式：载荷形状与真实浏览器 loader 完全一致——尤其绝不
+                # 注入 loader 不会发送的 modelAssetKey。旧版本靠注入它让“目录可见性”
+                # 伪造成 PASS，那正是本任务禁止的直接 API 捷径。
+                published = client.proxy(
+                    "POST", f"/groups/{good_group_id}/publish",
+                    json={
+                        "idempotencyKey": str(uuid.uuid4()),
+                        "expectedGroupRevision": group["revision"],
+                        "crystalDraftId": draft_view.get("crystalDraftId"),
+                        "crystalDraftPromotionConfirmed": True,
+                        "crystalName": draft_view.get("crystalName") or group.get("crystalName"),
+                        "crystalNameConfirmedByOperator": True,
+                        "displayName": "QA 流程验证珠 8mm",
+                        "sku": "QA-FLOW-008",
+                        "materialKey": "qa-flow-material-8",
+                        "shape": "ROUND",
+                        "diameterMm": 8,
+                        "qualityStatement": "合成样本，人工目检通过。",
+                        "qualitySource": "QA 集成验收记录。",
+                        "textureAssetKey": approved_asset_key,
+                        "currency": "CNY", "unitPriceMinor": 1200, "costMinor": 600,
+                        "availableQuantity": 3,
+                        "allowPublicDisplay": True, "allowAiTraining": False,
+                        "allowAiRecommendation": False, "allowCommercialUse": True,
+                        "rightsHolder": "QA 集成验收", "usagePermission": "OWNED",
+                        "isAuthenticPhotograph": True,
+                    },
+                )
+                if published.status_code != 200:
+                    raise RuntimeError(f"publish refused: {published.status_code} {published.text[:400]}")
+                published_body = published.json()
+            else:
+                # 发布成功路径必须由 Playwright 驱动真实浏览器：在“处理、审核与发布”
+                # 面板勾选确认并点击“确认并发布”→ 前端 loader 从权威 session/draft
+                # 组装载荷 → 同源 BFF 代理 → 后端。绝不再用 client.proxy 或直连 API
+                # 构造发布请求。
+                published_response = publish_via_ui(page, good_group_id)
+                published_body = published_response.json()
             has_snapshot = bool(published_body.get("inventorySnapshotId")) or bool(
                 client.proxy("GET", f"/groups/{good_group_id}/publish-result").json()
             )
             report(
-                "flow/publish", published_body.get("publishedAssetKeys") == [approved_asset_key] and has_snapshot,
-                f"publishedAssetKeys match; inventory snapshot present={bool(has_snapshot)}",
+                "flow/publish",
+                published_body.get("publishedAssetKeys") == [approved_asset_key] and has_snapshot,
+                "publication via " + ("the real browser publish form (loader → BFF → backend)" if not args.skip_browser else "the BFF proxy mirror (skip-browser)")
+                + f"; publishedAssetKeys={published_body.get('publishedAssetKeys')} "
+                + f"inventory snapshot present={bool(has_snapshot)}",
             )
 
             public_asset = client.direct("GET", f"/api/assets/{approved_asset_key}")
@@ -1209,7 +2110,7 @@ def run_flow(args: argparse.Namespace) -> None:
             )
             catalog_after = client.backend(
                 "GET", "/api/catalog/materials?currency=CNY",
-                headers={"authorization": f"Bearer {signed_test_token()}"},
+                headers={"authorization": f"Bearer {final_user_access_token()}"},
             )
             if catalog_after.status_code != 200:
                 raise RuntimeError(
@@ -1218,29 +2119,108 @@ def run_flow(args: argparse.Namespace) -> None:
             published_visible = any(
                 product.get("sku") == "QA-FLOW-008" for product in catalog_after.json().get("materials", [])
             )
-            report("flow/published-product-public", published_visible, "published product appears in the authenticated catalog (protected route)")
+            # 目录可见性如实报告：真实发布（浏览器 loader 或 HTTP 镜像）都不发送
+            # modelAssetKey，而 /api/catalog/materials 的完整性过滤要求它非空
+            # （design-api.service.ts materials()）。因此按真实运行时结果断言——当前
+            # 运行期应得 FAIL，暴露“导入控制台发布的产品不会出现在设计目录”这一
+            # runtime 缺陷（loader 本应把已批准主图同时作为同资产 modelAssetKey 发出，
+            # 后端显式支持该路径；发布 payload 单元测试也锁定 loader 现不发送它）。
+            # 绝不再注入 modelAssetKey 把这项伪造成 PASS（严格如实门）。
+            report(
+                "flow/published-product-public", published_visible,
+                "published product visible in the authenticated design catalog (protected route): "
+                f"{published_visible} — publish payload omits modelAssetKey which the catalog requires non-null; "
+                "surfaced runtime defect (no modelAssetKey injection)",
+            )
 
             if args.skip_browser:
+                skipped("browser/final-user-login", "--skip-browser: OIDC 登录为浏览器专属")
                 skipped("browser/approved-product-renders", "--skip-browser: crystal-library 页面渲染为浏览器专属")
             else:
-                # crystal-library 的数据源 designApi.materials 走 /api/catalog/materials
-                # （前端 BFF 以最终用户 Auth0 会话转发）；本验收的合成 auth0 配置
-                # 无法完成真实 OAuth 回环，浏览器里没有最终用户会话——页面会被
-                # 认证中间件挡住，已发布珠子的渲染无法在本环境断言。这不是通过项。
-                page.set_default_timeout(45_000)
-                page.goto(f"http://localhost:{FRONTEND_PORT}/crystal-library", wait_until="domcontentloaded")
-                page.screenshot(path=str(capture_dir / "desktop-06-library.png"))
-                current_url = page.url
-                if "/auth" in current_url or page.locator("text=登录").count() > 0:
-                    skipped(
-                        "browser/approved-product-renders",
-                        f"环境边界：crystal-library 是最终用户视图，需要真实 Auth0 会话；"
-                        f"合成配置下页面停在认证门槛（url={current_url}），已发布珠子的"
-                        f"浏览器渲染无法在本环境验证（目录数据本身已由 flow/published-product-public 断言）",
+                # 最终用户浏览器登录：复用 tests/auth-e2e 合成 OIDC+PKCE——经 CONNECT
+                # relay 走真实 /authorize(S256) → 回调 → BFF 代码交换 → 会话建立。
+                # 不允许 SKIP：登录不成功就是失败。
+                import requests as requests_module
+
+                requests_module.post(
+                    f"http://127.0.0.1:{PROVIDER_ADMIN_PORT}/admin/next-user",
+                    json={"sub": "qa-final-user-browser-001",
+                          "email": "qa-final-user-browser@example.com",
+                          "emailVerified": True, "name": "QA 浏览器最终用户"},
+                    headers={"authorization": f"Bearer {PROVIDER_ADMIN_TOKEN}"},
+                    timeout=15,
+                ).raise_for_status()
+                final_context = browser.new_context(
+                    viewport={"width": 1440, "height": 900}, ignore_https_errors=True
+                )
+                final_page = final_context.new_page()
+                final_page.set_default_timeout(60_000)
+                final_page.goto(f"http://localhost:{FRONTEND_PORT}/", wait_until="domcontentloaded")
+                final_page.get_by_role("button", name="登录").first.click()
+                final_page.get_by_role("button", name="退出登录").first.wait_for(state="visible", timeout=60_000)
+                final_page.screenshot(path=str(capture_dir / "desktop-06-final-user-login.png"))
+                report(
+                    "browser/final-user-login", True,
+                    "end user logged in through the real synthetic OIDC authorize + PKCE redirect loop",
+                )
+
+                # crystal-library（最终用户视图）渲染已发布珠子：断言已批准资产
+                # URL 请求成功（200）且 <img> 完成真实解码（naturalWidth/Height>0）。
+                # 珠子不在目录里（published_visible=False）时不可能出现对应 <img>：
+                # 这时如实记 FAIL（非环境 SKIP、不伪造 PASS）并继续，绝不 raise 把
+                # 后续移动端/真实素材检查拖死——保证必需结果集无 MISSING。
+                approved_hex = approved_asset_key.split(":", 1)[1]
+                asset_responses: list[tuple[str, int]] = []
+
+                def track_asset_response(response):
+                    if approved_hex in response.url:
+                        asset_responses.append((response.url.split("?")[0], response.status))
+
+                final_page.on("response", track_asset_response)
+                final_page.goto(
+                    f"http://localhost:{FRONTEND_PORT}/crystal-library", wait_until="domcontentloaded"
+                )
+                if published_visible:
+                    final_page.wait_for_selector("text=QA水晶A", timeout=60_000)
+                    final_page.wait_for_timeout(400)
+                else:
+                    # 给目录请求与首屏一个落地窗口，再用真实空结果佐证“不可见”。
+                    final_page.wait_for_timeout(1500)
+                final_page.screenshot(path=str(capture_dir / "desktop-07-library.png"))
+                render = final_page.evaluate(
+                    """(hexPart) => {
+                        const imgs = [...document.querySelectorAll('img')].filter(
+                            (img) => decodeURIComponent(img.currentSrc || img.src || '').includes(hexPart)
+                        );
+                        return imgs.map((img) => ({
+                            src: img.src,
+                            naturalWidth: img.naturalWidth,
+                            naturalHeight: img.naturalHeight,
+                            complete: img.complete
+                        }));
+                    }""",
+                    approved_hex,
+                )
+                if not render:
+                    report(
+                        "browser/approved-product-renders", False,
+                        "no <img> on /crystal-library references the published approved asset "
+                        f"(catalog visible={published_visible}): the bead is absent from the design "
+                        "catalog because the publish payload omits modelAssetKey; surfaced runtime defect",
                     )
                 else:
-                    page.wait_for_selector("text=QA水晶A", timeout=60_000)
-                    report("browser/approved-product-renders", True, "crystal-library 页面渲染已发布珠子")
+                    decoded_ok = all(
+                        image["naturalWidth"] > 0 and image["naturalHeight"] > 0 for image in render
+                    )
+                    request_ok = bool(asset_responses) and all(
+                        status == 200 for _, status in asset_responses
+                    )
+                    report(
+                        "browser/approved-product-renders", decoded_ok and request_ok,
+                        f"{len(render)} approved-asset <img> decoded (naturalWidth>0); "
+                        f"asset URL responses: {asset_responses[:4]}",
+                    )
+                final_context.close()
         except Exception as exc:
             fatal("flow/publish-public", repr(exc))
 
@@ -1277,8 +2257,8 @@ def run_flow(args: argparse.Namespace) -> None:
                 fatal("mobile/viewport", repr(exc))
             browser.close()
 
-    # 11. 真实素材只读验收（带 5 秒超时；超时即记录环境阻塞）
-    run_source_set_phase(args)
+    # 11. 真实素材只读端到端导入（一次性库 + 临时 archive；源文件绝不改动）
+    run_source_set_phase(args, client, archive_root)
 
 
 def _sha256_file_readonly(path: Path, timeout_s: int = 20) -> str:
@@ -1300,84 +2280,292 @@ def _sha256_file_readonly(path: Path, timeout_s: int = 20) -> str:
     return result.stdout.strip()
 
 
-def run_source_set_phase(args: argparse.Namespace) -> None:
+def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_root: Path) -> None:
+    """真实素材只读端到端导入（一次性库 + 临时 archive）。
+
+    源目录只读：仅 rglob/stat/read_bytes，绝不写入、复制、移动或重命名源文件；
+    导入目标是本脚本自建的一次性数据库与临时归档目录。三项必需结果：
+      - sources/discovery: 只读列举与构成（JPG/ARW、stem、跨目录、JPG-only、ARW-only）
+      - sources/import-roundtrip: 全量 manifest+上传；每个源文件 SHA-256 与会话归档
+        后的权威 sha256 相等；抽样直读临时 archive 字节再独立哈希比对；抽样二次
+        读取验证源文件字节稳定性
+      - sources/grouping-pairs: 跨目录同 stem 配对进同一组、存在纯 JPG 组与
+        纯 ARW 组、每个 stem 的全部文件同组
+    """
     source_set = Path(args.source_set)
-    import subprocess as sp
+    files: list[tuple[str, Path, str]] = []  # (relativePath, path, kind)
 
     try:
-        listing = sp.run(
-            ["ls", "-1", str(source_set)], capture_output=True, text=True, timeout=5
-        )
-        if listing.returncode != 0:
-            report("sources/discovery", False, f"ls rc={listing.returncode}: {listing.stderr[:200]}")
-            skipped("sources/hash-consistency", "discovery 失败，未尝试抽样；不得记为 PASS")
+        if not source_set.is_dir():
+            report("sources/discovery", False, f"source set not found: {source_set}")
             return
-        entries = listing.stdout.splitlines()
-        folder_count = 0
-        file_count = 0
-        sample_files: list[Path] = []
-        for entry in entries:
-            entry_path = source_set / entry
-            probe = sp.run(["python3", "-c", f"import os,sys; p=sys.argv[1]; print('d' if os.path.isdir(p) else 'f')", str(entry_path)], capture_output=True, text=True, timeout=5)
-            if probe.stdout.strip() == "d":
-                folder_count += 1
-                inner = sp.run(["ls", "-1", str(entry_path)], capture_output=True, text=True, timeout=5)
-                inner_files = [line for line in inner.stdout.splitlines() if line]
-                file_count += len(inner_files)
-                sample_files.extend(entry_path / name for name in inner_files)
-            elif probe.stdout.strip() == "f":
-                file_count += 1
-                sample_files.append(entry_path)
+        for path in sorted(source_set.rglob("*")):
+            if not path.is_file():
+                continue
+            ext = path.suffix.lower()
+            if ext == ".jpg":
+                kind = "JPEG"
+            elif ext == ".arw":
+                kind = "ARW"
+            else:
+                continue  # .DS_Store 等非素材文件不进入 manifest
+            files.append((path.relative_to(source_set).as_posix(), path, kind))
+        if not files:
+            report("sources/discovery", False, "source set contains no .jpg/.arw files")
+            return
+        stem_dirs: dict[str, set[str]] = {}
+        stem_kinds: dict[str, set[str]] = {}
+        for relative, _, kind in files:
+            stem = Path(relative).stem
+            stem_dirs.setdefault(stem, set()).add(relative.split("/")[0])
+            stem_kinds.setdefault(stem, set()).add(kind)
+        cross_stems = {stem: dirs for stem, dirs in stem_dirs.items() if len(dirs) > 1}
+        jpg_only_stems = [stem for stem, kinds in stem_kinds.items() if kinds == {"JPEG"}]
+        arw_only_stems = [stem for stem, kinds in stem_kinds.items() if kinds == {"ARW"}]
+        jpg_count = sum(1 for _, _, kind in files if kind == "JPEG")
         report(
             "sources/discovery", True,
-            f"folders={folder_count} files={file_count} (baseline expectation 26/127 — record actuals verbatim)",
+            f"{len(files)} files ({jpg_count} JPG + {len(files) - jpg_count} ARW), "
+            f"{len(stem_dirs)} stems, {len(cross_stems)} cross-folder stems "
+            f"({sorted(cross_stems)[:3]}), {len(jpg_only_stems)} jpg-only stems, "
+            f"{len(arw_only_stems)} arw-only stems (read-only enumeration)",
         )
-    except sp.TimeoutExpired:
-        report(
-            "sources/discovery", False,
-            "BLOCKED: macOS 文件提供器在 5 秒内未响应只读 ls；如实记录为环境阻塞，未复制、未等待、未改动",
-        )
-        skipped("sources/hash-consistency", "BLOCKED：目录列举被文件提供器阻塞，无法抽样；不得记为 PASS")
-        return
-
     except Exception as exc:
         report("sources/discovery", False, f"probe failed: {repr(exc)[:200]}")
-        skipped("sources/hash-consistency", "discovery 失败，未尝试抽样；不得记为 PASS")
         return
-
-    # 发现成功 → 真实抽样（只读）：每个样本独立读取两次，SHA-256 必须一致（提供器字节稳定性）。
-    sample = sample_files[:5]
-    if not sample:
-        report("sources/hash-consistency", False, "目录可列举但不包含任何文件，无法抽样")
-        return
-    unstable: list[str] = []
-    evidence: list[str] = []
-    try:
-        for path in sample:
-            first = _sha256_file_readonly(path)
-            second = _sha256_file_readonly(path)
-            if first != second:
-                unstable.append(str(path))
-            evidence.append(f"{path.name}={first[:16]}…")
-    except sp.TimeoutExpired:
+    if not cross_stems or not jpg_only_stems or not arw_only_stems:
         report(
-            "sources/hash-consistency", False,
-            f"BLOCKED: 抽样文件读取超时（{[str(p.name) for p in sample[:len(evidence) + 1]]}）；"
-            "提供器未能在超时内交付稳定字节，未复制、未改动",
+            "sources/grouping-pairs", False,
+            "source set lacks a cross-folder / jpg-only / arw-only stem to verify against",
         )
         return
+
+    try:
+        # 只读端到端导入：会话 → manifest → 逐文件 PUT（读取源字节，不改动源文件）。
+        created = client.proxy("POST", "/sessions", json={"idempotencyKey": str(uuid.uuid4())})
+        if created.status_code != 200:
+            raise RuntimeError(f"session create refused: {created.status_code} {created.text[:300]}")
+        src_session_id = created.json().get("sessionId")
+        entries = []
+        for relative, path, kind in files:
+            stat = path.stat()
+            entries.append({
+                "clientFileId": "src-" + hashlib.sha256(relative.encode()).hexdigest()[:16],
+                "relativePath": relative,
+                "byteSize": stat.st_size,
+                "lastModifiedMs": int(stat.st_mtime * 1000),
+                "kind": kind,
+            })
+        manifest = client.proxy(
+            "POST", f"/sessions/{src_session_id}/manifest",
+            json={"idempotencyKey": str(uuid.uuid4()), "files": entries},
+        )
+        if manifest.status_code != 200:
+            raise RuntimeError(f"manifest refused: {manifest.status_code} {manifest.text[:300]}")
+        relative_by_client = {entry["clientFileId"]: entry["relativePath"] for entry in entries}
+        relative_by_file_id = {
+            payload["fileId"]: relative_by_client[payload["clientFileId"]]
+            for payload in manifest.json()["files"]
+        }
+        file_id_by_relative = {relative: fid for fid, relative in relative_by_file_id.items()}
+
+        source_sha: dict[str, str] = {}
+        upload_failures: list[str] = []
+        total_files = len(files)
+        proxy_capped: list[tuple[str, int]] = []  # (relative, byteSize) 无法经 Next 代理上传
+        for index, (relative, path, kind) in enumerate(files, start=1):
+            if index % 16 == 0 or index == total_files:
+                print(f"... sources upload {index}/{total_files} ({relative})", flush=True)
+            data = path.read_bytes()
+            source_sha[relative] = hashlib.sha256(data).hexdigest()
+            file_id = file_id_by_relative[relative]
+            if len(data) > NEXT_ROUTE_BODY_CAP_BYTES:
+                # >10MiB 的真实 ARW：Next 默认路由体上限会截断，代理路径不可能成功
+                # （前端缺陷，见 sources/proxy-large-body-cap），直连同一后端 content 路由
+                # 以继续验证真实大文件的后端归档/哈希/分组完整性。
+                proxy_capped.append((relative, len(data)))
+                result = upload_direct_backend(client, src_session_id, file_id, data)
+            else:
+                result = upload_file(client, src_session_id, file_id, data, label=relative)
+            if result["uploadStatus"] not in ("UPLOADING", "ARCHIVED"):
+                upload_failures.append(f"{relative}:{result['uploadStatus']}")
+        if proxy_capped:
+            capped_bytes = sum(size for _, size in proxy_capped)
+            report(
+                "sources/proxy-large-body-cap", False,
+                f"{len(proxy_capped)}/{total_files} real files totalling {capped_bytes} bytes "
+                f"(first {proxy_capped[0][0]} @ {proxy_capped[0][1]} bytes) exceed the Next server's "
+                f"default 10MiB route-handler request body cap and cannot transit the admin proxy: the "
+                f"body is truncated at 10MiB (frontend.log 'Request body exceeded 10MB ... "
+                f"middlewareClientMaxBodySize') so the backend request never completes and the proxy "
+                f"returns 500 'The bead import service did not respond.' — surfaced defect: the "
+                f"frontend server must raise the body cap above the ~21MB ARW raws the bead-import "
+                f"feature ingests (backend Fastify cap is 256MB). These files were uploaded direct to "
+                f"the same backend content route so archive/SHA/grouping integrity below still covers "
+                f"every real file.",
+            )
+
+        def archive_settled():
+            snapshot = get_session(client, src_session_id)
+            states = [file["state"] for file in snapshot["files"]]
+            if snapshot["state"] in ("ARCHIVING", "NEEDS_REVIEW", "PARTIALLY_FAILED") and all(
+                state in ("ARCHIVED", "SKIPPED_DUPLICATE") for state in states
+            ):
+                return snapshot
+            return f"state={snapshot['state']} files={sorted(set(states))}"
+
+        settled = poll_until(archive_settled, 600, "real source-set archive settlement")
+
+        # 权威 sha256 对账：会话归档后每个文件携带 verified SHA-256，逐一与源文件
+        # 本地哈希比对（源文件从未被改动，两边必须相等）。
+        authoritative = {file["relativePath"]: file.get("sha256") for file in settled["files"]}
+        sha_mismatches = [
+            relative for relative in source_sha
+            if authoritative.get(relative) != source_sha[relative]
+        ]
+        non_archived = [
+            file["relativePath"] for file in settled["files"]
+            if file["state"] not in ("ARCHIVED", "SKIPPED_DUPLICATE")
+        ]
+
+        # 抽样直读临时 archive 字节：跨目录 2 + JPG-only 1 + ARW-only 1 + 同目录配对 2。
+        sample_relatives = []
+        cross_stem = sorted(cross_stems)[0]
+        sample_relatives.extend(
+            relative for relative, _, _ in files if Path(relative).stem == cross_stem
+        )
+        sample_relatives.append(next(
+            relative for relative, _, kind in files
+            if Path(relative).stem in jpg_only_stems and kind == "JPEG"
+        ))
+        sample_relatives.append(next(
+            relative for relative, _, kind in files
+            if Path(relative).stem in arw_only_stems and kind == "ARW"
+        ))
+        paired = [
+            (relative, kind) for relative, _, kind in files
+            if len(stem_kinds.get(Path(relative).stem, set())) == 2
+        ]
+        sample_relatives.extend(relative for relative, _ in paired[:2])
+        archive_byte_failures: list[str] = []
+        stability_failures: list[str] = []
+        for relative in sample_relatives:
+            if authoritative.get(relative) != source_sha[relative]:
+                archive_byte_failures.append(f"{relative}:registry")
+                continue
+            extension = "arw" if Path(relative).suffix.lower() == ".arw" else "jpg"
+            archive_file = archive_root / "imports" / src_session_id / "raw" / f"{source_sha[relative]}.{extension}"
+            try:
+                archive_bytes = archive_file.read_bytes()
+            except FileNotFoundError:
+                archive_byte_failures.append(f"{relative}:archive-file-missing")
+                continue
+            if hashlib.sha256(archive_bytes).hexdigest() != source_sha[relative]:
+                archive_byte_failures.append(f"{relative}:archive-bytes")
+            # 源文件二次独立读取（子进程分块）：提供器字节稳定性。
+            if _sha256_file_readonly(Path(args.source_set) / relative) != source_sha[relative]:
+                stability_failures.append(relative)
+
+        report(
+            "sources/import-roundtrip",
+            not (upload_failures or sha_mismatches or non_archived or archive_byte_failures or stability_failures),
+            f"{len(source_sha)} real files archived byte-identical into the disposable database/temp "
+            f"archive ({total_files - len(proxy_capped)} <=10MiB via the real admin proxy path; "
+            f"{len(proxy_capped)} >10MiB ARW raws via the same backend content route directly — the "
+            f"Next 10MiB body cap excludes them from the proxy, recorded as a defect under "
+            f"sources/proxy-large-body-cap); authoritative sha256 matches the source hash for every "
+            f"archived file; "
+            f"{len(sample_relatives)} sampled archive files re-hashed byte-identical"
+            + (f"; UPLOAD={upload_failures[:4]}" if upload_failures else "")
+            + (f"; SHA={sha_mismatches[:4]}" if sha_mismatches else "")
+            + (f"; NOT_ARCHIVED={non_archived[:4]}" if non_archived else "")
+            + (f"; ARCHIVE_BYTES={archive_byte_failures[:4]}" if archive_byte_failures else "")
+            + (f"; UNSTABLE={stability_failures[:4]}" if stability_failures else ""),
+        )
+
     except Exception as exc:
-        report("sources/hash-consistency", False, f"read failed: {repr(exc)[:200]}")
+        report("sources/import-roundtrip", False, f"real source-set import failed: {repr(exc)[:300]}")
         return
-    report(
-        "sources/hash-consistency", not unstable,
-        f"{len(sample)} 个样本各独立读取两次、SHA-256 一致（只读）；样本: {'; '.join(evidence)}"
-        + (f"；UNSTABLE={unstable}" if unstable else ""),
-    )
+
+    # 自动分组后核对配对：跨目录同 stem 同组、每个 stem 全部文件同组、
+    # 存在纯 JPG 组与纯 ARW 组（ARW 无 dHash 不参与视觉合并，必为独立组）。
+    # 真实素材库（127 文件）上 worker 的自动分组建议可能自相矛盾（同一源文件被
+    # 建议进多个组）而被后端契约校验反复拒绝、永不结算——分组放在独立 try 中，
+    # 失败只记 sources/grouping-pairs，绝不把已通过的 import-roundtrip 二次改判。
+    try:
+        started = client.proxy(
+            "POST", f"/sessions/{src_session_id}/grouping/start",
+            json={"idempotencyKey": str(uuid.uuid4())},
+        )
+        if started.status_code != 200:
+            raise RuntimeError(f"grouping start refused: {started.status_code} {started.text[:300]}")
+
+        def groups_ready():
+            snapshot = get_session(client, src_session_id)
+            if snapshot["state"] in ("NEEDS_REVIEW", "PARTIALLY_FAILED") and snapshot["groups"]:
+                return snapshot
+            return f"state={snapshot['state']} groups={len(snapshot['groups'])}"
+
+        grouped = poll_until(groups_ready, 240, "real source-set automatic grouping")
+        relative_by_file = {
+            file["fileId"]: file["relativePath"] for file in grouped["files"]
+        }
+        kind_by_relative = {relative: kind for relative, _, kind in files}
+        group_of_relative: dict[str, str] = {}
+        for group in grouped["groups"]:
+            for member_file_id in group["memberFileIds"]:
+                relative = relative_by_file.get(member_file_id)
+                if relative is not None:
+                    group_of_relative[relative] = group["groupId"]
+        assignment_failures = [
+            relative for relative, _, _ in files if group_of_relative.get(relative) is None
+        ]
+        stem_group_failures: list[str] = []
+        for stem in stem_dirs:
+            stem_group_ids = {
+                group_of_relative[relative] for relative in group_of_relative
+                if Path(relative).stem == stem
+            }
+            if len(stem_group_ids) > 1:
+                stem_group_failures.append(stem)
+        cross_pair_ok = all(
+            len({
+                group_of_relative[relative] for relative, _, _ in files
+                if Path(relative).stem == cross_stem
+            }) == 1
+        )
+        group_kinds: dict[str, set[str]] = {}
+        for relative, group_id in group_of_relative.items():
+            group_kinds.setdefault(group_id, set()).add(kind_by_relative[relative])
+        has_jpg_only_group = any(kinds == {"JPEG"} for kinds in group_kinds.values())
+        has_arw_only_group = any(kinds == {"ARW"} for kinds in group_kinds.values())
+        report(
+            "sources/grouping-pairs",
+            not assignment_failures and not stem_group_failures
+            and cross_pair_ok and has_jpg_only_group and has_arw_only_group,
+            f"{len(grouped['groups'])} groups over {len(files)} real files; cross-folder stem "
+            f"{cross_stem} paired into one group; jpg-only and arw-only groups present"
+            + (f"; UNASSIGNED={assignment_failures[:4]}" if assignment_failures else "")
+            + (f"; STEM_SPLIT={stem_group_failures[:4]}" if stem_group_failures else "")
+            + ("" if cross_pair_ok else f"; CROSS_PAIR_SPLIT={cross_stem}")
+            + ("" if has_jpg_only_group else "; NO_JPG_ONLY_GROUP")
+            + ("" if has_arw_only_group else "; NO_ARW_ONLY_GROUP"),
+        )
+    except Exception as exc:
+        extra = ""
+        try:
+            stuck = get_session(client, src_session_id)
+            extra = f"; final state={stuck['state']} groups={len(stuck.get('groups', []))}"
+        except Exception:
+            pass
+        report(
+            "sources/grouping-pairs", False,
+            f"real source-set automatic grouping failed to settle: {repr(exc)[:220]}{extra}",
+        )
 
 
 def main() -> None:
-    global KEEP_TEMP
+    global KEEP_TEMP, SKIP_BROWSER
     parser = argparse.ArgumentParser(description="TASK-ASSET-QA-001 disposable integration gate")
     parser.add_argument("--skip-browser", action="store_true", help="仅 HTTP 层（仍需后端/worker/前端）；浏览器专属断言记为 SKIP")
     parser.add_argument("--backend-port", type=int, default=None, help="后端临时端口（默认 4100；默认端口被占用时自动改用临时端口，显式指定则冲突即报错）")
@@ -1395,6 +2583,7 @@ def main() -> None:
     os.environ["no_proxy"] = "*"
     os.environ["NO_PROXY"] = "*"
     KEEP_TEMP = args.keep
+    SKIP_BROWSER = args.skip_browser
     try:
         run_flow(args)
         # 成功路径同样必须打印 SUMMARY 并清理进程/数据库/临时目录；
@@ -1406,8 +2595,6 @@ def main() -> None:
         report("unexpected/fatal", False, repr(exc))
         finish()
 
-
-KEEP_TEMP = False
 
 if __name__ == "__main__":
     main()

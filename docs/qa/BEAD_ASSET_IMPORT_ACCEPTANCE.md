@@ -2,9 +2,16 @@
 
 - 任务：`TASK-ASSET-QA-001`（一次性集成 / 架构 / 本地验收门，计划 Task 7）
 - 分支：`task/asset-qa-001-integration-gate`（worktree `.worktrees/asset-qa-001`，基线 `6e79b66`）
-- 执行：GLM-5.3-Flash（产品负责人 2026-09-08 临时授权的 Integration/QA Agent）
-- 日期：2026-09-08
-- 结论：**通过（35 PASS / 0 FAIL / 1 SKIP——SKIP 为如实记录的环境边界，未折算为 PASS）**
+- 执行：GLM-5.3-Flash（产品负责人临时授权的 Integration/QA Agent）
+- 日期：2026-09-09（本记录；前版 2026-09-08 的 35 PASS 记录已被真实浏览器结果推翻并作废）
+- 结论：**REVIEW-BLOCKED —— 门如实 FAIL（44 PASS / 4 FAIL / 0 SKIP，退出码 1），required set COMPLETE（无 MISSING），清理 0 错误；REVIEW 未授予**。
+
+发布路径已升级为**真实浏览器驱动**（合成 OIDC 拓扑 + 真实最终用户登录回环），目录可见性按产品负责人
+既定的“严格诚实 FAIL”裁定：必须先经真实 UI 发布、再断言目录；发布负载缺 `modelAssetKey` 使成品不出现在
+设计目录 → `flow/published-product-public` 与 `browser/approved-product-renders` **如实记 FAIL 并作为硬阻塞**，
+直至一个前端任务让发布负载携带 `modelAssetKey`。另两条 FAIL 是**真实规模下暴露的 runtime 缺陷**
+（Next 10 MiB 路由体上限、worker 自动分组重叠），同样如实记录。本任务未修改任何 runtime 代码，只修复 QA
+脚本自身缺陷并补充证据；全部 FAIL 的修复归属于后续 runtime 任务（见“四、四 项 FAIL 与根因”）。
 
 ## 一、真实命令
 
@@ -19,110 +26,135 @@ env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -m py_compile scripts/
 # 2. 架构测试（6/6 通过）
 node --test tests/bead-asset-import-architecture.test.mjs
 
-# 3. 完整集成验收（真实浏览器 + 真实后端 + 真实 worker + 一次性测试库）
-env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 scripts/ui-qa/bead_import_flow.py
+# 3. 完整集成验收（真实浏览器 + 真实 OIDC 登录 + 真实后端 + 真实 worker + 一次性测试库）
+env -u PYTHONHOME -u PYTHONPATH /opt/homebrew/bin/python3 -u scripts/ui-qa/bead_import_flow.py
 ```
 
-结果：`SUMMARY: 35 passed, 0 failed, 1 skipped`，退出码 0；结束后数据库、全部子进程与临时目录均被清理（CLEANUP 日志逐项确认）。
+最终通过的记录性运行（干净一次性，无 `--keep`）结果：
+
+```
+SUMMARY: 44 passed, 4 failed, 0 skipped; required set complete; cleanup errors: 0
+RUN_EXIT=1
+```
+
+结束后数据库、全部子进程与临时目录均被清理（CLEANUP 日志逐项确认；测试库删除后经 `pg_database` 复核 absent）。
 
 ## 二、一次性测试数据库与环境
 
 - 每次运行自动创建 `mystcrag_qa_flow_test_<unixtime>_<rand6>`（名称含 `test`），跑完 `DROP DATABASE ... WITH (FORCE)`。
-- 本轮最终通过运行的测试库：`mystcrag_qa_flow_test_1788876924_c4e0ad`（已随脚本清理删除）。
-- 认证：后端 `MYSTCRAG_AUTH_PROVIDER=signed-test`（本地 HMAC 合成令牌，仅注入子进程环境，未创建/修改 `.env`，无真实凭据）；管理台走独立 admin key 门（`qa-integration-admin-key-0123456789`，同为合成值）；前端为合成 auth0 形态配置（不演练最终用户登录）。
-- 归档根：临时目录 `archive/`，运行前脚本显式 `mkdir`（runtime 要求目录预先存在）。
-- 脚本进程内强制 `no_proxy=*`：本机常驻外部代理（`HTTP_PROXY=127.0.0.1:7897`）会把 localhost 探活请求劫走返回 502。
+- 本轮记录运行的测试库：`mystcrag_qa_flow_test_1788933801_f41c14`（已随脚本清理删除并复核 absent）。
+- 认证：**合成 OIDC 拓扑** —— auth0 issuer 挂在 `synthetic.auth006.internal`；Node 预载
+  `NODE_OPTIONS --require`；浏览器经 CONNECT relay 直达提供方；自签 CA 经 `NODE_EXTRA_CA_CERTS`；
+  最终用户走真实 PKCE S256 authorize + redirect 回环（`browser/final-user-login` PASS）。管理台走独立
+  admin key 门（`qa-integration-admin-key-0123456789`，合成值）。`.env` 未创建/修改。
+- 归档根：临时目录（含后端 `archive/`、worker 日志、浏览器截图 desktop-*.png），运行前脚本显式 `mkdir`，结束后随清理删除（按治理要求不入库）。
+- 脚本进程内强制 `no_proxy=*`：本机常驻外部代理会把 localhost 探活请求劫走返回 502。
 
-## 三、逐项结果（最终通过运行）
+## 三、逐项结果（记录性运行，`/tmp/qa001-final3.log`）
 
-环境与服务：
+环境与服务 / 一次性库：
 
 | # | 检查项 | 结果 | 说明 |
 |---|---|---|---|
 | 1 | env/postgres | PASS | `psql -h /tmp` 可达 |
 | 2 | fixtures/synthetic | PASS | 11 个合成文件：同 stem 对、跨目录同 stem、重复哈希、纯 jpg、纯 ARW、差背景 + 拯救片 |
-| 3 | db/fresh-test-database | PASS | 全新一次性测试库 |
-| 4 | services/backend+worker | PASS | backend :4100；worker poll 1000ms |
-| 5 | services/frontend | PASS | next dev（默认端口被占用时自动改用临时端口） |
+| 3 | db/fresh-test-database | PASS | `mystcrag_qa_flow_test_1788933801_f41c14` |
+| 4 | services/oidc-provider | PASS | provider tls `:64509`、admin `:64510`、relay `:64511`；discovery 经 CONNECT relay + 自签 CA 验证 |
+| 5 | services/backend+worker | PASS | backend `:4100`；worker poll 1000ms |
+| 6 | services/frontend | PASS | next dev `:64505`（默认端口被占用时自动改用临时端口） |
 
 登录 / 建任务 / 上传 / 重启恢复：
 
 | # | 检查项 | 结果 | 说明 |
 |---|---|---|---|
-| 6 | browser/login+guard | PASS | 未登录被重定向到登录页；key 被接受进入管理台 |
-| 7 | browser/create-session | PASS | 经 Dashboard 按钮真实创建会话 |
-| 8 | http/manifest | PASS | 11 文件登记（浏览器 webkitdirectory 无法脚本化，经同一 BFF 端点完成，与页面网络面板所见一致） |
-| 9 | http/upload | PASS | 10/11 上传；1 个扣下用于重启续传 |
-| 10 | flow/sha256-archive-roundtrip | PASS | 每个 ARCHIVED 上传的归档副本 SHA-256 与源字节一致 |
-| 11 | flow/restart-resume | PASS | 杀后端+worker 再重启；会话与文件状态恢复（ARCHIVED/PENDING/SKIPPED_DUPLICATE） |
-| 12 | flow/resume-upload-completes | PASS | 扣下的文件续传成功 |
-| 13 | flow/resume-archive-settles | PASS | 归档结算后会话进入 ARCHIVING |
+| 7 | browser/login+guard | PASS | guard 重定向到登录页；admin key 被接受进入管理台 |
+| 8 | browser/create-session | PASS | 经 Dashboard 按钮真实创建会话（`cmttp014…`） |
+| 9 | http/manifest | PASS | 11 文件登记（webkitdirectory 无法脚本化，经同源 BFF 端点完成，与页面网络面板一致） |
+| 10 | http/upload | PASS | 10/11 上传；1 个扣下用于重启续传 |
+| 11 | flow/sha256-archive-roundtrip | PASS | 每个 ARCHIVED 上传的归档副本 SHA-256 与源字节一致 |
+| 12 | flow/restart-termination | PASS | backend 进程组 (pid 98827) 与 worker 进程组 (pid 98828) 被杀；4100 端口验证关闭 |
+| 13 | flow/restart-new-pids | PASS | backend 98827→98977；worker 98828→98978 |
+| 14 | flow/restart-resume | PASS | 会话与文件状态跨重启恢复（ARCHIVED/PENDING/SKIPPED_DUPLICATE） |
+| 15 | flow/resume-upload-completes | PASS | 扣下的文件续传成功 |
+| 16 | flow/resume-archive-settles | PASS | 归档结算后会话进入 ARCHIVING |
+| 17 | flow/worker-advanced-after-restart | PASS | 重启后 worker 日志增长（19→115 字节），继续归档扣下的文件 |
 
 分组 / 合并 / 拆分 / 命名：
 
 | # | 检查项 | 结果 | 说明 |
 |---|---|---|---|
-| 14 | browser/grouping-start | PASS | 从会话页真实点击按钮发起分组，BFF 返回 200（并捕获 HTTP 响应，非仅点击成功） |
-| 15 | flow/auto-grouping | PASS | 合成批次自动归出 5 组 |
-| 16 | flow/merge | PASS | MERGE_GROUPS 5 → 4 组 |
-| 17 | flow/split | PASS | 拆回 5 组 |
-| 18 | flow/arw-only-merge | PASS | 纯 ARW 组并入含光栅组（操作员路径） |
-| 19 | flow/primary-confirmed | PASS | 每组主文件均为人工确认的光栅 |
-| 20 | flow/naming | PASS | 4 组人工命名（名称不来自图像/目录推断） |
+| 18 | browser/grouping-start | PASS | 从会话页真实点击按钮发起分组，BFF 返回 200（捕获 HTTP 响应） |
+| 19 | flow/auto-grouping | PASS | 合成批次自动归出 5 组 |
+| 20 | flow/merge | PASS | 5 → 4 组 |
+| 21 | flow/split | PASS | 拆回 5 组（no-op split 视为失败） |
+| 22 | flow/arw-only-merge | PASS | 纯 ARW 组并入含光栅组（操作员路径） |
+| 23 | flow/primary-confirmed | PASS | 每组主文件均为人工确认的光栅 |
+| 24 | browser/groups-page-render | PASS | 确认分组 panel 在真实浏览器渲染（desktop-03-groups.png） |
+| 25 | flow/naming | PASS | 4 组人工命名（名称不来自图像/目录推断） |
 
 草稿 / 目录可见性 / QC / 审批：
 
 | # | 检查项 | 结果 | 说明 |
 |---|---|---|---|
-| 21 | flow/catalog-requires-auth | PASS | 匿名目录请求被 401 拒绝（目录是 protected route，非匿名公开端点） |
-| 22 | flow/draft-public-denial | PASS | 发布前草稿 SKU 不出现在认证目录 |
-| 23 | flow/curation | PASS | 水晶八项 curation 字段人工填写并接受 |
-| 24 | flow/draft-refresh-persistence | PASS | 刷新后 productDraft 从全新会话读取水合 |
-| 25 | flow/qc-verdict | PASS | 差背景版本 QC_FAILED（isCurrent=False） |
-| 26 | flow/qc-blocks-approval | PASS | 对 QC_FAILED 资产请求审批被 409 拒绝 |
-| 27 | flow/qc-recovery-reprocess | PASS | 操作员切换主文件到拯救片并 reprocess |
-| 28 | flow/qc-recovery-passed | PASS | 拯救主片 v2 为 QC_PENDING |
-| 29 | flow/human-approval | PASS | 全部组人工批准；返回权威 approvedAssetKey |
+| 26 | flow/draft | PASS | 经浏览器草稿表单保存；crystalDraftId `cmttp0f77000…` |
+| 27 | flow/catalog-requires-auth | PASS | 匿名目录请求被 401 拒绝（protected route） |
+| 28 | flow/draft-public-denial | PASS | 发布前草稿 SKU 不出现在认证目录 |
+| 29 | flow/curation | PASS | 水晶八项 curation 字段人工填写并接受 |
+| 30 | flow/draft-refresh-persistence | PASS | 刷新后 productDraft 从全新会话读取水合 |
+| 31 | browser/draft-page-render | PASS | 命名与草稿 panel 在真实浏览器渲染（desktop-04-draft.png） |
+| 32 | flow/processing-start | PASS | 经浏览器按钮启动处理 |
+| 33 | flow/qc-verdict | PASS | 差背景版本 QC_FAILED（isCurrent=False） |
+| 34 | flow/qc-blocks-approval | PASS | 对 QC_FAILED 请求审批被 409 拒绝；浏览器无审批表单 |
+| 35 | flow/qc-recovery-reprocess | PASS | 操作员切换主文件到拯救片并 reprocess |
+| 36 | flow/qc-recovery-passed | PASS | 拯救主片 v2 为 QC_PENDING |
+| 37 | flow/human-approval | PASS | 全部组人工批准；返回权威 approvedAssetKey |
+| 38 | browser/review-page-render | PASS | 处理、审核与发布 panel 在真实浏览器渲染（desktop-05-review.png） |
 
-发布 / 公开渲染 / 视口：
-
-| # | 检查项 | 结果 | 说明 |
-|---|---|---|---|
-| 30 | flow/publish | PASS | publishedAssetKeys 与审批一致；inventory snapshot 存在 |
-| 31 | flow/public-approved-asset | PASS | 已批准 key 经公开 `/api/assets` 返回 200 `image/webp` |
-| 32 | flow/published-product-public | PASS | 已发布产品出现在认证目录（protected route 视图） |
-| 33 | browser/approved-product-renders | **SKIP** | 环境边界，见下节 |
-| 34 | mobile/status-reviews-viewport | PASS | 390x844 无横向溢出（scrollWidth=390 clientWidth=390） |
-
-真实素材只读探测：
+发布 / 公开渲染 / 目录可见性 / 视口：
 
 | # | 检查项 | 结果 | 说明 |
 |---|---|---|---|
-| 35 | sources/discovery | PASS | 只读探测 `/Users/chenyanyan/Desktop/珠子图`：26 目录 / 127 文件（原样记录） |
-| 36 | sources/hash-consistency | PASS | 5 个样本各独立读取两次、SHA-256 一致（只读子进程分块读取，绝不写入/复制/移动）；无法抽样时按实际结果记 BLOCKED，不标 PASS |
+| 39 | flow/publish | PASS | 经真实浏览器发布表单（loader → BFF → backend）；`publishedAssetKeys=['approved:13f65529…c0ae8']`；inventory snapshot present |
+| 40 | flow/public-approved-asset | PASS | 已批准 key 经公开 `/api/assets` 返回 200 `image/webp` |
+| 41 | flow/published-product-public | **FAIL** | 真实 UI 发布后，成品不出现在认证设计目录（catalog 查询为空）——发布负载缺 `modelAssetKey`，目录 `materials()` 过滤要求其非空。见“四、根因 ①” |
+| 42 | browser/final-user-login | PASS | 最终用户经真实合成 OIDC authorize + PKCE redirect 回环登录 |
+| 43 | browser/approved-product-renders | **FAIL** | `/crystal-library` 上没有任何 `<img>` 引用已发布的 approved 资产——同根因①：珠子不在设计目录中，页面无图可渲染 |
+| 44 | mobile/status-reviews-viewport | PASS | 390x844 无横向溢出（scrollWidth=390 clientWidth=390） |
 
-## 四、环境阻塞与边界（如实声明，非通过项）
+真实素材只读导入（`/Users/chenyanyan/Desktop/珠子图`，127 文件 / 66 stem / 1 跨目录 stem / 1.32 GB）：
 
-1. **`browser/approved-product-renders` SKIP**：`crystal-library` 页面数据源 `designApi.materials` 走 `/api/catalog/materials`（前端 BFF 以最终用户 Auth0 会话转发）。本验收的合成 auth0 配置无法完成真实 OAuth 回环，浏览器中没有最终用户会话，页面停在认证门槛——已发布珠子的浏览器端渲染无法在本环境断言。目录数据本身已由第 32 项（认证目录查询）断言。
-2. **webkitdirectory 无法被 Playwright 脚本化**：manifest 登记与文件字节上传改用浏览器登录后的同一同源 Cookie，经前端 BFF 代理的同一批端点完成（与页面网络面板所见一致）；其余流程均由真实浏览器驱动。
-3. **目录不是匿名公开端点**：`/api/catalog/materials` 为 `protectedRoute`。验收以 signed-test 认证身份查询目录（登录用户视图），并单独断言匿名请求被 401 拒绝。
-4. **已知 API 缺口（继承自前端任务记录，未在本任务修复）**：无未发布处理图/缩略图的管理员受权读取接口；`AssetImportSessionResponse.processedAssets` 不提供发布用权威 `textureAssetKey`（本流程经审批响应取回）。
+| # | 检查项 | 结果 | 说明 |
+|---|---|---|---|
+| 45 | sources/discovery | PASS | 127 文件（65 JPG + 62 ARW）、66 stem、跨目录 stem `['ZDX01535']`、4 个 jpg-only stem、1 个 arw-only stem（只读枚举） |
+| 46 | sources/proxy-large-body-cap | **FAIL** | 62/127 个真实文件（共 1,320,837,120 字节；首个 `ZDX01448.ARW` 21,190,656 字节）超出 Next 服务器默认 10 MiB 路由体上限，无法经管理代理上传（后端请求被截断永不完成、代理回 500）。见“四、根因 ②”。为保住归档/SHA/分组对每个真实文件的覆盖，这些 >10 MiB 文件改经**同一后端内容路由**直传——见第 47 项 |
+| 47 | sources/import-roundtrip | PASS | 127 个真实文件**逐字节**归档进一次性库/临时归档（65 个 ≤10 MiB 经真实管理代理路径；62 个 >10 MiB ARW 经同一后端内容路由直传，代理上限已作为缺陷记于第 46 项）；权威 sha256 与源哈希逐一相符；6 个抽样归档文件复核逐字节一致 |
+| 48 | sources/grouping-pairs | **FAIL** | 127 文件真实批次自动分组 240s 未收敛（`last=state=PARTIALLY_FAILED groups=0`）——worker 拒收分组成交。见“四、根因 ③” |
 
-## 五、执行中发现并修复的脚本缺陷（仅改 QA 脚本，未动 runtime）
+## 四、四项 FAIL 与根因（全部如实记录，硬阻塞，未在本任务修复）
 
-1. `archive_root` 只赋值未创建目录 → 启动服务前显式 `mkdir`。
-2. `--skip-browser` 声明未使用 → 实现为 HTTP 层模式（浏览器专属断言记 SKIP，不折算 PASS）。
-3. `run_source_set_phase` 固定声称“文件提供器阻塞” → 按实际结果分支，真实抽样两次独立读取验证哈希。
-4. 进程清理只 SIGTERM 直接子进程，pnpm→next dev→next-server 孙进程链留孤儿（孤儿持有 Next 项目锁，令后续运行的 `next dev` 拒绝启动）→ `start_new_session` 独立进程组 + cleanup `killpg` SIGTERM 后无条件补 SIGKILL。
-5. 成功路径不打印 SUMMARY、不清理 → `main()` 成功后同样调用 `finish()`。
-6. 浏览器选择器 `text=开始自动分组` 命中无事件绑定的卡片标题 `<p>`（点击“成功”但从不发请求）→ 改为 `button:has-text(...)` 并用 `expect_response` 捕获真实 BFF 响应。
-7. 目录断言未认证（401 空列表静默失真）→ 匿名 401 断言 + signed-test 认证目录查询。
-8. 本机外部代理劫持 localhost 探活 → 脚本内 `no_proxy=*`。
-9. 发布请求补 `modelAssetKey`（目录完整性过滤要求非空；同一已批准主图同时充当模型引用是后端显式支持的同资产路径）。
+| 根因 | FAIL 检查 | 证据 | 现象 | 修复归属 |
+|---|---|---|---|---|
+| ① 发布负载缺 `modelAssetKey` | flow/published-product-public；browser/approved-product-renders | 本条运行第 41/43 行；`apps/frontend/.../admin-bead-import/processing-loader.ts`（发布候选只带 `textureAssetKey`，无 `modelAssetKey`）；`design-api.service.ts` 目录 `materials()` 过滤丢弃 `modelAssetKey` 为空的行；仓库 `modelAssetKey ?? null` | 真实 UI 发布成功、`/api/assets` 200，但成品从认证目录与 `/crystal-library` 消失 | **前端任务**：让发布负载发送 `modelAssetKey=<已批准主图>`（与 `textureAssetKey` 同一已批准主图，后端显式支持的同资产路径）；修复后两条 FAIL 应变 PASS |
+| ② Next 默认 10 MiB 路由体上限 | sources/proxy-large-body-cap | frontend.log `Request body exceeded 10MB … middlewareClientBodySize`；`next.config.ts` 无体积覆盖；解析后服务端配置 `proxyClientMaxBodySize: 10485760`（next-server 共享 body-clone 路径，非 dev 专属）；代理 500 “The bead import service did not respond.”；后端 Fastify 上限实为 256 MiB | 62 个 ~21 MB Sony ARW 无法经管理代理上传；后端与 worker 直连收 21 MB 完全正常 | **前端服务器配置任务**：上调路由体上限至 ≥256 MiB（或特征级每文件上限），使 ARW 可经代理走完整 BFF 链路 |
+| ③ worker 自动分组在真实规模重叠 | sources/grouping-pairs | `/tmp/qa001-real-grouping-worker.log`、`/tmp/qa001-real-grouping-backend.log`（worker 拒收循环原文：`was rejected asset job completion result failed validation: groups.66.memberFileIds.*: A source file may belong to only one suggested group`）；会话终态 `PARTIALLY_FAILED groups=0` | 66 个真实 stem 的建议分组发生重叠（66 组建议中同一源文件被分到多组），worker 无限重试，会话卡死无任何可用分组 | **worker 任务**：分组完成结果校验/去重叠（或将重叠源文件归属唯一化），使真实规模批次能收敛出可用分组 |
+
+“严格诚实”说明：第 41/43 两条按产品负责人裁定**不折算、不跳过**——成品目录可见性必须以真实 UI 发布为前置并如实断言；
+正因为此诚实断言，① 号加载器缺陷才作为硬阻塞浮出。第 46 项是记录性缺陷（65 个 ≤10 MiB 文件已覆盖真实代理链路，
+62 个 >10 MiB 文件为绕过服务器缺陷而直传同一后端路由，完整性覆盖不受损，但代理缺陷本身如实记 FAIL）。
+第 48 项为真实规模下的 worker 缺陷；合成批次路径（第 18–23 项）全部通过，说明缺陷仅在 127 文件规模触发。
+
+## 五、执行中发现并修复的脚本缺陷（仅改 QA 脚本与文档，未动 runtime）
+
+1. **finish() 的 MISSING 重复计数**（本轮）：required 集里已如实给出 FAIL 的项同时被列进 MISSING，导致“required set INCOMPLETE”掩盖“已给出结论”的事实 → MISSING 仅统计“从头到尾未报告过任何结论”的必需项（已报告 PASS/FAIL/SKIP 均不计 MISSING）。
+2. **真实目录自动分组超时不应终止整场**：分组改为独立可报告检查（`sources/grouping-pairs`），超时/拒收记 FAIL 并附会话终态，而非把后续导入判定一并带崩。
+3. **>10 MiB 上传分层**：`http/upload` 主路径仍要求经真实代理（覆盖 BFF 链路）；超过 Next 10 MiB 上限的源文件改走同一后端内容路由并单独记为 `sources/proxy-large-body-cap` FAIL，保证归档/SHA/抽样仍覆盖每个真实文件。
+4. 前几轮沿用并保留的修复：`archive_root` 只赋值未建目录 → 显式 `mkdir`；真实 `--skip-browser` HTTP 模式（浏览器项记 SKIP 不折算 PASS）；按实际结果分支、两次独立读取验证哈希；独立进程组 + cleanup SIGTERM 后无条件补 SIGKILL（曾留孤儿 next-server 持 Next 项目锁）；成功路径打印 SUMMARY 并清理；浏览器选择器用 `button:has-text` + `expect_response` 捕获真实 BFF 响应；目录断言认证化 + 匿名 401 断言；`no_proxy=*`；诊断探针去掉与 `.backend()` 冲突的 `timeout` 参数。
 
 ## 六、风险与建议
 
-- 集成脚本依赖本机 Homebrew PostgreSQL（`psql -h /tmp`）与已安装的 pnpm 依赖，非 CI 可重放环境；后续如需 CI 化需先解决服务编排。
-- 前端 dev server 冷启动偶发超过 240 秒（Turbopack 编译 + 磁盘忙），脚本以 240 秒为上限；若复现可加大 `wait_for_http` 超时。
-- 运行期间若脚本被强杀（kill -9），进程组兜底不会执行，可能留下孤儿 next-server 持有项目锁；下次运行前需手动清理（`pgrep -fl "next dev -p"`）。
-- 本任务严格未修改 runtime 产品代码、契约、Prisma、根配置与 lockfile；上述全部改动限于 `scripts/ui-qa/bead_import_flow.py`、`tests/bead-asset-import-architecture.test.mjs`、本文档与 TASK_REGISTRY 本任务行。
+- **硬阻塞（发布类）**：在 ① 修复前，真实发布的产品对设计目录与 `/crystal-library` 不可见；这是前端 loader 的发布负载缺口，与后端正向接受路径无关。
+- **规模缺陷**：② 影响任何 >10 MiB 的真实 ARW（本机桌面集 62/127 个）；③ 影响真实 127 文件整包自动分组，需 worker 侧修复后重跑 `sources/grouping-pairs` 期望转 PASS。
+- 集成脚本依赖本机 Homebrew PostgreSQL（`psql -h /tmp`）与已安装的 pnpm 依赖，非 CI 可重放环境；前端 dev 冷启动偶发超 240 秒。
+- 运行期间若脚本被强杀（kill -9），进程组兜底不会执行，可能留下孤儿 next-server 持有项目锁；下次运行前需手动清理。
+- 记录性运行证据：`/tmp/qa001-final3.log`（完整输出，RUN_EXIT=1）；worker 拒收循环证据：`/tmp/qa001-real-grouping-worker.log`、`/tmp/qa001-real-grouping-backend.log`；`pnpm validate`：`/tmp/qa001-validate.log`。截图与归档均在一次性临时目录内、随清理删除，未入库（治理要求）。
+- 本任务严格未修改 runtime 产品代码、契约、Prisma、根配置与 lockfile；改动限于 `scripts/ui-qa/bead_import_flow.py`、`tests/bead-asset-import-architecture.test.mjs`、本文档与 TASK_REGISTRY 本任务行。
