@@ -290,3 +290,198 @@ test("the processing-start 启动处理 click fires inside the expect_response w
       "deeper than the with) so the BFF response cannot be missed; a click-then-listen ordering is a race"
   );
 });
+
+test("--self-test dispatches to the full self-test suite, not only the finish-order probe", () => {
+  const qaScript = readRepo("scripts/ui-qa/bead_import_flow.py");
+  assert.ok(
+    qaScript.includes("sys.exit(0 if run_self_tests() else 1)"),
+    "--self-test must exit through run_self_tests (aggregate), never only _selftest_finish_order"
+  );
+  const registry = qaScript.slice(qaScript.indexOf("def run_self_tests()"));
+  for (const probe of [
+    '("finish-order", _selftest_finish_order)',
+    '("cleanup-two-phase", _selftest_cleanup_two_phase)',
+    '("cross-pair-ok", _selftest_cross_pair_ok)'
+  ]) {
+    assert.ok(registry.includes(probe), `run_self_tests() must run ${probe}`);
+  }
+});
+
+test("cleanup() stays two-phase: live-only signalling, reap, then a deduped port check", () => {
+  const qaScript = readRepo("scripts/ui-qa/bead_import_flow.py");
+  const lines = qaScript.split("\n");
+  const defLine = lines.findIndex((line) => line.trim().startsWith("def cleanup("));
+  assert.ok(defLine !== -1, "cleanup() must exist");
+  const bodyEnd = lines.findIndex(
+    (line, i) => i > defLine && /^def |^class /.test(line) && !line.trim().startsWith("def cleanup")
+  );
+  const body = lines.slice(defLine + 1, bodyEnd === -1 ? undefined : bodyEnd);
+
+  const bodyText = body.join("\n");
+  assert.ok(
+    bodyText.includes("live = [(name, proc) for name, proc in PROCS if proc.poll() is None]"),
+    "phase 1 must compute the set of still-live process groups only"
+  );
+  assert.ok(
+    bodyText.includes('signalled_pids = {proc.pid for _, proc in live}'),
+    "the SIGTERM target set must be recorded so SIGKILL escalation only ever touches groups this run signalled"
+  );
+  const sigtermIdx = body.findIndex((line) => line.includes("os.killpg(proc.pid, signal.SIGTERM)"));
+  const sigkillGuardIdx = body.findIndex((line) => line.includes("if proc.pid in signalled_pids:"));
+  const reapIdx = body.findIndex((line) => line.includes("proc.wait(timeout=15)"));
+  const portCheckIdx = body.findIndex((line) => line.includes("if port in checked_ports:"));
+  assert.ok(
+    sigtermIdx !== -1 && sigkillGuardIdx !== -1 && reapIdx !== -1 && portCheckIdx !== -1,
+    "cleanup() must contain the phase-1 SIGTERM, the reap loop, the guarded SIGKILL and the deduped port check"
+  );
+  assert.ok(
+    sigtermIdx < reapIdx && reapIdx < portCheckIdx,
+    "port closure must be checked only after every process has been reaped, not while a same-port process still lives"
+  );
+  const checkedPortsDef = body.findIndex((line) => line.includes("checked_ports: set[int] = set()"));
+  assert.ok(checkedPortsDef !== -1, "port checks must be deduped across shared-port process names");
+  // The SIGKILL escalation must be nested after the signalled_pids guard (only groups this run
+  // signalled), so an already-exited old process group is never killpg'd under PID/PGID reuse.
+  assert.ok(
+    body.findIndex((line, i) => i > sigkillGuardIdx && line.includes("os.killpg(proc.pid, signal.SIGKILL)")) !== -1,
+    "the SIGKILL escalation must live inside the signalled_pids guard"
+  );
+});
+
+test("the real source-set gate attempts the frontend proxy first and never infers failure from file size", () => {
+  const qaScript = readRepo("scripts/ui-qa/bead_import_flow.py");
+  const phaseIdx = qaScript.indexOf("def run_source_set_phase(");
+  assert.ok(phaseIdx !== -1, "run_source_set_phase() must exist");
+  const phase = qaScript.slice(phaseIdx);
+
+  assert.ok(
+    phase.includes("upload_file(client, src_session_id, file_id, data, attempts=2, label=relative, direct_diag=False)"),
+    "every real file, regardless of size, must first genuinely attempt the frontend proxy"
+  );
+  assert.ok(
+    phase.includes("upload_direct_backend(client, src_session_id, file_id, data)"),
+    "direct-to-backend must exist only as the diagnostic continuation after an observed proxy failure"
+  );
+  assert.ok(
+    phase.includes("direct_backend_failures"),
+    "a direct-backend diagnostic failure (e.g. 409 on a stuck reservation) must be captured, never crash the phase"
+  );
+  assert.ok(
+    phase.includes("if direct_backend_failures:"),
+    "a stuck-reservation direct-backend failure must fail fast into sources/import-roundtrip instead of polling archive settlement for 600s"
+  );
+  assert.ok(
+    !phase.includes("NEXT_ROUTE_BODY_CAP_BYTES") && !phase.includes("len(data) >"),
+    "the byte-size based unconditional proxy bypass must be gone from the source-set phase"
+  );
+  assert.ok(
+    phase.includes("sources/proxy-large-body-cap") && phase.includes("observed error, never inferred from file size"),
+    "the large-body-cap gate must be driven by observed 500/truncation/connection errors and auto-PASS on success"
+  );
+  assert.ok(
+    qaScript.includes('REAL_SOURCE_SET_BASELINE = {"dirs": 26, "files": 127, "jpg": 65, "arw": 62}'),
+    "the real desktop source-set baseline (26 dirs / 127 files / 65 JPG / 62 ARW) must be enforced"
+  );
+  assert.ok(qaScript.includes("def _discover_source_set("), "read-only discovery must be isolated");
+  assert.ok(qaScript.includes("def _read_and_sha("), "read+hash must be isolated in a killable unit");
+  assert.ok(
+    qaScript.includes("timeout_s: int = 5") && qaScript.includes("timeout_s=5"),
+    "the source operations must run under a 5s forcibly-terminable timeout"
+  );
+});
+
+test("curation persistence is re-verified from a fresh session read and survives reload value-for-value", () => {
+  const qaScript = readRepo("scripts/ui-qa/bead_import_flow.py");
+
+  assert.ok(
+    qaScript.includes("def curation_matches(view: dict | None) -> bool:"),
+    "a dedicated judge must re-check the authoritative crystalDraft view after the PATCH"
+  );
+  assert.ok(
+    qaScript.includes('view.get("curationComplete") is True'),
+    "the judge must require curationComplete from the re-read, never from the PATCH acknowledgement alone"
+  );
+  assert.ok(
+    qaScript.includes("view.get(\"revision\") == expected_revision + 1"),
+    "a successful curation PATCH must be proven to advance revision exactly one step (N -> N+1)"
+  );
+  assert.ok(
+    qaScript.includes("all(view.get(field) == value for field, value in committed_curation.items())"),
+    "all eight committed curation fields must match the re-read field-by-field"
+  );
+  const committedShape = qaScript.slice(
+    qaScript.indexOf("committed_curation = {"),
+    qaScript.indexOf("def curation_matches(")
+  );
+  for (const key of ["nameCn", "nameEn", "mineralName", "colorTags", "visualTags", "styleTags", "priceLevel", "complianceNote"]) {
+    assert.ok(committedShape.includes(`"${key}"`), `committed_curation must carry ${key}`);
+  }
+  assert.ok(
+    committedShape.includes('"colorTags": ["clear"]') && committedShape.includes('"priceLevel": 2'),
+    "the committed shape must be the contract DTO shape (tags as arrays, priceLevel as a number)"
+  );
+  assert.ok(
+    qaScript.includes(
+      '"flow/draft-refresh-persistence",\n                draft_persisted and curation_persisted,'
+    ),
+    "the fresh-session persistence report must require both the productDraft and the curated crystalDraft to persist"
+  );
+  // After a reload the gate must read the real controls back and re-check completion,
+  // not just assert the workflow step heading.
+  assert.ok(
+    qaScript.includes("readbacks[field] = page.input_value("),
+    "after reload the gate must read actual form control values back"
+  );
+  assert.ok(
+    qaScript.includes("readbacks[field] == expected for field, expected in curation_values.items()"),
+    "the reload judge must compare every committed form string to the re-rendered input value"
+  );
+  assert.ok(
+    qaScript.includes("completion_matches = curation_matches(after_group.get(\"crystalDraft\") or {})"),
+    "completion after reload must come from a fresh authoritative session read, not the page title"
+  );
+  assert.ok(
+    qaScript.includes("form_matches and completion_matches"),
+    "the reload render result must require both the input readback and the authoritative completion state"
+  );
+});
+
+test("the QC-block gate locks exactly HTTP 409 + CONFLICT and proves the UI separately", () => {
+  const qaScript = readRepo("scripts/ui-qa/bead_import_flow.py");
+  assert.ok(
+    !qaScript.includes("400 <= blocked.status_code < 500"),
+    "the QC-block PASS must never come from a loose 4xx range, or a 401/400/404 would count as PASS"
+  );
+  assert.ok(
+    qaScript.includes("qc_blocked = blocked.status_code == 409 and blocked_code == \"CONFLICT\""),
+    "only the exact HTTP 409 + CONFLICT envelope may count as the QC-block PASS"
+  );
+  assert.ok(
+    qaScript.includes('.get("error", {}).get("code")'),
+    "the stable business error code must be read from the normalized {error:{code}} envelope"
+  );
+  assert.ok(
+    qaScript.includes('"browser/qc-blocks-ui-approval-button"'),
+    "the browser no-approval-button proof must be its own named check"
+  );
+  const requiredBlock = qaScript.slice(qaScript.indexOf("REQUIRED_RESULTS = ["));
+  assert.ok(
+    requiredBlock.includes('"browser/qc-blocks-ui-approval-button"'),
+    "the browser no-approval-button proof must be mandatory in the required result set"
+  );
+  assert.ok(
+    qaScript.includes('skipped(\n                    "browser/qc-blocks-ui-approval-button",'),
+    "skip-browser must skip the UI proof on its own line, never fold it into the HTTP result"
+  );
+  assert.ok(
+    qaScript.includes('report(\n                    "browser/qc-blocks-ui-approval-button",'),
+    "full-browser mode must report the UI proof as its own result"
+  );
+  const uiProof = qaScript.slice(qaScript.indexOf("ui_shows_failure = False"));
+  assert.ok(
+    uiProof.includes("ui_shows_failure") &&
+      uiProof.includes("ui_shows_issue") &&
+      uiProof.includes("ui_no_approval_form = poor_card.get_by_role(\"button\", name=\"提交批准\").count() == 0"),
+    "the UI proof must decompose into failure badge + issue text + absence of the approve button on that version"
+  );
+});

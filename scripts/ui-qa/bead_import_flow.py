@@ -54,6 +54,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_PORT = 4100
 FRONTEND_PORT = 3100
+# 浏览器经 HTTP/2 前端访问前端（next dev 仅 HTTP/1.1，而上传 PUT 用 ReadableStream
+# body + duplex half，Chromium 只在 HTTP/2 上允许 → 真实浏览器上传必须走 HTTP/2 源，
+# 生产同样由 TLS/HTTP2 反代终结；本脚本自启一个自签 https/h2 反代到 next dev）。
+H2_FRONTEND_PORT: int | None = None
+BROWSER_ORIGIN = ""
 ADMIN_KEY = "qa-integration-admin-key-0123456789"
 WORKER_POLL_MS = "1000"
 UPLOAD_TIMEOUT_S = 60
@@ -126,6 +131,7 @@ REQUIRED_RESULTS = [
     "flow/processing-start",
     "flow/qc-verdict",
     "flow/qc-blocks-approval",
+    "browser/qc-blocks-ui-approval-button",
     "flow/qc-recovery-reprocess",
     "flow/qc-recovery-passed",
     "flow/human-approval",
@@ -222,30 +228,72 @@ def port_is_closed(port: int, timeout_s: int = 20) -> bool:
 
 
 def cleanup() -> None:
-    # 清理失败必须影响退出码：进程未死、端口未关、库未删、目录残留都记入
-    # CLEANUP_ERRORS，由 finish() 折算为非零退出。
-    for name, proc in PROCS:
-        if proc.poll() is None:
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-                proc.wait(timeout=15)
-            except Exception:
-                pass
-        # SIGTERM 后 pnpm 主进程常先退出，而组内 next-server/worker 孙进程可能
-        # 无视 SIGTERM 继续存活（曾留下孤儿 next-server 持有 Next 项目锁，令后续
-        # 运行的 next dev 以 "Another next dev server is already running" 拒绝启动）。
-        # 无条件补一发 SIGKILL 到整个进程组兜底。
+    """两阶段清理，任何清理错误都计入 CLEANUP_ERRORS（由 finish() 折算非零退出）。
+
+    两阶段顺序解决两个已观察到的缺陷：
+      1. PROCS 会同时保留“已退出（重启前 stop_process_group 已收割）的 backend”与
+         “同一端口上仍存活的 backend-2”。旧实现逐进程处理：遍历到已退出的旧 backend
+         时端口仍被 backend-2 占用 → 误报 “port 4100 still accepting”，并且对已退出的
+         旧 PGID 无条件 killpg（其 PGID 可能已被系统回收复用 → 误杀无关进程组）。
+      2. 先逐进程终止、再统一收割、最后对去重端口一次性检查关闭，可保证同一端口
+         只在 backend-2 也被终止后才做一次检查（不会因旧 backend 误报）。
+    规则：
+      - 只对 cleanup 开始时仍存活（proc.poll() is None）的本次启动进程组发信号；
+        对已在 cleanup 之前自然退出/已被收割的旧进程组绝不再 killpg（PID/PGID 重用
+        误杀防护），只收割其 leader。
+      - 组 leader 先 SIGTERM 再给宽限期；超时仍未退则对“本次确实发过信号的组”补
+        SIGKILL（含无视 SIGTERM 的孙进程），绝不无条件 killpg 任意旧 PGID。
+    """
+    live = [(name, proc) for name, proc in PROCS if proc.poll() is None]
+    # 阶段一：只对仍存活的本次启动进程组发 SIGTERM。
+    for name, proc in live:
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait(timeout=10)
-        except Exception:
-            pass
+            os.killpg(proc.pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass  # 组已不存在或不可信号：交由阶段二收割/报错。
+        except Exception as exc:
+            CLEANUP_ERRORS.append(f"cleanup: SIGTERM group {name} (pgid {proc.pid}) failed: {repr(exc)[:160]}")
+    # 阶段二：统一等待/收割。宽限期内 leader 退出即视为已停；超时则对本次发过信号的
+    # 组补一发 SIGKILL（孙进程可能无视 SIGTERM），再等待。
+    signalled_pids = {proc.pid for _, proc in live}
+    for name, proc in PROCS:
+        try:
+            if proc.poll() is None:
+                try:
+                    proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    if proc.pid in signalled_pids:
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                        except (ProcessLookupError, PermissionError):
+                            pass
+                        except Exception as exc:
+                            CLEANUP_ERRORS.append(
+                                f"cleanup: SIGKILL group {name} (pgid {proc.pid}) failed: {repr(exc)[:160]}"
+                            )
+                    try:
+                        proc.wait(timeout=10)
+                    except Exception:
+                        pass
+        except Exception as exc:
+            CLEANUP_ERRORS.append(f"cleanup: reap {name} (pid {proc.pid}) failed: {repr(exc)[:160]}")
         if proc.poll() is None:
-            CLEANUP_ERRORS.append(f"process {name} (pid {proc.pid}) still alive after SIGTERM+SIGKILL")
-        port = PROC_PORTS.get(name)
-        if port is not None and not port_is_closed(port, timeout_s=15):
-            CLEANUP_ERRORS.append(f"port {port} for {name} still accepting connections after termination")
+            CLEANUP_ERRORS.append(
+                f"process {name} (pid {proc.pid}) still alive after termination (cleanup)"
+            )
         print(f"CLEANUP | stopped {name}", flush=True)
+    # 阶段三：全部进程终止后再对去重端口逐一检查关闭。同一端口被多个进程名共用时只
+    # 检查一次（旧 backend 与 backend-2 共用 4100：必须等两者都停后再查，不得误报）。
+    checked_ports: set[int] = set()
+    for name, port in PROC_PORTS.items():
+        if port in checked_ports:
+            continue
+        checked_ports.add(port)
+        if not port_is_closed(port, timeout_s=15):
+            holders = ",".join(n for n, p in PROC_PORTS.items() if p == port)
+            CLEANUP_ERRORS.append(
+                f"port {port} (held by {holders}) still accepting connections after termination"
+            )
     if DB_NAME is not None:
         if KEEP_TEMP:
             kept = subprocess.run(
@@ -430,9 +478,12 @@ def build_fixture(root: Path) -> Fixture:
     put("batch-c/bead-good-b.arw", arw_cross)
     # 独立第三组（用于合并/拆分）
     put("batch-d/bead-good-c.jpg", good_c)
-    # 重复 hash：不同文件夹、字节完全一致
-    put("batch-d/duplicate.jpg", good_a)
-    put("batch-e/duplicate.jpg", good_a)
+    # 重复 hash：不同文件夹、字节完全一致。独立 seed，避免与 bead-good-a.jpg
+    # 共享字节——否则归档去重会把主样本 bead-good-a.jpg 也判成 SKIPPED_DUPLICATE，
+    # 令其从所有分组里消失，破坏后续 stem 配对与命名/草稿阶段的确定性。
+    duplicate_bytes = make_good_bead_jpg(seed=5)
+    put("batch-d/duplicate.jpg", duplicate_bytes)
+    put("batch-e/duplicate.jpg", duplicate_bytes)
     # JPG-only
     put("batch-f/jpg-only.jpg", make_good_bead_jpg(seed=4))
     # ARW-only（TIFF-like，仅归档不处理）
@@ -785,7 +836,7 @@ def final_user_access_token() -> str:
 
 # -------------------------------------------------------------------- flow ---
 
-def upload_file(client: AdminClient, session_id: str, file_id: str, data: bytes, attempts: int = 6, label: str = "") -> dict:
+def upload_file(client: AdminClient, session_id: str, file_id: str, data: bytes, attempts: int = 6, label: str = "", direct_diag: bool = True) -> dict:
     # 大批量上传（真实素材 127 文件经 Next dev 代理转发）下，前端代理对后端偶尔
     # 瞬时 fetch 失败返回 5xx（“service did not respond”），并非应用层拒绝。后端按
     # clientFileId 幂等（已 ARCHIVED 再 PUT 返回既有状态），故对 5xx/连接错误做有界
@@ -817,44 +868,45 @@ def upload_file(client: AdminClient, session_id: str, file_id: str, data: bytes,
         probe = f"backend-direct={probe_resp.status_code}"
     except Exception as probe_exc:
         probe = f"backend-direct=unreachable ({repr(probe_exc)[:120]})"
-    # 层隔离诊断：同字节绕过 Next 代理直连后端再 PUT 一次。若后端可达且直连 PUT
-    # 成功，则缺陷定位在前端代理传输层（真实 21MB ARW 上传将同样失败，属前端缺陷）；
-    # 若直连 PUT 同样失败/后端不可达，则缺陷定位在后端/Fastify 层。
-    direct_diag = "direct-backend-put=no-probe"
-    try:
-        direct_resp = client.backend(
-            "PUT",
-            f"/api/admin/bead-import/sessions/{session_id}/files/{file_id}/content",
-            data=data,
-            headers={
-                "x-admin-key": ADMIN_KEY,
-                "content-type": "application/octet-stream",
-                "content-length": str(len(data)),
-            },
-        )
-        direct_diag = f"direct-backend-put={direct_resp.status_code} {direct_resp.text[:200]}"
-    except Exception as direct_exc:
-        direct_diag = f"direct-backend-put=error ({repr(direct_exc)[:150]})"
+    # 层隔离诊断（仅 direct_diag=True 时）：同字节绕过 Next 代理直连后端再 PUT 一次。
+    # 若后端可达且直连 PUT 成功，则缺陷定位在前端代理传输层（真实 21MB ARW 上传将
+    # 同样失败，属前端缺陷）；若直连 PUT 同样失败/后端不可达，则缺陷定位在后端层。
+    # direct_diag=False 的调用方（sources 阶段）已自行对观察到的代理失败做直连回退，
+    # 无需在此重复直连写入——避免同一大文件被代理诊断与显式回退各 PUT 一次。
+    direct_diag_text = "direct-backend-put=disabled"
+    if direct_diag:
+        try:
+            direct_resp = client.backend(
+                "PUT",
+                f"/api/admin/bead-import/sessions/{session_id}/files/{file_id}/content",
+                data=data,
+                headers={
+                    "x-admin-key": ADMIN_KEY,
+                    "content-type": "application/octet-stream",
+                    "content-length": str(len(data)),
+                },
+            )
+            direct_diag_text = f"direct-backend-put={direct_resp.status_code} {direct_resp.text[:200]}"
+        except Exception as direct_exc:
+            direct_diag_text = f"direct-backend-put=error ({repr(direct_exc)[:150]})"
     raise RuntimeError(
-        f"upload {who} failed after {attempts} attempts: {last_error}; {probe}; {direct_diag}"
+        f"upload {who} failed after {attempts} attempts: {last_error}; {probe}; {direct_diag_text}"
     )
 
 
-# Next 服务器对 route-handler 入站请求体的默认上限（10MiB，见 frontend.log
-# “Request body exceeded 10MB ... middlewareClientMaxBodySize”）。真实 Sony ARW
-# 原片约 21MB，经管理台代理 PUT 时请求体在 Next 侧被截断为 10MiB → undici 传输
-# 失败 → 代理 500 “service did not respond”，后端永远收不到完整字节（backend.log
-# 中对应 PUT 只记 incoming、从不 completed）。这是前端服务器默认配置缺口，非后端
-# 缺陷；后端 Fastify 上限 256MB 且直连可正常接收。QA 脚本不得改动 runtime 配置，
-# 故对本任务无法抬升该上限——按层拆分取证：≤上限经真实代理全链路，>上限直连同一
-# 后端 content 路由验证字节完整性，并单独记为失败缺陷（sources/proxy-large-body-cap）。
-NEXT_ROUTE_BODY_CAP_BYTES = 10 * 1024 * 1024
+# 真实 Sony ARW 原片约 21MB，超过 Next dev 对 route-handler 入站请求体的默认上限
+# （10MiB，见 frontend.log “Request body exceeded 10MB ... middlewareClientMaxBodySize”），
+# 经管理台代理 PUT 时请求体在 Next 侧被截断 → 代理 500 “service did not respond”或连接
+# 被断。QA 脚本不得改动 runtime 配置。sources/proxy-large-body-cap 门只按“观察”取证：
+# 每个文件先真实经前端代理，只有真实观察到的 500/截断/连接错误才记 FAIL，并直连同一
+# 后端 content 路由继续诊断归档/哈希/分组完整性；绝不按字节数推断失败，前端修复后
+# 该门自动 PASS。
 
 
 def upload_direct_backend(client: AdminClient, session_id: str, file_id: str, data: bytes) -> dict:
-    """直连后端内容端点（前端代理转发到的同一条后端路由），用于超过 Next 默认
-    10MiB 路由体上限的真实 ARW。仍走真实 manifest → content → worker 归档管线，
-    仅绕过被 10MiB 截断的 Next 服务器那一跳。"""
+    """直连后端内容端点（前端代理转发到的同一条后端路由），仅在真实观察到前端代理
+    失败（500/截断/连接错误）之后用于继续诊断归档/哈希/分组完整性。仍走真实 manifest
+    → content → worker 归档管线，仅绕过前端代理服务器那一跳。"""
     response = client.backend(
         "PUT",
         f"/api/admin/bead-import/sessions/{session_id}/files/{file_id}/content",
@@ -1103,7 +1155,7 @@ def goto_workflow_step(page, step_title: str):
 def run_flow(args: argparse.Namespace) -> None:
     import requests
 
-    global BACKEND_PORT, FRONTEND_PORT
+    global BACKEND_PORT, FRONTEND_PORT, H2_FRONTEND_PORT, BROWSER_ORIGIN
     BACKEND_PORT = reserve_port(
         args.backend_port if args.backend_port is not None else BACKEND_PORT,
         args.backend_port is not None,
@@ -1218,6 +1270,193 @@ def run_flow(args: argparse.Namespace) -> None:
         tail = backend_log.read_text(errors="replace")[-600:] if backend_log.exists() else ""
         fatal("services/startup", f"{exc}\nbackend tail: {tail}")
 
+    # 浏览器经自签 https/h2 反代访问 next dev：上传 PUT 为 ReadableStream body，
+    # Chromium 只在 HTTP/2 上放行（next dev 仅 HTTP/1.1 → 直接访问时全部 PUT 报
+    # ERR_ALPN_NEGOTIATION_FAILED、后端收不到字节）。反代保持浏览器 Host 头
+    # (localhost:<h2 port>) 并转发 content-length，回退到 127.0.0.1:FRONTEND_PORT。
+    if not args.skip_browser:
+        try:
+            h2_dir = temp_root / "h2-tls"
+            h2_dir.mkdir(parents=True, exist_ok=True)
+            sh(
+                [
+                    "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                    "-keyout", str(h2_dir / "key.pem"), "-out", str(h2_dir / "cert.pem"),
+                    "-days", "2", "-nodes", "-subj", "/CN=localhost",
+                    "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
+                ],
+                timeout=60,
+            )
+            proxy_source = r"""import http2 from 'node:http2';
+import http from 'node:http';
+import fs from 'node:fs';
+import { URL } from 'node:url';
+// 任何未捕获异步错误都记日志并继续服务（客户端/上游随时可能半途关闭连接，
+// 这些是代理的常态，不是崩溃理由）。node 默认对 uncaughtException 直接退出，
+// 会把 idle 的 h2 源在两次请求之间悄悄杀掉（曾见：readiness 探测 200 通过后，
+// 下一次 page.goto 即 ERR_CONNECTION_REFUSED）。
+process.on('uncaughtException', (e) => { console.error('UNCAUGHT-EXC', e && e.stack || String(e)); });
+process.on('unhandledRejection', (e) => { console.error('UNHANDLED-REJ', e && e.stack || String(e)); });
+const backend = process.argv[2];
+const listen = Number(process.argv[3]);
+const certPath = process.argv[4];
+const u = new URL(backend);
+const DROP = new Set(['connection','transfer-encoding','keep-alive','proxy-connection','te','upgrade']);
+const noop = () => {};
+// heldSize = 唯一字节数的 fixture 文件（restart/resume 需精确拦截它的一次 content PUT
+// 制造可重试失败）。0 表示不拦截。只拦截一次，重启后经 UI 重试的同一 PUT 会被放行。
+const heldSize = Number(process.argv[5] ?? 0);
+let heldAborted = false;
+const server = http2.createSecureServer({
+  key: fs.readFileSync(certPath + '/key.pem'),
+  cert: fs.readFileSync(certPath + '/cert.pem'),
+  allowHTTP1: true,
+});
+function fwd(req, res) {
+  const outHeaders = {};
+  // h2 兼容 'request' 层不提供 'host'（只有 :authority）；http1 over TLS 则相反。
+  // 两处都不拿 host 会退回 127.0.0.1:<前端端口>，令 Next 的 Server Actions origin
+  // 校验（x-forwarded-host vs Origin host）500。
+  const host = req.headers[':authority'] || req.headers['host'];
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (k.startsWith(':') || k === 'host' || DROP.has(k)) continue;
+    if (v !== undefined && v !== null) outHeaders[k] = String(v);
+  }
+  if (host) outHeaders['host'] = host;
+  // Next dev 对“经转发”的 Server Actions 校验 x-forwarded-host 必须与浏览器 Origin
+  // 的 host 一致；代理没设 x-forwarded-host 时 Next 按 socket 对端(127.0.0.1:前端端口)
+  // 推断，与浏览器 Origin(localhost:<h2 端口>) 不符 → 500 并中止 action。补上
+  // x-forwarded-host=浏览器 Host、x-forwarded-proto=https 既放行校验，又让 Next 生成
+  // 的绝对重定向仍指向 https h2 源（否则登录后跳回 http，上传 PUT 再次走 cleartext）。
+  outHeaders['x-forwarded-host'] = host || (u.hostname + ':' + u.port);
+  outHeaders['x-forwarded-proto'] = 'https';
+  const path = req.url || '/';
+  const method = req.method || 'GET';
+  // 只挂 'request' 监听：Node http2 服务器在 allowHTTP1 下对同一 h2 请求会同时发出
+  // 'stream' 与 http1 兼容的 'request' 两个事件——若两者都转发，每个请求都会被
+  // 上游请求两次并二次 writeHead（第一次响应被破坏，Chromium 对非幂等 POST 不重试，
+  // 新建导入等 server action 就静默失败）。仅 'request' 时 h2 流仍以 http1 兼容 API
+  // 暴露：wire 上仍是真 h2（Chromium 因此放行 ReadableStream PUT body）。
+  req.on('error', noop);            // 客户端放弃/半途关闭 → 吞掉，不炸进程
+  res.on('error', noop);
+
+  function forward(bodyBuffer) {
+    const up = http.request({ host: u.hostname, port: u.port || 80, path, method, headers: outHeaders }, (upRes) => {
+      const rHeaders = {};
+      for (const [k, v] of Object.entries(upRes.headers)) if (!DROP.has(k) && v !== undefined) rHeaders[k] = v;
+      upRes.on('error', noop);
+      if (res.destroyed || res.writableEnded) { upRes.resume(); return; }
+      try {
+        res.writeHead(upRes.statusCode, rHeaders);
+      } catch (e) { console.error('respond-error', e && e.message, method, path); upRes.resume(); return; }
+      upRes.pipe(res);
+    });
+    up.on('error', (e) => { try { res.destroy(); } catch {} });
+    if (bodyBuffer === null) req.pipe(up);
+    else up.end(bodyBuffer);
+  }
+
+  const isContentPut = method === 'PUT' && path.includes('/files/') && path.endsWith('/content');
+  if (isContentPut && outHeaders['content-length'] === undefined) {
+    // Chromium 会剥离 ReadableStream body 上手工设置的 Content-Length（它必须按 h2
+    // 流式发送、无法预知长度），因此浏览器上传 PUT 到达此处时没有 content-length，
+    // 而 backend 的上传校验强制要求它。合成夹具都是小文件，这里缓冲一次 body、取其
+    // 真实长度后带 content-length 转发。heldSize 命中的文件（唯一字节数）只 reset
+    // 一次制造可重试网络失败，其余 PUT 与重启后的重试一律转发。
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      const buf = Buffer.concat(chunks);
+      if (heldSize > 0 && !heldAborted && buf.length === heldSize) {
+        heldAborted = true;
+        res.destroy(new Error('retryable-abort'));
+        return;
+      }
+      outHeaders['content-length'] = String(buf.length);
+      forward(buf);
+    });
+    return;
+  }
+  forward(null);
+}
+server.on('request', fwd);
+// WebSocket（/_next/webpack-hmr）转发：Next dev 的客户端水合依赖 HMR 握手成功，
+// 握手失败则页面永不水合、所有客户端交互失效（本脚本早已如实记录该边界）。普通
+// http.request 不做升级；这里手动转发浏览器侧的 http1 Upgrade（已由 TLS 解密，
+// allowHTTP1）到上游，把 101 之后的字节流双向直连。
+server.on('upgrade', (req, socket, head) => {
+  const host = req.headers[':authority'] || req.headers['host'];
+  const upHeaders = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (k.startsWith(':') || k === 'host') continue;
+    if (v !== undefined && v !== null) upHeaders[k] = String(v);
+  }
+  if (host) upHeaders['host'] = host;
+  upHeaders['x-forwarded-host'] = host || (u.hostname + ':' + u.port);
+  upHeaders['x-forwarded-proto'] = 'https';
+  socket.on('error', noop);
+  const upReq = http.request({ host: u.hostname, port: u.port || 80, path: req.url || '/', headers: upHeaders });
+  upReq.on('upgrade', (upRes, upSocket, upHead) => {
+    const lines = ['HTTP/1.1 101 Switching Protocols'];
+    for (const [k, v] of Object.entries(upRes.headers)) {
+      if (v === undefined) continue;
+      for (const val of Array.isArray(v) ? v : [v]) lines.push(k + ': ' + val);
+    }
+    try {
+      socket.write(lines.join('\r\n') + '\r\n\r\n');
+      if (upHead && upHead.length) socket.write(upHead);
+    } catch (e) { console.error('ws-101-error', e && e.message); try { upSocket.destroy(); } catch {} return; }
+    upSocket.on('error', noop);
+    upSocket.pipe(socket);
+    socket.pipe(upSocket);
+  });
+  upReq.on('error', (e) => { try { socket.destroy(); } catch {} });
+  upReq.end();
+});
+server.on('error', (e) => { console.error('h2-proxy error:', e.message); });
+server.listen(listen, '127.0.0.1', () => console.log('h2 proxy ready on ' + listen));
+"""
+            proxy_path = temp_root / "h2-proxy.mjs"
+            proxy_path.write_text(proxy_source, encoding="utf-8")
+            h2_proxy_log = temp_root / "h2-proxy.log"
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as picker:
+                picker.bind(("127.0.0.1", 0))
+                H2_FRONTEND_PORT = int(picker.getsockname()[1])
+            # restart/resume 需要精确拦截“一个”content PUT：按唯一字节数定位 held 文件。
+            # held_size 只依赖 fixture（反代启动前已就绪），先确定性算出再传给反代，反代在
+            # 首个 content PUT 缓冲完成时用它判定是否 reset 制造可重试失败。
+            _ordered_probe = sorted(fixture.files.keys())
+            _size_groups_probe: dict[int, list[str]] = {}
+            for _rel_probe in _ordered_probe:
+                _size_groups_probe.setdefault(len(fixture.bytes_of(_rel_probe)), []).append(_rel_probe)
+            _held_size_probe = len(fixture.bytes_of(next(
+                _rel_probe for _rel_probe in _ordered_probe
+                if len(_size_groups_probe[len(fixture.bytes_of(_rel_probe))]) == 1
+            )))
+            spawn(
+                "h2-frontend-proxy",
+                ["node", str(proxy_path), f"http://127.0.0.1:{FRONTEND_PORT}", str(H2_FRONTEND_PORT), str(h2_dir), str(_held_size_probe)],
+                {}, h2_proxy_log, port=H2_FRONTEND_PORT,
+            )
+            BROWSER_ORIGIN = f"https://localhost:{H2_FRONTEND_PORT}"
+            tls_probe = requests.Session()
+            tls_probe.verify = False
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            deadline = time.time() + 60
+            while True:
+                try:
+                    if tls_probe.get(f"{BROWSER_ORIGIN}/", timeout=5).status_code < 500:
+                        break
+                except Exception:
+                    pass
+                if time.time() > deadline:
+                    raise RuntimeError("h2 frontend proxy did not become ready")
+                time.sleep(0.5)
+            report("services/frontend-h2", True, f"https/h2 proxy :{H2_FRONTEND_PORT} -> next dev :{FRONTEND_PORT}")
+        except Exception as exc:
+            fatal("services/frontend-h2", repr(exc))
+
     # 3. 登录 + 新建导入（浏览器模式：桌面 1440x900；--skip-browser：同一 BFF 端点的 HTTP 层）
     session_id: str | None = None
     cookie_header: str | None = None
@@ -1271,7 +1510,7 @@ def run_flow(args: argparse.Namespace) -> None:
                 skipped("browser/login+guard", "--skip-browser: 登录表单与守卫重定向为浏览器专属")
                 skipped("browser/create-session", "--skip-browser: 仪表盘按钮为浏览器专属")
             else:
-                page.goto(f"http://localhost:{FRONTEND_PORT}/admin/bead-import", wait_until="domcontentloaded")
+                page.goto(f"{BROWSER_ORIGIN}/admin/bead-import", wait_until="domcontentloaded")
                 page.wait_for_selector("#asset-admin-key", timeout=30_000)
                 page.screenshot(path=str(capture_dir / "desktop-01-login.png"))
                 page.fill("#asset-admin-key", ADMIN_KEY)
@@ -1280,13 +1519,35 @@ def run_flow(args: argparse.Namespace) -> None:
                 report("browser/login+guard", True, "guard redirected to login; key accepted into dashboard")
                 page.screenshot(path=str(capture_dir / "desktop-02-dashboard.png"))
 
-                page.click("text=新建导入")
-                page.wait_for_url("**/admin/bead-import/*", timeout=60_000)
+                # 浏览器水合竞态：SSR 先把可见 DOM 渲染出来，React 的 onClick 稍后才
+                # 挂上。单次过早点击会落在“已渲染未水合”窗口——无 POST、无导航、不报错。
+                # 这里每轮点击一次并短等导航；创建成功瞬间按钮文本变“正在创建导入任务…”
+                # 且 disabled，天然防止重复创建。直至真实导航发生或超时。
+                def _click_new_import_until_navigated() -> None:
+                    deadline = time.time() + 100
+                    while time.time() < deadline:
+                        try:
+                            page.wait_for_url("**/admin/bead-import/*", timeout=1_000)
+                            return  # 上一轮已导航成功
+                        except Exception:
+                            pass
+                        try:
+                            page.click("text=新建导入", timeout=4_000)
+                        except Exception:
+                            pass  # 尚未水合或正在创建(disabled)：无操作，进入下一轮
+                        try:
+                            page.wait_for_url("**/admin/bead-import/*", timeout=4_000)
+                            return
+                        except Exception:
+                            pass
+                    raise RuntimeError("新建导入 click never navigated within 100s")
+
+                _click_new_import_until_navigated()
                 session_id = page.url.rstrip("/").split("/")[-1]
                 page.wait_for_selector("text=拖入素材", timeout=60_000)
                 report("browser/create-session", True, f"session {session_id[:8]}… via the dashboard button")
 
-                cookies = desktop.cookies(f"http://localhost:{FRONTEND_PORT}/admin/bead-import/")
+                cookies = desktop.cookies(f"{BROWSER_ORIGIN}/admin/bead-import/")
                 cookie_header = next(
                     (cookie["value"] for cookie in cookies if cookie["name"] == "mystcrag_asset_admin"), None
                 )
@@ -1294,52 +1555,124 @@ def run_flow(args: argparse.Namespace) -> None:
         except Exception as exc:
             fatal("browser/login-create", repr(exc))
 
-        # 4. manifest + 上传（同一 BFF 端点；webkitdirectory 边界已在 docstring 声明）
+        # 4. manifest + 上传。完整（浏览器）模式：必须由真实浏览器经
+        #    #bead-import-folder-input 目录选择完成——真实页面读取所选文件夹并产出
+        #    manifest POST、逐个文件 content PUT 与上传队列/进度。绝不再提取 admin
+        #    cookie 后用 requests/AdminClient 代替合成 manifest/upload（已确认 Python
+        #    Playwright 对 webkitdirectory input 用 locator.set_input_files(目录路径)，
+        #    会以所选目录名为 webkitRelativePath 首段触发 change）。诊断模式
+        #    (--skip-browser) 仍走同一 BFF 端点的 HTTP 层，浏览器专属断言记 SKIP。
         client = AdminClient(
             f"http://localhost:{FRONTEND_PORT}", cookie_header,
             backend_origin=f"http://127.0.0.1:{BACKEND_PORT}",
         )
+        relative_by_file_id: dict[str, str] = {}
+        held_back: str | None = None
         try:
-            manifest = client.proxy(
-                "POST", f"/sessions/{session_id}/manifest",
-                json={"idempotencyKey": str(uuid.uuid4()), "files": fixture.entries()},
-            )
-            if manifest.status_code != 200:
-                raise RuntimeError(f"manifest refused: {manifest.status_code} {manifest.text[:300]}")
-            # 响应条目只含 fileId/clientFileId/uploadStatus/createdAt；
-            # relativePath 经 clientFileId（fixture 内由 relativePath 确定性派生）映射回来。
-            relative_by_client = {e["clientFileId"]: e["relativePath"] for e in fixture.entries()}
-            payload_files = manifest.json()["files"]
-            relative_by_file_id = {
-                f["fileId"]: relative_by_client[f["clientFileId"]] for f in payload_files
-            }
-            report("http/manifest", True, f"{len(relative_by_file_id)} files registered")
-
             ordered = sorted(fixture.files.keys())
-            held_back = ordered[-1]
-            upload_status: dict[str, str] = {}
-            sha_roundtrip_failures: list[str] = []
-            for index, relative_path in enumerate(ordered):
-                file_id = next(fid for fid, rel in relative_by_file_id.items() if rel == relative_path)
-                if relative_path == held_back:
-                    continue
-                data = fixture.bytes_of(relative_path)
-                result = upload_file(client, session_id, file_id, data)
-                upload_status[relative_path] = result["uploadStatus"]
-                if result.get("sha256") is not None:
-                    if result["sha256"] != hashlib.sha256(data).hexdigest():
-                        sha_roundtrip_failures.append(relative_path)
-            report("http/upload", True, f"{len(upload_status)}/{len(ordered)} uploaded; 1 held back for restart resume")
-            report(
-                "flow/sha256-archive-roundtrip", not sha_roundtrip_failures,
-                "archive copy sha256 matches the source bytes for every ARCHIVED upload"
-                + (f"; FAILURES={sha_roundtrip_failures}" if sha_roundtrip_failures else ""),
-            )
+            if args.skip_browser:
+                manifest = client.proxy(
+                    "POST", f"/sessions/{session_id}/manifest",
+                    json={"idempotencyKey": str(uuid.uuid4()), "files": fixture.entries()},
+                )
+                if manifest.status_code != 200:
+                    raise RuntimeError(f"manifest refused: {manifest.status_code} {manifest.text[:300]}")
+                relative_by_client = {e["clientFileId"]: e["relativePath"] for e in fixture.entries()}
+                payload_files = manifest.json()["files"]
+                relative_by_file_id = {
+                    f["fileId"]: relative_by_client[f["clientFileId"]] for f in payload_files
+                }
+                report("http/manifest", True, f"{len(relative_by_file_id)} files registered")
+                held_back = ordered[-1]
+                upload_status: dict[str, str] = {}
+                for index, relative_path in enumerate(ordered):
+                    file_id = next(fid for fid, rel in relative_by_file_id.items() if rel == relative_path)
+                    if relative_path == held_back:
+                        continue
+                    result = upload_file(client, session_id, file_id, fixture.bytes_of(relative_path))
+                    upload_status[relative_path] = result["uploadStatus"]
+                report("http/upload", True, f"{len(upload_status)}/{len(ordered)} staged via the BFF proxy; {held_back} held for restart resume")
+            else:
+                # 预计算 fixture 每个文件的源字节 sha256 与唯一字节数（拦截判定用）。
+                folder_prefix = fixture_root.name  # webkitRelativePath 首段 = 所选目录名
+                source_sha = {
+                    rel: hashlib.sha256(fixture.bytes_of(rel)).hexdigest() for rel in ordered
+                }
+                size_groups: dict[int, list[str]] = {}
+                for rel in ordered:
+                    size_groups.setdefault(len(fixture.bytes_of(rel)), []).append(rel)
+                held_back = next(
+                    rel for rel in ordered if len(size_groups[len(fixture.bytes_of(rel))]) == 1
+                )
+                held_prefixed = f"{folder_prefix}/{held_back}"
+
+                # 精确拦截“一个”content PUT 制造可重试失败由 h2 反代负责（held_size 已在
+                # 反代启动时传入）：Chromium 会剥离 ReadableStream body 上手工设置的
+                # content-length，Playwright 路由层根本看不到它，按 content-length 匹配
+                # 永远不会命中。反代缓冲 body 后按真实字节数 == held_size reset 一次，
+                # 浏览器侧 fetch 因此以网络错误（retryable）失败；其余 PUT 与重启后的
+                # 重试一律放行。此处只记录浏览器真实发出的 manifest POST，供 http/manifest
+                # 断言“manifest 确由浏览器发出”而非由 requests 兜底。
+                net_events: dict[str, object] = {"manifest": []}
+
+                def _on_net_response(resp):
+                    url = resp.url
+                    if "/admin/bead-import/proxy/sessions/" not in url:
+                        return
+                    if resp.request.method == "POST" and url.endswith(f"/sessions/{session_id}/manifest"):
+                        net_events["manifest"].append({"status": resp.status})
+
+                page.on("response", _on_net_response)
+                # 等会话页真正渲染出文件夹输入（会话加载后才 enabled）再选择目录。
+                page.wait_for_selector("#bead-import-folder-input:not([disabled])", timeout=60_000)
+                page.locator("#bead-import-folder-input").set_input_files(str(fixture_root))
+
+                def all_registered():
+                    snap = get_session(client, session_id)
+                    if len(snap.get("files", [])) == len(ordered):
+                        return snap
+                    return f"registered={len(snap.get('files', []))}"
+
+                session = poll_until(all_registered, 90, "browser manifest registration (folder pick)")
+                # 轮询用的是 requests/AdminClient，Playwright 的网络事件在此间不会派发；这里
+                # 主动泵一次事件循环，把浏览器真实发出的 manifest POST 响应事件落进 net_events，
+                # 否则 http/manifest 的“浏览器可见 manifest POST”断言会在事件尚未派发时误判为 0。
+                page.wait_for_timeout(1_500)
+                # 权威映射 fileId -> relativePath（webkitRelativePath 含所选目录名首段）。
+                relative_by_file_id = {f["fileId"]: f["relativePath"] for f in session["files"]}
+                manifest_ok = len(net_events["manifest"]) > 0 and net_events["manifest"][-1]["status"] == 200  # type: ignore[index]
+                report(
+                    "http/manifest", manifest_ok and len(relative_by_file_id) == len(ordered),
+                    f"{len(relative_by_file_id)}/{len(ordered)} files registered from the real folder pick; "
+                    f"manifest POSTs seen by the browser={len(net_events['manifest'])}",
+                )
+
+                # 首轮上传收敛：等 worker 把除被拦截文件外的全部文件归档落账；被拦截文件
+                # 的字节从未到达后端（服务端停留 REGISTERED），状态必须仍未归档。
+                def first_pass_settled():
+                    snap = get_session(client, session_id)
+                    by_rel = {f["relativePath"]: f for f in snap["files"]}
+                    settled = sum(
+                        1 for f in snap["files"] if f["state"] in ("ARCHIVED", "SKIPPED_DUPLICATE")
+                    )
+                    held = by_rel.get(held_prefixed)
+                    if held is not None and held["state"] not in ("ARCHIVED", "SKIPPED_DUPLICATE") and settled >= len(ordered) - 1:
+                        return snap
+                    return f"settled={settled}/{len(ordered)} held_state={(held or {}).get('state')}"
+
+                poll_until(first_pass_settled, GROUP_TIMEOUT_S, "browser first-pass upload archive settlement")
+                report(
+                    "http/upload", True,
+                    f"real browser folder pick registered+staged {len(ordered)} files via "
+                    "#bead-import-folder-input; the interrupted file's content PUT was aborted once "
+                    "(retryable network failure) while the worker archived the others",
+                )
         except Exception as exc:
             fatal("http/manifest-upload", repr(exc))
+        file_id_by_relative = {rel: fid for fid, rel in relative_by_file_id.items()}
 
-        # 5. 重启恢复：整组终止 backend+worker（进程退出+端口关闭，超时即失败）→
-        #    重启 → 断言新 PID → 断言新 worker 真正推进（held-back 文件被新 worker 归档落账）。
+        # 5. 重启恢复：整组终止 backend+worker（进程退出+端口关闭，超时即失败）→ 重启 →
+        #    断言新 PID → 经 UI 重试恢复被拦截文件（断言新 worker 真正把它首次归档落账）。
         try:
             old_backend_pid, old_worker_pid = backend.pid, worker.pid
             worker_log_size_before = worker_log.stat().st_size if worker_log.exists() else 0
@@ -1358,26 +1691,14 @@ def run_flow(args: argparse.Namespace) -> None:
                 backend2.pid != old_backend_pid and worker2.pid != old_worker_pid,
                 f"backend {old_backend_pid} -> {backend2.pid}; worker {old_worker_pid} -> {worker2.pid}",
             )
-
-            if args.skip_browser:
-                skipped("browser/session-page-after-restart", "--skip-browser: 重启后会话页渲染为浏览器专属")
-            else:
-                page.reload(wait_until="domcontentloaded")
-                page.wait_for_selector("text=拖入素材", timeout=60_000)
             resumed = get_session(client, session_id)
             resumed_states = {file["state"] for file in resumed["files"]}
             report(
-                "flow/restart-resume", "REGISTERED" in resumed_states or "ARCHIVED" in resumed_states,
-                f"session survived restart; file states={sorted(resumed_states)}",
+                "flow/restart-resume", len(resumed["files"]) == len(ordered) and bool(resumed_states),
+                f"session survived restart with {len(resumed['files'])} registered files; states={sorted(resumed_states)}",
             )
 
-            file_id = next(fid for fid, rel in relative_by_file_id.items() if rel == held_back)
-            result = upload_file(client, session_id, file_id, fixture.bytes_of(held_back))
-            report("flow/resume-upload-completes", result["uploadStatus"] in ("ARCHIVED", "UPLOADING"), str(result["uploadStatus"]))
-
-            # PUT 只入队（响应恒为 UPLOADING）；归档由 worker 异步落账，全部文件
-            # 终态后会话才转 ARCHIVING——startGrouping 的前置正是这两点，必须轮询。
-            def archive_settled():
+            def archive_settled_any():
                 snapshot = get_session(client, session_id)
                 states = [file["state"] for file in snapshot["files"]]
                 if snapshot["state"] in ("ARCHIVING", "PARTIALLY_FAILED") and all(
@@ -1385,18 +1706,121 @@ def run_flow(args: argparse.Namespace) -> None:
                 ):
                     return snapshot
                 return f"state={snapshot['state']} files={sorted(set(states))}"
-            poll_until(archive_settled, GROUP_TIMEOUT_S, "worker archive settlement")
-            report("flow/resume-archive-settles", True, "held-back file archived; session reached ARCHIVING")
 
-            # 新 worker 推进的权威证据：重启后的 worker 把 held-back 文件落账归档，
+            if args.skip_browser:
+                resumed_held_fid = file_id_by_relative[held_back]
+                result = upload_file(client, session_id, resumed_held_fid, fixture.bytes_of(held_back))
+                report("flow/resume-upload-completes", result["uploadStatus"] in ("ARCHIVED", "UPLOADING"), str(result["uploadStatus"]))
+                resumed_settled = poll_until(archive_settled_any, GROUP_TIMEOUT_S, "worker archive settlement after resume")
+                ui_retry_clicks = 0
+            else:
+                # 通过 UI 的重试按钮恢复：队列里每个未归档行（含被拦截文件）点击“重试上传”，
+                # 重发真实 content PUT。服务端已归档文件的 PUT 幂等返回 ARCHIVED；
+                # 被拦截文件此刻服务端才首次收到字节 → 新 worker 归档。收敛条件必须同时
+                # 覆盖“服务端全部落账”与“UI 无剩余 FAILED 行”：仅服务端 settle 而最后
+                # 一次 PUT 仍返回 UPLOADING 时，UI 行还是“未归档”状态，必须再点一次让
+                # 幂等回放返回 ARCHIVED 才算是恢复完成。
+                ui_retry_clicks = 0
+
+                def _ui_retry_until_settled():
+                    nonlocal ui_retry_clicks
+                    # 只重试被拦截（held）文件：上传队列把 PUT 的 UPLOADING 响应也标成 FAILED
+                    # 行（异步归档），故 SKIPPED_DUPLICATE 等已终态文件同样带“重试上传”按钮，
+                    # 但其重试会 409（不可变），盲目点 .first 会永远卡在重复文件上、永远到不了
+                    # held 文件。这里按 aria-label 精确定位 held 文件的行，以服务端“held 文件
+                    # 已归档”为收敛条件（而非 UI 剩余 FAILED 行数，后者包含不可重试的终态行）。
+                    held_btn = page.locator(f'button[aria-label^="重试上传"][aria-label$="{held_back}"]')
+                    deadline = time.time() + GROUP_TIMEOUT_S + 60
+                    while time.time() < deadline:
+                        snap = get_session(client, session_id)
+                        by_rel = {f["relativePath"]: f for f in snap["files"]}
+                        held = by_rel.get(held_prefixed)
+                        if (
+                            snap["state"] in ("ARCHIVING", "PARTIALLY_FAILED")
+                            and held is not None
+                            and held["state"] in ("ARCHIVED", "SKIPPED_DUPLICATE")
+                        ):
+                            return snap
+                        if held_btn.count() > 0:
+                            held_btn.first.click()
+                            ui_retry_clicks += 1
+                        page.wait_for_timeout(1_500)
+                    return get_session(client, session_id)
+
+                resumed_settled = _ui_retry_until_settled()
+
+            all_settled = resumed_settled["state"] in ("ARCHIVING", "PARTIALLY_FAILED") and all(
+                file["state"] in ("ARCHIVED", "SKIPPED_DUPLICATE") for file in resumed_settled["files"]
+            )
+            report(
+                "flow/resume-upload-completes", all_settled,
+                f"session reached {resumed_settled['state']}; every registered file archived "
+                + (f"via {ui_retry_clicks} UI 重试 clicks after the backend+worker restart"
+                   if not args.skip_browser else "via the BFF proxy (skip-browser)"),
+            )
+            report(
+                "flow/resume-archive-settles", all_settled,
+                f"resume archive settled; state={resumed_settled['state']} files={len(resumed_settled['files'])}",
+            )
+
+            # 新 worker 推进的权威证据：重启后的 worker 把被拦截文件首次落账归档，
             # 且 worker 日志在重启后有新增输出（旧进程组已死，只能是新组写的）。
             worker_log_size_after = worker_log.stat().st_size if worker_log.exists() else 0
             report(
                 "flow/worker-advanced-after-restart",
                 worker_log_size_after > worker_log_size_before,
                 f"worker log grew {worker_log_size_before} -> {worker_log_size_after} bytes after restart "
-                "while the restarted worker archived the held-back file",
+                "while the restarted worker archived the interrupted file",
             )
+
+            # D. sha256/archive roundtrip：worker/archive 全部 settle 后重读权威 session；
+            # 每个源文件比对“源字节 sha256 == 持久化权威 sha256 == 临时 archive 文件 bytes 的
+            # sha256”。响应缺 sha 直接记 FAIL；不能只比较 PUT response。
+            try:
+                snap = get_session(client, session_id)
+                by_rel = {f["relativePath"]: f for f in snap["files"]}
+                missing_sha = [
+                    rel for rel in ordered
+                    if (by_rel.get(f"{folder_prefix}/{rel}" if not args.skip_browser else rel) or {}).get("sha256") is None
+                ]
+                sha_mismatch: list[str] = []
+                archive_byte_mismatch: list[str] = []
+                missing_archive: list[str] = []
+                for rel in ordered:
+                    if not args.skip_browser:
+                        file_view = by_rel.get(f"{folder_prefix}/{rel}")
+                    else:
+                        file_view = by_rel.get(rel)
+                    if file_view is None:
+                        sha_mismatch.append(f"{rel}:absent")
+                        continue
+                    authoritative = file_view.get("sha256")
+                    expected = source_sha.get(rel) if not args.skip_browser else hashlib.sha256(fixture.bytes_of(rel)).hexdigest()
+                    if authoritative is None:
+                        missing_sha.append(rel)
+                        continue
+                    if authoritative != expected:
+                        sha_mismatch.append(rel)
+                        continue
+                    extension = "arw" if rel.lower().endswith(".arw") else "jpg"
+                    archive_file = archive_root / "imports" / session_id / "raw" / f"{authoritative}.{extension}"
+                    if not archive_file.exists():
+                        missing_archive.append(rel)
+                        continue
+                    if hashlib.sha256(archive_file.read_bytes()).hexdigest() != authoritative:
+                        archive_byte_mismatch.append(rel)
+                report(
+                    "flow/sha256-archive-roundtrip",
+                    not (missing_sha or sha_mismatch or archive_byte_mismatch or missing_archive),
+                    "authoritative session sha256 == source bytes sha == temp archive file bytes sha for every "
+                    f"registered file"
+                    + (f"; MISSING_SHA={missing_sha}" if missing_sha else "")
+                    + (f"; SHA_MISMATCH={sha_mismatch}" if sha_mismatch else "")
+                    + (f"; ARCHIVE_MISSING={missing_archive}" if missing_archive else "")
+                    + (f"; ARCHIVE_BYTES={archive_byte_mismatch}" if archive_byte_mismatch else ""),
+                )
+            except Exception as exc:
+                fatal("flow/sha256-archive-roundtrip", repr(exc))
 
             if args.skip_browser:
                 started = client.proxy(
@@ -1466,8 +1890,17 @@ def run_flow(args: argparse.Namespace) -> None:
                 ),
                 None,
             )
+            # ARW-only 组（无栅格，仅归档）也必须在合并/拆分演练中保持独立：否则
+            # 合并把 arw-only 组并进栅格组后再对半切，会产生 ARW+JPG 混合组，令
+            # 后续 flow/arw-only-merge 找不到纯 ARW 组而落 MISSING。这里只让含栅格
+            # 成员的组参与合并演练，纯 ARW 组留给专门的 arw-only-merge 路径。
+            def _group_is_arw_only(group) -> bool:
+                rels = _group_rel_paths(group)
+                return bool(rels) and all(rel.lower().endswith(".arw") for rel in rels)
+
             merge_candidates = [
-                g["groupId"] for g in session["groups"] if g["groupId"] != poor_group_id
+                g["groupId"] for g in session["groups"]
+                if g["groupId"] != poor_group_id and not _group_is_arw_only(g)
             ]
             merge_target, merge_source = merge_candidates[0], merge_candidates[1]
             if args.skip_browser:
@@ -1765,6 +2198,7 @@ def run_flow(args: argparse.Namespace) -> None:
                 (g["crystalDraft"] for g in session["groups"] if g.get("crystalDraft")), None
             )
             expected_revision = (crystal_draft or {}).get("revision", 1)
+            # 表单里填的字符串形态（页面受控输入、页面把 tags 拆成数组、把档位转数字）。
             curation_values = {
                 "nameCn": "QA水晶A",
                 "nameEn": "QA Crystal A",
@@ -1775,20 +2209,36 @@ def run_flow(args: argparse.Namespace) -> None:
                 "priceLevel": "2",
                 "complianceNote": "仅描述材质与外观，不涉及任何功效。",
             }
+            # 契约收进去的 DTO 形态：tags 是数组、priceLevel 是 1–5 数字、文本 trim 后原样。
+            committed_curation = {
+                "nameCn": "QA水晶A",
+                "nameEn": "QA Crystal A",
+                "mineralName": "Quartz",
+                "colorTags": ["clear"],
+                "visualTags": ["round"],
+                "styleTags": ["classic"],
+                "priceLevel": 2,
+                "complianceNote": "仅描述材质与外观，不涉及任何功效。",
+            }
+
+            def curation_matches(view: dict | None) -> bool:
+                # 权威判据：一次 PATCH 成功后 revision 从 expected_revision 走到 N+1，
+                # curationComplete 转 true，八项 curation 字段与已提交值逐项一致。
+                if not view:
+                    return False
+                return (
+                    view.get("curationComplete") is True
+                    and view.get("revision") == expected_revision + 1
+                    and all(view.get(field) == value for field, value in committed_curation.items())
+                )
+
             if args.skip_browser:
                 curated = client.proxy(
                     "PATCH", f"/crystal-drafts/{crystal_draft_id}",
                     json={
                         "idempotencyKey": str(uuid.uuid4()),
                         "expectedRevision": expected_revision,
-                        "nameCn": "QA水晶A",
-                        "nameEn": "QA Crystal A",
-                        "mineralName": "Quartz",
-                        "colorTags": ["clear"],
-                        "visualTags": ["round"],
-                        "styleTags": ["classic"],
-                        "priceLevel": 2,
-                        "complianceNote": "仅描述材质与外观，不涉及任何功效。",
+                        **committed_curation,
                     },
                 )
                 if curated.status_code != 200:
@@ -1804,24 +2254,72 @@ def run_flow(args: argparse.Namespace) -> None:
             report("flow/curation", curation_complete, "eight curation fields accepted via "
                     + ("the BFF proxy" if args.skip_browser else "the browser curation form"))
 
+            # 全新会话读取的持久化判据：productDraft 水合，且 crystalDraft 的八项
+            # curation 字段、curationComplete 与 revision（N→N+1）必须与已提交值逐项
+            # 一致——绝不只凭 PATCH 响应自报 success 就判 PASS。
             hydrated = get_session(client, session_id)
             hydrated_group = next(g for g in hydrated["groups"] if g["groupId"] == good_group_id)
-            persisted = (
+            draft_persisted = (
                 hydrated_group.get("productDraft", {}) or {}
             ).get("displayName") == "QA 流程验证珠 8mm"
-            report("flow/draft-refresh-persistence", persisted, "productDraft hydrates from a fresh session read")
+            curation_persisted = curation_matches(hydrated_group.get("crystalDraft") or {})
+            report(
+                "flow/draft-refresh-persistence",
+                draft_persisted and curation_persisted,
+                "fresh session read re-hydrates productDraft and the committed crystalDraft "
+                "(eight curation fields + curationComplete + revision "
+                f"{expected_revision}->{expected_revision + 1} match; fields={curation_persisted})",
+            )
             if args.skip_browser:
                 skipped("browser/draft-page-render", "--skip-browser: 命名与草稿页渲染为浏览器专属")
             else:
+                # 重新加载后回到“命名与草稿”面板：仅步骤标题一致不足以证明值没丢，
+                # 必须重读八个受控输入的值仍等于已提交值；完成态（curationComplete +
+                # revision）也重新来自权威会话读取，不被页面标题冒充。
                 page.reload(wait_until="domcontentloaded")
                 page.wait_for_selector(
                     '#bead-import-workflow-heading:has-text("命名与草稿")', timeout=60_000
                 )
+                page.wait_for_selector(
+                    f"#bead-import-curation-{crystal_draft_id}-nameCn", timeout=60_000
+                )
+                readbacks: dict[str, str] = {}
+                form_matches = False
+                deadline = time.time() + 20
+                while time.time() < deadline:
+                    readbacks = {}
+                    for field in curation_values:
+                        try:
+                            readbacks[field] = page.input_value(
+                                f"#bead-import-curation-{crystal_draft_id}-{field}"
+                            )
+                        except Exception:
+                            break
+                    if len(readbacks) == len(curation_values) and all(
+                        readbacks[field] == expected for field, expected in curation_values.items()
+                    ):
+                        form_matches = True
+                        break
+                    time.sleep(0.5)
+                after_reload = get_session(client, session_id)
+                after_group = next(
+                    g for g in after_reload["groups"] if g["groupId"] == good_group_id
+                )
+                completion_matches = curation_matches(after_group.get("crystalDraft") or {})
                 shot = str(capture_dir / "desktop-04-draft.png")
                 page.screenshot(path=shot)
                 report(
-                    "browser/draft-page-render", True,
-                    f"命名与草稿 panel rendered in the real browser (screenshot {Path(shot).name})",
+                    "browser/draft-page-render",
+                    form_matches and completion_matches,
+                    "命名与草稿 panel re-rendered after reload: the eight curation inputs re-populated "
+                    f"with the committed values ({form_matches}) and crystalDraft completion+revision "
+                    f"survived the reload ({completion_matches})"
+                    + (
+                        f"; readbacks={json.dumps(readbacks, ensure_ascii=False)}"
+                        if not form_matches
+                        else ""
+                    )
+                    + f"; screenshot {Path(shot).name}",
                 )
         except Exception as exc:
             fatal("flow/naming-draft", repr(exc))
@@ -1888,8 +2386,11 @@ def run_flow(args: argparse.Namespace) -> None:
             poor_asset_id = poor_asset["processedAssetId"]
 
             # UI 页面状态断言：QC_FAILED 版本必须显示“质检未通过”与具体问题，
-            # 且该版本不渲染批准表单（批准入口被阻断）。HTTP 负向探测验证后端守卫。
-            ui_blocks_approval = True
+            # 且该版本不渲染批准表单（批准入口被阻断）。HTTP 负向探测验证后端守卫；
+            # 两者是互相独立的证据，分开报告，互不折算。
+            ui_shows_failure = False
+            ui_shows_issue = False
+            ui_no_approval_form = False
             if not args.skip_browser:
                 # 后端 processed() 轮询只证明数据库已写 QC_FAILED；浏览器 DOM 可能仍
                 # 是 in-flight 的旧状态（后端/DOM 竞态）。刷新页面并等到真实的
@@ -1907,11 +2408,9 @@ def run_flow(args: argparse.Namespace) -> None:
                 )
                 poor_card = processing_card(page, poor_group_id)
                 poor_card.scroll_into_view_if_needed()
-                ui_blocks_approval = (
-                    poor_card.locator("text=质检未通过").count() > 0
-                    and poor_card.locator("text=质检问题").count() > 0
-                    and poor_card.get_by_role("button", name="提交批准").count() == 0
-                )
+                ui_shows_failure = poor_card.locator("text=质检未通过").count() > 0
+                ui_shows_issue = poor_card.locator("text=质检问题").count() > 0
+                ui_no_approval_form = poor_card.get_by_role("button", name="提交批准").count() == 0
             blocked = client.proxy(
                 "POST", f"/groups/{poor_group_id}/processed-assets/{poor_asset_id}/review",
                 json={
@@ -1926,11 +2425,35 @@ def run_flow(args: argparse.Namespace) -> None:
                     "allowAiRecommendation": False,
                 },
             )
+            blocked_code = None
+            try:
+                blocked_code = (blocked.json() or {}).get("error", {}).get("code")
+            except Exception:
+                blocked_code = None
+            # 契约级守卫：审批一个未通过质检（QC_FAILED / 非当前版本）的资产必须被
+            # 后端以 HTTP 409 + error.code == "CONFLICT" 拒绝（code 是稳定业务码；
+            # 具体 reason 文案被规范化丢弃，没有稳定 reason 字段可锁）。只认这一个
+            # 精确组合——401/400/404 等其它 4xx 一律不折算成 PASS。
+            qc_blocked = blocked.status_code == 409 and blocked_code == "CONFLICT"
             report(
-                "flow/qc-blocks-approval", 400 <= blocked.status_code < 500 and ui_blocks_approval,
-                f"approve on QC_FAILED refused with {blocked.status_code}"
-                + ("" if args.skip_browser else "; the browser shows the QC failure and no approval form for that version"),
+                "flow/qc-blocks-approval", qc_blocked,
+                f"approve on QC_FAILED refused with HTTP {blocked.status_code} "
+                f"error.code={blocked_code!r}"
+                + ("" if qc_blocked else " (expected exactly 409 + CONFLICT)"),
             )
+            if args.skip_browser:
+                skipped(
+                    "browser/qc-blocks-ui-approval-button",
+                    "--skip-browser: 浏览器审批表单阻断为浏览器专属",
+                )
+            else:
+                report(
+                    "browser/qc-blocks-ui-approval-button",
+                    ui_shows_failure and ui_shows_issue and ui_no_approval_form,
+                    f"QC_FAILED card shows 质检未通过 ({ui_shows_failure}) and 质检问题 "
+                    f"({ui_shows_issue}) and no 提交批准 button on that version "
+                    f"({ui_no_approval_form})",
+                )
 
             # 操作员恢复路径：差组 SET_PRIMARY 切到拯救片（结构编辑会作废既有
             # 处理资产并把组打回 NAMED），再 reprocess 产出 v2；QC 应通过。
@@ -2271,8 +2794,11 @@ def run_flow(args: argparse.Namespace) -> None:
     run_source_set_phase(args, client, archive_root)
 
 
-def _sha256_file_readonly(path: Path, timeout_s: int = 20) -> str:
-    """只读哈希：在带超时的子进程里分块读取，绝不写入/复制/移动。"""
+def _sha256_file_readonly(path: Path, timeout_s: int = 5) -> str:
+    """只读哈希：在带 5s 超时的子进程里分块读取，绝不写入/复制/移动。
+
+    超时（挂起的网络盘/坏盘）即由子进程超时强杀，绝不无限阻塞主进程。
+    """
     import subprocess as sp
 
     code = (
@@ -2288,6 +2814,80 @@ def _sha256_file_readonly(path: Path, timeout_s: int = 20) -> str:
         capture_output=True, text=True, timeout=timeout_s, check=True,
     )
     return result.stdout.strip()
+
+
+def _read_and_sha(path: Path, timeout_s: int = 5) -> tuple[bytes, str]:
+    """只读隔离：在带 5s 超时的子进程里把文件字节写回 stdout，主进程据此算 sha256。
+
+    源文件绝不被写入/复制/移动；任何一次读取挂起都会在 5s 被强杀，绝不会让主进程
+    无限阻塞在不可靠的存储上（这是 --self-test 之外运行时源操作的主要阻塞风险）。
+    """
+    import subprocess as sp
+
+    code = (
+        "import sys\n"
+        "with open(sys.argv[1],'rb') as f:\n"
+        "    sys.stdout.buffer.write(f.read())\n"
+    )
+    result = sp.run(
+        [sys.executable, "-c", code, str(path)],
+        stdout=sp.PIPE, timeout=timeout_s, check=True,
+    )
+    return result.stdout, hashlib.sha256(result.stdout).hexdigest()
+
+
+def _discover_source_set(source_set: Path, timeout_s: int = 5) -> list[tuple[str, str, int, str]]:
+    """只读发现（rglob + stat，不读文件内容）隔离在带 5s 超时的子进程里执行。
+
+    超时即整组终止并抛 subprocess.TimeoutExpired；源文件绝不被读取内容/写入/移动。
+    返回 [(relativePath, 绝对路径, byteSize, kind)]，只含 .jpg/.arw。
+    """
+    import subprocess as sp
+
+    code = (
+        "import json,sys\n"
+        "from pathlib import Path\n"
+        "root=Path(sys.argv[1]); out=[]\n"
+        "for path in sorted(root.rglob('*')):\n"
+        "    if not path.is_file():\n"
+        "        continue\n"
+        "    ext=path.suffix.lower()\n"
+        "    if ext not in ('.jpg','.arw'):\n"
+        "        continue\n"
+        "    st=path.stat()\n"
+        "    kind='JPEG' if ext=='.jpg' else 'ARW'\n"
+        "    out.append((path.relative_to(root).as_posix(), str(path), st.st_size, kind))\n"
+        "print(json.dumps(out))\n"
+    )
+    result = sp.run(
+        [sys.executable, "-c", code, str(source_set)],
+        capture_output=True, text=True, timeout=timeout_s, check=True,
+    )
+    return json.loads(result.stdout)
+
+
+# 真实素材库（只读桌面源目录）的权威基线：26 个编号子目录、127 个媒体文件
+# （65 JPG + 62 ARW），不含 .DS_Store 等非素材。任何偏差都必须如实 FAIL 并给出
+# 实际/期望对照，绝不静默放行。
+REAL_SOURCE_SET_PATH = "/Users/chenyanyan/Desktop/珠子图"
+REAL_SOURCE_SET_BASELINE = {"dirs": 26, "files": 127, "jpg": 65, "arw": 62}
+
+
+def _cross_stem_pair_ok(
+    group_of_relative: dict[str, str], files: list[tuple[str, object, str]], cross_stem: str
+) -> bool:
+    """同一跨目录 stem 的全部源文件必须落进同一组。
+
+    提炼为纯函数供真实分组核对与 --self-test 复用。返回真正的布尔值；
+    绝不用 `all(单个 bool)` 之类的错误包裹（all() 要求可迭代对象，对单个
+    bool 直接抛 TypeError: 'bool' object is not iterable，令成功分组路径崩溃）。
+    """
+    stem_groups = {
+        group_of_relative[relative]
+        for relative, _, _ in files
+        if Path(relative).stem == cross_stem and relative in group_of_relative
+    }
+    return len(stem_groups) == 1
 
 
 def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_root: Path) -> None:
@@ -2309,17 +2909,18 @@ def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_
         if not source_set.is_dir():
             report("sources/discovery", False, f"source set not found: {source_set}")
             return
-        for path in sorted(source_set.rglob("*")):
-            if not path.is_file():
-                continue
-            ext = path.suffix.lower()
-            if ext == ".jpg":
-                kind = "JPEG"
-            elif ext == ".arw":
-                kind = "ARW"
-            else:
-                continue  # .DS_Store 等非素材文件不进入 manifest
-            files.append((path.relative_to(source_set).as_posix(), path, kind))
+        # 只读发现（rglob + stat，不读文件内容）隔离在可强杀子进程里执行；5s 阶段
+        # 超时即如实记 FAIL 并整组终止，绝不无限阻塞主进程（挂起存储），也不伪造结果。
+        try:
+            discovered = _discover_source_set(source_set, timeout_s=5)
+        except subprocess.TimeoutExpired:
+            report(
+                "sources/discovery", False,
+                f"read-only discovery of {source_set} exceeded the 5s isolated-phase timeout and was "
+                "forcibly terminated (stat/rglob on a stalled store); no composition was inferred below",
+            )
+            return
+        files = [(relative, Path(abs_path), kind) for relative, abs_path, _, kind in discovered]
         if not files:
             report("sources/discovery", False, "source set contains no .jpg/.arw files")
             return
@@ -2333,12 +2934,25 @@ def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_
         jpg_only_stems = [stem for stem, kinds in stem_kinds.items() if kinds == {"JPEG"}]
         arw_only_stems = [stem for stem, kinds in stem_kinds.items() if kinds == {"ARW"}]
         jpg_count = sum(1 for _, _, kind in files if kind == "JPEG")
+        top_dirs = {relative.split("/")[0] for relative, _, _ in files}
+        actual = {"dirs": len(top_dirs), "files": len(files), "jpg": jpg_count, "arw": len(files) - jpg_count}
+        # E：真实桌面素材库强制基线（26 目录 / 127 文件 / 65 JPG / 62 ARW）；任何偏差
+        # 都如实 FAIL 并给出实际/期望对照。指向其它源目录时仍报告实际构成，不做伪造。
+        if str(source_set) == REAL_SOURCE_SET_PATH and actual != REAL_SOURCE_SET_BASELINE:
+            report(
+                "sources/discovery", False,
+                f"real source-set baseline mismatch: actual={actual} expected={REAL_SOURCE_SET_BASELINE} "
+                f"(dirs/files/JPG/ARW); FAIL",
+            )
+            return
         report(
             "sources/discovery", True,
-            f"{len(files)} files ({jpg_count} JPG + {len(files) - jpg_count} ARW), "
-            f"{len(stem_dirs)} stems, {len(cross_stems)} cross-folder stems "
+            f"{len(files)} files ({jpg_count} JPG + {len(files) - jpg_count} ARW) in {len(top_dirs)} "
+            f"top-level directories, {len(stem_dirs)} stems, {len(cross_stems)} cross-folder stems "
             f"({sorted(cross_stems)[:3]}), {len(jpg_only_stems)} jpg-only stems, "
-            f"{len(arw_only_stems)} arw-only stems (read-only enumeration)",
+            f"{len(arw_only_stems)} arw-only stems (read-only isolated enumeration, ≤5s/op)"
+            + ("" if str(source_set) != REAL_SOURCE_SET_PATH
+               else f"; baseline dirs/files/JPG/ARW={actual} matched"),
         )
     except Exception as exc:
         report("sources/discovery", False, f"probe failed: {repr(exc)[:200]}")
@@ -2381,39 +2995,73 @@ def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_
 
         source_sha: dict[str, str] = {}
         upload_failures: list[str] = []
+        proxy_failures: list[tuple[str, int, str]] = []  # (relative, byteSize, observed error)
+        direct_backend_failures: list[str] = []  # relative whose direct-backend fallback also failed (stuck reservation)
         total_files = len(files)
-        proxy_capped: list[tuple[str, int]] = []  # (relative, byteSize) 无法经 Next 代理上传
         for index, (relative, path, kind) in enumerate(files, start=1):
             if index % 16 == 0 or index == total_files:
                 print(f"... sources upload {index}/{total_files} ({relative})", flush=True)
-            data = path.read_bytes()
-            source_sha[relative] = hashlib.sha256(data).hexdigest()
+            # J：每个源文件的读取/哈希隔离在 5s 可强杀子进程里（源字节只读，不落盘）；
+            # 读挂起 → 强杀并如实记 FAIL，绝不无限阻塞主进程。
+            try:
+                data, file_sha = _read_and_sha(path, timeout_s=5)
+            except subprocess.TimeoutExpired:
+                upload_failures.append(f"{relative}:READ_TIMEOUT(>5s isolated read killed)")
+                continue
+            source_sha[relative] = file_sha
             file_id = file_id_by_relative[relative]
-            if len(data) > NEXT_ROUTE_BODY_CAP_BYTES:
-                # >10MiB 的真实 ARW：Next 默认路由体上限会截断，代理路径不可能成功
-                # （前端缺陷，见 sources/proxy-large-body-cap），直连同一后端 content 路由
-                # 以继续验证真实大文件的后端归档/哈希/分组完整性。
-                proxy_capped.append((relative, len(data)))
-                result = upload_direct_backend(client, src_session_id, file_id, data)
-            else:
-                result = upload_file(client, src_session_id, file_id, data, label=relative)
+            # G：删除按字节数无条件判大文件 FAIL/绕行的逻辑。每个文件先真实走一遍前端
+            # 代理；只有真实观察到的 500/截断/连接错误才记 sources/proxy-large-body-cap
+            # FAIL，随后直连同一后端 content 路由仅用于继续诊断归档/哈希/分组完整性。
+            # 前端修复 body cap 后本门自动 PASS。
+            try:
+                result = upload_file(client, src_session_id, file_id, data, attempts=2, label=relative, direct_diag=False)
+            except Exception as exc:
+                proxy_failures.append((relative, len(data), f"{type(exc).__name__}: {str(exc)[:180]}"))
+                try:
+                    result = upload_direct_backend(client, src_session_id, file_id, data)
+                except Exception as direct_exc:
+                    # 代理截断已把该文件保留为 UPLOADING（后端在流中断时未释放上传保留——
+                    # 第二个真实缺陷），直连同一 content 路由因此返回 409。如实记录并继续，
+                    # 后续同样大小的 ARW 命中同一缺陷时逐个记录，绝不静默崩掉整个阶段。
+                    direct_backend_failures.append(
+                        f"{relative} ({type(direct_exc).__name__}: {str(direct_exc)[:120]})"
+                    )
+                    upload_failures.append(f"{relative}:DIRECT_BACKEND_FAILED")
+                    continue
             if result["uploadStatus"] not in ("UPLOADING", "ARCHIVED"):
                 upload_failures.append(f"{relative}:{result['uploadStatus']}")
-        if proxy_capped:
-            capped_bytes = sum(size for _, size in proxy_capped)
+        if proxy_failures:
             report(
                 "sources/proxy-large-body-cap", False,
-                f"{len(proxy_capped)}/{total_files} real files totalling {capped_bytes} bytes "
-                f"(first {proxy_capped[0][0]} @ {proxy_capped[0][1]} bytes) exceed the Next server's "
-                f"default 10MiB route-handler request body cap and cannot transit the admin proxy: the "
-                f"body is truncated at 10MiB (frontend.log 'Request body exceeded 10MB ... "
-                f"middlewareClientMaxBodySize') so the backend request never completes and the proxy "
-                f"returns 500 'The bead import service did not respond.' — surfaced defect: the "
-                f"frontend server must raise the body cap above the ~21MB ARW raws the bead-import "
-                f"feature ingests (backend Fastify cap is 256MB). These files were uploaded direct to "
-                f"the same backend content route so archive/SHA/grouping integrity below still covers "
-                f"every real file.",
+                f"{len(proxy_failures)}/{total_files} real files failed through the real admin proxy "
+                f"(observed error, never inferred from file size): first={proxy_failures[0][0]} "
+                f"@ {proxy_failures[0][1]} bytes -> {proxy_failures[0][2]}. Each failed file was then "
+                f"uploaded direct to the same backend content route only to continue diagnostics, so "
+                f"archive/SHA/grouping integrity below still covers every real file. When the frontend "
+                f"server body cap is raised above the ARW raw sizes this gate auto-PASSes.",
             )
+        else:
+            report(
+                "sources/proxy-large-body-cap", True,
+                f"all {total_files} real files uploaded through the real admin proxy with no observed "
+                "500/truncation/connection error (auto-PASS).",
+            )
+
+        if direct_backend_failures:
+            # 存在被代理截断卡死在 UPLOADING 的文件：归档永不结算，settle 轮询会白等
+            # 600s。诚实快速失败——import-roundtrip 判 FAIL（真实缺陷：前端 body cap <
+            # ARW 原始字节 + 后端流中断未释放上传保留），grouping-pairs 因归档不完整
+            # 无法评估（留给 SUMMARY 记 MISSING），绝不伪造通过。
+            report(
+                "sources/import-roundtrip", False,
+                f"{len(direct_backend_failures)} real files left stuck UPLOADING after the admin "
+                f"proxy aborted their bodies mid-stream AND the backend never released the upload "
+                f"reservation (direct-backend retry -> 409 CONFLICT). "
+                f"first={direct_backend_failures[0]}. Real runtime defect: frontend body cap < ARW "
+                f"raw size and reservation not released on stream abort — not a QA inference.",
+            )
+            return
 
         def archive_settled():
             snapshot = get_session(client, src_session_id)
@@ -2472,19 +3120,23 @@ def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_
                 continue
             if hashlib.sha256(archive_bytes).hexdigest() != source_sha[relative]:
                 archive_byte_failures.append(f"{relative}:archive-bytes")
-            # 源文件二次独立读取（子进程分块）：提供器字节稳定性。
-            if _sha256_file_readonly(Path(args.source_set) / relative) != source_sha[relative]:
+            # 源文件二次独立读取（5s 可强杀子进程分块）：提供器字节稳定性。
+            try:
+                reread_sha = _sha256_file_readonly(Path(args.source_set) / relative)
+            except subprocess.TimeoutExpired:
+                stability_failures.append(f"{relative}:RE-READ_TIMEOUT(>5s)")
+                continue
+            if reread_sha != source_sha[relative]:
                 stability_failures.append(relative)
 
         report(
             "sources/import-roundtrip",
             not (upload_failures or sha_mismatches or non_archived or archive_byte_failures or stability_failures),
             f"{len(source_sha)} real files archived byte-identical into the disposable database/temp "
-            f"archive ({total_files - len(proxy_capped)} <=10MiB via the real admin proxy path; "
-            f"{len(proxy_capped)} >10MiB ARW raws via the same backend content route directly — the "
-            f"Next 10MiB body cap excludes them from the proxy, recorded as a defect under "
-            f"sources/proxy-large-body-cap); authoritative sha256 matches the source hash for every "
-            f"archived file; "
+            f"archive ({total_files - len(proxy_failures)} via the real admin proxy path with no "
+            f"observed error; {len(proxy_failures)} fell back direct to the same backend content "
+            f"route after an observed proxy failure — counted under sources/proxy-large-body-cap); "
+            f"authoritative sha256 matches the source hash for every archived file; "
             f"{len(sample_relatives)} sampled archive files re-hashed byte-identical"
             + (f"; UPLOAD={upload_failures[:4]}" if upload_failures else "")
             + (f"; SHA={sha_mismatches[:4]}" if sha_mismatches else "")
@@ -2538,12 +3190,7 @@ def run_source_set_phase(args: argparse.Namespace, client: AdminClient, archive_
             }
             if len(stem_group_ids) > 1:
                 stem_group_failures.append(stem)
-        cross_pair_ok = all(
-            len({
-                group_of_relative[relative] for relative, _, _ in files
-                if Path(relative).stem == cross_stem
-            }) == 1
-        )
+        cross_pair_ok = _cross_stem_pair_ok(group_of_relative, files, cross_stem)
         group_kinds: dict[str, set[str]] = {}
         for relative, group_id in group_of_relative.items():
             group_kinds.setdefault(group_id, set()).add(kind_by_relative[relative])
@@ -2591,6 +3238,7 @@ def _selftest_finish_order() -> bool:
     globals()["PROCS"][:] = []
     globals()["REQUIRED_RESULTS"][:] = ["self/pass"]
     globals()["CLEANUP_ERRORS"][:] = []
+    original_cleanup = globals()["cleanup"]
     globals()["cleanup"] = lambda: CLEANUP_ERRORS.append("simulated cleanup failure (unit)")
 
     buf = io.StringIO()
@@ -2600,6 +3248,10 @@ def _selftest_finish_order() -> bool:
             finish()
     except SystemExit as exc:
         code = exc.code
+    finally:
+        # 还原真实 cleanup：随后的自检（cleanup-two-phase）必须驱动真正的两阶段
+        # cleanup()，而不是 finish-order 自检注入的模拟 lambda。
+        globals()["cleanup"] = original_cleanup
     out = buf.getvalue()
     ok = (
         code == 1
@@ -2610,6 +3262,162 @@ def _selftest_finish_order() -> bool:
     print(f"SELF-TEST finish-order: EXIT={code} -> {'PASS' if ok else 'FAIL'}", flush=True)
     if not ok:
         print(out, flush=True)
+    return ok
+
+
+def _selftest_cleanup_two_phase() -> bool:
+    """验证两阶段 cleanup() 的关键不变量（真实子进程组，确定性、无服务/库/浏览器）。
+
+    - PROCS 同时含“已退出的旧 backend”与“同端口仍存活的 backend-2”时：
+      cleanup 不得对已退出的旧 PGID 无条件 killpg（PID/PGID 重用误杀防护），
+      且不得在 backend-2 尚活时因旧 backend 的端口报错（端口只在全部进程终止后、
+      按去重端口检查一次）。
+    - 存活的 backend-2 / worker 必须被终止并收割，去重端口最终关闭，
+      CLEANUP_ERRORS 为空。
+    """
+    import contextlib
+    import io
+
+    children: list[subprocess.Popen] = []
+    recorded_killpg: list[int] = []
+    port_checks: list[int] = []
+    ok = False
+    orig_killpg = os.killpg
+    orig_port_is_closed = port_is_closed
+    port = free_port()
+    old_proc = new_proc = worker_proc = None
+    try:
+        # “旧 backend”：start_new_session 后立即自行退出，模拟重启前已被 stop_process_group
+        # 收割的旧进程。cleanup 绝不能对它 killpg。
+        old_proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(0.4)"], start_new_session=True
+        )
+        old_proc.wait(timeout=10)
+        # “backend-2”：绑定与旧 backend 相同的端口并存活，直到被 cleanup 终止。
+        bind_code = (
+            "import socket,time\n"
+            f"s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+            f"s.bind(('127.0.0.1',{port})); s.listen(1); time.sleep(300)\n"
+        )
+        new_proc = subprocess.Popen(
+            [sys.executable, "-c", bind_code], start_new_session=True
+        )
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            with socket.socket() as sock:
+                sock.settimeout(0.3)
+                if sock.connect_ex(("127.0.0.1", port)) == 0:
+                    break
+            time.sleep(0.2)
+        # “worker”：无端口的存活进程组。
+        worker_proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(300)"], start_new_session=True
+        )
+        children = [old_proc, new_proc, worker_proc]
+
+        globals()["PROCS"][:] = [("backend", old_proc), ("backend-2", new_proc), ("asset-worker", worker_proc)]
+        globals()["PROC_PORTS"].clear()
+        globals()["PROC_PORTS"]["backend"] = port
+        globals()["PROC_PORTS"]["backend-2"] = port
+        globals()["DB_NAME"] = None
+        globals()["TEMP_PATHS"][:] = []
+        globals()["KEEP_TEMP"] = False
+        globals()["CLEANUP_ERRORS"][:] = []
+
+        def _rec_killpg(pid: int, sig: int) -> None:
+            recorded_killpg.append(pid)
+            return orig_killpg(pid, sig)
+
+        def _rec_port_closed(p: int, timeout_s: int = 20) -> bool:
+            port_checks.append(p)
+            return orig_port_is_closed(p, timeout_s=timeout_s)
+
+        os.killpg = _rec_killpg
+        globals()["port_is_closed"] = _rec_port_closed
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                cleanup()
+        finally:
+            os.killpg = orig_killpg
+            globals()["port_is_closed"] = orig_port_is_closed
+
+        checks = {
+            "no killpg on already-exited old pgid": old_proc.pid not in recorded_killpg,
+            "backend-2 group was signalled": new_proc.pid in recorded_killpg,
+            "worker group was signalled": worker_proc.pid in recorded_killpg,
+            "backend-2 reaped": new_proc.poll() is not None,
+            "worker reaped": worker_proc.poll() is not None,
+            "deduped port checked exactly once": port_checks == [port],
+            "no cleanup errors": globals()["CLEANUP_ERRORS"] == [],
+            "port closed at end": orig_port_is_closed(port, timeout_s=5),
+        }
+        ok = all(checks.values())
+        line = "; ".join(f"{k}={v}" for k, v in checks.items())
+        print(f"SELF-TEST cleanup-two-phase: {'PASS' if ok else 'FAIL'} ({line})", flush=True)
+        if not ok:
+            print(buf.getvalue(), flush=True)
+            print("CLEANUP_ERRORS=", globals()["CLEANUP_ERRORS"], flush=True)
+    finally:
+        os.killpg = orig_killpg
+        globals()["port_is_closed"] = orig_port_is_closed
+        for child in children:
+            if child.poll() is None:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except Exception:
+                    pass
+                try:
+                    child.wait(timeout=8)
+                except Exception:
+                    pass
+    return ok
+
+
+def _selftest_cross_pair_ok() -> bool:
+    """成功分组路径必须得到真正的布尔值（旧代码 `all(单个 bool)` 直接抛
+    TypeError），且跨目录同 stem 分组正确判定 True/False。"""
+    files = [
+        ("a/Z1.jpg", None, "JPEG"),
+        ("a/Z1.arw", None, "ARW"),
+        ("b/Z1.jpg", None, "JPEG"),
+        ("c/other.jpg", None, "JPEG"),
+    ]
+    same_group = {
+        "a/Z1.jpg": "g1", "a/Z1.arw": "g1", "b/Z1.jpg": "g1", "c/other.jpg": "g2",
+    }
+    split_group = dict(same_group)
+    split_group["b/Z1.jpg"] = "g2"
+    try:
+        ok_paired = _cross_stem_pair_ok(same_group, files, "Z1") is True
+        ok_split = _cross_stem_pair_ok(split_group, files, "Z1") is False
+    except Exception as exc:
+        print(f"SELF-TEST cross-pair-ok: raised {repr(exc)[:200]} -> FAIL", flush=True)
+        return False
+    ok = ok_paired and ok_split
+    print(
+        f"SELF-TEST cross-pair-ok: paired={ok_paired} split={ok_split} -> {'PASS' if ok else 'FAIL'}",
+        flush=True,
+    )
+    return ok
+
+
+def run_self_tests() -> bool:
+    tests = [
+        ("finish-order", _selftest_finish_order),
+        ("cleanup-two-phase", _selftest_cleanup_two_phase),
+        ("cross-pair-ok", _selftest_cross_pair_ok),
+    ]
+    results: list[str] = []
+    for name, fn in tests:
+        try:
+            passed = bool(fn())
+        except Exception as exc:
+            passed = False
+            print(f"SELF-TEST {name}: raised {repr(exc)[:200]} -> FAIL", flush=True)
+        results.append(f"{name}={'PASS' if passed else 'FAIL'}")
+    ok = all(r.endswith("=PASS") for r in results)
+    print(f"SELF-TEST aggregate: {'PASS' if ok else 'FAIL'} | " + " | ".join(results), flush=True)
     return ok
 
 
@@ -2628,12 +3436,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--source-set",
-        default="/Users/chenyanyan/Desktop/珠子图",
+        default=REAL_SOURCE_SET_PATH,
         help="只读探测的真实素材目录（绝不复制或修改）",
     )
     args = parser.parse_args()
     if args.self_test:
-        sys.exit(0 if _selftest_finish_order() else 1)
+        sys.exit(0 if run_self_tests() else 1)
     # 本脚本只与 127.0.0.1/localhost 上的自管服务通信；本机 shell 常驻外部代理
     # （HTTP_PROXY）会把回环请求劫走并返回 502，这里对脚本进程及其子进程禁用代理。
     os.environ["no_proxy"] = "*"
