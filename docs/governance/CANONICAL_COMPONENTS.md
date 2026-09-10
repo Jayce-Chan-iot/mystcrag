@@ -46,9 +46,9 @@ DesignV1
        └─ LazyBraceletScene -> BraceletCanvas -> BraceletScene
 ```
 
-`FlatBraceletEditor` is the only production DIY renderer. `ThreeBraceletPreview` carries the `THREE_BRACELET_PREVIEW_LIFECYCLE = "EXPERIMENTAL_NOT_PRODUCTION_MOUNTED"` marker (TASK-3D-001 Product Owner decision 2026-09-10) and `tests/three-preview-lifecycle.test.mjs` fails if any production route, `DiyEditor` or composition root references it.
+`FlatBraceletEditor` is the only production DIY renderer. Both experimental renderers already have decided lifecycles and machine guards: `BraceletSequenceEditor` was decided EXPERIMENTAL test-only by TASK-FE-001 (guarded by `tests/fe-sequence-editor-lifecycle.test.mjs`), and `ThreeBraceletPreview` was decided EXPERIMENTAL_NOT_PRODUCTION_MOUNTED by TASK-3D-001 (guarded by `tests/three-preview-lifecycle.test.mjs`). No lifecycle decision is pending; changing either component's production role requires a new product decision and task.
 
-Only the last two currently require a lifecycle decision. Collapsing all renderers into one component is not a governance goal.
+Both experimental renderers above have decided lifecycles with machine guards; no renderer lifecycle decision is pending. Collapsing all renderers into one component is not a governance goal.
 
 ## Canonical change rule
 
