@@ -117,7 +117,7 @@ Integration evidence: BASE-002 passed SOL review and is reachable at `be5646b418
 | TASK-AI-001 | AI | P0 | superseded by SOL decision | `task/ai-001-candidate-contract-decision` | CANCELLED: contract decision folded into TASK-BASELINE-001; implementation is BASE-003 |
 | TASK-BE-003 | BACKEND | P0 | superseded by BASE-003 | `task/be-003-ai-candidate-boundary` | CANCELLED: duplicate implementation scope |
 | TASK-BASELINE-002 | QA | P0 | superseded by BASE-004 | `task/baseline-002-freeze-validation` | CANCELLED: renamed to avoid collision with BASE-002 |
-| TASK-FE-001 | FRONTEND | P1 | TASK-GOV-001 | `task/fe-001-dormant-editor-lifecycle` | READY: decide `BraceletSequenceEditor` lifecycle |
+| TASK-FE-001 | FRONTEND (GLM-5.3 temporarily executing under the Product Owner 12-task takeover authorization dated 2026-09-10; Product Owner lifecycle decision 2026-09-10: keep `BraceletSequenceEditor` as a test-only EXPERIMENTAL component — no production route mount, no replacement of `FlatBraceletEditor`, no deletion) | P1 | TASK-GOV-001 | `task/fe-001-dormant-editor-lifecycle` | REVIEW: lifecycle decided as constrained EXPERIMENTAL test-only. Implementation on top of main@`9da7a2e`: added machine-verifiable `BRACELET_SEQUENCE_EDITOR_LIFECYCLE = "EXPERIMENTAL_TEST_ONLY"` export to the component (marker only, no behavior/visual change); added `tests/fe-sequence-editor-lifecycle.test.mjs` (5 tests: file retained, marker present, no production route/`DiyEditor`/barrel/composition-root reference, `FlatBraceletEditor` remains the production renderer wired by `DiyEditor`, every non-component reference is a test/fixture). Red-first: the marker assertion failed 4/5 exit 1 on the unmodified baseline ("must export BRACELET_SEQUENCE_EDITOR_LIFECYCLE"), then passed 5/5 exit 0 after the marker. Docs synced: FEAT-006 DORMANT→EXPERIMENTAL, CANONICAL_COMPONENTS sole-production-renderer rows, DUP-004→RESOLVED (EXPERIMENTAL test-only), TARGET_REPOSITORY_STRUCTURE editor decisions. Awaiting Codex review; no push/deploy/merge |
 | TASK-3D-001 | THREE | P1 | TASK-GOV-001 | `task/3d-001-production-readiness-decision` | READY: evidence-based 3D mount/experimental decision |
 | TASK-BE-001 | BACKEND | P1 | TASK-GOV-001 | `task/be-001-service-wrapper-cleanup` | READY: prove/retire or justify uncomposed wrappers |
 | TASK-BE-002 | BACKEND | P1 | TASK-BE-001 | `task/be-002-module-boundary-cleanup` | BACKLOG: implement or retire metadata-only module shells |
@@ -174,6 +174,8 @@ Integration evidence: BASE-002 passed SOL review and is reachable at `be5646b418
 - Reachability test proves the selected lifecycle.
 - If removed, tests migrate to the canonical editor and no barrel/export/import remains.
 - 2D DIY add/replace/reorder/delete/fit/save/export flows remain covered.
+
+Decision and acceptance (2026-09-10): documented experiment retained — `BraceletSequenceEditor` is a test-only EXPERIMENTAL component. The component exports the machine-verifiable `BRACELET_SEQUENCE_EDITOR_LIFECYCLE = "EXPERIMENTAL_TEST_ONLY"` marker; `tests/fe-sequence-editor-lifecycle.test.mjs` proves the component file is retained, no `apps/frontend/app/**` route, `DiyEditor`, barrel or composition root references it, `FlatBraceletEditor` remains the production DIY renderer, and every non-component reference is a test/fixture file. No removal, no route mount, no visual or behavioral change to either editor.
 
 ### TASK-3D-001 — 3D lifecycle
 

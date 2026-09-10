@@ -75,10 +75,10 @@ Rules:
 
 ## Target component decisions
 
-- `FlatBraceletEditor` remains the production DIY renderer until a dedicated integration task changes the product path.
+- `FlatBraceletEditor` remains the sole production DIY renderer until a dedicated integration task changes the product path.
 - `BraceletPreview` remains a compact display renderer; it is not a DIY editor duplicate.
 - `ThreeBraceletPreview` remains experimental until browser, fallback, performance, selection, export, and visual parity acceptance criteria pass.
-- `BraceletSequenceEditor` requires either an explicit product role or retirement.
+- `BraceletSequenceEditor` is an EXPERIMENTAL test-only component (TASK-FE-001 Product Owner decision 2026-09-10): retained with the `BRACELET_SEQUENCE_EDITOR_LIFECYCLE = "EXPERIMENTAL_TEST_ONLY"` marker, never mounted on production routes or `DiyEditor`; any production role requires a new product decision and task.
 - Database repository classes are persistence adapters. Thin backend wrappers must add policy/orchestration or be retired after reachability proof.
 - QA evidence is curated once. Raw rerun screenshots are ignored or archived outside the product tree.
 

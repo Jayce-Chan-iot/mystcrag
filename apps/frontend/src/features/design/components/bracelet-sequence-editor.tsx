@@ -1,5 +1,10 @@
 "use client";
 
+// EXPERIMENTAL_TEST_ONLY: test-only sequence editor. Do not mount in apps/frontend/app/**,
+// DiyEditor or any production composition root; FlatBraceletEditor is the sole production
+// DIY renderer. Enforced by tests/fe-sequence-editor-lifecycle.test.mjs. TASK-FE-001.
+export const BRACELET_SEQUENCE_EDITOR_LIFECYCLE = "EXPERIMENTAL_TEST_ONLY";
+
 import type { PublicDesignV1 } from "@mystcrag/design-contract";
 import * as React from "react";
 
