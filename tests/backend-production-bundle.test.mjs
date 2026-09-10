@@ -1,20 +1,24 @@
-import { before, test } from "node:test";
+import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, lstatSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, lstatSync, readdirSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // TASK-BE-SMOKE-001: the Backend production bundle must start directly under a
 // normal pnpm production dependency layout — no NODE_PATH, no test harness, no
 // manual/absolute path, and no symlink — for both crawlee's require.resolve("jquery")
-// and jsdom's require.resolve("./xhr-sync-worker.js").
+// and jsdom's require.resolve("./xhr-sync-worker.js"), and must carry no sharp native
+// image-processor binding. The assertions below prove these properties structurally.
 
 const REPO_ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const BACKEND_DIR = path.join(REPO_ROOT, "apps", "backend");
 const DIST_DIR = path.join(BACKEND_DIR, "dist");
 const DIST_INDEX = path.join(DIST_DIR, "index.js");
+const DIST_MAP = path.join(DIST_DIR, "index.js.map");
 const DIST_WORKER = path.join(DIST_DIR, "xhr-sync-worker.js");
+const METAFILE_PATH = path.join(os.tmpdir(), `be-smoke-001-metafile-${process.pid}.json`);
 
 function childEnv() {
   const env = { ...process.env };
@@ -34,10 +38,51 @@ function listFiles(dir) {
   return files;
 }
 
+// A metafile input path identifies sharp / @img/sharp-* when it references the sharp
+// package or an @img native/colour helper by their pnpm directory segments.
+function isSharpOrImg(inputPath) {
+  return /(?:sharp@|[/\\]sharp[/\\]|[/\\]@img[/\\]|@img\+)/i.test(inputPath);
+}
+
+// Explicitly-allowlisted non-machine literals that the bundled Playwright/jsdom source
+// hardcodes. Stripping them first keeps the detectors below sharp-only about what they
+// flag: a real, machine-specific filesystem path.
+const ALLOWED_WINDOWS_LITERALS = [
+  "C:\\Program Files\\Google\\Chrome",
+  "C:/Program Files/Google/Chrome",
+  "C:\\fakepath\\",
+  "C:/fakepath/"
+];
+
+// Returns every substring that looks like an absolute machine path. Patterns are
+// deliberately boundary-anchored so URL schemes (`data:`, `unix:`, `file:`), regex
+// flags (`/^data:/i`), JS escape sequences (`\n`, `\x7f`), and the allowlisted
+// Playwright/browser literals do not register.
+function machinePathHits(text) {
+  let stripped = text;
+  for (const literal of ALLOWED_WINDOWS_LITERALS) {
+    stripped = stripped.replaceAll(literal, " ");
+  }
+  const hits = [];
+  const scan = (label, re) => {
+    for (const match of stripped.matchAll(re)) hits.push(`${label}: ${match[0]}`);
+  };
+  scan("posix abs", /\/Users\//g);
+  scan("posix abs", /\/home\//g);
+  scan("posix abs", /\/opt\//g);
+  scan("posix abs", /\/var\/folders\//g);
+  scan("posix abs", /(^|[^\w\/.>-])\/tmp\//g);
+  scan("windows drive", /(?<![\w])[A-Za-z]:\\[A-Z0-9_.()]/g);
+  scan("windows drive", /(?<![\w])[A-Za-z]:\/[A-Za-z0-9_]/g);
+  scan("unc", /(?<![\w])[\\]{2}[A-Za-z][A-Za-z0-9-]+\\[A-Za-z0-9]/g);
+  scan("pnpm store", /(^|[^\w\/.\\-])\/(?:[^\/\s"']+\/)*\.pnpm\//g);
+  return hits;
+}
+
 before(() => {
   const build = spawnSync(process.execPath, ["build.mjs"], {
     cwd: BACKEND_DIR,
-    env: childEnv(),
+    env: { ...childEnv(), BUILD_METAFILE_OUT: METAFILE_PATH },
     encoding: "utf8"
   });
   assert.equal(
@@ -45,6 +90,10 @@ before(() => {
     0,
     `backend build.mjs failed (error: ${build.error ? build.error.message : "none"}):\nstdout:\n${build.stdout}\nstderr:\n${build.stderr}`
   );
+});
+
+after(() => {
+  rmSync(METAFILE_PATH, { force: true });
 });
 
 test("dist contains the self-contained worker asset and no symlinks", () => {
@@ -59,30 +108,81 @@ test("dist contains the self-contained worker asset and no symlinks", () => {
   );
 });
 
-test("the artifact embeds no absolute machine path", () => {
+test("every text artifact (index.js, index.js.map, worker) embeds no absolute machine path", () => {
+  const forbiddenLiterals = [REPO_ROOT, path.resolve(REPO_ROOT, "..")];
+
+  // Raw-text outputs: the bundled program and the self-contained jsdom worker.
   for (const target of [DIST_INDEX, DIST_WORKER]) {
     const content = readFileSync(target, "utf8");
-    assert.ok(
-      !content.includes(REPO_ROOT),
-      `${path.relative(REPO_ROOT, target)} embeds the repository absolute path`
+    const rel = path.relative(REPO_ROOT, target);
+    for (const literal of forbiddenLiterals) {
+      assert.ok(
+        !content.includes(literal),
+        `${rel} embeds the machine path ${literal}`
+      );
+    }
+    assert.deepEqual(
+      machinePathHits(content),
+      [],
+      `${rel} embeds an absolute machine path`
     );
-    assert.ok(
-      !content.includes(path.resolve(REPO_ROOT, "..")),
-      `${path.relative(REPO_ROOT, target)} embeds the parent absolute path`
-    );
-    assert.ok(!/\/Users\//.test(content), `${path.relative(REPO_ROOT, target)} embeds a /Users/ path`);
   }
+
+  // The sourcemap: its `sources` must all be relative, and its embedded `sourcesContent`
+  // (the inlined input text) must likewise carry no machine path.
+  assert.ok(existsSync(DIST_MAP), `${DIST_MAP} is missing`);
+  const map = JSON.parse(readFileSync(DIST_MAP, "utf8"));
+
+  const absoluteSources = map.sources.filter((source) =>
+    /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(source)
+  );
+  assert.deepEqual(
+    absoluteSources,
+    [],
+    `index.js.map embeds absolute source(s): ${absoluteSources.join(", ")}`
+  );
+
+  const sourcesText = map.sourcesContent.filter((s) => s != null).join("\n");
+  for (const literal of forbiddenLiterals) {
+    assert.ok(
+      !sourcesText.includes(literal),
+      `index.js.map sourcesContent embeds the machine path ${literal}`
+    );
+  }
+  assert.deepEqual(
+    machinePathHits(sourcesText),
+    [],
+    "index.js.map sourcesContent embeds an absolute machine path"
+  );
 });
 
-test("the artifact carries no unresolved native image-processor binding", () => {
-  // sharp is image-only (asset worker via asset-pipeline); the backend imports only
-  // sharp-free symbols. Its eager native loader would throw at import time under a clean
-  // layout, so the tree-shake plugin must have removed it from the built artifact.
-  const content = readFileSync(DIST_INDEX, "utf8");
+test("sharp and @img/sharp-* inputs contribute zero bytes to the bundle (structural build evidence)", () => {
+  assert.ok(existsSync(METAFILE_PATH), "esbuild metafile was not written");
+  const metafile = JSON.parse(readFileSync(METAFILE_PATH, "utf8"));
+
+  // sharp must still be resolvable and present in the build's input graph — this proves
+  // the zero-byte contribution below is the tree-shake plugin's doing, not sharp having
+  // silently dropped out of reach.
+  const sharpInputs = Object.keys(metafile.inputs).filter(isSharpOrImg);
   assert.ok(
-    !content.includes("@img/sharp"),
-    "dist/index.js still embeds sharp's native binding loader"
+    sharpInputs.length > 0,
+    "sharp/@img must appear in the esbuild input graph (tree-shake path is not exercised); the backend may have regressed to importing sharp-free symbols only without the side-effect-free marking"
   );
+
+  const indexOutput = Object.keys(metafile.outputs).find(
+    (output) => output.replace(/\\/g, "/") === "dist/index.js"
+  );
+  assert.ok(indexOutput, "dist/index.js output not found in the esbuild metafile");
+
+  const contributions = metafile.outputs[indexOutput].inputs;
+  for (const inputPath of sharpInputs) {
+    const bytes = contributions[inputPath]?.bytesInOutput ?? 0;
+    assert.equal(
+      bytes,
+      0,
+      `${inputPath} contributes ${bytes} bytes to dist/index.js — sharp leaked into the API bundle`
+    );
+  }
 });
 
 test("jquery and the jsdom xhr worker resolve and run with NODE_PATH cleared", () => {

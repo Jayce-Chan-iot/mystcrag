@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import { rm } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,6 +66,16 @@ const result = await build({
   metafile: true,
   logLevel: "info"
 });
+
+// Persist the esbuild metafile when a caller asks for it (BUILD_METAFILE_OUT). The
+// production-bundle test uses the output-contribution graph to assert structurally that
+// `sharp` / `@img/sharp-*` inputs contribute zero bytes to `dist/index.js`, instead of
+// matching source strings. The metafile embeds build-time input paths, so it is written
+// only to the explicit caller-chosen location — never into `dist/`.
+const metafileOut = process.env.BUILD_METAFILE_OUT;
+if (metafileOut) {
+  await writeFile(metafileOut, JSON.stringify(result.metafile), "utf8");
+}
 
 // jsdom's XMLHttpRequest-impl resolves its sibling worker via
 // require.resolve("./xhr-sync-worker.js"), which esbuild cannot inline. Emit a

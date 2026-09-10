@@ -19,23 +19,28 @@ const port = await new Promise((resolve, reject) => {
   });
 });
 
+const childEnv = {
+  ...process.env,
+  NODE_ENV: process.env.NODE_ENV ?? "development",
+  BACKEND_PORT: String(port),
+  MYSTCRAG_AUTH_PROVIDER: process.env.MYSTCRAG_AUTH_PROVIDER ?? "signed-test",
+  MYSTCRAG_ENABLE_SIGNED_TEST_AUTH:
+    process.env.MYSTCRAG_ENABLE_SIGNED_TEST_AUTH ?? "true",
+  MYSTCRAG_AUTH_SIGNING_SECRET:
+    process.env.MYSTCRAG_AUTH_SIGNING_SECRET ??
+    "mystcrag-production-artifact-smoke-secret",
+  MYSTCRAG_AUTH_ISSUER:
+    process.env.MYSTCRAG_AUTH_ISSUER ?? "mystcrag-production-artifact-smoke",
+  MYSTCRAG_AUTH_AUDIENCE:
+    process.env.MYSTCRAG_AUTH_AUDIENCE ?? "mystcrag-production-artifact-smoke"
+};
+// The artifact must start with no NODE_PATH. Strip any ambient value so a caller never
+// has to remember to prefix the run with `env -u NODE_PATH`.
+delete childEnv.NODE_PATH;
+
 const child = spawn(process.execPath, ["dist/index.js"], {
   cwd: new URL("..", import.meta.url),
-  env: {
-    ...process.env,
-    NODE_ENV: process.env.NODE_ENV ?? "development",
-    BACKEND_PORT: String(port),
-    MYSTCRAG_AUTH_PROVIDER: process.env.MYSTCRAG_AUTH_PROVIDER ?? "signed-test",
-    MYSTCRAG_ENABLE_SIGNED_TEST_AUTH:
-      process.env.MYSTCRAG_ENABLE_SIGNED_TEST_AUTH ?? "true",
-    MYSTCRAG_AUTH_SIGNING_SECRET:
-      process.env.MYSTCRAG_AUTH_SIGNING_SECRET ??
-      "mystcrag-production-artifact-smoke-secret",
-    MYSTCRAG_AUTH_ISSUER:
-      process.env.MYSTCRAG_AUTH_ISSUER ?? "mystcrag-production-artifact-smoke",
-    MYSTCRAG_AUTH_AUDIENCE:
-      process.env.MYSTCRAG_AUTH_AUDIENCE ?? "mystcrag-production-artifact-smoke"
-  },
+  env: childEnv,
   stdio: ["ignore", "pipe", "pipe"]
 });
 
@@ -52,6 +57,16 @@ child.stderr.on("data", (chunk) => {
 const exit = new Promise((resolve) => {
   child.once("exit", (code, signal) => resolve({ code, signal }));
 });
+
+function waitForExit(timeoutMs) {
+  if (typeof child.exitCode === "number" && child.exitCode !== null) {
+    return Promise.resolve({ code: child.exitCode, signal: child.signalCode ?? null });
+  }
+  return Promise.race([
+    exit,
+    new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs))
+  ]);
+}
 
 const healthUrl = `http://127.0.0.1:${port}/health`;
 let health;
@@ -83,8 +98,23 @@ if (health?.status !== "ok") {
   throw new Error(`Backend did not report healthy at ${healthUrl}.\n${output}`);
 }
 
+const SIGTERM_GRACE_MS = 15_000;
+const SIGKILL_GRACE_MS = 5_000;
+
 child.kill("SIGTERM");
-const result = await exit;
+let result = await waitForExit(SIGTERM_GRACE_MS);
+if (result === null) {
+  // SIGTERM was not honoured within the grace window: escalate and fail loudly rather
+  // than letting the gate hang forever on a stuck child.
+  child.kill("SIGKILL");
+  const killed = await waitForExit(SIGKILL_GRACE_MS);
+  if (killed === null) {
+    throw new Error(`Backend did not exit after SIGTERM and SIGKILL.\n${output}`);
+  }
+  throw new Error(
+    `Backend did not stop cleanly after SIGTERM within ${SIGTERM_GRACE_MS}ms (forced with SIGKILL).\n${output}`
+  );
+}
 if (result.code !== 0 || result.signal !== null) {
   throw new Error(
     `Backend did not stop cleanly after SIGTERM (${JSON.stringify(result)}).\n${output}`
