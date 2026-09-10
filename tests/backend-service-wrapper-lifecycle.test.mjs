@@ -25,8 +25,9 @@ const LEGACY_SYMBOL_PATTERNS = new Map(
   LEGACY_SYMBOLS.map((symbol) => [symbol, new RegExp(`\\b${symbol}\\b`)])
 );
 
-// Retired files must not reappear under the same or a different name anywhere
-// in the backend source tree, preventing rename/move evasion.
+// The four retired files must not reappear anywhere in the backend source tree.
+// This prevents the eight legacy symbols and the four retired file basenames
+// from returning; it does not claim to detect a renamed equivalent class.
 const RETIRED_FILE_BASENAMES = [
   "pricing.service.ts",
   "inventory.service.ts",
@@ -80,7 +81,7 @@ test("the four pure-delegation wrapper files are retired", async () => {
     assert.deepEqual(
       found,
       [],
-      `${basename} must not exist anywhere under apps/backend/src/modules (rename/move evasion is forbidden)`
+      `${basename} must not reappear anywhere under apps/backend/src/modules`
     );
     await assert.rejects(
       () => access(path.join("apps/backend/src/modules", dirFor(basename), basename)),
