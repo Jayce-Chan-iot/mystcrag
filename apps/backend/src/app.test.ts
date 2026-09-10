@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createApp } from "./app.js";
+import type { AuthProvider } from "./auth/auth-provider.js";
 
 test("health endpoint reports a ready service", async () => {
   const app = createApp();
@@ -58,4 +59,62 @@ test("backend logger redacts administrator, authorization, and cookie credential
   assert.equal(logs.includes("asset-admin-secret-value"), false);
   assert.equal(logs.includes("private-token"), false);
   assert.equal(logs.includes("private-cookie"), false);
+});
+
+const moduleBoundaryAuthProvider: AuthProvider = {
+  async authenticateAccessToken() {
+    throw new Error("unused in /api/modules boundary test");
+  }
+};
+
+async function moduleNames(options: Parameters<typeof createApp>[0] = {}) {
+  const app = createApp(options);
+  try {
+    const response = await app.inject({ method: "GET", url: "/api/modules" });
+    assert.equal(response.statusCode, 200);
+    const body = response.json();
+    return (body.modules as Array<{ name: string }>).map((module) => module.name);
+  } finally {
+    await app.close();
+  }
+}
+
+test("/api/modules lists nothing when no module service is composed", async () => {
+  assert.deepEqual(await moduleNames(), []);
+});
+
+test("/api/modules lists design when a design service is composed", async () => {
+  assert.deepEqual(
+    await moduleNames({ designService: {} as never, authProvider: moduleBoundaryAuthProvider }),
+    ["design"]
+  );
+});
+
+test("/api/modules lists design when a recommendation service is composed", async () => {
+  assert.deepEqual(
+    await moduleNames({
+      recommendationService: {} as never,
+      authProvider: moduleBoundaryAuthProvider
+    }),
+    ["design"]
+  );
+});
+
+test("/api/modules lists tarot when a tarot service is composed", async () => {
+  assert.deepEqual(
+    await moduleNames({ tarotService: {} as never, authProvider: moduleBoundaryAuthProvider }),
+    ["tarot"]
+  );
+});
+
+test("/api/modules lists design then tarot once each when both are composed", async () => {
+  assert.deepEqual(
+    await moduleNames({
+      designService: {} as never,
+      recommendationService: {} as never,
+      tarotService: {} as never,
+      authProvider: moduleBoundaryAuthProvider
+    }),
+    ["design", "tarot"]
+  );
 });

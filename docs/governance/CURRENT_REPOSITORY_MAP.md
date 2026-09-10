@@ -87,7 +87,7 @@ Applications do not import other applications. The public design contract remain
 - Tarot: session creation, selection, reveal, recommendation and result lifecycle.
 - Knowledge admin: overview, graph, coverage, source stats, atlas, runs, review queue, conflicts, review pipeline, rules, versions and source policy.
 
-The `user`, `crystal`, `community`, and `order` module descriptors are registered, but most business behavior is composed through design routes or direct repository/application services rather than dedicated module routes.
+`GET /api/modules` now lists only the modules composed at runtime: `design` when the design or recommendation application service is composed, and `tarot` when the tarot service is composed. Order/publication and catalog behavior is composed through design routes and repository/application services rather than dedicated module descriptors.
 
 ## Persistence map
 

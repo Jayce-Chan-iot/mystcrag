@@ -1,4 +1,4 @@
 export type BackendModule = {
-  readonly name: "user" | "design" | "crystal" | "community" | "order" | "tarot";
+  readonly name: "design" | "tarot";
   readonly description: string;
 };

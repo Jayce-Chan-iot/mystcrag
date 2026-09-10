@@ -99,8 +99,6 @@ function dirFor(basename) {
 test("module barrels no longer re-export the retired wrapper files", async () => {
   const barrels = [
     "apps/backend/src/modules/design/index.ts",
-    "apps/backend/src/modules/community/index.ts",
-    "apps/backend/src/modules/order/index.ts",
   ];
   for (const barrel of barrels) {
     const source = await readFile(barrel, "utf8");

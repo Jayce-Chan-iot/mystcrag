@@ -59,9 +59,9 @@ Return backend process readiness. This endpoint does not imply database or exter
 
 GET /api/modules
 
-Return registered backend module metadata for initialization diagnostics. This is not a public product API and may be removed after module routing is implemented.
+Return the backend modules actually composed in this app instance, for initialization diagnostics. This is not a public product API and may be removed after module routing is implemented.
 
-Tarot appears in this response only when its authenticated routes are registered.
+`design` appears only when the design service or the recommendation service is composed; `tarot` appears only when the tarot service is composed. Admin-only surfaces such as knowledge admin and asset import are never listed.
 
 ## User API
 

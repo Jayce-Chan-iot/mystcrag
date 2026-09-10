@@ -2,7 +2,8 @@ import Fastify from "fastify";
 
 import type { AuthProvider } from "./auth/auth-provider.js";
 import { resolveTarotFeatureEnabled } from "./config/tarot-feature.js";
-import { backendModules, tarotModule } from "./modules/index.js";
+import { designModule, tarotModule } from "./modules/index.js";
+import type { BackendModule } from "./modules/module.js";
 import {
   registerDesignContractRoutes,
   type DesignApiService
@@ -61,12 +62,16 @@ export function createApp(options: CreateAppOptions = {}) {
         ? { logger: { stream: options.logger.stream, redact: loggerRedaction } }
         : { logger: { redact: loggerRedaction } }
   );
-  const registeredModules = options.tarotService
-    ? [...backendModules, tarotModule]
-    : backendModules;
+  const modules: BackendModule[] = [];
+  if (options.designService || options.recommendationService) {
+    modules.push(designModule);
+  }
+  if (options.tarotService) {
+    modules.push(tarotModule);
+  }
 
   app.get("/health", async () => ({ status: "ok" }));
-  app.get("/api/modules", async () => ({ modules: registeredModules }));
+  app.get("/api/modules", async () => ({ modules }));
   if ((options.designService || options.tarotService || options.recommendationService) && !options.authProvider) {
     throw new Error("An authentication provider is required for protected API routes.");
   }

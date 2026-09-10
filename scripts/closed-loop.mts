@@ -165,8 +165,8 @@ async function main(): Promise<void> {
   const modules = await apiJson("GET", "/api/modules");
   const moduleNames = (modules.modules as Array<{ name: string }>).map((module) => module.name);
   check(
-    "GET /api/modules → design + tarot registered",
-    moduleNames.includes("design") && moduleNames.includes("tarot"),
+    "GET /api/modules → exactly design + tarot (runtime composition)",
+    JSON.stringify(moduleNames) === JSON.stringify(["design", "tarot"]),
     moduleNames.join(", ")
   );
   const init = await mcpCall("initialize", {
