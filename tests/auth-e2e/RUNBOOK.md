@@ -136,6 +136,15 @@ backend's HTTPS origin through the preload's `AUTH006_API_REMAP_HOST` rewrite (h
 
 ## Production bundle runtime restoration (pre-existing main gap)
 
+> **Superseded by TASK-BE-SMOKE-001 (production bundle self-sufficiency).** The
+> `NODE_PATH` → hoisted store and `dist/xhr-sync-worker.js` symlink restorations below are
+> no longer required to start the production artifact. `apps/backend/build.mjs` now emits a
+> self-sufficient bundle: `jquery` is a portable explicit dependency, the jsdom
+> `xhr-sync-worker.js` asset is copied self-contained at build time, and `sharp` is marked
+> side-effect-free so esbuild tree-shakes the dead image-processing chain out of the API
+> bundle. `node apps/backend/dist/index.js` therefore starts with `NODE_PATH` cleared and no
+> symlink. This historical gap description is retained unmodified below.
+
 `node apps/backend/dist/index.js` currently fails at import time on main baseline
 `4cac24c`: crawlee entered the backend import graph in `f3dd030` (2026-08-21) — after the
 runnable-artifact fix `66b2a89` (2026-07-22) — and two of its transitive modules call

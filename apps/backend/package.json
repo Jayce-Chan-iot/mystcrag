@@ -24,6 +24,7 @@
     "@mystcrag/tarot-engine": "workspace:*",
     "fastify": "^5.10.0",
     "jose": "6.2.10",
+    "jquery": "^3.7.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
