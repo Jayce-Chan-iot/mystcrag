@@ -118,3 +118,50 @@ test("/api/modules lists design then tarot once each when both are composed", as
     ["design", "tarot"]
   );
 });
+
+const knowledgeAdminBoundaryApiKey = "knowledge-admin-key-0123456789";
+const assetAdminBoundaryApiKey = "asset-admin-key-0123456789abcdef";
+
+test("/api/modules lists nothing when only the knowledge admin surface is composed", async () => {
+  assert.deepEqual(
+    await moduleNames({
+      knowledgeAdminService: {} as never,
+      knowledgeAdminApiKey: knowledgeAdminBoundaryApiKey
+    }),
+    []
+  );
+});
+
+test("/api/modules lists nothing when only the asset import and product asset surfaces are composed", async () => {
+  assert.deepEqual(
+    await moduleNames({
+      assetImportEnabled: true,
+      assetImportService: {} as never,
+      productAssetService: {} as never,
+      assetAdminApiKey: assetAdminBoundaryApiKey
+    }),
+    []
+  );
+});
+
+test("/api/modules lists nothing when only the product asset surface is composed", async () => {
+  assert.deepEqual(await moduleNames({ productAssetService: {} as never }), []);
+});
+
+test("/api/modules lists design then tarot once each when admin surfaces are also composed", async () => {
+  assert.deepEqual(
+    await moduleNames({
+      designService: {} as never,
+      recommendationService: {} as never,
+      tarotService: {} as never,
+      authProvider: moduleBoundaryAuthProvider,
+      knowledgeAdminService: {} as never,
+      knowledgeAdminApiKey: knowledgeAdminBoundaryApiKey,
+      assetImportEnabled: true,
+      assetImportService: {} as never,
+      productAssetService: {} as never,
+      assetAdminApiKey: assetAdminBoundaryApiKey
+    }),
+    ["design", "tarot"]
+  );
+});
