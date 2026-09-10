@@ -36,7 +36,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import crypto from "node:crypto";
-import { createWriteStream, existsSync } from "node:fs";
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
@@ -443,38 +443,6 @@ function loadPg() {
   };
 }
 
-/**
- * The backend production bundle inlines crawlee (backend → knowledge-core → knowledge-ingestion),
- * whose playwright-utils calls `require.resolve("jquery")` at module scope, and jsdom (same chain),
- * whose XMLHttpRequest-impl resolves its sibling `./xhr-sync-worker.js`. esbuild cannot inline
- * require.resolve, so both lookups run against dist/index.js and fail at import time — a
- * pre-existing production-build regression on main (crawlee entered the graph in f3dd030, after
- * the runnable-artifact fix 66b2a89). Backend sources are out of AUTH-006's writable scope, so
- * the run restores the intended lookups from the test harness while still executing the
- * unmodified production bundle: bare specifiers resolve through NODE_PATH pointed at pnpm's
- * hoisted store, and the jsdom worker asset is symlinked next to the bundle (see
- * linkJsdomWorkerIntoBundle).
- */
-function bundleResolutionNodePath(): string {
-  const hoisted = path.join(REPO_ROOT, "node_modules", ".pnpm", "node_modules");
-  if (!existsSync(path.join(hoisted, "jquery"))) {
-    throw new Error(
-      `AUTH-006 expects pnpm's hoisted store at ${hoisted} to provide the bundle's require.resolve("jquery") lookup; it does not exist.`
-    );
-  }
-  return hoisted;
-}
-
-async function linkJsdomWorkerIntoBundle(backendDir: string): Promise<void> {
-  const hoistedJsdom = path.join(REPO_ROOT, "node_modules", ".pnpm", "node_modules", "jsdom");
-  const jsdomDir = await fs.realpath(hoistedJsdom);
-  const worker = path.join(jsdomDir, "lib", "jsdom", "living", "xhr", "xhr-sync-worker.js");
-  await fs.access(worker);
-  const linkPath = path.join(backendDir, "dist", "xhr-sync-worker.js");
-  await fs.rm(linkPath, { force: true });
-  await fs.symlink(worker, linkPath, "file");
-}
-
 async function queryAdmin(sql: string, values?: unknown[]) {
   const pg = loadPg();
   const pool = new pg.Pool({ connectionString: resolveAdminDatabaseUrl() });
@@ -822,12 +790,9 @@ export async function startIsolatedStack(): Promise<RunState> {
       logFile: path.join(logsDir, "backend-build.log"),
       timeoutMs: 300_000
     });
-    await linkJsdomWorkerIntoBundle(backendDir);
-
     const backendEnv: Record<string, string> = {
       ...runtimeEnv(ports.providerTls, certPath),
       NODE_ENV: "test",
-      NODE_PATH: bundleResolutionNodePath(),
       BACKEND_PORT: String(ports.backend),
       DATABASE_URL: databaseUrl,
       MYSTCRAG_AUTH_PROVIDER: "auth0",
@@ -1233,7 +1198,6 @@ export async function spawnBackendWithEnv(
   await fs.mkdir(logsDir, { recursive: true });
   const env: Record<string, string> = {
     ...nodeEnvForChildren(),
-    NODE_PATH: bundleResolutionNodePath(),
     BACKEND_PORT: String(ports.negativeBackend),
     ...envOverrides
   };
