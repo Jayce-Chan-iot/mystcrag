@@ -48,8 +48,6 @@ DesignV1
 
 `FlatBraceletEditor` is the only production DIY renderer. Both experimental renderers already have decided lifecycles and machine guards: `BraceletSequenceEditor` was decided EXPERIMENTAL test-only by TASK-FE-001 (guarded by `tests/fe-sequence-editor-lifecycle.test.mjs`), and `ThreeBraceletPreview` was decided EXPERIMENTAL_NOT_PRODUCTION_MOUNTED by TASK-3D-001 (guarded by `tests/three-preview-lifecycle.test.mjs`). No lifecycle decision is pending; changing either component's production role requires a new product decision and task.
 
-Both experimental renderers above have decided lifecycles with machine guards; no renderer lifecycle decision is pending. Collapsing all renderers into one component is not a governance goal.
-
 ## Canonical change rule
 
 A canonical replacement needs an approved task that names the old and new authority, migrates every production consumer, updates contract/architecture tests, and records the lifecycle change here. Adding a second implementation does not make it canonical.
