@@ -1,10 +1,16 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, lstatSync, readdirSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  terminateBackend,
+  waitForHealth,
+  waitForExit
+} from "../apps/backend/scripts/smoke-production-start.mjs";
 
 // TASK-BE-SMOKE-001: the Backend production bundle must start directly under a
 // normal pnpm production dependency layout — no NODE_PATH, no test harness, no
@@ -234,4 +240,128 @@ test("jquery and the jsdom xhr worker resolve and run with NODE_PATH cleared", (
     200,
     `emitted worker did not complete a real data: URL request: ${response.statusText}`
   );
+});
+
+const SMOKE_SCRIPT = path.join(BACKEND_DIR, "scripts", "smoke-production-start.mjs");
+
+// A synthetic child that never emits exit: exercises the bounded-wait and clear/unref
+// branches of the termination helpers without a real process or a long wait.
+function neverExitingChild() {
+  return {
+    exitCode: null,
+    signalCode: null,
+    once() {},
+    off() {},
+    kill() {}
+  };
+}
+
+// A real child goes through this ready handshake before any signal is sent: the child
+// prints READY only after registering its SIGTERM handler, so a test can never race a
+// SIGTERM against handler registration (which would otherwise kill the child by its
+// default disposition and flake).
+function waitForChildReady(child) {
+  return new Promise((resolve, reject) => {
+    child.stdout.setEncoding("utf8");
+    child.stdout.once("data", resolve);
+    child.once("error", reject);
+    child.once("exit", (code, signal) =>
+      reject(new Error(`child exited before ready (code=${code}, signal=${signal})`))
+    );
+  });
+}
+
+test("waitForExit resolves null on a bounded timeout instead of hanging", async () => {
+  const started = Date.now();
+  const result = await waitForExit(neverExitingChild(), 30);
+  assert.equal(result, null);
+  assert.ok(Date.now() - started < 2000, "bounded wait overran its short timeout");
+});
+
+test("termination escalates SIGTERM to SIGKILL and fails when the child ignores SIGTERM", async () => {
+  const child = spawn(process.execPath, [
+    "-e",
+    "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('READY\\n');"
+  ]);
+  await waitForChildReady(child);
+  await assert.rejects(
+    terminateBackend(child, "", { sigtermGraceMs: 40, sigkillGraceMs: 2000 }),
+    /forced with SIGKILL/
+  );
+  assert.equal(child.exitCode, null);
+  assert.equal(child.signalCode, "SIGKILL");
+});
+
+test("termination fails explicitly when the child survives both SIGTERM and SIGKILL", async () => {
+  await assert.rejects(
+    terminateBackend(neverExitingChild(), "", { sigtermGraceMs: 20, sigkillGraceMs: 20 }),
+    /did not stop after SIGTERM and SIGKILL/
+  );
+});
+
+test("normal SIGTERM shutdown resolves cleanly without waiting out the grace window", async () => {
+  const child = spawn(process.execPath, [
+    "-e",
+    "process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000); process.stdout.write('READY\\n');"
+  ]);
+  await waitForChildReady(child);
+  const started = Date.now();
+  const result = await terminateBackend(child, "", {
+    sigtermGraceMs: 60_000,
+    sigkillGraceMs: 1000
+  });
+  assert.deepEqual(result, { code: 0, signal: null });
+  assert.ok(Date.now() - started < 2000, "clean shutdown overran a large grace window");
+});
+
+test("clean shutdown leaves no referenced timer behind (the process drains immediately)", async () => {
+  const probeScript = `
+    import { spawn } from "node:child_process";
+    import { terminateBackend } from ${JSON.stringify(pathToFileURL(SMOKE_SCRIPT).href)};
+    const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => process.exit(0)); setInterval(()=>{},1000); process.stdout.write('READY\\\\n')"]);
+    await new Promise((resolve) => child.stdout.once("data", resolve));
+    await terminateBackend(child, "", { sigtermGraceMs: 60_000, sigkillGraceMs: 1000 });
+    console.log("PROBE_CLEAN");
+  `;
+  const probe = spawn(process.execPath, ["--input-type=module", "-e", probeScript], {
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  let out = "";
+  probe.stdout.setEncoding("utf8");
+  probe.stderr.setEncoding("utf8");
+  probe.stdout.on("data", (chunk) => (out += chunk));
+  probe.stderr.on("data", (chunk) => (out += chunk));
+  const code = await new Promise((resolve, reject) => {
+    const guard = setTimeout(() => {
+      probe.kill("SIGKILL");
+      reject(new Error(`probe lingered past 5s (leftover timer): ${out}`));
+    }, 5000);
+    probe.once("exit", (exitCode) => {
+      clearTimeout(guard);
+      resolve(exitCode);
+    });
+  });
+  assert.equal(code, 0, `probe exited ${code}:\n${out}`);
+  assert.match(out, /PROBE_CLEAN/);
+});
+
+test("waitForHealth returns without hanging when the server accepts but never responds", async () => {
+  const server = createServer(() => {
+    // accept the connection and never write a response
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  try {
+    const started = Date.now();
+    const health = await waitForHealth(
+      neverExitingChild(),
+      `http://127.0.0.1:${address.port}/health`,
+      "",
+      { healthFetchTimeoutMs: 30, healthPollIntervalMs: 10, healthAttempts: 3 }
+    );
+    assert.equal(health, undefined);
+    assert.ok(Date.now() - started < 3000, "waitForHealth hung on a silent listener");
+  } finally {
+    server.close();
+  }
 });
