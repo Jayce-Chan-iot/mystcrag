@@ -6,8 +6,26 @@ import test from "node:test";
 const COMPONENT_PATH = "apps/frontend/src/features/design/components/bracelet-sequence-editor.tsx";
 const DIY_EDITOR_PATH = "apps/frontend/src/features/design/components/diy-editor.tsx";
 const FLAT_EDITOR_PATH = "apps/frontend/src/features/design/components/flat-bracelet-editor.tsx";
-const IMPORT_PATTERN = /["']\.\/components\/bracelet-sequence-editor["']|["']\.{1,2}\/(?:[^"']*\/)?bracelet-sequence-editor["']|from\s+["'][^"']*bracelet-sequence-editor["']/;
 const LIFECYCLE_MARKER_PATTERN = /export\s+const\s+BRACELET_SEQUENCE_EDITOR_LIFECYCLE\s*=\s*["']EXPERIMENTAL_TEST_ONLY["']/;
+
+// A production file is flagged when its source text contains ANY of these tokens,
+// regardless of the referencing form: static import, alias import, re-export,
+// dynamic import(), require(), JSX usage, or a bare identifier/type reference.
+// Raw substring matching deliberately avoids regex forms that could miss a
+// reference style the guard author did not anticipate.
+const FORBIDDEN_TOKENS = [
+  "BraceletSequenceEditor",
+  "BRACELET_SEQUENCE_EDITOR_LIFECYCLE",
+  "bracelet-sequence-editor",
+];
+
+function forbiddenTokenHits(source) {
+  return FORBIDDEN_TOKENS.filter((token) => source.includes(token));
+}
+
+function isTestOrFixtureFile(file) {
+  return /\.(?:test|spec)\.[^.]+$/.test(file) || file.split(path.sep).includes("fixtures");
+}
 
 async function sourceFiles(root) {
   const entries = await readdir(root, { withFileTypes: true });
@@ -32,11 +50,10 @@ async function productionReferencingFiles() {
     .map((file) => path.normalize(file));
   const references = [];
   for (const file of files) {
-    const isTest = /\.(?:test|spec)\.[^.]+$/.test(file);
-    const isFixture = path.normalize(file).split(path.sep).includes("fixtures");
-    const isTheComponentItself = file === path.normalize(COMPONENT_PATH);
-    if (isTest || isFixture || isTheComponentItself) continue;
-    if (IMPORT_PATTERN.test(await readFile(file, "utf8"))) references.push(file);
+    if (file === path.normalize(COMPONENT_PATH)) continue;
+    if (isTestOrFixtureFile(file)) continue;
+    const hits = forbiddenTokenHits(await readFile(file, "utf8"));
+    if (hits.length > 0) references.push(`${file} (${hits.join(", ")})`);
   }
   return references;
 }
@@ -54,12 +71,12 @@ test("BraceletSequenceEditor carries a machine-verifiable EXPERIMENTAL test-only
   );
 });
 
-test("no production route, DIY editor, barrel or composition root references the experimental sequence editor", async () => {
+test("no production file references the experimental sequence editor in any form", async () => {
   const references = await productionReferencingFiles();
   assert.deepEqual(
     references,
     [],
-    `production files must not import BraceletSequenceEditor: ${references.join(", ")}`
+    `production files must not reference BraceletSequenceEditor, BRACELET_SEQUENCE_EDITOR_LIFECYCLE or bracelet-sequence-editor: ${references.join("; ")}`
   );
 });
 
@@ -69,17 +86,41 @@ test("FlatBraceletEditor remains the production DIY renderer wired by DiyEditor"
   await access(FLAT_EDITOR_PATH);
 });
 
+test("the detector itself recognizes every known reference form (guard against an always-green guard)", () => {
+  const samples = {
+    "static relative import": `import { BraceletSequenceEditor } from "./components/bracelet-sequence-editor";`,
+    "alias import": `import { BraceletSequenceEditor } from "@/features/design/components/bracelet-sequence-editor";`,
+    "re-export": `export { BraceletSequenceEditor } from "./bracelet-sequence-editor";`,
+    "dynamic import": `const Editor = (await import("./bracelet-sequence-editor")).BraceletSequenceEditor;`,
+    "require call": `const { BraceletSequenceEditor } = require("../components/bracelet-sequence-editor");`,
+    "direct JSX symbol usage": `render(<BraceletSequenceEditor design={design} />);`,
+    "bare type reference": `let editor: BraceletSequenceEditor | null = null;`,
+    "lifecycle constant reference": `if (BRACELET_SEQUENCE_EDITOR_LIFECYCLE === "EXPERIMENTAL_TEST_ONLY") {}`,
+    "path-like string without imports": `const editorPath = "features/design/components/bracelet-sequence-editor";`,
+  };
+  for (const [label, sample] of Object.entries(samples)) {
+    assert.ok(
+      forbiddenTokenHits(sample).length > 0,
+      `detector failed to recognize reference form: ${label}`
+    );
+  }
+  const innocuous = `import { FlatBraceletEditor } from "./flat-bracelet-editor";\nconst SequenceEditor = null;`;
+  assert.deepEqual(
+    forbiddenTokenHits(innocuous),
+    [],
+    "detector must not flag files that only reference other editors"
+  );
+});
+
 test("every non-component reference to the experimental sequence editor is a test or fixture file", async () => {
   const files = await sourceFiles("apps/frontend/src");
   for (const file of files) {
-    const isTheComponentItself = file === path.normalize(COMPONENT_PATH);
+    if (file === path.normalize(COMPONENT_PATH)) continue;
     const source = await readFile(file, "utf8");
-    if (isTheComponentItself || !/BraceletSequenceEditor/.test(source)) continue;
-    const isTest = /\.(?:test|spec)\.[^.]+$/.test(file);
-    const isFixture = file.split(path.sep).includes("fixtures");
+    if (forbiddenTokenHits(source).length === 0) continue;
     assert.ok(
-      isTest || isFixture,
-      `${file} references BraceletSequenceEditor but is neither the component itself nor a test/fixture file`
+      isTestOrFixtureFile(file),
+      `${file} references the experimental sequence editor but is neither the component itself nor a test/fixture file`
     );
   }
 });
