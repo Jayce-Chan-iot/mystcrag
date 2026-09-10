@@ -1,3 +1,4 @@
+import type { AssetAdminLoginMode } from "./admin-auth";
 import { ASSET_ADMIN_LOGIN_PATH, ASSET_ADMIN_NOT_CONFIGURED_PATH, type ConsoleRedirect } from "./page-guard";
 
 export const ASSET_ADMIN_CONSOLE_HOME = "/admin/bead-import";
@@ -5,7 +6,9 @@ export const ASSET_ADMIN_INVALID_KEY_PATH = `${ASSET_ADMIN_LOGIN_PATH}?error=inv
 
 export type AssetAdminLoginDeps = {
   configured: boolean;
+  mode: AssetAdminLoginMode;
   verifyKey: (candidate: string) => boolean;
+  verifyLocalCredentials: (username: string, password: string) => boolean;
   createSession: () => void;
   destroySession: () => void;
   redirect: ConsoleRedirect;
@@ -15,6 +18,15 @@ export type AssetAdminLogoutDeps = Pick<AssetAdminLoginDeps, "destroySession" | 
 
 function readSubmittedKey(formData: FormData): string | null {
   const value = formData.get("key");
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+function readSubmittedCredential(formData: FormData, name: "username" | "password"): string | null {
+  const value = formData.get(name);
   if (typeof value !== "string") {
     return null;
   }
@@ -32,8 +44,17 @@ export function runAssetAdminLogin(formData: FormData, deps: AssetAdminLoginDeps
   if (!deps.configured) {
     deps.redirect(ASSET_ADMIN_NOT_CONFIGURED_PATH);
   }
-  const key = readSubmittedKey(formData);
-  if (key === null || !deps.verifyKey(key)) {
+  const valid = deps.mode === "LOCAL_CREDENTIALS"
+    ? (() => {
+        const username = readSubmittedCredential(formData, "username");
+        const password = readSubmittedCredential(formData, "password");
+        return username !== null && password !== null && deps.verifyLocalCredentials(username, password);
+      })()
+    : (() => {
+        const key = readSubmittedKey(formData);
+        return key !== null && deps.verifyKey(key);
+      })();
+  if (!valid) {
     deps.redirect(ASSET_ADMIN_INVALID_KEY_PATH);
   }
   deps.createSession();

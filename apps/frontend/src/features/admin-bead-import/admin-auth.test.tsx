@@ -18,8 +18,11 @@ import {
   destroyAssetAdminSession,
   isAssetAdminAuthenticated,
   isAssetAdminConfigured,
+  resolveAssetAdminLoginMode,
+  resolveAssetAdminLocalCredentials,
   readAssetAdminSessionToken,
   resolveAssetAdminKey,
+  verifyAssetAdminLocalCredentials,
   verifyAssetAdminKey,
   type AssetAdminCookieOptions,
   type AssetAdminCookieStore
@@ -127,6 +130,32 @@ test("verifyAssetAdminKey fails closed on an unconfigured deployment and on shor
   assert.equal(verifyAssetAdminKey(VALID_KEY, { MYSTCRAG_ASSET_ADMIN_KEY: "short" }), false);
   // A 15-byte candidate can never match, and must not reach a length-mismatched compare.
   assert.equal(verifyAssetAdminKey("a".repeat(15), { MYSTCRAG_ASSET_ADMIN_KEY: "a".repeat(15) }), false);
+});
+
+test("local username and password login is available only in development with a strong server key", () => {
+  const development = {
+    NODE_ENV: "development",
+    MYSTCRAG_ASSET_ADMIN_KEY: VALID_KEY,
+    MYSTCRAG_ASSET_ADMIN_LOCAL_USERNAME: "admin",
+    MYSTCRAG_ASSET_ADMIN_LOCAL_PASSWORD: "admin"
+  };
+  assert.deepEqual(resolveAssetAdminLocalCredentials(development), {
+    username: "admin",
+    password: "admin"
+  });
+  assert.equal(resolveAssetAdminLoginMode(development), "LOCAL_CREDENTIALS");
+  assert.equal(verifyAssetAdminLocalCredentials("admin", "admin", development), true);
+  assert.equal(verifyAssetAdminLocalCredentials("admin", "wrong", development), false);
+  assert.equal(verifyAssetAdminLocalCredentials("wrong", "admin", development), false);
+
+  const production = { ...development, NODE_ENV: "production" };
+  assert.equal(resolveAssetAdminLocalCredentials(production), null);
+  assert.equal(resolveAssetAdminLoginMode(production), "ADMIN_KEY");
+  assert.equal(verifyAssetAdminLocalCredentials("admin", "admin", production), false);
+
+  const missingStrongKey = { ...development, MYSTCRAG_ASSET_ADMIN_KEY: "short" };
+  assert.equal(resolveAssetAdminLocalCredentials(missingStrongKey), null);
+  assert.equal(resolveAssetAdminLoginMode(missingStrongKey), "ADMIN_KEY");
 });
 
 test("the session token is irreversible and never contains the admin key", () => {
@@ -355,6 +384,22 @@ test("the rendered login form contains no key material and no configuration valu
   }
 });
 
+test("the development login form accepts a username and password without rendering the server key field", () => {
+  const markup = renderToStaticMarkup(
+    createElement(AdminLoginForm, {
+      configured: true,
+      error: null,
+      mode: "LOCAL_CREDENTIALS"
+    })
+  );
+  assert.match(markup, /name="username"/);
+  assert.match(markup, /name="password"/);
+  assert.match(markup, /value="admin"/);
+  assert.ok(!markup.includes('name="key"'));
+  assert.ok(!markup.includes('minLength="16"'));
+  assert.ok(!markup.includes(VALID_KEY));
+});
+
 function alertText(markup: string): string {
   const match = /role="alert"[^>]*>([\s\S]*?)</.exec(markup);
   assert.ok(match, "expected a role=alert status region in the login form");
@@ -369,6 +414,18 @@ test("the login form reports an invalid key without revealing the configured val
   const markup = renderToStaticMarkup(createElement(AdminLoginForm, { configured: true, error: "invalid" }));
   assert.ok(!markup.includes(VALID_KEY));
   assert.equal(alertText(markup), "密钥无效，请重新输入。");
+});
+
+test("the development login form reports a generic username or password error", () => {
+  const markup = renderToStaticMarkup(
+    createElement(AdminLoginForm, {
+      configured: true,
+      error: "invalid",
+      mode: "LOCAL_CREDENTIALS"
+    })
+  );
+  assert.equal(alertText(markup), "账号或密码错误，请重新输入。");
+  assert.ok(!markup.includes(VALID_KEY));
 });
 
 test("the login form explains an unconfigured deployment without leaking configuration", () => {

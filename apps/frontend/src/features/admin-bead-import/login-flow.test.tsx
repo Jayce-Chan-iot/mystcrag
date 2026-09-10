@@ -6,7 +6,12 @@ import {
   runAssetAdminLogin,
   runAssetAdminLogout
 } from "./login-flow";
-import { ASSET_ADMIN_COOKIE_NAME, assetAdminSessionToken, verifyAssetAdminKey } from "./admin-auth";
+import {
+  ASSET_ADMIN_COOKIE_NAME,
+  assetAdminSessionToken,
+  verifyAssetAdminKey,
+  verifyAssetAdminLocalCredentials
+} from "./admin-auth";
 
 const VALID_KEY = "asset-admin-key-0123456789abcdef";
 const ENV = { MYSTCRAG_ASSET_ADMIN_KEY: VALID_KEY, NODE_ENV: "production" };
@@ -16,18 +21,24 @@ type Recording = {
   created: number;
   destroyed: number;
   verified: string[];
+  verifiedCredentials: Array<{ username: string; password: string }>;
 };
 
-function makeDeps(overrides: { configured?: boolean; env?: typeof ENV } = {}) {
+function makeDeps(overrides: { configured?: boolean; env?: Record<string, string>; mode?: "ADMIN_KEY" | "LOCAL_CREDENTIALS" } = {}) {
   const env = overrides.env ?? ENV;
   const configured = overrides.configured ?? true;
-  const recording: Recording = { targets: [], created: 0, destroyed: 0, verified: [] };
+  const recording: Recording = { targets: [], created: 0, destroyed: 0, verified: [], verifiedCredentials: [] };
   const store = new Map<string, string>();
   const deps = {
     configured,
+    mode: overrides.mode ?? "ADMIN_KEY",
     verifyKey: (candidate: string) => {
       recording.verified.push(candidate);
       return verifyAssetAdminKey(candidate, env);
+    },
+    verifyLocalCredentials: (username: string, password: string) => {
+      recording.verifiedCredentials.push({ username, password });
+      return verifyAssetAdminLocalCredentials(username, password, env);
     },
     createSession: () => {
       recording.created += 1;
@@ -47,6 +58,13 @@ function makeDeps(overrides: { configured?: boolean; env?: typeof ENV } = {}) {
   return { deps, recording, store };
 }
 
+function credentialsForm(username: string, password: string): FormData {
+  const formData = new FormData();
+  formData.set("username", username);
+  formData.set("password", password);
+  return formData;
+}
+
 function formWith(value: unknown): FormData {
   const formData = new FormData();
   if (typeof value === "string") {
@@ -63,6 +81,35 @@ test("a correct key mints exactly one session and lands on the console home", ()
   assert.equal(recording.created, 1);
   assert.equal(recording.destroyed, 0);
   assert.equal(store.get(ASSET_ADMIN_COOKIE_NAME), assetAdminSessionToken(ENV));
+});
+
+test("development local admin credentials mint a session without exposing or submitting the strong key", () => {
+  const env = {
+    NODE_ENV: "development",
+    MYSTCRAG_ASSET_ADMIN_KEY: VALID_KEY,
+    MYSTCRAG_ASSET_ADMIN_LOCAL_USERNAME: "admin",
+    MYSTCRAG_ASSET_ADMIN_LOCAL_PASSWORD: "admin"
+  };
+  const { deps, recording, store } = makeDeps({ env, mode: "LOCAL_CREDENTIALS" });
+  assert.throws(() => runAssetAdminLogin(credentialsForm("admin", "admin"), deps), /redirect:\/admin\/bead-import$/);
+  assert.equal(recording.created, 1);
+  assert.deepEqual(recording.verified, []);
+  assert.deepEqual(recording.verifiedCredentials, [{ username: "admin", password: "admin" }]);
+  assert.equal(store.get(ASSET_ADMIN_COOKIE_NAME), assetAdminSessionToken(env));
+});
+
+test("wrong local credentials are rejected without minting a session", () => {
+  const env = {
+    NODE_ENV: "development",
+    MYSTCRAG_ASSET_ADMIN_KEY: VALID_KEY,
+    MYSTCRAG_ASSET_ADMIN_LOCAL_USERNAME: "admin",
+    MYSTCRAG_ASSET_ADMIN_LOCAL_PASSWORD: "admin"
+  };
+  const { deps, recording } = makeDeps({ env, mode: "LOCAL_CREDENTIALS" });
+  assert.throws(() => runAssetAdminLogin(credentialsForm("admin", "wrong"), deps));
+  assert.deepEqual(recording.targets, ["/admin/bead-import/login?error=invalid"]);
+  assert.equal(recording.created, 0);
+  assert.deepEqual(recording.verified, []);
 });
 
 test("a wrong key never mints a session and reports a generic invalid error", () => {

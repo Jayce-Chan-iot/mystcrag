@@ -91,6 +91,18 @@ pnpm --filter @mystcrag/backend dev
 pnpm --filter @mystcrag/frontend dev
 ```
 
+### macOS 桌面启动器与珠子素材后台
+
+本机桌面脚本 `/Users/chenyanyan/Desktop/玄矶系统.command` 从本地 `main` 工作区启动 Frontend、Backend 与 Asset Worker，并把原片归档到 Git 仓库之外的 `/Users/chenyanyan/Library/Application Support/Mystcrag Asset Archive`。选择菜单 1 启动全套服务，选择菜单 8 可直接打开 `/admin/bead-import`。
+
+桌面启动器在 `NODE_ENV=development` 下提供本机便捷登录：账号 `admin`、密码 `admin`。这组凭据只由 Frontend 服务端在开发模式验证；Backend 与管理代理仍使用启动器生成、保存在 `~/Library/Application Support/Mystcrag Launcher/asset-admin-key` 的 ≥16 字节强密钥。生产模式忽略本地账号变量并继续要求真实管理密钥，不得把 `admin/admin` 用于公网或生产部署。
+
+不使用桌面启动器时，珠子处理 Worker 需要单独启动：
+
+```bash
+pnpm --filter @mystcrag/asset-worker start
+```
+
 验收环境不得设置 `NEXT_PUBLIC_MYSTCRAG_MOCK_API=true`。可用以下命令确认未开启 Mock：
 
 ```bash

@@ -6,6 +6,8 @@ import {
   createAssetAdminSession,
   destroyAssetAdminSession,
   isAssetAdminConfigured,
+  resolveAssetAdminLoginMode,
+  verifyAssetAdminLocalCredentials,
   verifyAssetAdminKey
 } from "./admin-auth";
 import { assetAdminCookieStore } from "./console-access";
@@ -20,7 +22,9 @@ export async function loginAction(formData: FormData): Promise<void> {
   const store = await assetAdminCookieStore();
   runAssetAdminLogin(formData, {
     configured: isAssetAdminConfigured(),
+    mode: resolveAssetAdminLoginMode(),
     verifyKey: (candidate) => verifyAssetAdminKey(candidate),
+    verifyLocalCredentials: (username, password) => verifyAssetAdminLocalCredentials(username, password),
     createSession: () => createAssetAdminSession(store),
     destroySession: () => destroyAssetAdminSession(store),
     redirect

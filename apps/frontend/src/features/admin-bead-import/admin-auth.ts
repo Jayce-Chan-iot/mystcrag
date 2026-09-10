@@ -25,6 +25,13 @@ const SESSION_TOKEN_CONTEXT = "mystcrag:bead-import-admin-session:v1";
 
 export type AssetAdminEnv = Readonly<Record<string, string | undefined>>;
 
+export type AssetAdminLoginMode = "ADMIN_KEY" | "LOCAL_CREDENTIALS";
+
+export type AssetAdminLocalCredentials = {
+  username: string;
+  password: string;
+};
+
 export type AssetAdminCookieOptions = {
   httpOnly: boolean;
   sameSite: "strict" | "lax" | "none";
@@ -56,8 +63,45 @@ export function isAssetAdminConfigured(env: AssetAdminEnv = process.env): boolea
   return resolveAssetAdminKey(env) !== null;
 }
 
+/**
+ * Optional convenience login for the local macOS launcher. It is deliberately
+ * development-only and cannot replace the strong server key used by the
+ * Backend proxy and session digest.
+ */
+export function resolveAssetAdminLocalCredentials(
+  env: AssetAdminEnv = process.env
+): AssetAdminLocalCredentials | null {
+  if (env.NODE_ENV !== "development" || resolveAssetAdminKey(env) === null) {
+    return null;
+  }
+  const username = env.MYSTCRAG_ASSET_ADMIN_LOCAL_USERNAME;
+  const password = env.MYSTCRAG_ASSET_ADMIN_LOCAL_PASSWORD;
+  if (typeof username !== "string" || username === "" || typeof password !== "string" || password === "") {
+    return null;
+  }
+  return { username, password };
+}
+
+export function resolveAssetAdminLoginMode(env: AssetAdminEnv = process.env): AssetAdminLoginMode {
+  return resolveAssetAdminLocalCredentials(env) === null ? "ADMIN_KEY" : "LOCAL_CREDENTIALS";
+}
+
 function digest(value: string): Buffer {
   return createHash("sha256").update(value).digest();
+}
+
+export function verifyAssetAdminLocalCredentials(
+  username: string,
+  password: string,
+  env: AssetAdminEnv = process.env
+): boolean {
+  const configured = resolveAssetAdminLocalCredentials(env);
+  if (configured === null) {
+    return false;
+  }
+  const usernameMatches = timingSafeEqual(digest(username), digest(configured.username));
+  const passwordMatches = timingSafeEqual(digest(password), digest(configured.password));
+  return usernameMatches && passwordMatches;
 }
 
 /** Timing-safe compare over fixed-length digests; never reveals key length. */
