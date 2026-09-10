@@ -50,3 +50,13 @@ The sanitizer and its regression tests remain unchanged; no traversal, raw uploa
 ## Scope and handoff
 
 Only the registered five test/document paths change. Business runtime, schema/migrations, shared Contract, authentication test assertions, CI workflow, sanitizer and Task 3 are untouched. Original GLM handoff and SOL acceptance evidence remain unchanged. No production database is modified; only the E2E harness's newly created disposable databases are automatically removed by its verified teardown.
+
+## Remote CI result (2026-09-10 closure check, GLM-5.3 under Product Owner takeover authorization)
+
+Read-only verification against GitHub; this check pushed, deployed, merged and changed nothing.
+
+- PR #5 is MERGED at head `7ae4b23`. All three checks on that head are SUCCESS: `validate`, `postgres-verification`, and `auth-006-security-e2e` (run `33719233588`, job `100534767669`).
+- The `auth-006-security-e2e` job log ends with `54 passed (2.7m)` and `artifact secret scan passed (212 text files, 0 trace entries scanned)`. The 212-file scan count is the CI environment's own checkout; it is not comparable to the local 220-file runs recorded above.
+- The repair commit `7ae4b23` is an ancestor of local main@`fa14588`, so the helper's canonical `AUTH006_DATABASE_ADMIN_URL` read and all four subprocess regression cases in `tests/auth-ci-database-url.test.mjs` are present in current main. The four case names in this report match the implementation.
+- Local recheck at main@`fa14588` (fresh, this check): `node --test tests/auth-ci-database-url.test.mjs` 4/4 exit 0; `node --test tests/*.test.mjs` 39/39 exit 0; `git diff --check` clean.
+- The sanitizer's fail-closed policy and the preserved `symbolic-link-in-source` diagnostic limitation recorded above are unchanged. The task remains in REVIEW pending Codex closure; the merge state of PR #5 is recorded as fact, not as an action of this task.
