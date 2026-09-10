@@ -16,7 +16,7 @@ Consult this registry before introducing another schema, renderer, service, stor
 | Design persistence | `DesignRepository` through `DesignApplicationService` | protected Design API | Frontend local editor state is an unsaved working copy only |
 | Immutable order snapshot | `OrderRepository` plus Design Contract order schemas | protected order API and profile | No cart/payment/shipping authority exists yet |
 | 2D bracelet geometry/fit | `packages/bracelet-engine` | Flat editor, Three Engine | Renderer-local placement math must remain consistent with engine semantics |
-| Production DIY renderer | `FlatBraceletEditor` in frontend design feature — the sole production DIY renderer | DIY editor | `ThreeBraceletPreview` experimental; `BraceletSequenceEditor` EXPERIMENTAL test-only (no production mount, enforced by `tests/fe-sequence-editor-lifecycle.test.mjs`) |
+| Production DIY renderer | `FlatBraceletEditor` in frontend design feature — the sole production DIY renderer | DIY editor | `ThreeBraceletPreview` EXPERIMENTAL_NOT_PRODUCTION_MOUNTED (no production mount, enforced by `tests/three-preview-lifecycle.test.mjs`); `BraceletSequenceEditor` EXPERIMENTAL test-only (no production mount, enforced by `tests/fe-sequence-editor-lifecycle.test.mjs`) |
 | Compact display renderer | `BraceletPreview` | results, Tarot cards | Complementary to editing, not a duplicate DIY editor |
 | 3D scene descriptor | `packages/three-engine/src/runtime/scene-descriptor.ts` | Three renderer/interactions | Legacy `BraceletConfiguration` is compatibility-only |
 | 3D rendering | `BraceletCanvas` -> `BraceletScene`, loaded by `LazyBraceletScene` | Experimental frontend wrapper/demo | Not production-mounted as of baseline |
@@ -42,9 +42,11 @@ DesignV1
   ├─ BraceletPreview       compact/read-only 2D presentation
   ├─ FlatBraceletEditor    production interactive 2D editing
   ├─ BraceletSequenceEditor EXPERIMENTAL test-only sequence manipulation (no production mount)
-  └─ ThreeBraceletPreview experimental 3D wrapper
+  └─ ThreeBraceletPreview EXPERIMENTAL_NOT_PRODUCTION_MOUNTED 3D wrapper (no production mount)
        └─ LazyBraceletScene -> BraceletCanvas -> BraceletScene
 ```
+
+`FlatBraceletEditor` is the only production DIY renderer. `ThreeBraceletPreview` carries the `THREE_BRACELET_PREVIEW_LIFECYCLE = "EXPERIMENTAL_NOT_PRODUCTION_MOUNTED"` marker (TASK-3D-001 Product Owner decision 2026-09-10) and `tests/three-preview-lifecycle.test.mjs` fails if any production route, `DiyEditor` or composition root references it.
 
 Only the last two currently require a lifecycle decision. Collapsing all renderers into one component is not a governance goal.
 

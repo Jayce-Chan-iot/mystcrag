@@ -77,7 +77,7 @@ Rules:
 
 - `FlatBraceletEditor` remains the sole production DIY renderer until a dedicated integration task changes the product path.
 - `BraceletPreview` remains a compact display renderer; it is not a DIY editor duplicate.
-- `ThreeBraceletPreview` remains experimental until browser, fallback, performance, selection, export, and visual parity acceptance criteria pass.
+- `ThreeBraceletPreview` is an EXPERIMENTAL component that is not production mounted (TASK-3D-001 Product Owner decision 2026-09-10): retained with the `THREE_BRACELET_PREVIEW_LIFECYCLE = "EXPERIMENTAL_NOT_PRODUCTION_MOUNTED"` marker, never mounted on production DIY, results, or navigation routes; any 3D launch requires a new task passing WebGL fallback, performance, responsive, selection/geometry/asset parity and browser acceptance, and is enforced by `tests/three-preview-lifecycle.test.mjs`.
 - `BraceletSequenceEditor` is an EXPERIMENTAL test-only component (TASK-FE-001 Product Owner decision 2026-09-10): retained with the `BRACELET_SEQUENCE_EDITOR_LIFECYCLE = "EXPERIMENTAL_TEST_ONLY"` marker, never mounted on production routes or `DiyEditor`; any production role requires a new product decision and task.
 - Database repository classes are persistence adapters. Thin backend wrappers must add policy/orchestration or be retired after reachability proof.
 - QA evidence is curated once. Raw rerun screenshots are ignored or archived outside the product tree.

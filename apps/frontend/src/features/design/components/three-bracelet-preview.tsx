@@ -9,6 +9,8 @@ import * as React from "react";
 import { BraceletPreview } from "./bracelet-preview";
 import type { ThreeBraceletSceneClientProps } from "./three-bracelet-scene-client";
 
+export const THREE_BRACELET_PREVIEW_LIFECYCLE = "EXPERIMENTAL_NOT_PRODUCTION_MOUNTED";
+
 const DynamicThreeBraceletScene = dynamic<ThreeBraceletSceneClientProps>(
   async () => {
     if (typeof performance !== "undefined") performance.mark("mystcrag-three-load-start");

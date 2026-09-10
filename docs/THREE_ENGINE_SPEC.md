@@ -62,3 +62,9 @@ No production geometry, material shader, GLTF loading, interaction state, or ren
 There is intentionally no `threeConfig` duplicate inside `DesignV1`. Phase 2B implements the one-way `designV1ToSceneDescriptor` adapter: it validates the design, orders main-ring components, calculates deterministic numeric transforms, resolves anchored accessories, and reports missing asset keys as structured warnings. Its output is plain serializable runtime data and is not an API DTO.
 
 `BraceletBeadConfiguration` and `BraceletConfiguration` remain temporarily available from the legacy path and root compatibility export with `@deprecated` annotations. New adapters do not use count-grouped data. The adapter does not recalculate price, alter compliance or inventory, mutate its input, or place Three.js instances in shared data.
+
+## Lifecycle decision (TASK-3D-001, Product Owner decision 2026-09-10)
+
+The 3D bracelet preview is `EXPERIMENTAL` and is not an MVP release condition. `ThreeBraceletPreview` and `ThreeBraceletSceneClient` are implemented and test-covered but are not mounted by any production DIY route, results page, or navigation; `FlatBraceletEditor` remains the sole production DIY renderer. `ThreeBraceletPreview` exports the machine-verifiable marker `THREE_BRACELET_PREVIEW_LIFECYCLE = "EXPERIMENTAL_NOT_PRODUCTION_MOUNTED"`, and `tests/three-preview-lifecycle.test.mjs` fails if any production composition root (`apps/frontend/app` or non-test files under `apps/frontend/src`) references the 3D components in any form.
+
+Launching 3D in production requires a new dedicated task (not a scope expansion of this one) that passes: WebGL fallback acceptance, a documented performance budget on mobile-first hardware, responsive QA, selection/geometry/asset parity with the production editor and Bracelet Engine semantics, and browser acceptance tests.
