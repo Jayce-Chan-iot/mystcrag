@@ -39,6 +39,8 @@ export function makeConfig(overrides: Partial<AuthConfig> = {}): AuthConfig {
     authSessionSecret: "a".repeat(64),
     backendOrigin: "https://api.mystcrag.com",
     enableSignedTestAuth: false,
+    desktopAutoAuth: false,
+    desktopAccessToken: "",
     ...overrides
   };
 }

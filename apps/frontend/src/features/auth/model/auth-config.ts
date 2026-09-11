@@ -28,6 +28,12 @@ export type AuthConfig = {
   readonly authSessionSecret: string;
   readonly backendOrigin: string;
   readonly enableSignedTestAuth: boolean;
+  /**
+   * Server-only desktop development identity (see spec 2026-09-12). Reachable only
+   * when the full fail-closed matrix below holds; never projected to browser state.
+   */
+  readonly desktopAutoAuth: boolean;
+  readonly desktopAccessToken: string;
 };
 
 export type AuthConfigError = {
@@ -131,6 +137,8 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
   const authSessionSecret = env.MYSTCRAG_AUTH_SESSION_SECRET?.trim() ?? "";
   const backendOrigin = env.MYSTCRAG_BACKEND_ORIGIN?.replace(/\/$/, "") ?? "";
   const enableSignedTestAuth = env.MYSTCRAG_ENABLE_SIGNED_TEST_AUTH === "true";
+  const desktopAutoAuth = env.MYSTCRAG_DESKTOP_AUTO_AUTH === "true";
+  const desktopAccessToken = env.MYSTCRAG_DESKTOP_ACCESS_TOKEN?.trim() ?? "";
 
   const nodeEnv: string = env.NODE_ENV ?? "development";
   const isProduction = nodeEnv === "production" || nodeEnv === "staging";
@@ -230,6 +238,29 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
     errors.push("MYSTCRAG_BACKEND_ORIGIN HTTP is only allowed for loopback in development/test");
   }
 
+  // Desktop auto-auth is a fail-closed, development-only convenience identity. It is
+  // never a second production session or a fixed-user fallback: every condition must
+  // hold or startup rejects the configuration (never a silent downgrade).
+  if (desktopAutoAuth) {
+    if (environment !== "development") {
+      errors.push("MYSTCRAG_DESKTOP_AUTO_AUTH requires NODE_ENV=development");
+    }
+    if (authProvider !== "signed-test") {
+      errors.push("MYSTCRAG_DESKTOP_AUTO_AUTH requires MYSTCRAG_AUTH_PROVIDER='signed-test'");
+    } else if (!enableSignedTestAuth) {
+      errors.push("MYSTCRAG_DESKTOP_AUTO_AUTH requires MYSTCRAG_ENABLE_SIGNED_TEST_AUTH=true");
+    }
+    if (appOrigin && !isLoopbackOrigin(appOrigin)) {
+      errors.push("MYSTCRAG_DESKTOP_AUTO_AUTH requires loopback MYSTCRAG_APP_ORIGIN");
+    }
+    if (backendOrigin && !isLoopbackOrigin(backendOrigin)) {
+      errors.push("MYSTCRAG_DESKTOP_AUTO_AUTH requires loopback MYSTCRAG_BACKEND_ORIGIN");
+    }
+    if (!desktopAccessToken) {
+      errors.push("MYSTCRAG_DESKTOP_ACCESS_TOKEN is required when MYSTCRAG_DESKTOP_AUTO_AUTH=true");
+    }
+  }
+
   if (errors.length > 0) {
     const error: AuthConfigError = {
       code: "INVALID_CONFIG",
@@ -251,6 +282,10 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
     authLogoutUrl,
     authSessionSecret,
     backendOrigin,
-    enableSignedTestAuth
+    enableSignedTestAuth,
+    // The desktop Token is only surfaced when desktop mode is active; otherwise it is
+    // dropped so no inactive-path consumer can ever hold it.
+    desktopAutoAuth,
+    desktopAccessToken: desktopAutoAuth ? desktopAccessToken : ""
   };
 }

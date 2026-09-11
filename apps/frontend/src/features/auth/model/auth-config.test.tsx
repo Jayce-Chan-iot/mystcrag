@@ -11,6 +11,8 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 
 import { resolveAuthConfig, type AuthConfigError } from "./auth-config";
@@ -341,5 +343,101 @@ test("environment classification is resolved reliably from NODE_ENV", () => {
   assert.equal(
     resolveAuthConfig({ ...validSignedTestConfig, NODE_ENV: "something-else" }).environment,
     "development"
+  );
+});
+
+// --- Desktop auto auth mode matrix ---
+
+const validDesktopConfig = {
+  ...validSignedTestConfig,
+  MYSTCRAG_DESKTOP_AUTO_AUTH: "true",
+  MYSTCRAG_DESKTOP_ACCESS_TOKEN: "desktop-token-value"
+};
+
+test("valid desktop configuration passes and exposes server-only desktop fields", () => {
+  const config = resolveAuthConfig(validDesktopConfig);
+  assert.equal(config.desktopAutoAuth, true);
+  assert.equal(config.desktopAccessToken, "desktop-token-value");
+});
+
+test("desktop mode with empty token fails closed", () => {
+  expectConfigError(
+    () => resolveAuthConfig({ ...validDesktopConfig, MYSTCRAG_DESKTOP_ACCESS_TOKEN: "" }),
+    "MYSTCRAG_DESKTOP_ACCESS_TOKEN"
+  );
+});
+
+test("desktop flag with auth0 provider fails closed", () => {
+  expectConfigError(
+    () => resolveAuthConfig({
+      ...validAuth0Config,
+      MYSTCRAG_DESKTOP_AUTO_AUTH: "true",
+      MYSTCRAG_DESKTOP_ACCESS_TOKEN: "desktop-token-value"
+    }),
+    "signed-test"
+  );
+});
+
+test("desktop flag with NODE_ENV=test fails closed", () => {
+  expectConfigError(
+    () => resolveAuthConfig({ ...validDesktopConfig, NODE_ENV: "test" }),
+    "development"
+  );
+});
+
+test("desktop flag with NODE_ENV=staging fails closed", () => {
+  expectConfigError(
+    () => resolveAuthConfig({ ...validDesktopConfig, NODE_ENV: "staging" }),
+    "development"
+  );
+});
+
+test("desktop flag with NODE_ENV=production fails closed", () => {
+  expectConfigError(
+    () => resolveAuthConfig({ ...validDesktopConfig, NODE_ENV: "production" }),
+    "development"
+  );
+});
+
+test("desktop flag with non-loopback app origin fails closed", () => {
+  expectConfigError(
+    () => resolveAuthConfig({
+      ...validDesktopConfig,
+      MYSTCRAG_APP_ORIGIN: "https://mystcrag.com",
+      MYSTCRAG_AUTH_CALLBACK_URL: "https://mystcrag.com/auth/callback",
+      MYSTCRAG_AUTH_LOGOUT_URL: "https://mystcrag.com"
+    }),
+    "loopback"
+  );
+});
+
+test("desktop flag with non-loopback backend origin fails closed", () => {
+  expectConfigError(
+    () => resolveAuthConfig({
+      ...validDesktopConfig,
+      MYSTCRAG_BACKEND_ORIGIN: "https://api.mystcrag.com"
+    }),
+    "loopback"
+  );
+});
+
+test("desktop flag absent preserves all existing behavior", () => {
+  const config = resolveAuthConfig(validSignedTestConfig);
+  assert.equal(config.desktopAutoAuth, false);
+  assert.equal(config.desktopAccessToken, "");
+});
+
+test("desktop variables never use NEXT_PUBLIC_ and are not renamed to a public value", () => {
+  const source = readFileSync(join(process.cwd(), "src", "features", "auth", "model", "auth-config.ts"), "utf8");
+  assert.equal(source.includes("NEXT_PUBLIC_MYSTCRAG_DESKTOP"), false);
+  assert.match(source, /MYSTCRAG_DESKTOP_AUTO_AUTH/);
+  assert.match(source, /MYSTCRAG_DESKTOP_ACCESS_TOKEN/);
+
+  const config = resolveAuthConfig(validDesktopConfig);
+  // The resolved config keys stay private singular names; the token is not mapped
+  // onto any NEXT_PUBLIC_* field.
+  assert.deepEqual(
+    Object.keys(config).filter((key) => key.toLowerCase().includes("desktop")),
+    ["desktopAutoAuth", "desktopAccessToken"]
   );
 });
