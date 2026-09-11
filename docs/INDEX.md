@@ -15,6 +15,7 @@ Repository governance entry points:
 - P0 baseline closure: `P0_BASELINE_CLOSURE_DISPATCH.md`, `superpowers/plans/2026-08-24-p0-schema-closure.md`
 - Bead asset import: `superpowers/specs/2026-08-31-bead-asset-import-assistant-design.md`, `superpowers/plans/2026-08-31-bead-asset-import-assistant-implementation-plan.md`
 - QA/output evidence retention: `governance/QA_EVIDENCE_RETENTION.md`
+- Consumer login prompt and desktop development identity: `superpowers/specs/2026-09-12-auth-login-prompt-desktop-auto-auth.md`, `superpowers/plans/2026-09-12-auth-login-prompt-desktop-auto-auth.md`, `AUTH_SESSION_CONTRACT.md`
 
 | Task | Controlling documents |
 | --- | --- |
@@ -32,6 +33,7 @@ Repository governance entry points:
 | 3D | `THREE_ENGINE_SPEC.md`, `BRACELET_GEOMETRY.md`, `DESIGN_CONTRACT_V1.md` |
 | QA / browser | `INTERACTION_TEST_PLAN.md`, `USER_ACCEPTANCE_CHECKLIST.md`, `DIY_V2_BASELINE.md` |
 | Local operation | `LOCAL_DEMO_GUIDE.md`, `ENGINEERING_GUIDE.md`, `DEPLOYMENT_GUIDE.md` |
+| Consumer authentication / desktop development identity | `AUTH_SESSION_CONTRACT.md`, `SECURITY_AND_PRIVACY.md`, `superpowers/specs/2026-09-12-auth-login-prompt-desktop-auto-auth.md`, `superpowers/plans/2026-09-12-auth-login-prompt-desktop-auto-auth.md` |
 | Dependencies / OSS | `DEPENDENCY_DECISIONS.md`, `OSS_RESEARCH.md` |
 | Tarot-guided design | `superpowers/specs/2026-08-19-tarot-guided-bracelet-design.md`, `superpowers/plans/2026-08-20-tarot-guided-bracelet-integration.md`, `API_SPECIFICATION.md`, `SECURITY_AND_PRIVACY.md` |
 
