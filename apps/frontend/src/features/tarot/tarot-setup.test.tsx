@@ -162,7 +162,7 @@ test("setup exposes the 120-character boundary and an inline non-modal error", (
   const question = "问".repeat(120);
   const markup = renderToStaticMarkup(
     <TarotSetupFields
-      error="暂时无法创建牌阵，请检查网络后重试。"
+      error="NETWORK_ERROR"
       isSubmitting={false}
       onQuestionChange={() => undefined}
       onSaveQuestionChange={() => undefined}
@@ -179,8 +179,34 @@ test("setup exposes the 120-character boundary and an inline non-modal error", (
   assert.match(markup, /maxLength="120"/);
   assert.match(markup, /120 \/ 120/);
   assert.match(markup, /role="alert"/);
-  assert.match(markup, /暂时无法创建牌阵，请检查网络后重试。/);
+  assert.match(markup, /网络连接中断：暂时无法连接服务。请检查网络后重试。/);
   assert.doesNotMatch(markup, /role="dialog"/);
+});
+
+test("unauthorized setup opens the shared login dialog instead of an inline message", () => {
+  const markup = renderToStaticMarkup(
+    <TarotSetupFields
+      error="UNAUTHORIZED"
+      isSubmitting={false}
+      onDismissAuthRequired={() => undefined}
+      onQuestionChange={() => undefined}
+      onSaveQuestionChange={() => undefined}
+      onSpreadChange={() => undefined}
+      onSubmit={() => undefined}
+      onThemeChange={() => undefined}
+      question=""
+      saveQuestion={false}
+      spreadType="PAST_PRESENT_FUTURE"
+      theme="SELF_GROWTH"
+    />
+  );
+
+  assert.match(markup, /role="dialog"/);
+  assert.match(markup, /aria-modal="true"/);
+  assert.match(markup, /登录后继续/);
+  assert.match(markup, /登录 \/ 注册/);
+  assert.match(markup, /暂不登录/);
+  assert.doesNotMatch(markup, /role="alert"/);
 });
 
 test("question draft store is memory-only and scoped by returned session ID", () => {

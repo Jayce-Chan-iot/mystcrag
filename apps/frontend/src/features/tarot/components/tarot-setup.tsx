@@ -9,7 +9,8 @@ import { useRouter } from "next/navigation";
 import { useRef, useState, type FormEvent } from "react";
 
 import { WristMeasurementGuide } from "../../questionnaire/components/wrist-measurement-guide";
-import { ERROR_PRESENTATION, toFrontendApiError } from "../../../lib/api/frontend-api-error";
+import { AuthRequiredDialog } from "../../auth/browser/auth-required-dialog";
+import { ERROR_PRESENTATION, toFrontendApiError, type FrontendErrorCode } from "../../../lib/api/frontend-api-error";
 import { tarotApi, type TarotApiClient } from "../../../lib/api/tarot-api";
 import {
   useTarotQuestionDraftStore,
@@ -90,13 +91,14 @@ export type TarotSetupFieldsProps = Readonly<{
   question: string;
   saveQuestion: boolean;
   wristCircumferenceMm?: number;
-  error: string | null;
+  error: FrontendErrorCode | null;
   isSubmitting: boolean;
   onThemeChange(value: TarotTheme): void;
   onSpreadChange(value: TarotSpreadType): void;
   onQuestionChange(value: string): void;
   onSaveQuestionChange(value: boolean): void;
   onWristChange?(value: number): void;
+  onDismissAuthRequired?(): void;
   onSubmit(): void;
 }>;
 
@@ -113,6 +115,7 @@ export function TarotSetupFields({
   onQuestionChange,
   onSaveQuestionChange,
   onWristChange = () => undefined,
+  onDismissAuthRequired,
   onSubmit
 }: TarotSetupFieldsProps) {
   const questionHelpId = "tarot-question-help";
@@ -220,7 +223,11 @@ export function TarotSetupFields({
         <div className="mt-7 rounded-2xl border border-[var(--border)] bg-white/55 p-4 text-xs leading-6 text-[var(--muted)]" data-tarot-safety-note="true">
           塔罗内容仅用于自我反思与设计灵感，不构成事实预测、医疗或投资建议；水晶搭配也不代表功效承诺。
         </div>
-        {error ? <p className="mt-5 text-sm leading-6 text-[var(--danger)]" role="alert">{error}</p> : null}
+        {error === "UNAUTHORIZED" ? (
+          <AuthRequiredDialog onDismiss={onDismissAuthRequired} />
+        ) : error ? (
+          <p className="mt-5 text-sm leading-6 text-[var(--danger)]" role="alert">{ERROR_PRESENTATION[error].title}：{ERROR_PRESENTATION[error].message}</p>
+        ) : null}
         <button
           className="mt-7 min-h-13 rounded-full bg-[var(--accent-deep)] px-7 text-sm font-medium text-white shadow-[0_14px_35px_rgb(73_53_95/0.22)] transition hover:-translate-y-0.5 disabled:cursor-wait disabled:opacity-55 lg:mt-auto"
           disabled={isSubmitting}
@@ -242,7 +249,7 @@ export function TarotSetup({ client = tarotApi }: Readonly<{ client?: Pick<Tarot
   const [question, setQuestion] = useState("");
   const [saveQuestion, setSaveQuestion] = useState(false);
   const [wristCircumferenceMm, setWristCircumferenceMm] = useState(155);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<FrontendErrorCode | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitterRef = useRef<ReturnType<typeof createTarotSetupSubmitter> | null>(null);
 
@@ -262,8 +269,7 @@ export function TarotSetup({ client = tarotApi }: Readonly<{ client?: Pick<Tarot
     try {
       await submitterRef.current?.({ theme, spreadType, question, saveQuestion, wristCircumferenceMm });
     } catch (submissionError) {
-      const presentation = ERROR_PRESENTATION[toFrontendApiError(submissionError).code];
-      setError(`${presentation.title}：${presentation.message}`);
+      setError(toFrontendApiError(submissionError).code);
       setIsSubmitting(false);
     }
   };
@@ -286,6 +292,7 @@ export function TarotSetup({ client = tarotApi }: Readonly<{ client?: Pick<Tarot
         onSaveQuestionChange={setSaveQuestion}
         onWristChange={setWristCircumferenceMm}
         onSpreadChange={setSpreadType}
+        onDismissAuthRequired={() => setError(null)}
         onSubmit={() => void submit()}
         onThemeChange={setTheme}
         question={question}
