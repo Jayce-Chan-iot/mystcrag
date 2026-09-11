@@ -1,0 +1,157 @@
+/**
+ * Server-only desktop identity runtime adapter tests.
+ *
+ * Coverage:
+ * - mode detection (auth0 vs desktop)
+ * - safe local session projection (no token/issuer/subject/audience/id)
+ * - desktop login sanitizes returnTo before a same-origin 303 and never creates a cookie
+ * - desktop BFF access token and rolling shims never invoke the Auth0 primitives
+ * - token never reaches a projection, redirect Location, or logged event
+ */
+
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import type { NextRequest, NextResponse } from "next/server";
+
+import {
+  detectAuthMode,
+  projectDesktopSession,
+  buildDesktopSessionResponse,
+  getDesktopBearerToken,
+  handleDesktopLoginRequest,
+  makeAccessTokenResolver,
+  makeTouchSession,
+  DESKTOP_DISPLAY_NAME
+} from "./runtime-auth";
+import { makeConfig, makeDevConfig, makeAuthEventCapture, makeRequest } from "./auth-test-fixtures";
+
+function desktopConfig() {
+  return makeDevConfig({
+    authProvider: "signed-test",
+    enableSignedTestAuth: true,
+    desktopAutoAuth: true,
+    desktopAccessToken: "desktop-secret-token"
+  });
+}
+
+test("detectAuthMode is derived from the explicit desktop flag", () => {
+  assert.equal(detectAuthMode(desktopConfig()), "desktop");
+  assert.equal(detectAuthMode(makeConfig()), "auth0");
+});
+
+test("projectDesktopSession returns only the safe local projection", () => {
+  const projection = projectDesktopSession();
+  assert.deepEqual(projection, {
+    authenticated: true,
+    user: { displayName: DESKTOP_DISPLAY_NAME }
+  });
+  assert.equal(projection.user.displayName, "本地演示用户");
+  const serialized = JSON.stringify(projection);
+  assert.doesNotMatch(serialized, /token|issuer|subject|audience|user_id|desktop-secret/);
+});
+
+test("buildDesktopSessionResponse is a 200 no-store safe projection", async () => {
+  const response = buildDesktopSessionResponse();
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("pragma"), "no-cache");
+  assert.equal(response.headers.get("set-cookie"), null);
+  assert.deepEqual(await response.json(), projectDesktopSession());
+});
+
+test("getDesktopBearerToken exposes only the server-only token", () => {
+  assert.equal(getDesktopBearerToken(desktopConfig()), "desktop-secret-token");
+});
+
+test("desktop login sanitizes a valid relative returnTo to a same-origin 303 without cookies", () => {
+  const { logger, records } = makeAuthEventCapture();
+  const request = makeRequest("http://localhost:3000/auth/login?returnTo=%2Fdiy%2Fx%3Fa%3D1%23h");
+  const response = handleDesktopLoginRequest(request, desktopConfig(), {
+    generateRequestId: () => "req-desktop-login",
+    logAuthEvent: logger
+  });
+
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), "http://localhost:3000/diy/x?a=1#h");
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("pragma"), "no-cache");
+  assert.equal(response.headers.get("set-cookie"), null);
+  assert.deepEqual(records, []);
+  assert.doesNotMatch(response.headers.get("location") ?? "", /desktop-secret-token/);
+});
+
+test("desktop login rejects a dangerous returnTo to same-origin root and logs rejection only", () => {
+  const { logger, records } = makeAuthEventCapture();
+  const request = makeRequest("http://localhost:3000/auth/login?returnTo=https%3A%2F%2Fevil.example%2Fsteal");
+  const response = handleDesktopLoginRequest(request, desktopConfig(), {
+    generateRequestId: () => "req-desktop-open-redirect",
+    logAuthEvent: logger
+  });
+
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), "http://localhost:3000/");
+  assert.equal(response.headers.get("set-cookie"), null);
+  assert.equal(records.length, 1);
+  assert.equal(records[0]?.event, "auth.open_redirect_rejected");
+  assert.equal(records[0]?.requestId, "req-desktop-open-redirect");
+  const serializedRecords = JSON.stringify(records);
+  assert.doesNotMatch(serializedRecords, /evil\.example|desktop-secret-token/);
+});
+
+test("desktop access token resolver returns the token without calling the Auth0 resolver", async () => {
+  let auth0Calls = 0;
+  const resolver = makeAccessTokenResolver(
+    () => desktopConfig(),
+    () => {
+      auth0Calls += 1;
+      return Promise.resolve({ token: "auth0-token" });
+    }
+  );
+  const sink = new Response() as NextResponse;
+  const result = await resolver(makeRequest("http://localhost:3000/api/design"), sink);
+  assert.deepEqual(result, { token: "desktop-secret-token" });
+  assert.equal(auth0Calls, 0);
+});
+
+test("auth0 access token resolver delegates unchanged", async () => {
+  let auth0Calls = 0;
+  const resolver = makeAccessTokenResolver(
+    () => makeConfig(),
+    () => {
+      auth0Calls += 1;
+      return Promise.resolve({ token: "auth0-token" });
+    }
+  );
+  const sink = new Response() as NextResponse;
+  const result = await resolver(makeRequest("https://app.mystcrag.com/api/design"), sink);
+  assert.deepEqual(result, { token: "auth0-token" });
+  assert.equal(auth0Calls, 1);
+});
+
+test("desktop touchSession returns no rolling cookies without calling Auth0", async () => {
+  let auth0Calls = 0;
+  const touch = makeTouchSession(
+    () => desktopConfig(),
+    () => {
+      auth0Calls += 1;
+      return Promise.resolve(["mystcrag_session=rolled; Path=/"]);
+    }
+  );
+  assert.deepEqual(await touch(makeRequest("http://localhost:3000/")), []);
+  assert.equal(auth0Calls, 0);
+});
+
+test("auth0 touchSession delegates unchanged", async () => {
+  let auth0Calls = 0;
+  const touch = makeTouchSession(
+    () => makeConfig(),
+    () => {
+      auth0Calls += 1;
+      return Promise.resolve(["mystcrag_session=rolled; Path=/"]);
+    }
+  );
+  const cookies = await touch(makeRequest("https://app.mystcrag.com/"));
+  assert.deepEqual(cookies, ["mystcrag_session=rolled; Path=/"]);
+  assert.equal(auth0Calls, 1);
+});

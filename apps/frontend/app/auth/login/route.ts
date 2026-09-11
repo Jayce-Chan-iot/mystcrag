@@ -1,7 +1,9 @@
 import { NextRequest } from "next/server";
-import { getAuth0Client, generateRequestId } from "../../../src/features/auth/server/auth0-server";
+import type { AuthConfig } from "../../../src/features/auth/model/auth-config";
+import { getAuth0Client, getAuthConfig, generateRequestId } from "../../../src/features/auth/server/auth0-server";
 import { handleLoginRequest, type LoginDeps } from "../../../src/features/auth/server/login";
 import { logAuthEvent } from "../../../src/features/auth/server/auth-events";
+import { detectAuthMode, handleDesktopLoginRequest } from "../../../src/features/auth/server/runtime-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -23,5 +25,17 @@ const deps: LoginDeps = {
 };
 
 export async function GET(request: NextRequest) {
+  let config: AuthConfig;
+  try {
+    config = getAuthConfig();
+  } catch {
+    return handleLoginRequest(request, deps);
+  }
+  if (detectAuthMode(config) === "desktop") {
+    return handleDesktopLoginRequest(request, config, {
+      generateRequestId,
+      logAuthEvent
+    });
+  }
   return handleLoginRequest(request, deps);
 }

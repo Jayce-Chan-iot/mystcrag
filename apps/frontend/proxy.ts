@@ -19,10 +19,11 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getAuth0Client, generateRequestId } from "./src/features/auth/server/auth0-server";
+import { getAuth0Client, getAuthConfig, generateRequestId } from "./src/features/auth/server/auth0-server";
 import { decideProxyRoute } from "./src/features/auth/server/proxy-routes";
 import { handleProxyPageRolling } from "./src/features/auth/server/proxy-page";
 import { logAuthEvent } from "./src/features/auth/server/auth-events";
+import { detectAuthMode } from "./src/features/auth/server/runtime-auth";
 
 // Broad matcher for rolling session support.
 // Excludes static assets, image optimization, and metadata files.
@@ -50,6 +51,18 @@ export default async function proxy(request: NextRequest) {
   // response. Rolling never extends the absolute expiry (enforced by the SDK store).
   // getAuth0Client()/middleware failures fail closed inside handleProxyPageRolling
   // (stable 500, never NextResponse.next(), no cookie clearing).
+  //
+  // Desktop mode has no Auth0 session to roll: pass the page through without ever
+  // instantiating the Auth0 SDK. Any config resolution failure falls through to the
+  // fail-closed SDK path below (unchanged Auth0 semantics).
+  try {
+    if (detectAuthMode(getAuthConfig()) === "desktop") {
+      return NextResponse.next();
+    }
+  } catch {
+    // Config resolution failure: fall through to the fail-closed SDK middleware path.
+  }
+
   return handleProxyPageRolling(request, {
     middleware: (pageRequest) => getAuth0Client().middleware(pageRequest),
     generateRequestId,
