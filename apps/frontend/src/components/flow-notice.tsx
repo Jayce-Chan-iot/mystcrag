@@ -1,9 +1,14 @@
 import Link from "next/link";
 import * as React from "react";
 
+import { AuthRequiredDialog } from "../features/auth/browser/auth-required-dialog";
 import { ERROR_PRESENTATION, type FrontendErrorCode } from "../lib/api/frontend-api-error";
 
 export function FlowNotice({ code, onAction, compact = false }: { code: FrontendErrorCode; onAction?: () => void; compact?: boolean }) {
+  if (code === "UNAUTHORIZED") {
+    return <AuthRequiredDialog onDismiss={onAction} />;
+  }
+
   const content = ERROR_PRESENTATION[code];
   const tone = content.tone === "danger"
     ? "border-[var(--danger)]/25 bg-[#f8edef] text-[var(--danger)]"

@@ -144,14 +144,21 @@ test("revision conflict and inventory changes return stable user-facing errors",
 });
 
 test("all required exceptional states have explicit accessible UI", () => {
-  const markup = FRONTEND_ERROR_CODES.map((code) => renderToStaticMarkup(<FlowNotice code={code} />)).join("");
-  for (const code of FRONTEND_ERROR_CODES) assert.match(markup, new RegExp(`data-error-code="${code}"`));
+  const nonAuthCodes = FRONTEND_ERROR_CODES.filter((code) => code !== "UNAUTHORIZED");
+  const markup = nonAuthCodes.map((code) => renderToStaticMarkup(<FlowNotice code={code} />)).join("");
+  for (const code of nonAuthCodes) assert.match(markup, new RegExp(`data-error-code="${code}"`));
   assert.match(markup, /role="alert"/);
   assert.match(markup, /价格已更新/);
   assert.match(markup, /库存有变化/);
   const forbiddenMarkup = renderToStaticMarkup(<FlowNotice code="FORBIDDEN" />);
   assert.match(forbiddenMarkup, /href="\/ai-design"/);
   assert.match(forbiddenMarkup, /重新生成/);
+  const unauthorizedMarkup = renderToStaticMarkup(<FlowNotice code="UNAUTHORIZED" />);
+  assert.match(unauthorizedMarkup, /role="dialog"/);
+  assert.match(unauthorizedMarkup, /aria-modal="true"/);
+  assert.match(unauthorizedMarkup, /登录后继续/);
+  assert.match(unauthorizedMarkup, /登录 \/ 注册/);
+  assert.match(unauthorizedMarkup, /暂不登录/);
 });
 
 test("mock result API exposes AI failure, network error and empty state paths", async () => {
