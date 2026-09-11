@@ -57,19 +57,23 @@ export MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY="$(openssl rand -base64 32 | tr -d
 
 ## 4. 生成 8 小时本地开发凭证
 
-内置 `signed-test` Provider 只能在 `NODE_ENV=development|test` 且显式启用时使用。它不是固定用户或跳过登录；Backend 仍会验证签名、issuer、audience 和过期时间。
+内置 `signed-test` Provider 只能在 `NODE_ENV=development` 且显式启用时使用。桌面自动登录模式（`MYSTCRAG_DESKTOP_AUTO_AUTH=true`）额外要求 app/backend 都是 loopback origin；它不是固定用户或跳过登录，Backend 仍会验证签名、issuer、audience 和过期时间。
 
 ```bash
 set -a; source .env; set +a
+export MYSTCRAG_APP_ORIGIN="http://localhost:3000"
+export MYSTCRAG_AUTH_CALLBACK_URL="http://localhost:3000/auth/callback"
+export MYSTCRAG_AUTH_LOGOUT_URL="http://localhost:3000"
 export MYSTCRAG_AUTH_SIGNING_SECRET="${MYSTCRAG_AUTH_SIGNING_SECRET:-$(openssl rand -hex 32)}"
-export NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN="$(
+export MYSTCRAG_DESKTOP_AUTO_AUTH="true"
+export MYSTCRAG_DESKTOP_ACCESS_TOKEN="$(
   pnpm --filter @mystcrag/backend exec tsx -e \
     'import { signTestAccessToken } from "./src/auth/signed-test-auth-provider.ts"; const now=Math.floor(Date.now()/1000); console.log(signTestAccessToken({subject:"user-phase-2c-demo",issuer:String(process.env.MYSTCRAG_AUTH_ISSUER),audience:String(process.env.MYSTCRAG_AUTH_AUDIENCE),issuedAtEpochSeconds:now,expiresAtEpochSeconds:now+28800},String(process.env.MYSTCRAG_AUTH_SIGNING_SECRET)))'
 )"
-test -n "$NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN" && echo "demo token ready"
+test -n "$MYSTCRAG_DESKTOP_ACCESS_TOKEN" && echo "demo token ready"
 ```
 
-不要提交 token。Frontend 只在启动时读取 `NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN`；重新生成后必须重启 Frontend。
+不要提交 token。Frontend 只在 Node.js 服务端读取 `MYSTCRAG_DESKTOP_ACCESS_TOKEN`（配合 `MYSTCRAG_DESKTOP_AUTO_AUTH=true`），Token 不会进入浏览器；重新生成后必须重启 Frontend。
 
 `.env.example` 不包含可用签名密钥。上面的命令会为当前 shell 生成临时值，签发 token 和启动 Backend 必须使用同一值。如果分两个终端启动，将同一临时值配置到本地 `.env` 后再分别 `source .env`；该文件不得提交。
 
@@ -87,7 +91,7 @@ pnpm dev
 # 终端 A
 pnpm --filter @mystcrag/backend dev
 
-# 终端 B（还必须有 NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN）
+# 终端 B（还必须有 MYSTCRAG_DESKTOP_ACCESS_TOKEN 和 MYSTCRAG_DESKTOP_AUTO_AUTH=true）
 pnpm --filter @mystcrag/frontend dev
 ```
 

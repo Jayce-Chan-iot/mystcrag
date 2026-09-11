@@ -285,7 +285,30 @@ Accessed 2026-08-25:
 - [Auth0 Next.js quickstart](https://auth0.com/docs/quickstart/webapp/nextjs) and [official `nextjs-auth0` repository](https://github.com/auth0/nextjs-auth0) — Regular Web Application/BFF routes, server-side Cookie Session access, HttpOnly cookies, and current default route behavior. Exact package version remains AUTH-002's dependency decision.
 - [BFF pattern](https://auth0.com/blog/the-backend-for-frontend-pattern-bff/) — backend token custody, API proxying, Secure/HttpOnly cookie, and CSRF responsibility.
 
-## 12. Current state
+## 12. Desktop development identity (server-only, loopback, development-only)
+
+TASK-AUTH-009 adds a server-only desktop convenience identity for the explicit local macOS launcher. It is not a second production session, not a fixed-user fallback, and not reachable outside explicit loopback development. The sole production browser session remains the Auth0 encrypted Cookie Session in section 4.
+
+The mode is enabled only when **all** of the following hold, otherwise the Frontend startup fails closed (never a silent downgrade):
+
+- `NODE_ENV=development`
+- `MYSTCRAG_AUTH_PROVIDER=signed-test`
+- `MYSTCRAG_ENABLE_SIGNED_TEST_AUTH=true`
+- `MYSTCRAG_DESKTOP_AUTO_AUTH=true`
+- `MYSTCRAG_APP_ORIGIN` and `MYSTCRAG_BACKEND_ORIGIN` are both loopback origins
+- `MYSTCRAG_DESKTOP_ACCESS_TOKEN` is non-empty
+
+Rules:
+
+- The only new variables are `MYSTCRAG_DESKTOP_AUTO_AUTH` and `MYSTCRAG_DESKTOP_ACCESS_TOKEN`; both are server-only and never `NEXT_PUBLIC_*`. The legacy `NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN` template has no consumer.
+- `/auth/session` in desktop mode returns `200` with `Cache-Control: no-store` and the safe projection `{"authenticated":true,"user":{"displayName":"本地演示用户"}}`. No token, issuer, subject, audience, or internal `User.id` is returned.
+- The desktop Access Token lives only in the launcher's `0600` runtime env and in Next.js server process memory; the BFF forwards it server-to-server as `Authorization: Bearer`. It never enters a browser cookie, React/client state, HTML/RSC payload, URL, log, or error message.
+- Desktop mode never instantiates or invokes the Auth0 SDK: page routing passes through, `/auth/login` 303s to a `validateReturnTo`-cleared same-origin path without creating a cookie, and there is no rolling, renewal, logout or refresh. When desktop mode is off, Auth0 cookie/rolling/refresh/logout/returnTo/Origin/error-classification behavior is unchanged.
+- The signed-test token uses `exp = now + 28800` seconds, a maximum eight-hour launcher lifetime. Backend still verifies signature, exact issuer, audience and expiry through `SignedTestTokenAuthProvider`; this task does not modify Backend.
+- Consumer `UNAUTHORIZED` responses render one shared `AuthRequiredDialog` (登录后继续); its primary action navigates to `/auth/login?returnTo=<validated path>`. The "注册" side is supplied by the Auth0 tenant's database-connection signup setting; the app only promises entry to the unified login/register endpoint and never fabricates a local consumer registration form.
+- The independent bead-import admin `admin/admin` local authentication is unchanged and never shares the consumer dialog or desktop identity.
+
+## 13. Current state
 
 `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`
 
