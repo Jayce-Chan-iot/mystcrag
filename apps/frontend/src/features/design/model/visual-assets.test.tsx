@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { DISPLAY_TRAY_OPTIONS } from "./display-tray";
 import { getBeadVisual, getTrayVisual, loadBeadVisualImage, nextBeadImagePhase } from "./visual-assets";
 
 const coreMaterials = [
@@ -30,6 +31,18 @@ test("every display tray resolves to a real photographic surface", () => {
   );
   assert.equal(new Set(sources).size, 4);
   for (const src of sources) assert.match(src, /^\/trays\/.+\.webp$/);
+});
+
+test("every display tray publishes the shared runtime geometry ratios", () => {
+  for (const option of DISPLAY_TRAY_OPTIONS) {
+    const visual = getTrayVisual(option.id);
+    assert.deepEqual(
+      { rimRadiusRatio: visual.rimRadiusRatio, innerRadiusRatio: visual.innerRadiusRatio },
+      { rimRadiusRatio: 0.44, innerRadiusRatio: 0.37 },
+      option.id
+    );
+    assert.ok(visual.innerRadiusRatio < visual.rimRadiusRatio);
+  }
 });
 
 const HEX = "a".repeat(64);

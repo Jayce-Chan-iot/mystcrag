@@ -47,6 +47,8 @@ export type LoadableImageElement = {
 export type TrayVisual = {
   src: string;
   alt: string;
+  rimRadiusRatio: 0.44;
+  innerRadiusRatio: 0.37;
 };
 
 const BEAD_VISUALS = {
@@ -73,10 +75,30 @@ const BEAD_VISUALS = {
 } as const satisfies Record<string, PhotographicBeadVisual>;
 
 const TRAY_VISUALS: Record<DisplayTrayMaterial, TrayVisual> = {
-  ACRYLIC_CLEAR: { src: "/trays/clear-acrylic.webp", alt: "透明亚克力展示托盘" },
-  BONE_CHINA: { src: "/trays/bone-china.webp", alt: "米白骨瓷展示托盘" },
-  WOOD: { src: "/trays/oak-wood.webp", alt: "原木展示托盘" },
-  FRENCH_LINEN: { src: "/trays/french-linen.webp", alt: "法式亚麻展示托盘" }
+  ACRYLIC_CLEAR: {
+    src: "/trays/clear-acrylic.webp",
+    alt: "透明亚克力展示托盘",
+    rimRadiusRatio: 0.44,
+    innerRadiusRatio: 0.37
+  },
+  BONE_CHINA: {
+    src: "/trays/bone-china.webp",
+    alt: "米白骨瓷展示托盘",
+    rimRadiusRatio: 0.44,
+    innerRadiusRatio: 0.37
+  },
+  WOOD: {
+    src: "/trays/oak-wood.webp",
+    alt: "原木展示托盘",
+    rimRadiusRatio: 0.44,
+    innerRadiusRatio: 0.37
+  },
+  FRENCH_LINEN: {
+    src: "/trays/french-linen.webp",
+    alt: "法式亚麻展示托盘",
+    rimRadiusRatio: 0.44,
+    innerRadiusRatio: 0.37
+  }
 };
 
 export function getBeadVisual(materialKey: string, textureAssetKey?: string | null): BeadVisual {
