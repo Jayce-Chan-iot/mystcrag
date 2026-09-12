@@ -12,6 +12,7 @@ import {
   initialLoginHref,
   isDialogDismissKey,
   nextTabIndex,
+  resolveReturnFocusTarget,
   restoreFocusTo,
   SERVER_SAFE_LOGIN_HREF
 } from "./auth-required-dialog";
@@ -58,8 +59,8 @@ test("dialog wires initial focus, restoration, trap and Escape to pure helpers",
   const source = readFileSync(new URL("./auth-required-dialog.tsx", import.meta.url), "utf8");
   assert.match(source, /primaryRef\.current\?\.focus\(\)/);
   assert.match(source, /previouslyFocusedRef\.current = document\.activeElement/);
-  assert.match(source, /dismissDialog\(\(\) => setOpen\(false\), previouslyFocusedRef\.current, onDismiss\)/);
-  assert.match(source, /restoreFocusTo\(previouslyFocusedRef\.current\)/);
+  assert.match(source, /resolveReturnFocusTarget\(returnFocusRef, previouslyFocusedRef\.current\)/);
+  assert.match(source, /restoreFocusTo\(resolveReturnFocusTarget\(returnFocusRef, previouslyFocusedRef\.current\)\)/);
   assert.match(source, /event\.preventDefault\(\)/);
   assert.match(source, /nextTabIndex\(/);
   assert.match(source, /isDialogDismissKey\(event\.key\)/);
@@ -83,6 +84,15 @@ test("restoreFocusTo calls focus() only on a focusable element", () => {
   assert.equal(restoreFocusTo(undefined), false);
   assert.equal(restoreFocusTo({}), false);
   assert.equal(restoreFocusTo({ focus: 1 }), false);
+});
+
+test("resolveReturnFocusTarget prefers an explicit returnFocusRef over activeElement fallback", () => {
+  const trigger = { focus: () => {} };
+  const body = { focus: () => {} };
+  assert.equal(resolveReturnFocusTarget({ current: trigger as HTMLElement }, body as HTMLElement), trigger);
+  assert.equal(resolveReturnFocusTarget({ current: null }, body as HTMLElement), body);
+  assert.equal(resolveReturnFocusTarget(undefined, body as HTMLElement), body);
+  assert.equal(resolveReturnFocusTarget(null, null), null);
 });
 
 test("dismissDialog closes, restores focus to the trigger and then fires onDismiss in order", () => {

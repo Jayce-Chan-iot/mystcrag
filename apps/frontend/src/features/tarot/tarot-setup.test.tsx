@@ -209,6 +209,17 @@ test("unauthorized setup opens the shared login dialog instead of an inline mess
   assert.doesNotMatch(markup, /role="alert"/);
 });
 
+test("tarot setup wires a stable submit-button returnFocusRef for the auth dialog", () => {
+  const source = readFileSync(
+    new URL("./components/tarot-setup.tsx", import.meta.url),
+    "utf8"
+  );
+  assert.match(source, /submitButtonRef/);
+  assert.match(source, /ref=\{submitButtonRef\}/);
+  assert.match(source, /returnFocusRef=\{submitButtonRef\}/);
+  assert.match(source, /data-tarot-setup-submit/);
+});
+
 test("question draft store is memory-only and scoped by returned session ID", () => {
   const store = createTarotQuestionDraftStore();
   store.set("session-one", { question: "我想整理下一步", saveQuestion: false });

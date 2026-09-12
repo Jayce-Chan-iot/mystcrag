@@ -164,6 +164,24 @@ test("operation failure stays inline and never removes the ready catalog or desi
   assert.equal(afterDismiss.materials.length, 2);
 });
 
+test("catalog-notice-dismissed clears only the catalog notice so a later 401 can remount the dialog", () => {
+  const failed = reduceLibraryPage(INITIAL_LIBRARY_PAGE_STATE, {
+    type: "catalog-failed",
+    code: "UNAUTHORIZED"
+  });
+  assert.equal(failed.status, "catalog-error");
+  assert.equal(failed.catalogNotice, "UNAUTHORIZED");
+
+  const dismissed = reduceLibraryPage(failed, { type: "catalog-notice-dismissed" });
+  assert.equal(dismissed.catalogNotice, null);
+  assert.equal(dismissed.status, "catalog-error");
+  assert.equal(dismissed.operationNotice, null);
+
+  // A fresh 401 writes the code again; the page can remount the dialog.
+  const again = reduceLibraryPage(dismissed, { type: "catalog-failed", code: "UNAUTHORIZED" });
+  assert.equal(again.catalogNotice, "UNAUTHORIZED");
+});
+
 test("a late design resolution supplements the already-ready catalog", () => {
   const catalogReady = reduceLibraryPage(INITIAL_LIBRARY_PAGE_STATE, {
     type: "catalog-resolved",

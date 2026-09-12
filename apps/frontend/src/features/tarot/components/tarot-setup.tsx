@@ -119,6 +119,10 @@ export function TarotSetupFields({
   onSubmit
 }: TarotSetupFieldsProps) {
   const questionHelpId = "tarot-question-help";
+  // Stable return target for the auth dialog: while `isSubmitting` the "进入抽牌" button
+  // is disabled, so `document.activeElement` collapses to `document.body` and cannot be
+  // used to restore focus after dismissal.
+  const submitButtonRef = useRef<HTMLButtonElement>(null);
 
   return (
     <form
@@ -224,11 +228,12 @@ export function TarotSetupFields({
           塔罗内容仅用于自我反思与设计灵感，不构成事实预测、医疗或投资建议；水晶搭配也不代表功效承诺。
         </div>
         {error === "UNAUTHORIZED" ? (
-          <AuthRequiredDialog onDismiss={onDismissAuthRequired} />
+          <AuthRequiredDialog onDismiss={onDismissAuthRequired} returnFocusRef={submitButtonRef} />
         ) : error ? (
           <p className="mt-5 text-sm leading-6 text-[var(--danger)]" role="alert">{ERROR_PRESENTATION[error].title}：{ERROR_PRESENTATION[error].message}</p>
         ) : null}
         <button
+          ref={submitButtonRef}
           className="mt-7 min-h-13 rounded-full bg-[var(--accent-deep)] px-7 text-sm font-medium text-white shadow-[0_14px_35px_rgb(73_53_95/0.22)] transition hover:-translate-y-0.5 disabled:cursor-wait disabled:opacity-55 lg:mt-auto"
           disabled={isSubmitting}
           data-tarot-setup-submit="true"

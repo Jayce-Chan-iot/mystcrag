@@ -160,7 +160,7 @@ export function QuestionnaireWizard() {
         )}
 
         {error ? <p className="mt-5 text-sm text-[var(--danger)]" id="question-error" role="alert">{error}</p> : null}
-        {apiError ? <div className="mt-6"><FlowNotice code={apiError} compact onAction={() => void moveNext()} /></div> : null}
+        {apiError ? <div className="mt-6"><FlowNotice code={apiError} compact onAction={() => void moveNext()} onDismissAuthRequired={() => setApiError(null)} /></div> : null}
       </section>
 
       <div className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--border)] bg-[var(--surface)]/94 px-5 py-4 backdrop-blur sm:static sm:mt-auto sm:border-0 sm:bg-transparent sm:px-0 sm:pt-14">

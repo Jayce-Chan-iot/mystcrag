@@ -335,7 +335,7 @@ export function GalleryPage() {
   if (notice && entries.length === 0) {
     return (
       <main className="mx-auto min-h-[60vh] max-w-3xl px-5 py-16" data-gallery-page="error">
-        <FlowNotice code={notice} onAction={() => { setNotice(null); setIsLoading(true); void loadEntries().finally(() => setIsLoading(false)); }} />
+        <FlowNotice code={notice} onAction={() => { setNotice(null); setIsLoading(true); void loadEntries().finally(() => setIsLoading(false)); }} onDismissAuthRequired={() => setNotice(null)} />
       </main>
     );
   }
@@ -417,7 +417,7 @@ export function GalleryPage() {
           </div>
         </div>
 
-        {notice ? <div className="mt-4"><FlowNotice code={notice} compact onAction={() => setNotice(null)} /></div> : null}
+        {notice ? <div className="mt-4"><FlowNotice code={notice} compact onAction={() => setNotice(null)} onDismissAuthRequired={() => setNotice(null)} /></div> : null}
         {message ? (
           <p className="mt-4 rounded-full bg-[var(--accent-soft)] px-5 py-2 text-sm text-[var(--success)]" data-gallery-toast="true" role="status">{message}</p>
         ) : null}

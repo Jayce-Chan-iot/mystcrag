@@ -68,6 +68,19 @@ export function restoreFocusTo(element: unknown): boolean {
 }
 
 /**
+ * Chooses the element to restore focus to on dialog dismissal. An explicit
+ * `returnFocusRef.current` always wins over the `document.activeElement` fallback —
+ * required when the trigger control is `disabled` during submit and the browser has
+ * already dropped focus to `document.body`.
+ */
+export function resolveReturnFocusTarget(
+  returnFocusRef: { current: HTMLElement | null } | null | undefined,
+  fallback: HTMLElement | null
+): HTMLElement | null {
+  return returnFocusRef?.current ?? fallback;
+}
+
+/**
  * The single dismissal primitive for the dialog: close it, restore focus to the
  * previously focused trigger element, then run the caller's `onDismiss`. `onDismiss` is
  * deliberately distinct from any business retry — it only ever reveals intent to close.
@@ -80,10 +93,12 @@ export function dismissDialog(close: () => void, restoreFrom: unknown, onDismiss
 
 export function AuthRequiredDialog({
   onDismiss,
-  loginHref
+  loginHref,
+  returnFocusRef
 }: {
   onDismiss?: () => void;
   loginHref?: string;
+  returnFocusRef?: React.RefObject<HTMLElement | null>;
 }) {
   const [open, setOpen] = React.useState(true);
   const titleId = React.useId();
@@ -98,15 +113,17 @@ export function AuthRequiredDialog({
   const href = initialLoginHref(loginHref ?? clientHref ?? undefined);
 
   // Capture the element that had focus before the dialog opened and move focus to the
-  // primary action. Focus is restored explicitly on dismissal (see `createDismissHandler`)
-  // and again as a backup on an actual unmount.
+  // primary action. Focus is restored explicitly on dismissal (see `dismiss`) and again
+  // as a backup on an actual unmount. An explicit `returnFocusRef` always wins because
+  // a disabled trigger (e.g. "进入抽牌" during submit) leaves `document.activeElement`
+  // as `document.body`.
   React.useEffect(() => {
     previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
     primaryRef.current?.focus();
     return () => {
-      restoreFocusTo(previouslyFocusedRef.current);
+      restoreFocusTo(resolveReturnFocusTarget(returnFocusRef, previouslyFocusedRef.current));
     };
-  }, []);
+  }, [returnFocusRef]);
 
   // After hydration, derive returnTo from the real window.location; never on the server.
   // The default SSR/first client render already shares the server-safe href, so this
@@ -121,8 +138,13 @@ export function AuthRequiredDialog({
   const dismiss = React.useCallback(() => {
     // Reads the trigger element lazily at dismissal time (never during render) and runs
     // the same dismissal+focus-restore order used by the Button/Escape/mask paths.
-    dismissDialog(() => setOpen(false), previouslyFocusedRef.current, onDismiss);
-  }, [onDismiss, setOpen]);
+    // `returnFocusRef` takes priority over the captured `document.activeElement`.
+    dismissDialog(
+      () => setOpen(false),
+      resolveReturnFocusTarget(returnFocusRef, previouslyFocusedRef.current),
+      onDismiss
+    );
+  }, [onDismiss, returnFocusRef, setOpen]);
 
   if (!open) return null;
 

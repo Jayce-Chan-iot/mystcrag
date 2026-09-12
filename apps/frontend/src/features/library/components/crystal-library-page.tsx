@@ -121,7 +121,8 @@ export type LibraryPageEvent =
   | { type: "design-failed"; code: FrontendErrorCode }
   | { type: "operation-started" }
   | { type: "operation-failed"; code: FrontendErrorCode }
-  | { type: "operation-notice-dismissed" };
+  | { type: "operation-notice-dismissed" }
+  | { type: "catalog-notice-dismissed" };
 
 export function reduceLibraryPage(state: LibraryPageState, event: LibraryPageEvent): LibraryPageState {
   switch (event.type) {
@@ -141,6 +142,8 @@ export function reduceLibraryPage(state: LibraryPageState, event: LibraryPageEve
       return { ...state, operationNotice: event.code };
     case "operation-notice-dismissed":
       return { ...state, operationNotice: null };
+    case "catalog-notice-dismissed":
+      return { ...state, catalogNotice: null };
   }
 }
 
@@ -808,7 +811,15 @@ export function CrystalLibraryPage() {
   if (state.status === "catalog-error") {
     return (
       <main className="mx-auto min-h-[60vh] max-w-3xl px-5 py-16" data-library-page="error">
-        <FlowNotice code={state.catalogNotice ?? "NETWORK_ERROR"} onAction={retryLoad} />
+        {state.catalogNotice ? (
+          <FlowNotice
+            code={state.catalogNotice}
+            onAction={retryLoad}
+            onDismissAuthRequired={() => dispatcher.dispatch({ type: "catalog-notice-dismissed" })}
+          />
+        ) : (
+          <p className="text-sm leading-6 text-[var(--muted)]" role="status">目录暂时不可用。可离开本页后再次进入以重新加载。</p>
+        )}
       </main>
     );
   }
@@ -940,7 +951,7 @@ export function CrystalLibraryPage() {
               </div>
             ) : null}
 
-            {state.operationNotice ? <div className="mt-4"><FlowNotice code={state.operationNotice} compact onAction={() => dispatcher.dispatch({ type: "operation-notice-dismissed" })} /></div> : null}
+            {state.operationNotice ? <div className="mt-4"><FlowNotice code={state.operationNotice} compact onAction={() => dispatcher.dispatch({ type: "operation-notice-dismissed" })} onDismissAuthRequired={() => dispatcher.dispatch({ type: "operation-notice-dismissed" })} /></div> : null}
             {message ? (
               <p className="mt-4 rounded-full bg-[var(--accent-soft)] px-5 py-2 text-sm text-[var(--success)]" role="status" data-library-toast="true">{message}</p>
             ) : null}

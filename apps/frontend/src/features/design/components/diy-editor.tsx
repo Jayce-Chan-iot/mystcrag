@@ -292,7 +292,7 @@ export function DiyEditor({ designId }: { designId: string }) {
     return <main className="mx-auto min-h-[70vh] max-w-7xl px-5 py-16" aria-live="polite" data-diy-editor-page="true">正在从 Backend 加载设计…</main>;
   }
   if (!design || !optimistic) {
-    return <main className="mx-auto min-h-[70vh] max-w-7xl px-5 py-16" data-diy-editor-page="true"><FlowNotice code={notice ?? "EMPTY_STATE"} onAction={() => { setIsLoading(true); void loadDesign(); }} /></main>;
+    return <main className="mx-auto min-h-[70vh] max-w-7xl px-5 py-16" data-diy-editor-page="true"><FlowNotice code={notice ?? "EMPTY_STATE"} onAction={() => { setIsLoading(true); void loadDesign(); }} onDismissAuthRequired={() => setNotice(null)} /></main>;
   }
 
   const selectedComponentId = design.beads.some((bead) => bead.componentId === rawSelectedComponentId)
@@ -909,7 +909,7 @@ export function DiyEditor({ designId }: { designId: string }) {
 
           <section className="relative overflow-hidden border-b border-[var(--border)]/70 bg-[var(--surface)] px-8" aria-labelledby="desktop-preview-title">
             <h1 className="sr-only" id="desktop-preview-title">DIY 手串编辑预览</h1>
-            {notice ? <div className="absolute left-8 right-8 top-4 z-40"><FlowNotice code={notice} compact onAction={noticeAction} /></div> : null}
+            {notice ? <div className="absolute left-8 right-8 top-4 z-40"><FlowNotice code={notice} compact onAction={noticeAction} onDismissAuthRequired={() => setNotice(null)} /></div> : null}
             {requiresRestock ? <p className="absolute left-8 right-8 top-4 z-30 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900" role="status">本方案含需补货材料，下单后预计等待约 5 天，具体以实际补货时间为准。</p> : null}
             <button
               aria-pressed={braceletConnected}
@@ -1186,7 +1186,7 @@ export function DiyEditor({ designId }: { designId: string }) {
             <div className="flex shrink-0 items-center gap-1"><dt>合计</dt><dd className="font-medium text-[var(--accent-deep)]" data-server-authoritative-price="true">{formatMinorAmount({ amountMinor: design.pricing.totalPriceMinor, currency: design.currency, locale: design.locale })}</dd></div>
           </dl>
 
-          {notice ? <div className="m-4"><FlowNotice code={notice} compact onAction={noticeAction} /></div> : null}
+          {notice ? <div className="m-4"><FlowNotice code={notice} compact onAction={noticeAction} onDismissAuthRequired={() => setNotice(null)} /></div> : null}
           {requiresRestock ? <p className="mx-4 mt-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900" role="status">本方案含需补货材料，下单后预计等待约 5 天，具体以实际补货时间为准。</p> : null}
           {editMessage ? <p className="mx-4 mt-3 rounded-xl bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--success)]" role="status">{editMessage}</p> : null}
 
