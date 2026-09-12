@@ -29,10 +29,21 @@ export const DESKTOP_DISPLAY_NAME = "本地演示用户";
 export type DesktopSessionProjection = {
   readonly authenticated: true;
   readonly user: { readonly displayName: string };
+  /**
+   * Non-sensitive capability signal for the UI. Desktop identity is process-scoped for
+   * the launcher lifetime, so there is no session cookie an active logout could revoke.
+   * `false` tells the client to show a read-only "本地演示模式" badge instead of an
+   * actionable "退出" control.
+   */
+  readonly logoutAvailable: false;
 };
 
 export function projectDesktopSession(): DesktopSessionProjection {
-  return { authenticated: true, user: { displayName: DESKTOP_DISPLAY_NAME } };
+  return {
+    authenticated: true,
+    user: { displayName: DESKTOP_DISPLAY_NAME },
+    logoutAvailable: false
+  };
 }
 
 export function buildDesktopSessionResponse(): NextResponse {
@@ -79,6 +90,50 @@ export function handleDesktopLoginRequest(
       "Pragma": "no-cache"
     }
   });
+}
+
+export type DesktopLogoutDeps = {
+  generateRequestId(): string;
+  logAuthEvent: AuthEventLogger;
+};
+
+/**
+ * Desktop-mode POST /auth/logout: never touches Auth0 or builds an upstream logout URL,
+ * and never claims to revoke the process-scoped desktop identity. It still performs the
+ * exact Origin equality check, then returns a controlled, no-store, same-origin
+ * informational result. Auth0 mode logout behavior is untouched (handled upstream).
+ */
+export function handleDesktopLogoutRequest(
+  request: NextRequest,
+  config: AuthConfig,
+  deps: DesktopLogoutDeps
+): NextResponse {
+  const requestId = deps.generateRequestId();
+
+  // Exact Origin equality — fail closed before anything else, mirroring the Auth0 path.
+  const origin = request.headers.get("origin");
+  if (!origin || origin !== config.appOrigin) {
+    deps.logAuthEvent("auth.origin_rejected", {
+      category: "origin_rejected",
+      requestId,
+      outcome: "failure"
+    });
+    return NextResponse.json(
+      { error: { code: "FORBIDDEN", message: "Origin validation failed.", requestId } },
+      { status: 403, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+
+  // The desktop identity is held by the process for its lifetime; there is no session
+  // cookie to expire and no upstream SSO session to tear down, so a logout is a no-op.
+  return NextResponse.json(
+    {
+      status: "local-demo",
+      requestId,
+      message: "本地演示身份由进程持有，不受退出操作影响。"
+    },
+    { status: 200, headers: { "Cache-Control": "no-store", "Pragma": "no-cache" } }
+  );
 }
 
 export type AccessTokenResolver = (request: NextRequest, sink: NextResponse) => Promise<{ token: string }>;

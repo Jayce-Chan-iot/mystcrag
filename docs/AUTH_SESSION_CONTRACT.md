@@ -291,7 +291,7 @@ TASK-AUTH-009 adds a server-only desktop convenience identity for the explicit l
 
 The mode is enabled only when **all** of the following hold, otherwise the Frontend startup fails closed (never a silent downgrade):
 
-- `NODE_ENV=development`
+- `NODE_ENV=development` — compared against the raw `env.NODE_ENV`, so an exact `development` is required; a missing, empty, `test`, `staging`, `production` or any other value rejects startup. This does not change plain `signed-test` (non-desktop) support, which remains available in development/test with the existing explicit opt-in.
 - `MYSTCRAG_AUTH_PROVIDER=signed-test`
 - `MYSTCRAG_ENABLE_SIGNED_TEST_AUTH=true`
 - `MYSTCRAG_DESKTOP_AUTO_AUTH=true`
@@ -301,11 +301,12 @@ The mode is enabled only when **all** of the following hold, otherwise the Front
 Rules:
 
 - The only new variables are `MYSTCRAG_DESKTOP_AUTO_AUTH` and `MYSTCRAG_DESKTOP_ACCESS_TOKEN`; both are server-only and never `NEXT_PUBLIC_*`. The legacy `NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN` template has no consumer.
-- `/auth/session` in desktop mode returns `200` with `Cache-Control: no-store` and the safe projection `{"authenticated":true,"user":{"displayName":"本地演示用户"}}`. No token, issuer, subject, audience, or internal `User.id` is returned.
+- `/auth/session` in desktop mode returns `200` with `Cache-Control: no-store` and the safe projection `{"authenticated":true,"user":{"displayName":"本地演示用户"},"logoutAvailable":false}`. `logoutAvailable:false` is a non-sensitive capability signal that makes the UI show a read-only "本地演示模式" badge instead of an actionable "退出" control. No token, issuer, subject, audience, or internal `User.id` is returned.
 - The desktop Access Token lives only in the launcher's `0600` runtime env and in Next.js server process memory; the BFF forwards it server-to-server as `Authorization: Bearer`. It never enters a browser cookie, React/client state, HTML/RSC payload, URL, log, or error message.
-- Desktop mode never instantiates or invokes the Auth0 SDK: page routing passes through, `/auth/login` 303s to a `validateReturnTo`-cleared same-origin path without creating a cookie, and there is no rolling, renewal, logout or refresh. When desktop mode is off, Auth0 cookie/rolling/refresh/logout/returnTo/Origin/error-classification behavior is unchanged.
+- Desktop mode never instantiates or invokes the Auth0 SDK: page routing passes through, `/auth/login` 303s to a `validateReturnTo`-cleared same-origin path without creating a cookie, and there is no rolling, renewal or refresh. `POST /auth/logout` still performs the exact `Origin` check and returns a controlled, no-store, same-origin `200` with `{"status":"local-demo",...}`; it never builds an Auth0 logout URL, never sets/clears a cookie and never claims to revoke the process-scoped desktop identity, so it no longer yields a 500. When desktop mode is off, Auth0 cookie/rolling/refresh/logout/returnTo/Origin/error-classification behavior is unchanged.
 - The signed-test token uses `exp = now + 28800` seconds, a maximum eight-hour launcher lifetime. Backend still verifies signature, exact issuer, audience and expiry through `SignedTestTokenAuthProvider`; this task does not modify Backend.
 - Consumer `UNAUTHORIZED` responses render one shared `AuthRequiredDialog` (登录后继续); its primary action navigates to `/auth/login?returnTo=<validated path>`. The "注册" side is supplied by the Auth0 tenant's database-connection signup setting; the app only promises entry to the unified login/register endpoint and never fabricates a local consumer registration form.
+- The dialog's secondary "暂不登录" (and Escape/mask dismissal) is a pure close: it restores keyboard focus to the trigger element and is never wired to a business `onAction` retry/re-submit. Dismissing therefore does not re-issue the protected request; when the user performs the protected operation again and receives a fresh `401`, the dialog re-opens.
 - The independent bead-import admin `admin/admin` local authentication is unchanged and never shares the consumer dialog or desktop identity.
 
 ## 13. Current state

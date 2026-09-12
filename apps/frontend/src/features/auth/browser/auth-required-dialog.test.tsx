@@ -8,8 +8,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   AUTH_REQUIRED_COPY,
   AuthRequiredDialog,
+  dismissDialog,
+  initialLoginHref,
   isDialogDismissKey,
-  nextTabIndex
+  nextTabIndex,
+  restoreFocusTo,
+  SERVER_SAFE_LOGIN_HREF
 } from "./auth-required-dialog";
 
 const noop = () => undefined;
@@ -53,10 +57,95 @@ test("dialog renders one accessible, labelled dialog with approved copy and 44px
 test("dialog wires initial focus, restoration, trap and Escape to pure helpers", () => {
   const source = readFileSync(new URL("./auth-required-dialog.tsx", import.meta.url), "utf8");
   assert.match(source, /primaryRef\.current\?\.focus\(\)/);
-  assert.match(source, /const previouslyFocused = document\.activeElement/);
-  assert.match(source, /previouslyFocused\.focus\(\)/);
+  assert.match(source, /previouslyFocusedRef\.current = document\.activeElement/);
+  assert.match(source, /dismissDialog\(\(\) => setOpen\(false\), previouslyFocusedRef\.current, onDismiss\)/);
+  assert.match(source, /restoreFocusTo\(previouslyFocusedRef\.current\)/);
   assert.match(source, /event\.preventDefault\(\)/);
   assert.match(source, /nextTabIndex\(/);
   assert.match(source, /isDialogDismissKey\(event\.key\)/);
-  assert.doesNotMatch(source, /__NEXT_PUBLIC|desktop|access_token|Bearer/i);
+  // No secret material may be referenced in source or reach rendered output.
+  assert.doesNotMatch(source, /__NEXT_PUBLIC|access_token|Bearer/i);
+});
+
+test("dialog never leaks secret or token material into SSR markup", () => {
+  const markup = renderToStaticMarkup(<AuthRequiredDialog onDismiss={noop} />);
+  assert.doesNotMatch(markup, /__NEXT_PUBLIC|access_token|Bearer|desktop-secret/i);
+});
+
+// --- Issue 3: every dismissal path explicitly restores focus (behavioral) ---
+
+test("restoreFocusTo calls focus() only on a focusable element", () => {
+  const focused: string[] = [];
+  const trigger = { focus: () => { focused.push("trigger"); } };
+  assert.equal(restoreFocusTo(trigger), true);
+  assert.deepEqual(focused, ["trigger"]);
+  assert.equal(restoreFocusTo(null), false);
+  assert.equal(restoreFocusTo(undefined), false);
+  assert.equal(restoreFocusTo({}), false);
+  assert.equal(restoreFocusTo({ focus: 1 }), false);
+});
+
+test("dismissDialog closes, restores focus to the trigger and then fires onDismiss in order", () => {
+  const calls: string[] = [];
+  const trigger = { focus: () => { calls.push("focus"); } };
+  dismissDialog(
+    () => { calls.push("close"); },
+    trigger,
+    () => { calls.push("onDismiss"); }
+  );
+  assert.deepEqual(calls, ["close", "focus", "onDismiss"]);
+});
+
+test("dismissDialog always fires onDismiss even when no element can be restored", () => {
+  let onDismissCalls = 0;
+  dismissDialog(() => {}, null, () => { onDismissCalls += 1; });
+  assert.equal(onDismissCalls, 1);
+});
+
+test("dismissDialog closes, restores focus and fires onDismiss in order (Button/Escape/mask path)", () => {
+  const calls: string[] = [];
+  const setOpenCalls: boolean[] = [];
+  const handler = () => dismissDialog(
+    () => { setOpenCalls.push(false); calls.push("close"); },
+    { focus: () => { calls.push("focus"); } },
+    () => { calls.push("onDismiss"); }
+  );
+  handler();
+  assert.deepEqual(calls, ["close", "focus", "onDismiss"]);
+  assert.deepEqual(setOpenCalls, [false]);
+});
+
+test("a dialog dismiss with no onDismiss performs no business retry", () => {
+  let externalCalls = 0;
+  const close = () => { externalCalls += 1; };
+  const handler = () => dismissDialog(close, { focus: () => {} });
+  handler();
+  assert.equal(externalCalls, 1, "dialog only closes; no onDismiss/retry is invoked");
+});
+
+test("a dialog dismiss still restores focus when onDismiss is absent", () => {
+  const focused: string[] = [];
+  dismissDialog(() => {}, { focus: () => { focused.push("trigger"); } });
+  assert.deepEqual(focused, ["trigger"]);
+});
+
+// --- Issue 4: a fresh mount re-opens the dialog, so a new 401 can surface again ---
+
+test("a freshly rendered dialog starts open, so a later 401 remount reopens it", () => {
+  const markup = renderToStaticMarkup(<AuthRequiredDialog onDismiss={noop} />);
+  assert.match(markup, /data-auth-required-dialog="true"/);
+  assert.ok(markup.length > 0, "dialog renders (open=true) on a fresh mount");
+});
+
+// --- Issue 5: the default login href is hydration-stable ---
+
+test("initial login href is the fixed server-safe default when no prop is supplied", () => {
+  assert.equal(initialLoginHref(), SERVER_SAFE_LOGIN_HREF);
+  assert.equal(initialLoginHref("/auth/login?returnTo=%2Fcustom"), "/auth/login?returnTo=%2Fcustom");
+});
+
+test("default dialog SSRs the fixed server-safe href so hydration cannot mismatch", () => {
+  const markup = renderToStaticMarkup(<AuthRequiredDialog onDismiss={noop} />);
+  assert.ok(markup.includes(`href="${SERVER_SAFE_LOGIN_HREF}"`), markup);
+  assert.ok(!markup.includes("buildLoginHref"), "no window-derived href may leak into SSR output");
 });

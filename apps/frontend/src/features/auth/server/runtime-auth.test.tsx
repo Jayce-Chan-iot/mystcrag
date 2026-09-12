@@ -20,11 +20,18 @@ import {
   buildDesktopSessionResponse,
   getDesktopBearerToken,
   handleDesktopLoginRequest,
+  handleDesktopLogoutRequest,
   makeAccessTokenResolver,
   makeTouchSession,
   DESKTOP_DISPLAY_NAME
 } from "./runtime-auth";
-import { makeConfig, makeDevConfig, makeAuthEventCapture, makeRequest } from "./auth-test-fixtures";
+import {
+  makeConfig,
+  makeDevConfig,
+  makeAuthEventCapture,
+  makeRequest,
+  noopAuthEventLogger
+} from "./auth-test-fixtures";
 
 function desktopConfig() {
   return makeDevConfig({
@@ -44,9 +51,11 @@ test("projectDesktopSession returns only the safe local projection", () => {
   const projection = projectDesktopSession();
   assert.deepEqual(projection, {
     authenticated: true,
-    user: { displayName: DESKTOP_DISPLAY_NAME }
+    user: { displayName: DESKTOP_DISPLAY_NAME },
+    logoutAvailable: false
   });
   assert.equal(projection.user.displayName, "本地演示用户");
+  assert.equal(projection.logoutAvailable, false);
   const serialized = JSON.stringify(projection);
   assert.doesNotMatch(serialized, /token|issuer|subject|audience|user_id|desktop-secret/);
 });
@@ -140,6 +149,50 @@ test("desktop touchSession returns no rolling cookies without calling Auth0", as
   );
   assert.deepEqual(await touch(makeRequest("http://localhost:3000/")), []);
   assert.equal(auth0Calls, 0);
+});
+
+test("desktop logout requires exact Origin and rejects a mismatched Origin with 403", () => {
+  const { logger, records } = makeAuthEventCapture();
+  const request = makeRequest("http://localhost:3000/auth/logout", {
+    method: "POST",
+    headers: { origin: "http://evil.example.com" }
+  });
+  const response = handleDesktopLogoutRequest(request, desktopConfig(), {
+    generateRequestId: () => "req-desktop-logout",
+    logAuthEvent: logger
+  });
+
+  assert.equal(response.status, 403);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("set-cookie"), null);
+  assert.equal(response.headers.get("location"), null);
+  assert.deepEqual(records, [
+    { event: "auth.origin_rejected", category: "origin_rejected", requestId: "req-desktop-logout", outcome: "failure" }
+  ]);
+});
+
+test("desktop logout is a controlled no-store same-origin result that never builds an Auth0 URL", async () => {
+  const request = makeRequest("http://localhost:3000/auth/logout", {
+    method: "POST",
+    headers: { origin: "http://localhost:3000" }
+  });
+  const response = handleDesktopLogoutRequest(request, desktopConfig(), {
+    generateRequestId: () => "req-desktop-logout",
+    logAuthEvent: noopAuthEventLogger
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("pragma"), "no-cache");
+  assert.equal(response.headers.get("set-cookie"), null);
+  // No upstream Auth0 logout URL is constructed or pointed at.
+  assert.equal(response.headers.get("location"), null);
+  const body = await response.json();
+  assert.equal(body.status, "local-demo");
+  assert.equal(body.requestId, "req-desktop-logout");
+  assert.doesNotMatch(body.message, /撤销|revoke|已退出/);
+  const serialized = JSON.stringify(body);
+  assert.doesNotMatch(serialized, /desktop-secret-token|client_id|oidc/);
 });
 
 test("auth0 touchSession delegates unchanged", async () => {

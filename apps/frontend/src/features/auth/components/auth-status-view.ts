@@ -40,10 +40,26 @@ export type AuthStatusView =
       /** Class contract for the shrinking header row itself. */
       readonly rowClassName: string;
       readonly action: AuthStatusAction;
+    }
+  | {
+      readonly state: "authenticated";
+      readonly role: "status";
+      readonly ariaLive: "polite";
+      readonly displayName: string;
+      readonly displayNameClassName: string;
+      readonly rowClassName: string;
+      /**
+       * Non-interactive read-only badge that replaces the logout action when the server
+       * session forbids an active logout (e.g. the process-scoped desktop demo identity).
+       */
+      readonly localBadge: { readonly label: string };
     };
 
 /** Mobile touch target: Tailwind `min-h-11` = 2.75rem = 44px minimum. */
 export const TOUCH_TARGET_CLASS = "min-h-11";
+
+/** Read-only label shown instead of an actionable "退出" control when logout is disabled. */
+export const DESKTOP_DEMO_LABEL = "本地演示模式";
 
 export const AUTH_STATUS_CLASSES = {
   loginAction:
@@ -52,6 +68,9 @@ export const AUTH_STATUS_CLASSES = {
     "inline-flex min-h-11 shrink-0 items-center rounded px-2 underline hover:no-underline focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2",
   logoutAction:
     "inline-flex min-h-11 shrink-0 items-center rounded-md px-4 py-2 text-sm font-medium text-[var(--muted)] transition hover:bg-[var(--muted)]/10 focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2",
+  /** Non-clickable desktop-demo mode badge (logoutAvailable:false). */
+  localBadge:
+    "shrink-0 rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-1 text-xs text-[var(--muted)]",
   /** Long displayName/email must truncate inside bounded widths, never stretch the header. */
   displayName: "min-w-0 max-w-[10rem] truncate text-sm text-[var(--foreground)] sm:max-w-[16rem]",
   row: "flex min-w-0 items-center gap-3",
@@ -74,10 +93,15 @@ export function resolveDisplayName(user: AuthStatusUser | null | undefined): str
 /**
  * Resolves the AuthStatus view model for a session status. Pure function of its inputs;
  * every aria role/live region/label in the component comes from here.
+ *
+ * `options.logoutAvailable === false` (the desktop demo identity) yields an authenticated
+ * view with a read-only "本地演示模式" badge and no actionable logout. Any other value or
+ * absence keeps the interactive "退出" action.
  */
 export function resolveAuthStatusView(
   state: AuthStatusState,
-  user?: AuthStatusUser | null
+  user?: AuthStatusUser | null,
+  options?: { logoutAvailable?: boolean }
 ): AuthStatusView {
   switch (state) {
     case "loading":
@@ -107,13 +131,19 @@ export function resolveAuthStatusView(
       };
     case "authenticated": {
       const displayName = resolveDisplayName(user);
-      return {
+      const base = {
         state: "authenticated",
         role: "status",
         ariaLive: "polite",
         displayName,
         displayNameClassName: AUTH_STATUS_CLASSES.displayName,
-        rowClassName: AUTH_STATUS_CLASSES.row,
+        rowClassName: AUTH_STATUS_CLASSES.row
+      } as const;
+      if (options?.logoutAvailable === false) {
+        return { ...base, localBadge: { label: DESKTOP_DEMO_LABEL } };
+      }
+      return {
+        ...base,
         action: {
           kind: "logout",
           label: "退出",

@@ -6,7 +6,11 @@ import { ERROR_PRESENTATION, type FrontendErrorCode } from "../lib/api/frontend-
 
 export function FlowNotice({ code, onAction, compact = false }: { code: FrontendErrorCode; onAction?: () => void; compact?: boolean }) {
   if (code === "UNAUTHORIZED") {
-    return <AuthRequiredDialog onDismiss={onAction} />;
+    // The auth prompt is a pure login gate: dismissing it ("暂不登录") must never trigger
+    // the business retry/re-submit passed as `onAction`. It closes and restores focus;
+    // the protected operation is re-attempted by the user and can surface a fresh 401
+    // (remounting the dialog again) on its own.
+    return <AuthRequiredDialog />;
   }
 
   const content = ERROR_PRESENTATION[code];

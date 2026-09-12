@@ -385,6 +385,21 @@ test("desktop flag with NODE_ENV=test fails closed", () => {
   );
 });
 
+test("desktop flag with NODE_ENV unset fails closed", () => {
+  const rest = Object.fromEntries(
+    Object.entries(validDesktopConfig).filter(([key]) => key !== "NODE_ENV")
+  );
+  expectConfigError(() => resolveAuthConfig(rest), "development");
+});
+
+test("desktop flag with empty NODE_ENV fails closed", () => {
+  expectConfigError(() => resolveAuthConfig({ ...validDesktopConfig, NODE_ENV: "" }), "development");
+});
+
+test("desktop flag with NODE_ENV=unexpected fails closed", () => {
+  expectConfigError(() => resolveAuthConfig({ ...validDesktopConfig, NODE_ENV: "unexpected" }), "development");
+});
+
 test("desktop flag with NODE_ENV=staging fails closed", () => {
   expectConfigError(
     () => resolveAuthConfig({ ...validDesktopConfig, NODE_ENV: "staging" }),

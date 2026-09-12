@@ -19,6 +19,11 @@ export type SessionState = {
     email?: string;
     emailVerified?: boolean;
   };
+  /**
+   * Server capability signal. `false` (desktop demo) means the UI must not offer a
+   * logout control; absent/true keeps the interactive "退出" action.
+   */
+  logoutAvailable?: boolean;
   idleExpiresAt?: string;
   absoluteExpiresAt?: string;
 };

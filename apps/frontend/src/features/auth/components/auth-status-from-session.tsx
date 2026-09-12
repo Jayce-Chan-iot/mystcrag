@@ -26,6 +26,6 @@ export type AuthStatusFromSessionProps = {
 };
 
 export function AuthStatusFromSession({ status, session, login, logout }: AuthStatusFromSessionProps) {
-  const view = resolveAuthStatusView(status, session?.user);
+  const view = resolveAuthStatusView(status, session?.user, { logoutAvailable: session?.logoutAvailable });
   return <AuthStatusPresenter view={view} onLogin={() => login()} onLogout={() => logout()} />;
 }

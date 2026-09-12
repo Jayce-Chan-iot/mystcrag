@@ -242,7 +242,11 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
   // never a second production session or a fixed-user fallback: every condition must
   // hold or startup rejects the configuration (never a silent downgrade).
   if (desktopAutoAuth) {
-    if (environment !== "development") {
+    // The desktop convenience identity must only ever face an EXACT `development`
+    // env: check the raw env.NODE_ENV (never the derived `environment` fallback,
+    // which folds missing/empty/unknown values into development). Any other value —
+    // missing, empty, test, staging, production or unexpected — rejects startup.
+    if (env.NODE_ENV !== "development") {
       errors.push("MYSTCRAG_DESKTOP_AUTO_AUTH requires NODE_ENV=development");
     }
     if (authProvider !== "signed-test") {

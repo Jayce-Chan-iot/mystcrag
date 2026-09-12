@@ -36,11 +36,46 @@ export function nextTabIndex(key: string, shiftKey: boolean, currentIndex: numbe
 
 const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled])';
 
-function defaultLoginHref(): string {
-  if (typeof window === "undefined") {
-    return "/auth/login?returnTo=%2F";
+/**
+ * Production HTML/browser never binds the desktop token, so an open redirect or script
+ * injection could only ever reach a public login endpoint; still we keep the secondary
+ * "暂不登录" and primary login link free of any window-derived value in the initial SSR
+ * render to avoid a hydration mismatch. See `initialLoginHref`/the mount effect.
+ */
+export const SERVER_SAFE_LOGIN_HREF = "/auth/login?returnTo=%2F";
+
+/**
+ * The login href used by the PRE-hydration render (SSR and first client render). When an
+ * explicit `loginHref` prop is supplied it is honoured verbatim; otherwise the fixed
+ * server-safe default is used so the server and client produce identical markup.
+ */
+export function initialLoginHref(loginHref?: string): string {
+  return loginHref ?? SERVER_SAFE_LOGIN_HREF;
+}
+
+/**
+ * Returns keyboard focus to an element. Exported/pure so behavior tests can prove that
+ * every dismissal actually restores focus (not just source inspection). Returns `true`
+ * when focus was restored.
+ */
+export function restoreFocusTo(element: unknown): boolean {
+  const candidate = element as { focus?: unknown } | null | undefined;
+  if (candidate && typeof candidate.focus === "function") {
+    (candidate as HTMLElement).focus();
+    return true;
   }
-  return buildLoginHref(window.location);
+  return false;
+}
+
+/**
+ * The single dismissal primitive for the dialog: close it, restore focus to the
+ * previously focused trigger element, then run the caller's `onDismiss`. `onDismiss` is
+ * deliberately distinct from any business retry — it only ever reveals intent to close.
+ */
+export function dismissDialog(close: () => void, restoreFrom: unknown, onDismiss?: () => void): void {
+  close();
+  restoreFocusTo(restoreFrom);
+  onDismiss?.();
 }
 
 export function AuthRequiredDialog({
@@ -55,25 +90,39 @@ export function AuthRequiredDialog({
   const descriptionId = React.useId();
   const containerRef = React.useRef<HTMLDivElement>(null);
   const primaryRef = React.useRef<HTMLAnchorElement>(null);
+  const previouslyFocusedRef = React.useRef<HTMLElement | null>(null);
 
-  const href = loginHref ?? defaultLoginHref();
+  // Two-phase login href: the SSR and first client render share the fixed server-safe
+  // default (no hydration mismatch); only after mount do we reflect the real location.
+  const [clientHref, setClientHref] = React.useState<string | null>(null);
+  const href = initialLoginHref(loginHref ?? clientHref ?? undefined);
 
-  // Initial focus on the primary action; restore the previously focused element on
-  // unmount so a dismissed dialog returns the user to the action that triggered it.
+  // Capture the element that had focus before the dialog opened and move focus to the
+  // primary action. Focus is restored explicitly on dismissal (see `createDismissHandler`)
+  // and again as a backup on an actual unmount.
   React.useEffect(() => {
-    const previouslyFocused = document.activeElement as HTMLElement | null;
+    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
     primaryRef.current?.focus();
     return () => {
-      if (previouslyFocused && typeof previouslyFocused.focus === "function") {
-        previouslyFocused.focus();
-      }
+      restoreFocusTo(previouslyFocusedRef.current);
     };
   }, []);
 
+  // After hydration, derive returnTo from the real window.location; never on the server.
+  // The default SSR/first client render already shares the server-safe href, so this
+  // only switches to the true returnTo post-mount — the documented fix for hydration.
+  React.useEffect(() => {
+    if (loginHref === undefined) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- post-hydration window.Location sync (hydration-safe returnTo)
+      setClientHref(buildLoginHref(window.location));
+    }
+  }, [loginHref]);
+
   const dismiss = React.useCallback(() => {
-    setOpen(false);
-    onDismiss?.();
-  }, [onDismiss]);
+    // Reads the trigger element lazily at dismissal time (never during render) and runs
+    // the same dismissal+focus-restore order used by the Button/Escape/mask paths.
+    dismissDialog(() => setOpen(false), previouslyFocusedRef.current, onDismiss);
+  }, [onDismiss, setOpen]);
 
   if (!open) return null;
 

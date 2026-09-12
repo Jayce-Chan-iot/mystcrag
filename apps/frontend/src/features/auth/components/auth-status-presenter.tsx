@@ -57,14 +57,18 @@ export function AuthStatusPresenter({ view, onLogin, onLogout }: AuthStatusPrese
   return (
     <div className={view.rowClassName} role={view.role} aria-live={view.ariaLive}>
       <span className={view.displayNameClassName} title={view.displayName}>{view.displayName}</span>
-      <button
-        type="button"
-        onClick={() => onLogout()}
-        className={view.action.className}
-        aria-label={view.action.ariaLabel}
-      >
-        {view.action.label}
-      </button>
+      {"action" in view ? (
+        <button
+          type="button"
+          onClick={() => onLogout()}
+          className={view.action.className}
+          aria-label={view.action.ariaLabel}
+        >
+          {view.action.label}
+        </button>
+      ) : (
+        <span className={AUTH_STATUS_CLASSES.localBadge}>{view.localBadge.label}</span>
+      )}
     </div>
   );
 }

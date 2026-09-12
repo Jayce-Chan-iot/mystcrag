@@ -21,6 +21,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   AUTH_STATUS_CLASSES,
+  DESKTOP_DEMO_LABEL,
   TOUCH_TARGET_CLASS,
   resolveAuthStatusView,
   resolveDisplayName,
@@ -66,6 +67,7 @@ test("authenticated state keeps the status live region and offers logout", () =>
   assert.equal(view.role, "status");
   assert.equal(view.ariaLive, "polite");
   assert.equal(view.displayName, "张三");
+  assert.ok("action" in view, "default authenticated view keeps the interactive logout action");
   assert.equal(view.action.kind, "logout");
   assert.equal(view.action.label, "退出");
   assert.equal(view.action.ariaLabel, "退出登录");
@@ -75,6 +77,7 @@ test("every action control carries the 44px mobile touch target", () => {
   for (const state of ["loading", "error", "unauthenticated", "authenticated"] as const) {
     const view = resolveAuthStatusView(state, { displayName: "用户" });
     if (view.state === "loading") continue;
+    if (!("action" in view)) continue;
     assert.ok(
       view.action.className.includes(TOUCH_TARGET_CLASS),
       `${view.state} action must keep ${TOUCH_TARGET_CLASS}`
@@ -245,6 +248,64 @@ test("presenter authenticated button onClick invokes onLogout exactly once", () 
   button.props.onClick();
   assert.equal(logoutCalls, 1);
   assert.equal(loginCalls, 0);
+});
+
+// --- Desktop demo projection (logoutAvailable:false) is a non-interactive badge ---
+
+test("authenticated view with logoutAvailable:false carries a read-only badge and no action", () => {
+  const view = resolveAuthStatusView(
+    "authenticated",
+    { displayName: "本地演示用户" },
+    { logoutAvailable: false }
+  );
+  assert.equal(view.state, "authenticated");
+  assert.equal(view.role, "status");
+  assert.equal(view.ariaLive, "polite");
+  assert.ok(!("action" in view), "desktop demo must not offer an actionable logout");
+  const badgeView = view as Extract<AuthStatusView, { localBadge: { readonly label: string } }>;
+  assert.equal(badgeView.localBadge.label, DESKTOP_DEMO_LABEL);
+});
+
+test("authenticated presenter with logoutAvailable:false renders the badge and no logout button", () => {
+  const element = renderPresenter(
+    resolveAuthStatusView("authenticated", { displayName: "本地演示用户" }, { logoutAvailable: false }),
+    () => {
+      throw new Error("login must not fire for demo badge");
+    },
+    () => {
+      throw new Error("logout must be unreachable for demo badge");
+    }
+  );
+  const buttons = collectElements(element).filter((node) => node.type === "button");
+  assert.equal(buttons.length, 0, "desktop demo must render no actionable control");
+
+  const markup = renderToStaticMarkup(element);
+  assert.ok(markup.includes("本地演示模式"), markup);
+  assert.ok(!markup.includes('aria-label="退出登录"'), markup);
+  assert.ok(!markup.includes("<button"), markup);
+});
+
+test("AuthStatusFromSession surfaces logoutAvailable:false as the read-only desktop badge", () => {
+  const session: SessionState = {
+    authenticated: true,
+    user: { displayName: "本地演示用户" },
+    logoutAvailable: false
+  };
+  const markup = renderToStaticMarkup(renderFromSession("authenticated", session, () => {}, () => {
+    throw new Error("logout must be disabled for desktop demo");
+  }));
+  assert.ok(markup.includes("本地演示模式"), markup);
+  assert.ok(!markup.includes('aria-label="退出登录"'), markup);
+});
+
+test("AuthStatusFromSession without logoutAvailable keeps the active logout control", () => {
+  const session: SessionState = { authenticated: true, user: { displayName: "张三" } };
+  const element = renderFromSession("authenticated", session, () => {}, () => {});
+  const buttons = collectElements(element).filter((node) => node.type === "button");
+  assert.equal(buttons.length, 1);
+  const button = buttons[0];
+  if (!button) throw new Error("expected one logout button");
+  assert.equal(button.props["aria-label"], "退出登录");
 });
 
 // --- AuthStatusFromSession: the single tested session-to-presenter wiring boundary ---

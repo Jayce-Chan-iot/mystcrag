@@ -57,7 +57,7 @@ export MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY="$(openssl rand -base64 32 | tr -d
 
 ## 4. 生成 8 小时本地开发凭证
 
-内置 `signed-test` Provider 只能在 `NODE_ENV=development` 且显式启用时使用。桌面自动登录模式（`MYSTCRAG_DESKTOP_AUTO_AUTH=true`）额外要求 app/backend 都是 loopback origin；它不是固定用户或跳过登录，Backend 仍会验证签名、issuer、audience 和过期时间。
+内置 `signed-test` Provider 在 `NODE_ENV=development` 和 `NODE_ENV=test` 下均可使用，且必须显式启用。桌面自动登录模式（`MYSTCRAG_DESKTOP_AUTO_AUTH=true`）则**只在精确的 `NODE_ENV=development`** 下生效：NODE_ENV 缺失、空字符串、`test`、`staging`、`production` 或其它未知值都会被 Frontend 启动校验拒绝；它额外要求 app/backend 都是 loopback origin。它不是固定用户或跳过登录，Backend 仍会验证签名、issuer、audience 和过期时间。
 
 ```bash
 set -a; source .env; set +a
