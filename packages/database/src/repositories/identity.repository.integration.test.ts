@@ -306,6 +306,53 @@ test("external identity persistence matrix", { skip: !databaseUrl }, async (t) =
       );
       assert.equal(orphans[0]?.count ?? "0", "0");
     });
+
+    await t.test("15. emailVerified=false first mapping persists one user and no credential columns", async () => {
+      const subject = keyOf("unverified-first");
+      const mapping = await repository.findOrProvisionExternalIdentity({
+        issuer: ISSUER_A,
+        subject,
+        email: "unverified@example.test",
+        emailVerified: false
+      });
+      assert.equal(mapping.created, true);
+      assert.equal(mapping.emailVerified, false);
+
+      const identity = await prisma.externalIdentity.findUniqueOrThrow({
+        where: { issuer_subject: { issuer: ISSUER_A, subject } }
+      });
+      const user = await prisma.user.findUniqueOrThrow({ where: { id: mapping.actorId } });
+      assert.equal(identity.userId, user.id);
+      assert.equal(identity.emailVerified, false);
+      assert.equal(user.email, null);
+
+      const identitiesForUser = await prisma.externalIdentity.findMany({
+        where: { userId: user.id }
+      });
+      assert.equal(identitiesForUser.length, 1);
+      assert.equal(identitiesForUser[0]!.id, identity.id);
+
+      const forbiddenFragments = [
+        "password",
+        "token",
+        "verification_code",
+        "authorization_code",
+        "pkce"
+      ];
+      const columns = await prisma.$queryRawUnsafe<
+        Array<{ table_name: string; column_name: string }>
+      >(
+        `SELECT table_name, column_name
+           FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name IN ('users', 'external_identities')`
+      );
+      const offending = columns.filter(({ column_name }) => {
+        const lower = column_name.toLowerCase();
+        return forbiddenFragments.some((fragment) => lower.includes(fragment));
+      });
+      assert.deepEqual(offending, []);
+    });
   } finally {
     await prisma.$disconnect();
   }
