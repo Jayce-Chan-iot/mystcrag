@@ -499,18 +499,28 @@ test("active flight reprojects radius entry and continuity on stage resize", () 
   const before = harness.controller.getFlights().find((f) => f.componentId === "resize-fly")!;
   assert.ok(before.progress > 0 && before.progress < 1);
 
-  // Shrink stage 400 -> 200; change left/top as well.
+  // Shrink stage 400 -> 200; change left/top as well. Clock does not advance.
   harness.controller.setStageSize(200, 200);
   harness.controller.sync(payload, [], { left: 40, top: 80, width: 200, height: 200 });
   const after = harness.controller.getFlights().find((f) => f.componentId === "resize-fly")!;
   const newInner = 200 * 0.37;
   const expectedRadius = mmToRadiusPx(10, newInner);
-  assert.ok(Math.abs(after.radiusPx - expectedRadius) < 0.5, `radius ${after.radiusPx} vs ${expectedRadius}`);
-  // Continuity: client position must not jump far from pre-resize client point.
-  assert.ok(Math.hypot(after.clientX - before.clientX, after.clientY - before.clientY) < 80, "client position must stay continuous across resize");
-  // New entry belongs to new bounds (stage-local entry inside new inner circle).
+  assert.ok(Math.abs(after.radiusPx - expectedRadius) < 0.01, `radius ${after.radiusPx} vs ${expectedRadius}`);
+  // Strict continuity with frozen clock: no double progress application.
+  assert.ok(Math.abs(after.clientX - before.clientX) <= 0.001, `clientX jump ${after.clientX - before.clientX}`);
+  assert.ok(Math.abs(after.clientY - before.clientY) <= 0.001, `clientY jump ${after.clientY - before.clientY}`);
   const bounds = harness.controller.getBounds();
   assert.ok(Math.abs(bounds.innerRadiusPx - newInner) < 0.01);
+
+  // Idempotent re-sync at same size/rect/clock.
+  for (let i = 0; i < 3; i += 1) {
+    const prior = harness.controller.getFlights().find((f) => f.componentId === "resize-fly")!;
+    harness.controller.sync(payload, [], { left: 40, top: 80, width: 200, height: 200 });
+    const next = harness.controller.getFlights().find((f) => f.componentId === "resize-fly")!;
+    assert.ok(Math.abs(next.clientX - prior.clientX) <= 0.001, `idempotent clientX drift on sync ${i}`);
+    assert.ok(Math.abs(next.clientY - prior.clientY) <= 0.001, `idempotent clientY drift on sync ${i}`);
+  }
+  assert.equal(harness.consumed.length, 1, "request must be consumed only once");
 
   // Grow back 200 -> 400 mid-flight
   harness.fake.setTime(harness.fake.now() + FIXED_STEP_MS * 2);
@@ -519,7 +529,7 @@ test("active flight reprojects radius entry and continuity on stage resize", () 
   const grown = harness.controller.getFlights().find((f) => f.componentId === "resize-fly");
   const grownInner = 400 * 0.37;
   if (grown) {
-    assert.ok(Math.abs(grown.radiusPx - mmToRadiusPx(10, grownInner)) < 0.5);
+    assert.ok(Math.abs(grown.radiusPx - mmToRadiusPx(10, grownInner)) < 0.01);
   }
 
   // Complete handoff and verify particle uses authoritative radius inside new bounds.
@@ -531,9 +541,111 @@ test("active flight reprojects radius entry and continuity on stage resize", () 
   const particle = harness.controller.getSnapshot().particles.find((p) => p.componentId === "resize-fly");
   assert.ok(particle, "particle must exist after handoff");
   const finalBounds = harness.controller.getBounds();
-  assert.ok(Math.abs(particle!.radiusPx - mmToRadiusPx(10, finalBounds.innerRadiusPx)) < 0.5);
+  assert.ok(Math.abs(particle!.radiusPx - mmToRadiusPx(10, finalBounds.innerRadiusPx)) < 0.01);
   const dist = Math.hypot(particle!.x - finalBounds.centerX, particle!.y - finalBounds.centerY);
   assert.ok(dist + particle!.radiusPx <= finalBounds.innerRadiusPx + 1, `particle must stay inside tray: ${dist}+${particle!.radiusPx} <= ${finalBounds.innerRadiusPx}`);
+});
+
+test("flight remaining duration completes after original remainder without NaN", () => {
+  const design = designFixture();
+  const harness = createHarness();
+  const bead = { ...design.beads[0]!, componentId: "remain", diameterMm: 8, positionIndex: 0 };
+  const payload = { ...design, beads: [bead] };
+  harness.controller.setStageSize(400, 400);
+  harness.controller.sync(payload, [
+    { requestId: "rm", componentId: "remain", originClientX: 8, originClientY: 200 }
+  ], stage());
+
+  // 100ms into a 280ms flight.
+  harness.fake.setTime(100);
+  harness.controller.setStageSize(400, 400);
+  harness.controller.sync(payload, [], stage());
+  const flight = harness.controller.getFlights().find((f) => f.componentId === "remain")!;
+  assert.ok(Number.isFinite(flight.clientX) && Number.isFinite(flight.progress));
+  assert.ok(flight.progress >= 0 && flight.progress < 1);
+
+  // Advance original remainder - 1ms: still flying.
+  const remaining = 180;
+  harness.fake.setTime(100 + remaining - 1);
+  harness.controller.getFlights();
+  // Force a frame so handoff can evaluate.
+  if (harness.fake.pendingCount() > 0) harness.fake.flush(100 + remaining - 1);
+  assert.ok(
+    harness.controller.getFlights().some((f) => f.componentId === "remain" && f.progress < 1) ||
+      !harness.controller.getSnapshot().particles.some((p) => p.componentId === "remain"),
+    "must not hand off before remaining time elapses"
+  );
+
+  // Advance to full remainder: handoff completes.
+  harness.fake.setTime(100 + remaining);
+  if (harness.fake.pendingCount() > 0) harness.fake.flush(100 + remaining);
+  else {
+    // If loop already stopped, sync to settle structure.
+    harness.controller.sync(payload, [], stage());
+  }
+  // Drive a few frames if still flying.
+  for (let i = 0; i < 5; i += 1) {
+    if (harness.fake.pendingCount() === 0) break;
+    harness.fake.flush(harness.fake.now() + FIXED_STEP_MS);
+  }
+  const particle = harness.controller.getSnapshot().particles.find((p) => p.componentId === "remain");
+  assert.ok(particle, "handoff after remaining duration");
+  const bounds = harness.controller.getBounds();
+  assert.ok(Math.abs(particle!.radiusPx - mmToRadiusPx(8, bounds.innerRadiusPx)) < 0.01);
+  assert.ok(Math.hypot(particle!.x - bounds.centerX, particle!.y - bounds.centerY) + particle!.radiusPx <= bounds.innerRadiusPx + 1);
+});
+
+test("flight dropped to overflow when capacity no longer admits after shrink", () => {
+  const design = designFixture();
+  const harness = createHarness();
+  // 47 base 8mm beads + flyer. 8mm admits many at 400px; 200px should soft-overflow some.
+  const base = Array.from({ length: 47 }, (_, index) => ({
+    ...design.beads[0]!,
+    componentId: `b${index}`,
+    diameterMm: 8,
+    positionIndex: index
+  }));
+  const flyer = { ...design.beads[0]!, componentId: "drop-fly", diameterMm: 8, positionIndex: 47 };
+  const payload = { ...design, beads: [...base, flyer] };
+  harness.controller.setStageSize(400, 400);
+  harness.controller.sync(payload, [
+    { requestId: "df", componentId: "drop-fly", originClientX: 6, originClientY: 200 }
+  ], stage());
+
+  const inner400 = 400 * 0.37;
+  const plan400 = deterministicFallbackLayout(
+    payload.beads.map((b) => ({ componentId: b.componentId, kind: "BEAD" as const, radiusPx: mmToRadiusPx(b.diameterMm, inner400) })),
+    { centerX: 200, centerY: 200, innerRadiusPx: inner400 }
+  );
+  // If flyer is admitted at 400, proceed to shrink test.
+  assert.ok(plan400.particles.some((p) => p.componentId === "drop-fly") || plan400.overflowComponentIds.includes("drop-fly"));
+
+  harness.fake.setTime(FIXED_STEP_MS * 3);
+  harness.controller.setStageSize(200, 200);
+  harness.controller.sync(payload, [], { left: 0, top: 0, width: 200, height: 200 });
+
+  const inner200 = 200 * 0.37;
+  const plan200 = deterministicFallbackLayout(
+    payload.beads.map((b) => ({ componentId: b.componentId, kind: "BEAD" as const, radiusPx: mmToRadiusPx(b.diameterMm, inner200) })),
+    { centerX: 100, centerY: 100, innerRadiusPx: inner200 }
+  );
+  const snap = harness.controller.getSnapshot();
+  const visible = new Set(snap.particles.map((p) => p.componentId));
+  const overflow = new Set(snap.overflowComponentIds);
+  const activeFlights = new Set(harness.controller.getFlights().filter((f) => f.progress < 1).map((f) => f.componentId));
+  const planVisible = new Set(plan200.particles.map((p) => p.componentId));
+  const planOverflow = new Set(plan200.overflowComponentIds);
+
+  assert.deepEqual([...overflow].sort(), [...planOverflow].sort());
+  if (planOverflow.has("drop-fly")) {
+    assert.ok(!activeFlights.has("drop-fly"), "non-admitted flight must be cleared");
+    assert.ok(!visible.has("drop-fly"));
+    assert.ok(overflow.has("drop-fly"));
+  }
+  const expectedVisible = [...planVisible].filter((id) => !activeFlights.has(id));
+  assert.deepEqual([...visible].sort(), expectedVisible.sort());
+  const union = new Set([...visible, ...overflow, ...activeFlights]);
+  assert.deepEqual([...union].sort(), payload.beads.map((b) => b.componentId).sort());
 });
 
 test("flight overlay uses a single centering transform", () => {
