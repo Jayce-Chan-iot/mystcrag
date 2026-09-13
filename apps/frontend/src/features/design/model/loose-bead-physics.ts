@@ -78,6 +78,10 @@ function candidateFor(componentId: string, index: number, count: number, bounds:
   };
 }
 
+export function projectParticleToBounds(particle: LooseParticle, bounds: LooseBounds): LooseParticle {
+  return projectIntoBounds(particle, bounds);
+}
+
 function projectIntoBounds(particle: LooseParticle, bounds: LooseBounds): LooseParticle {
   const radius = clampRadius(particle.radiusPx);
   const maxDistance = Math.max(0, bounds.innerRadiusPx - radius);

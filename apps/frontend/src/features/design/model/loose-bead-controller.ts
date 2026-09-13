@@ -20,6 +20,7 @@ import {
   MAX_PHYSICS_BODIES,
   deterministicFallbackLayout,
   injectLooseParticle,
+  projectParticleToBounds,
   stepLoosePhysics,
   type LooseBounds,
   type LooseBodyInput,
@@ -301,6 +302,13 @@ export function createLooseStageController(options: LooseStageControllerOptions)
     onFlightUpdate(flightProgressList());
   }
 
+  function projectAllParticles() {
+    state = {
+      ...state,
+      particles: state.particles.map((particle) => projectParticleToBounds(particle, bounds))
+    };
+  }
+
   /**
    * Re-path active flights after a stage size/origin change without re-consuming
    * launch intents. Continuity: current client position becomes the new path start.
@@ -313,17 +321,25 @@ export function createLooseStageController(options: LooseStageControllerOptions)
     for (const flight of [...flights.values()]) {
       if (flight.handedOff) {
         // Overlay must match the in-tray particle's current center and radius.
-        const particle = state.particles.find((item) => item.componentId === flight.componentId);
         flight.stageLeft = left;
         flight.stageTop = top;
-        if (particle) {
-          flight.fromStageX = particle.x;
-          flight.fromStageY = particle.y;
-          flight.entryX = particle.x;
-          flight.entryY = particle.y;
-          flight.radiusPx = particle.radiusPx;
-          flight.fromClientX = left + particle.x;
-          flight.fromClientY = top + particle.y;
+        let projectedParticle: LooseParticle | undefined;
+        state = {
+          ...state,
+          particles: state.particles.map((item) => {
+            if (item.componentId !== flight.componentId) return item;
+            projectedParticle = projectParticleToBounds(item, bounds);
+            return projectedParticle;
+          })
+        };
+        if (projectedParticle) {
+          flight.fromStageX = projectedParticle.x;
+          flight.fromStageY = projectedParticle.y;
+          flight.entryX = projectedParticle.x;
+          flight.entryY = projectedParticle.y;
+          flight.radiusPx = projectedParticle.radiusPx;
+          flight.fromClientX = left + projectedParticle.x;
+          flight.fromClientY = top + projectedParticle.y;
         }
         flight.startedAt = now;
         flight.durationMs = 0;
@@ -692,6 +708,29 @@ export function createLooseStageController(options: LooseStageControllerOptions)
       settled: false
     };
 
+    // Immediate radial clamp into the current bounds (same-frame resize safety).
+    projectAllParticles();
+
+    // Align handedOff overlays to the corrected particles before publishing.
+    const alignLeft = stageRect?.left ?? lastStageRect?.left ?? 0;
+    const alignTop = stageRect?.top ?? lastStageRect?.top ?? 0;
+    for (const flight of flights.values()) {
+      if (!flight.handedOff) continue;
+      const particle = state.particles.find((item) => item.componentId === flight.componentId);
+      if (!particle) continue;
+      flight.stageLeft = alignLeft;
+      flight.stageTop = alignTop;
+      flight.fromStageX = particle.x;
+      flight.fromStageY = particle.y;
+      flight.entryX = particle.x;
+      flight.entryY = particle.y;
+      flight.radiusPx = particle.radiusPx;
+      flight.fromClientX = alignLeft + particle.x;
+      flight.fromClientY = alignTop + particle.y;
+      flight.startedAt = runtime.now();
+      flight.durationMs = 0;
+    }
+
     if (mode === "REDUCED" || mode === "FALLBACK") {
       placeFallback(inputs);
       return;
@@ -724,6 +763,8 @@ export function createLooseStageController(options: LooseStageControllerOptions)
           }),
           settled: false
         };
+        // Clamp centers into the new inner circle immediately — do not wait for RAF.
+        projectAllParticles();
       }
       publishLayout();
     },
