@@ -1,40 +1,79 @@
 # DIY Tray Asset Provenance
 
-Owner: TASK-ASSET-003 (ASSET / Xiaomi MiMo under Codex lead)
-Date: 2026-09-13
-License: Generated for Mystcrag product runtime use. No competitor media copied.
+Owner: TASK-ASSET-003 (ASSET / Xiaomi MiMo under Codex lead and review)
+Date: 2026-09-13 (review remediation)
+License: Runtime assets derived only from repository baseline tray files already tracked at plan commit `a306042`. No competitor media. No third-party stock. No generative-image source.
 
-Shared runtime frame and geometry:
+## Authoritative input
+
+The four source files are the pre-existing repository runtime trays at plan base `a306042`:
+
+| Source (git `a306042`) | Original size | Mode |
+| --- | --- | --- |
+| `apps/frontend/public/trays/bone-china.webp` | 1100×1100 | RGB |
+| `apps/frontend/public/trays/clear-acrylic.webp` | 1100×1100 | RGB |
+| `apps/frontend/public/trays/french-linen.webp` | 1100×1100 | RGB |
+| `apps/frontend/public/trays/oak-wood.webp` | 1100×1100 | RGB |
+
+Extract command:
+
+```bash
+git show a306042:apps/frontend/public/trays/<name>.webp > /tmp/a306042-<name>.webp
+```
+
+## Shared runtime frame
 
 - Canvas: 1024×1024 RGBA WebP
-- `rimRadiusRatio = 0.44`
-- `innerRadiusRatio = 0.37`
-- Centered non-empty alpha bounds; four corner alpha values `<= 8`
-- Outer subject diameter normalized to ≈ 0.88 × frame width (880 px target, measured longest side 901 px)
+- `rimRadiusRatio = 0.44`, `innerRadiusRatio = 0.37`
+- Outer alpha longest side normalized to `round(1024 * 0.88) = 901`
+- Four corner alpha values `<= 8`
+- Each file ≤ 900 KiB
 
-Generation invariant (all four materials):
+## Deterministic transformation (all four materials)
 
-> Photorealistic top-down circular jewelry bead tray isolated on a solid chroma-key background; outer rim radius 44% of frame width; usable inner floor radius 37%; entire rim retained; restrained contact shadow only; no beads, text, logo, hands, tools, or cropped rim; neutral soft studio light from upper left.
+1. Estimate studio background as the mean RGB of an 8-pixel border band.
+2. Convert every pixel to alpha with a linear distance ramp to that background:
+   - `alpha = 0` when `dist <= t0`
+   - `alpha = 255` when `dist >= t1`
+   - otherwise `alpha = round(255 * (dist - t0) / (t1 - t0))`
+3. Acrylic only: keep light RGB and multiply alpha by `0.20` when `luma >= 225` and `dist < t1 + 10`, so the usable floor stays true-transparent instead of an opaque gray disc.
+4. Gaussian blur the alpha channel only (`radius=0.55`) for a light anti-aliased edge. No texture smearing.
+5. Crop to `alpha >= 8` bounding box; scale longest side to 901 (proportional); center on a transparent 1024×1024 canvas using unmasked RGBA paste (preserves semi-transparent RGB).
+6. Force the outer 2-pixel border fully transparent.
+7. Save WebP. Prefer `lossless=True, method=6`; fall back to `quality=95,90,85` only if the file exceeds 900 KiB.
 
-Post-process (shared):
+### Per-file thresholds
 
-1. Chroma-key exterior background via corner flood-fill.
-2. Neutralize residual chroma-tinted contact shadow into dark gray alpha.
-3. Wipe residual AI watermark pixels outside the tray disc.
-4. Crop to alpha bounds, scale longest side to `round(1024 * 0.88)`, center on a transparent 1024×1024 canvas.
-5. Save WebP (`quality≈90`, `method=6`), each file ≤ 900 KiB.
+| File | t0 | t1 | Acrylic floor rule |
+| --- | --- | --- | --- |
+| `bone-china.webp` | 10 | 22 | no |
+| `clear-acrylic.webp` | 7 | 18 | yes |
+| `french-linen.webp` | 12 | 28 | no |
+| `oak-wood.webp` | 12 | 28 | no |
 
-| File | Source | Material line | Transformation | SHA-256 | Bytes |
-| --- | --- | --- | --- | --- | --- |
-| `bone-china.webp` | MiMo `image_gen` 2026-09-13, magenta chroma-key source | Material: polished warm-white bone china. | flood-key magenta → neutralize shadow → center/scale → WebP q90 | `e292c5d3d63978a79f2ded9b2966376242ab01301b26c714af80dfb7880d19be` | 82646 |
-| `clear-acrylic.webp` | MiMo `image_gen` 2026-09-13, green chroma-key source | Material: optically clear acrylic with substantial wall thickness and specular rim. | flood-key green → map transmitting body to neutral partial alpha → watermark wipe → center/scale → WebP q90 | `69587cf796219469370eb49bdc2d7420d507af47a46447f247f12fb3d1c16f69` | 338632 |
-| `french-linen.webp` | MiMo `image_gen` 2026-09-13, magenta chroma-key source | Material: warm undyed French linen. | flood-key magenta → neutralize shadow → center/scale → WebP q90 | `8edc97299bbd73f81b910cabbaeb85d72adcd8222edc8633838d98932b0911db` | 311692 |
-| `oak-wood.webp` | MiMo `image_gen` 2026-09-13, magenta chroma-key source | Material: pale natural oak wood. | flood-key magenta → neutralize shadow → center/scale → WebP q90 | `18cde5c5daf8ce8bf3486eb8dfa07b86ee6a6735e9061ed0127bd3d5a82c730a` | 217786 |
+Reproduction sketch (Pillow 10.x):
 
-Verification:
+```python
+# border mean bg -> linear alpha ramp -> optional acrylic floor scale
+# -> GaussianBlur(A, 0.55) -> crop/scale/center 901 on 1024 RGBA
+# -> save WEBP lossless method=6 (or quality=95 under 900KiB)
+```
+
+## Output evidence
+
+| File | SHA-256 | Bytes | Longest | Corner alpha |
+| --- | --- | --- | --- | --- |
+| `bone-china.webp` | `abce9d45c097effaf9d40ff8a9026fff552d104d97b6f1261b8d913a6469be06` | 388808 | 901 | 0 |
+| `clear-acrylic.webp` | `3af679d318ec48a85a3e83c16ed9ae2b764d30f844077244478ee040d2ac12b5` | 483610 | 901 | 0 |
+| `french-linen.webp` | `befa91f2377be8d8036bea7ef35d785294384220ccb4228d9aad70994133c651` | 453650 | 901 | 0 |
+| `oak-wood.webp` | `f8421fe34deefbf1731c58d577be7d81be602081db45974d88ba9310383e6b59` | 674178 | 901 | 0 |
+
+Acrylic center pixel is light RGB with low alpha (`≈ (241,234,234,37)`), confirming true transparency rather than a gray-black disc.
+
+## Verification
 
 ```bash
 python3 scripts/ui-qa/verify_diy_assets.py --trays-only
 ```
 
-Expected: PASS for exactly four files (1024×1024, corner alpha `<= 8`, centered alpha box, longest side 901).
+Expected: PASS for exactly four files, including enhanced gates for alpha islands outside the subject, edge green/magenta fringe, black specks, and hard binary alpha blocks.
