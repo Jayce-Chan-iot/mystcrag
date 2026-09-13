@@ -41,7 +41,11 @@ test("bead lengthAlongStringMm precedes diameter and inline accessory length pre
       componentId: "acc-inline",
       placementMode: "INLINE",
       positionIndex: 2,
-      productType: "CHARM",
+      accessoryType: "SPACER",
+      material: "STERLING_SILVER",
+      finish: "POLISHED",
+      quantity: 1,
+      modelAssetKey: "spacer-inline-v1",
       dimensions: { diameterMm: 6, widthMm: 7 },
       unitPriceMinor: 100
     }
@@ -54,8 +58,12 @@ test("bead lengthAlongStringMm precedes diameter and inline accessory length pre
       componentId: "acc-diameter",
       placementMode: "INLINE",
       positionIndex: 2,
-      productType: "CHARM",
-      dimensions: { diameterMm: 5, widthMm: undefined as unknown as number },
+      accessoryType: "SPACER",
+      material: "STERLING_SILVER",
+      finish: "POLISHED",
+      quantity: 1,
+      modelAssetKey: "spacer-diameter-v1",
+      dimensions: { diameterMm: 5 },
       unitPriceMinor: 100
     }
   ];
@@ -67,9 +75,12 @@ test("bead lengthAlongStringMm precedes diameter and inline accessory length pre
       componentId: "acc-anchored",
       placementMode: "ANCHORED",
       anchorComponentId: "bead-with-length",
-      anchorSlot: "OUTER",
-      positionIndex: 3,
-      productType: "CHARM",
+      anchorSlot: 0,
+      accessoryType: "PENDANT",
+      material: "STERLING_SILVER",
+      finish: "POLISHED",
+      quantity: 1,
+      modelAssetKey: "pendant-anchored-v1",
       dimensions: { diameterMm: 12, widthMm: 18 },
       unitPriceMinor: 100
     }

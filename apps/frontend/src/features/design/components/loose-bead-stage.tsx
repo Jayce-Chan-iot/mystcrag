@@ -392,8 +392,7 @@ export function LooseBeadStage({
     }
   }, [design, launchQueue, onLaunchConsumed, placeDeterministic, startLoop]);
 
-  const overflowActive =
-    (physicsRef.current?.overflowComponentIds.length ?? 0) > 0 || bodyCount > MAX_PHYSICS_BODIES;
+  const overflowActive = bodyCount > MAX_PHYSICS_BODIES;
   const fallbackActive = motionMode !== "PHYSICS";
   const particleClass =
     fallbackActive || reducedMotion

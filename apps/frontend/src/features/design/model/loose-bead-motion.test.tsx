@@ -90,7 +90,7 @@ test("observeElementSize falls back to one window resize listener", () => {
   let resizeCalls = 0;
   const cleanup = observeElementSize(element, () => {
     resizeCalls += 1;
-  }, { ResizeObserverCtor: undefined as unknown as typeof ResizeObserver, windowTarget });
+  }, { ResizeObserverCtor: undefined as unknown as typeof ResizeObserver, windowTarget: windowTarget as unknown as Pick<Window, "addEventListener" | "removeEventListener"> });
   const resizeListeners = listeners.get("resize");
   assert.equal(resizeListeners?.size, 1);
   for (const listener of resizeListeners ?? []) listener();

@@ -421,9 +421,9 @@ export function DiyEditor({ designId }: { designId: string }) {
     );
   };
 
-  const consumeLaunch = React.useCallback((requestId: string) => {
+  const consumeLaunch = (requestId: string) => {
     setLaunchQueue((queue) => queue.filter((intent) => intent.requestId !== requestId));
-  }, []);
+  };
 
   const moveBead = (componentId: string, targetPositionIndex: number) => {
     const current = design.beads.find((bead) => bead.componentId === componentId);
