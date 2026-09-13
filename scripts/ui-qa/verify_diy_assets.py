@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +50,8 @@ TRAY_CENTER_TOLERANCE = 16
 # Expected outer subject diameter ≈ 0.88 * 1024 = 901 (rimRadiusRatio 0.44)
 TRAY_LONGEST_MIN = 880
 TRAY_LONGEST_MAX = 910
+TRAY_REMAINDER_RADIUS_RATIO = 0.447
+TRAY_REMAINDER_MAX_COUNT = 64
 BEAD_SIZE = 512
 BEAD_CENTER_TOLERANCE = 4
 BEAD_LONGEST_MIN = 430
@@ -113,6 +116,20 @@ def _check_tray_artifacts(image: Image.Image) -> list[str]:
     outer_r = min(w, h) * ISLAND_RADIUS_RATIO
     ring_in = min(w, h) * EDGE_RING_INNER
     ring_out = min(w, h) * EDGE_RING_OUTER
+
+    # A valid 901px circular tray cannot have substantial alpha beyond this
+    # radius. This catches connected right/bottom background bands that evade
+    # isolated-island and alpha-bbox checks.
+    remainder_radius = min(w, h) * TRAY_REMAINDER_RADIUS_RATIO
+    remainder_hits = 0
+    for y in range(h):
+        for x in range(w):
+            if pix[x, y][3] >= 8 and math.hypot(x - cx, y - cy) > remainder_radius:
+                remainder_hits += 1
+    if remainder_hits > TRAY_REMAINDER_MAX_COUNT:
+        issues.append(
+            f"outside_disc_alpha={remainder_hits} expected <= {TRAY_REMAINDER_MAX_COUNT}"
+        )
 
     # Discrete alpha islands outside the main subject disc
     island_candidates = 0
