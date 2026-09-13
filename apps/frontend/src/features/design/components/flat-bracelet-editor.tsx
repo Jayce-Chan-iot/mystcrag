@@ -7,6 +7,9 @@ import * as React from "react";
 
 import { evaluateBraceletFit, inlineAccessoryLengthMm, type BraceletFit } from "../model/bracelet-fit";
 import { isPointOutsideTray, type DisplayTrayMaterial } from "../model/display-tray";
+import { MODE_TRANSITION_MS, deriveLooseBodies } from "../model/loose-bead-controller";
+import { deterministicFallbackLayout } from "../model/loose-bead-physics";
+import { getTrayVisual } from "../model/visual-assets";
 import { CrystalBeadImage } from "./crystal-bead-image";
 import { DisplayTray } from "./display-tray";
 import { LooseBeadStage, type BeadLaunchIntent } from "./loose-bead-stage";
@@ -162,8 +165,6 @@ export function FlatBraceletEditor({
 }) {
   const fit = providedFit ?? evaluateBraceletFit(design);
   const components = ringComponents(design);
-  const componentLayouts = calculateSizeAwareRingLayout(components, connected);
-  const ringRadiusPercent = componentLayouts[0]?.radiusPercent ?? 39;
   const stageRef = React.useRef<HTMLDivElement>(null);
   const dragRef = React.useRef<DragState | null>(null);
   const nativeDragIdRef = React.useRef("");
@@ -171,6 +172,98 @@ export function FlatBraceletEditor({
   const [nativeDraggedComponentId, setNativeDraggedComponentId] = React.useState("");
   const [nativeOutsideTray, setNativeOutsideTray] = React.useState(false);
   const [nativeDragTarget, setNativeDragTarget] = React.useState<number | null>(null);
+  const [visualConnected, setVisualConnected] = React.useState(connected);
+  const [transitionGhosts, setTransitionGhosts] = React.useState<
+    Array<{ componentId: string; fromX: number; fromY: number; toX: number; toY: number; sizePercent: number }>
+  >([]);
+  const modeStageRef = React.useRef<HTMLDivElement | null>(null);
+  const componentLayouts = calculateSizeAwareRingLayout(components, visualConnected);
+  const ringRadiusPercent = componentLayouts[0]?.radiusPercent ?? 39;
+
+  React.useEffect(() => {
+    if (connected === visualConnected) return;
+    const reduced =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) {
+      queueMicrotask(() => {
+        setVisualConnected(connected);
+        setTransitionGhosts([]);
+      });
+      return;
+    }
+    const stage = modeStageRef.current;
+    const fromPositions = new Map<string, { x: number; y: number; size: number }>();
+    if (stage) {
+      const rect = stage.getBoundingClientRect();
+      for (const node of stage.querySelectorAll<HTMLElement>("[data-component-id]")) {
+        const componentId = node.dataset.componentId;
+        if (!componentId) continue;
+        const nodeRect = node.getBoundingClientRect();
+        fromPositions.set(componentId, {
+          x: ((nodeRect.left + nodeRect.width / 2 - rect.left) / rect.width) * 100,
+          y: ((nodeRect.top + nodeRect.height / 2 - rect.top) / rect.height) * 100,
+          size: (nodeRect.width / rect.width) * 100
+        });
+      }
+    }
+    const innerRadiusPx = Math.min(320, 320) * getTrayVisual(trayMaterial).innerRadiusRatio;
+    const looseLayout = deterministicFallbackLayout(deriveLooseBodies(design, innerRadiusPx).physical, {
+      centerX: 160,
+      centerY: 160,
+      innerRadiusPx
+    });
+    const looseById = new Map(looseLayout.particles.map((particle) => [particle.componentId, particle]));
+    const ghosts = components.map((component) => {
+      const from = fromPositions.get(component.componentId) ?? { x: 50, y: 50, size: 8 };
+      const loose = looseById.get(component.componentId);
+      const ring = componentLayouts.find((item) => item.component.componentId === component.componentId);
+      const to = connected
+        ? {
+            x: ring?.leftPercent ?? 50,
+            y: ring?.topPercent ?? 50,
+            size: ring?.widthPercent ?? 8
+          }
+        : {
+            x: loose ? (loose.x / 320) * 100 : 50,
+            y: loose ? (loose.y / 320) * 100 : 50,
+            size: loose ? (loose.radiusPx * 2 / 320) * 100 : 8
+          };
+      return {
+        componentId: component.componentId,
+        fromX: from.x,
+        fromY: from.y,
+        toX: to.x,
+        toY: to.y,
+        sizePercent: from.size || to.size || 8
+      };
+    });
+    queueMicrotask(() => {
+      setTransitionGhosts(ghosts);
+      setVisualConnected(connected);
+    });
+    const timeout = window.setTimeout(() => {
+      setTransitionGhosts([]);
+    }, MODE_TRANSITION_MS);
+    return () => window.clearTimeout(timeout);
+  }, [connected, componentLayouts, components, design, trayMaterial, visualConnected]);
+
+  React.useEffect(() => {
+    if (transitionGhosts.length === 0) return;
+    const stage = modeStageRef.current;
+    if (!stage || typeof Element.prototype.animate !== "function") return;
+    for (const ghost of transitionGhosts) {
+      const node = stage.querySelector<HTMLElement>(`[data-mode-transition-ghost="${ghost.componentId}"]`);
+      node?.animate(
+        [
+          { left: `${ghost.fromX}%`, top: `${ghost.fromY}%`, opacity: 0.95 },
+          { left: `${ghost.toX}%`, top: `${ghost.toY}%`, opacity: 0.15 }
+        ],
+        { duration: MODE_TRANSITION_MS, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)", fill: "forwards" }
+      );
+    }
+  }, [transitionGhosts]);
 
   const canRemove = (componentId: string) => {
     const component = components.find((item) => item.componentId === componentId);
@@ -191,13 +284,14 @@ export function FlatBraceletEditor({
     setNativeDragTarget(null);
   };
 
-  if (!connected) {
+  if (!visualConnected) {
     return (
       <div
         aria-label="2D 手串编辑预览"
         className="relative mx-auto aspect-square w-full max-w-[35rem] select-none"
         data-bracelet-layout="loose"
         data-flat-bracelet-editor="true"
+        ref={modeStageRef}
         style={fitDesktopViewport ? { maxWidth: "clamp(14rem, calc(100dvh - 20.5rem), 35rem)" } : undefined}
       >
         <LooseBeadStage
@@ -209,6 +303,22 @@ export function FlatBraceletEditor({
           selectedComponentId={selectedComponentId}
           trayMaterial={trayMaterial}
         />
+        {transitionGhosts.map((ghost) => (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute z-40 -translate-x-1/2 -translate-y-1/2 rounded-full"
+            data-mode-transition-ghost={ghost.componentId}
+            key={`ghost-${ghost.componentId}`}
+            style={{
+              height: `${ghost.sizePercent}%`,
+              left: `${ghost.fromX}%`,
+              top: `${ghost.fromY}%`,
+              width: `${ghost.sizePercent}%`
+            }}
+          >
+            <CrystalBeadImage alt="" materialKey={design.beads.find((bead) => bead.componentId === ghost.componentId)?.materialKey ?? "clear-quartz-v1"} sizes="64px" />
+          </span>
+        ))}
         {fit.message ? (
           <div
             aria-live="polite"
@@ -283,9 +393,13 @@ export function FlatBraceletEditor({
     <div
       aria-label="2D 手串编辑预览"
       className="relative mx-auto aspect-square w-full max-w-[35rem] select-none"
-      data-bracelet-layout={connected ? "connected" : "spread"}
+      data-bracelet-layout={visualConnected ? "connected" : "spread"}
       data-drag-reflow-active={reflowActive}
       data-flat-bracelet-editor="true"
+      ref={(node) => {
+        stageRef.current = node;
+        modeStageRef.current = node;
+      }}
       style={fitDesktopViewport ? { maxWidth: "clamp(14rem, calc(100dvh - 20.5rem), 35rem)" } : undefined}
       onDragOver={(event) => {
         const componentId = nativeDragIdRef.current;
@@ -308,9 +422,25 @@ export function FlatBraceletEditor({
         }
         clearNativeDrag();
       }}
-      ref={stageRef}
     >
       <DisplayTray material={trayMaterial} />
+
+      {transitionGhosts.map((ghost) => (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute z-40 -translate-x-1/2 -translate-y-1/2 rounded-full"
+          data-mode-transition-ghost={ghost.componentId}
+          key={`ghost-${ghost.componentId}`}
+          style={{
+            height: `${ghost.sizePercent}%`,
+            left: `${ghost.fromX}%`,
+            top: `${ghost.fromY}%`,
+            width: `${ghost.sizePercent}%`
+          }}
+        >
+          <CrystalBeadImage alt="" materialKey={design.beads.find((bead) => bead.componentId === ghost.componentId)?.materialKey ?? "clear-quartz-v1"} sizes="64px" />
+        </span>
+      ))}
 
       {reflowActive && draggedSlotLayout ? (
         <span
