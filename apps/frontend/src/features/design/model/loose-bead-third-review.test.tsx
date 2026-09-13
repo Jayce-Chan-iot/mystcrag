@@ -8,9 +8,10 @@ import {
   computeModeGhosts,
   createLooseStageController,
   createModeTransitionController,
+  mmToRadiusPx,
   type LooseStageRuntime
 } from "./loose-bead-controller";
-import { FIXED_STEP_MS, HARD_STOP_MS, MAX_PHYSICS_BODIES } from "./loose-bead-physics";
+import { FIXED_STEP_MS, HARD_STOP_MS, MAX_PHYSICS_BODIES, deterministicFallbackLayout } from "./loose-bead-physics";
 import { calculateSizeAwareRingLayout } from "../components/flat-bracelet-editor";
 
 function designFixture(): PublicDesignV1 {
@@ -187,24 +188,21 @@ test("in-tray particles keep moving while another bead is still flying", () => {
     { requestId: "f2", componentId: "flyer", originClientX: 5, originClientY: 200 }
   ], stage());
   assert.ok(harness.controller.getFlights().some((f) => f.componentId === "flyer"));
-  const before = harness.controller.getSnapshot().particles.find((p) => p.componentId === "mover")!;
   const start = harness.fake.now();
-  let changed = false;
+  let previous = harness.controller.getSnapshot().particles.find((p) => p.componentId === "mover")!;
+  let movedBetweenFrames = false;
   for (let index = 1; index <= 14; index += 1) {
     harness.fake.flush(start + index * FIXED_STEP_MS);
     const stillFlying = harness.controller.getFlights().some((f) => f.componentId === "flyer");
     const mover = harness.controller.getSnapshot().particles.find((p) => p.componentId === "mover")!;
-    if (
-      stillFlying &&
-      (Math.hypot(mover.x - before.x, mover.y - before.y) > 0.01 ||
-        Math.hypot(mover.velocityX, mover.velocityY) > 0.01)
-    ) {
-      changed = true;
+    if (stillFlying && Math.hypot(mover.x - previous.x, mover.y - previous.y) > 1e-4) {
+      movedBetweenFrames = true;
       break;
     }
+    previous = mover;
     if (!stillFlying) break;
   }
-  assert.ok(changed, "existing particle must advance while a flight is active");
+  assert.ok(movedBetweenFrames, "existing particle position must change across RAFs while a flight is active");
 });
 
 test("reduced to physics launch resets simulation budget instead of instant hard-stop", () => {
@@ -309,7 +307,8 @@ test("flight visual adapter keeps real radius and bead identity through handoff 
   const mid = harness.controller.getFlights().find((f) => f.componentId === "img-bead")!;
   assert.equal(mid.kind, "BEAD");
   assert.equal(mid.materialKey, bead.materialKey);
-  assert.equal(mid.radiusPx, mid.radiusPx);
+  const expectedRadius = mmToRadiusPx(bead.diameterMm, harness.controller.getBounds().innerRadiusPx);
+  assert.ok(Math.abs(mid.radiusPx - expectedRadius) < 0.5, `flight radius ${mid.radiusPx} vs derived ${expectedRadius}`);
   const start = harness.fake.now();
   for (let index = 1; index <= 24; index += 1) {
     harness.fake.flush(start + index * FIXED_STEP_MS);
@@ -327,20 +326,158 @@ test("flight visual adapter keeps real radius and bead identity through handoff 
 test("hard-stop fallback merges overflow from full inputs", () => {
   const design = designFixture();
   const harness = createHarness();
-  const beads = Array.from({ length: 48 }, (_, index) => ({
+  // Stay under the 48-body PHYSICS cap while still producing soft overflow with 10mm beads.
+  const beads = Array.from({ length: 40 }, (_, index) => ({
     ...design.beads[0]!,
     componentId: `z${index}`,
     diameterMm: 10,
     positionIndex: index
   }));
-  const added = { ...design.beads[0]!, componentId: "late", diameterMm: 10, positionIndex: 48 };
-  harness.controller.sync({ ...design, beads: [...beads, added] }, [
+  harness.controller.sync({ ...design, beads }, [], stage());
+  assert.equal(harness.controller.getSnapshot().mode, "PHYSICS", "must start in PHYSICS before hard stop");
+  // Keep the loop alive with an outside launch so wall-clock hard stop can fire.
+  const extra = { ...design.beads[0]!, componentId: "late", diameterMm: 10, positionIndex: 40 };
+  harness.controller.sync({ ...design, beads: [...beads, extra] }, [
     { requestId: "late", componentId: "late", originClientX: 6, originClientY: 6 }
   ], stage());
+  assert.equal(harness.controller.getSnapshot().mode, "PHYSICS");
   const start = harness.fake.now();
-  harness.fake.flush(start + HARD_STOP_MS);
+  for (let index = 1; index <= 40; index += 1) {
+    if (harness.fake.pendingCount() === 0) break;
+    harness.fake.flush(start + index * FIXED_STEP_MS);
+  }
+  if (harness.fake.pendingCount() > 0) {
+    harness.fake.flush(start + HARD_STOP_MS);
+  }
   const snap = harness.controller.getSnapshot();
   assert.equal(snap.settled, true);
+  assert.equal(snap.mode, "FALLBACK");
   assert.ok(snap.overflowComponentIds.length > 0 || snap.particles.length <= MAX_PHYSICS_BODIES);
   assert.equal(new Set(snap.particles.map((p) => p.componentId)).size, snap.particles.length);
+});
+
+test("sync after handoff before overlay removal keeps the bead", () => {
+  const design = designFixture();
+  const harness = createHarness();
+  const bead = { ...design.beads[0]!, componentId: "race-bead", positionIndex: 0 };
+  const payload = { ...design, beads: [bead] };
+  harness.controller.sync(payload, [
+    { requestId: "race", componentId: "race-bead", originClientX: 8, originClientY: 8 }
+  ], stage());
+
+  // Drive to handoff: particle exists while overlay may still be present.
+  const start = harness.fake.now();
+  let sawHandoffBoth = false;
+  for (let index = 1; index <= 30; index += 1) {
+    harness.fake.flush(start + index * FIXED_STEP_MS);
+    const beadIn = harness.controller.getSnapshot().particles.some((p) => p.componentId === "race-bead");
+    const flying = harness.controller.getFlights().some((f) => f.componentId === "race-bead");
+    if (beadIn && flying) {
+      sawHandoffBoth = true;
+      // Critical race: sync while handedOff overlay is still retained.
+      harness.controller.sync(payload, [], stage());
+      assert.ok(
+        harness.controller.getSnapshot().particles.some((p) => p.componentId === "race-bead"),
+        "sync after handoff must keep the in-tray bead"
+      );
+      break;
+    }
+  }
+  assert.ok(sawHandoffBoth, "expected a handoff frame with both overlay and particle");
+
+  // Next RAF removes overlay; bead must remain.
+  harness.fake.flush(harness.fake.now() + FIXED_STEP_MS);
+  assert.ok(harness.controller.getSnapshot().particles.some((p) => p.componentId === "race-bead"));
+  // Multi-frame stability.
+  for (let index = 0; index < 8; index += 1) {
+    harness.fake.flush(harness.fake.now() + FIXED_STEP_MS);
+    harness.controller.sync(payload, [], stage());
+    const ids = harness.controller.getSnapshot().particles.map((p) => p.componentId);
+    assert.deepEqual(ids, [...new Set(ids)]);
+    assert.ok(ids.includes("race-bead"));
+  }
+});
+
+test("flying bead that capacity planning overflows never becomes an extra tray particle", () => {
+  const design = designFixture();
+  const harness = createHarness();
+  const base = Array.from({ length: 47 }, (_, index) => ({
+    ...design.beads[0]!,
+    componentId: `base-${index}`,
+    diameterMm: 10,
+    positionIndex: index
+  }));
+  const extra = { ...design.beads[0]!, componentId: "zzzz", diameterMm: 10, positionIndex: 47 };
+  const payload = { ...design, beads: [...base, extra] };
+  const plan = deterministicFallbackLayout(
+    payload.beads.map((bead) => ({
+      componentId: bead.componentId,
+      kind: "BEAD" as const,
+      radiusPx: mmToRadiusPx(bead.diameterMm, 400 * 0.37)
+    })),
+    { centerX: 200, centerY: 200, innerRadiusPx: 400 * 0.37 }
+  );
+  const planAdmitted = new Set(plan.particles.map((p) => p.componentId));
+  const planOverflow = payload.beads.filter((b) => !planAdmitted.has(b.componentId)).map((b) => b.componentId);
+
+  harness.controller.sync(payload, [
+    { requestId: "zzzz-fly", componentId: "zzzz", originClientX: 4, originClientY: 200 }
+  ], stage());
+
+  const assertConservation = (label: string) => {
+    const snap = harness.controller.getSnapshot();
+    const visible = snap.particles.map((p) => p.componentId);
+    const overflow = [...snap.overflowComponentIds];
+    assert.deepEqual(visible, [...new Set(visible)], `${label}: no duplicate visible ids`);
+    assert.deepEqual(overflow, [...new Set(overflow)], `${label}: no duplicate overflow ids`);
+    for (const id of visible) {
+      assert.ok(!overflow.includes(id), `${label}: ${id} cannot be both visible and overflow`);
+    }
+    const all = new Set([...visible, ...overflow]);
+    for (const bead of payload.beads) {
+      // Actively flying ids may be temporarily absent from both sets only while overlay is in flight (progress < 1).
+      const flying = harness.controller.getFlights().some((f) => f.componentId === bead.componentId && f.progress < 1);
+      if (!flying) {
+        assert.ok(all.has(bead.componentId), `${label}: missing ${bead.componentId}`);
+      }
+    }
+    if (planOverflow.includes("zzzz")) {
+      assert.ok(!visible.includes("zzzz") || snap.overflowComponentIds.includes("zzzz") === false);
+      // If plan says overflow, zzzz must not remain a visible tray particle after handoff.
+      const stillFlying = harness.controller.getFlights().some((f) => f.componentId === "zzzz");
+      if (!stillFlying) {
+        assert.ok(!visible.includes("zzzz"), `${label}: overflow bead must not stay visible`);
+        assert.ok(overflow.includes("zzzz"), `${label}: overflow bead must be listed`);
+      }
+    }
+  };
+
+  assertConservation("after launch sync");
+
+  const start = harness.fake.now();
+  for (let index = 1; index <= 30; index += 1) {
+    harness.fake.flush(start + index * FIXED_STEP_MS);
+  }
+  assertConservation("after flight frames");
+  harness.controller.sync(payload, [], stage());
+  assertConservation("after resync");
+  harness.controller.setStageSize(400, 400);
+  harness.controller.sync(payload, [], stage());
+  assertConservation("after resize resync");
+  harness.fake.flush(harness.fake.now() + HARD_STOP_MS);
+  assertConservation("after hard stop");
+
+  // Final admitted/overflow sets match the plan.
+  const finalSnap = harness.controller.getSnapshot();
+  const finalVisible = new Set(finalSnap.particles.map((p) => p.componentId));
+  const finalOverflow = new Set(finalSnap.overflowComponentIds);
+  for (const id of planAdmitted) {
+    // Handed-off/flying remnants aside, admitted ids that are not flying must be visible.
+    const flying = harness.controller.getFlights().some((f) => f.componentId === id);
+    if (!flying) assert.ok(finalVisible.has(id) || finalOverflow.has(id));
+  }
+  for (const id of planOverflow) {
+    assert.ok(finalOverflow.has(id) || finalVisible.has(id) === false);
+    assert.ok(!finalVisible.has(id), `plan overflow ${id} must not be visible`);
+  }
 });
