@@ -295,6 +295,52 @@ export function createLooseStageController(options: LooseStageControllerOptions)
     onFlightUpdate(flightProgressList());
   }
 
+  /**
+   * Re-path active flights after a stage size/origin change without re-consuming
+   * launch intents. Continuity: current client position becomes the new path start.
+   */
+  function reprojectActiveFlights(stageRect?: StageRect | null) {
+    if (flights.size === 0 || !lastDesign) return;
+    const now = runtime.now();
+    const left = stageRect?.left ?? lastStageRect?.left ?? 0;
+    const top = stageRect?.top ?? lastStageRect?.top ?? 0;
+    for (const flight of [...flights.values()]) {
+      if (flight.handedOff) {
+        // Keep stage origin in sync for the handoff overlay frame.
+        flight.stageLeft = left;
+        flight.stageTop = top;
+        continue;
+      }
+      const progress = Math.min(1, Math.max(0, (now - flight.startedAt) / FLIGHT_MS));
+      const oldStageX = flight.fromStageX + (flight.entryX - flight.fromStageX) * progress;
+      const oldStageY = flight.fromStageY + (flight.entryY - flight.fromStageY) * progress;
+      const currentClientX = flight.stageLeft + oldStageX;
+      const currentClientY = flight.stageTop + oldStageY;
+      const nextFromStageX = currentClientX - left;
+      const nextFromStageY = currentClientY - top;
+      const body = bodyFor(lastDesign, flight.componentId, bounds.innerRadiusPx);
+      const radiusPx = body?.radiusPx ?? mmToRadiusPx(flight.diameterMm ?? 8, bounds.innerRadiusPx);
+      const { entryX, entryY, velocityX, velocityY } = trayEntryFor(
+        { x: nextFromStageX, y: nextFromStageY },
+        bounds,
+        radiusPx
+      );
+      flight.fromStageX = nextFromStageX;
+      flight.fromStageY = nextFromStageY;
+      flight.fromClientX = currentClientX;
+      flight.fromClientY = currentClientY;
+      flight.entryX = entryX;
+      flight.entryY = entryY;
+      flight.velocityX = velocityX;
+      flight.velocityY = velocityY;
+      flight.radiusPx = radiusPx;
+      flight.stageLeft = left;
+      flight.stageTop = top;
+      // Preserve remaining duration: progress(now) unchanged, progress(now+remaining)=1.
+      flight.startedAt = now - progress * FLIGHT_MS;
+    }
+  }
+
   function stopLoop() {
     running = false;
     if (rafHandle !== null && typeof runtime.cancelAnimationFrame === "function") {
@@ -538,6 +584,8 @@ export function createLooseStageController(options: LooseStageControllerOptions)
     if (destroyed) return;
     lastDesign = design;
     lastStageRect = stageRect ?? lastStageRect;
+    // Keep in-flight geometry on the new stage origin/bounds without re-launching.
+    reprojectActiveFlights(stageRect ?? lastStageRect);
     bodyCount =
       design.beads.length +
       design.accessories.filter((accessory) => accessory.placementMode === "INLINE").length;
