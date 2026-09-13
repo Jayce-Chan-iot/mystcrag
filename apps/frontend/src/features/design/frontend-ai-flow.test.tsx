@@ -176,7 +176,8 @@ test("DIY editor keeps the focused mobile column and adds the desktop workbench"
   assert.match(source, /设计已确认，订单快照已生成/);
   assert.match(source, /清空设计/);
   assert.match(source, /收缩成串/);
-  assert.match(source, /散开查看/);
+  assert.match(source, /散开到托盘/);
+  assert.doesNotMatch(source, /散开查看/);
   assert.match(source, /h-\[calc\(100dvh-3\.25rem\)\]/);
   assert.match(source, /grid-rows-\[minmax\(0,1fr\)_11\.25rem\]/);
   assert.match(source, /fitDesktopViewport/);
@@ -197,6 +198,15 @@ test("DIY workbench exposes tray choice, current beads, diameter controls and ex
   assert.match(source, /max-w-\[30rem\]/);
   assert.match(source, /displayTrayCanvasPalette\(trayMaterial\)/);
   assert.match(source, /展示托盘：/);
+  assert.match(source, /launchQueue/);
+  assert.match(source, /setLaunchQueue/);
+  assert.match(source, /onLaunchConsumed/);
+  assert.match(source, /已选用的珠子/);
+  assert.match(source, /成品手围与尺寸/);
+  assert.match(source, /预计适配手围/);
+  assert.match(source, /当前组合长度/);
+  assert.doesNotMatch(source, /常用水晶/);
+  assert.doesNotMatch(source, />已选水晶</);
 });
 
 test("flat bracelet editor exposes the touch-first 2D ring in connected mode", () => {
