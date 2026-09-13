@@ -365,7 +365,7 @@ export function LooseBeadStage({
                 const size = Math.max(12, flight.radiusPx * 2);
                 return (
                   <div
-                    className="pointer-events-none absolute left-0 top-0 -translate-x-1/2 -translate-y-1/2"
+                    className="pointer-events-none absolute left-0 top-0"
                     data-loose-flight={componentId}
                     key={componentId}
                     ref={(node) => {

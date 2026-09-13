@@ -20,7 +20,6 @@ import {
   MAX_PHYSICS_BODIES,
   deterministicFallbackLayout,
   injectLooseParticle,
-  seedLooseParticles,
   stepLoosePhysics,
   type LooseBounds,
   type LooseBodyInput,
@@ -165,33 +164,6 @@ function trayEntryFor(origin: { x: number; y: number }, bounds: LooseBounds, rad
     entryY,
     velocityX: (bounds.centerX - entryX) * handoffSpeed,
     velocityY: (bounds.centerY - entryY) * handoffSpeed
-  };
-}
-
-function reconcileKeepPositions(
-  previous: LoosePhysicsState,
-  inputs: readonly LooseBodyInput[],
-  bounds: LooseBounds
-): LoosePhysicsState {
-  // Capacity authority: deterministic placement with real radii (count + occupied space).
-  const plan = deterministicFallbackLayout(inputs, bounds);
-  const admittedIds = new Set(plan.particles.map((particle) => particle.componentId));
-  const existing = new Map(previous.particles.map((particle) => [particle.componentId, particle]));
-  const particles: LooseParticle[] = plan.particles.map((planParticle) => {
-    const prior = existing.get(planParticle.componentId);
-    if (prior) {
-      return { ...prior, kind: planParticle.kind, radiusPx: planParticle.radiusPx };
-    }
-    return { ...planParticle, velocityX: 0, velocityY: 0, sleepingFrames: 0 };
-  });
-  const overflowComponentIds = inputs
-    .filter((input) => !admittedIds.has(input.componentId))
-    .map((input) => input.componentId);
-  return {
-    elapsedMs: previous.elapsedMs,
-    overflowComponentIds,
-    particles,
-    settled: false
   };
 }
 
@@ -580,98 +552,86 @@ export function createLooseStageController(options: LooseStageControllerOptions)
       pendingLaunches.set(intent.requestId, intent);
     }
 
-    const injectedIds = new Set<string>();
+    // Rollback: drop provisional particle/flight for missing components and consume once.
     for (const [requestId, intent] of [...pendingLaunches.entries()]) {
       if (!componentExists(design, intent.componentId)) {
         removeParticle(intent.componentId);
         consume(requestId);
+      }
+    }
+    for (const [requestId, flight] of [...flights.entries()]) {
+      if (!componentExists(design, flight.componentId)) {
+        flights.delete(requestId);
+      }
+    }
+
+    // Unified capacity authority: full inputs, real radii, occupied space.
+    const inputs = deriveLooseBodies(design, bounds.innerRadiusPx).physical;
+    const plan = deterministicFallbackLayout(inputs, bounds);
+    const admittedIds = new Set(plan.particles.map((particle) => particle.componentId));
+    const overflowComponentIds = inputs
+      .filter((input) => !admittedIds.has(input.componentId))
+      .map((input) => input.componentId);
+
+    // Launches may only start flight/inject for bodies the plan admits.
+    for (const [requestId, intent] of [...pendingLaunches.entries()]) {
+      if (!componentExists(design, intent.componentId)) {
+        consume(requestId);
         continue;
       }
       const body = bodyFor(design, intent.componentId, bounds.innerRadiusPx);
-      if (!body) {
+      if (!body || !admittedIds.has(body.componentId)) {
         consume(requestId);
         continue;
       }
       const alreadyVisible = state.particles.some((particle) => particle.componentId === intent.componentId);
       const alreadyFlying = [...flights.values()].some((flight) => flight.componentId === intent.componentId);
       if (!alreadyVisible && !alreadyFlying) {
-        if (state.particles.length === 0) {
-          const others = deriveLooseBodies(design, bounds.innerRadiusPx).physical.filter(
-            (input) => input.componentId !== intent.componentId
-          );
-          state = seedLooseParticles(others, bounds);
-        }
         const origin = originInStage(intent, stageRect ?? lastStageRect);
         beginFlightOrInject(body, origin, requestId, stageRect ?? lastStageRect);
-        injectedIds.add(intent.componentId);
       }
       consume(requestId);
     }
 
-    // Drop flights whose components disappeared (rollback).
+    // Drop flights that lost admission (capacity/rollback).
     for (const [requestId, flight] of [...flights.entries()]) {
-      if (!componentExists(design, flight.componentId)) {
+      if (!admittedIds.has(flight.componentId)) {
         flights.delete(requestId);
       }
     }
-    publishFlights();
 
-    const inputs = deriveLooseBodies(design, bounds.innerRadiusPx).physical;
+    // Handed-off flights are in-tray particles — never treat them as "still flying out".
+    const activeFlyingIds = new Set(
+      [...flights.values()].filter((flight) => !flight.handedOff).map((flight) => flight.componentId)
+    );
+    const existing = new Map(state.particles.map((particle) => [particle.componentId, particle]));
+    const particles: LooseParticle[] = [];
+    for (const planParticle of plan.particles) {
+      if (activeFlyingIds.has(planParticle.componentId)) continue;
+      const prior = existing.get(planParticle.componentId);
+      if (prior) {
+        particles.push({ ...prior, kind: planParticle.kind, radiusPx: planParticle.radiusPx });
+      } else {
+        particles.push({ ...planParticle, velocityX: 0, velocityY: 0, sleepingFrames: 0 });
+      }
+    }
+
+    state = {
+      ...state,
+      particles,
+      overflowComponentIds,
+      settled: false
+    };
+
     if (mode === "REDUCED" || mode === "FALLBACK") {
       placeFallback(inputs);
       return;
     }
 
-    if (injectedIds.size > 0 || flights.size > 0) {
-      const flyingIds = new Set([...flights.values()].map((flight) => flight.componentId));
-      const kept = inputs.filter((input) => !injectedIds.has(input.componentId) && !flyingIds.has(input.componentId));
-      const rest = reconcileKeepPositions(
-        { ...state, particles: state.particles.filter((p) => !injectedIds.has(p.componentId) && !flyingIds.has(p.componentId)) },
-        kept,
-        bounds
-      );
-      const injectedParticles = state.particles.filter(
-        (p) => injectedIds.has(p.componentId) && !flyingIds.has(p.componentId)
-      );
-      const overflow = [
-        ...rest.overflowComponentIds,
-        ...inputs
-          .filter((input) => flyingIds.has(input.componentId))
-          .map((input) => input.componentId)
-          .filter(() => false),
-        ...inputs
-          .filter((input) => !rest.particles.some((p) => p.componentId === input.componentId) && !flyingIds.has(input.componentId) && !injectedParticles.some((p) => p.componentId === input.componentId))
-          .map((input) => input.componentId)
-      ];
-      state = {
-        ...rest,
-        particles: [...rest.particles, ...injectedParticles],
-        overflowComponentIds: [...new Set(overflow)],
-        settled: false
-      };
-      // Unique ids only
-      const unique = new Map(state.particles.map((p) => [p.componentId, p]));
-      state = { ...state, particles: [...unique.values()] };
-      onApplyTransforms(state.particles);
-      publishLayout();
-      startLoop();
-      return;
-    }
-
-    if (state.particles.length === 0) {
-      state = seedLooseParticles(inputs, bounds);
-      onApplyTransforms(state.particles);
-      publishLayout();
-      startLoop();
-      return;
-    }
-
-    const beforeIds = state.particles.map((particle) => particle.componentId).join("|");
-    state = reconcileKeepPositions(state, inputs, bounds);
-    const afterIds = state.particles.map((particle) => particle.componentId).join("|");
     onApplyTransforms(state.particles);
+    publishFlights();
     publishLayout();
-    if (beforeIds !== afterIds || !state.settled) startLoop();
+    if (flights.size > 0 || !state.settled) startLoop();
   }
 
   recomputeBounds();
