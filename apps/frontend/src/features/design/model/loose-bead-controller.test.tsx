@@ -121,12 +121,12 @@ test("pending launch injects from origin and is not seeded by reconcile first", 
     { left: 0, top: 0, width: 400, height: 400 }
   );
 
-  const particle = harness.controller.getSnapshot().particles.find((item) => item.componentId === "launch-bead");
-  assert.ok(particle, "launch particle must exist");
-  assert.ok(
-    Math.hypot(particle!.x - origin.x, particle!.y - origin.y) < 1,
-    `expected inject near origin, got ${particle!.x},${particle!.y}`
-  );
+  // Outside sources begin a visible pre-entry flight from the measured origin.
+  const flight = harness.controller.getFlights().find((item) => item.componentId === "launch-bead");
+  assert.ok(flight, "launch flight must start from origin");
+  assert.ok(Math.hypot(flight!.clientX - origin.x, flight!.clientY - origin.y) < 2);
+  // Not seeded by reconcile as a random tray particle.
+  assert.ok(!harness.controller.getSnapshot().particles.some((p) => p.componentId === "launch-bead"));
   assert.deepEqual(harness.consumed, ["launch-1"]);
 });
 
@@ -139,10 +139,14 @@ test("failed launch consumes the intent and removes the provisional particle", (
   harness.controller.sync({ ...design, beads: [...base, added] }, [
     { requestId: "launch-rb", componentId: "rollback-bead", originClientX: 10, originClientY: 10 }
   ], { left: 0, top: 0, width: 400, height: 400 });
-  assert.ok(harness.controller.getSnapshot().particles.some((p) => p.componentId === "rollback-bead"));
+  assert.ok(
+    harness.controller.getSnapshot().particles.some((p) => p.componentId === "rollback-bead") ||
+      harness.controller.getFlights().some((f) => f.componentId === "rollback-bead")
+  );
 
   harness.controller.sync({ ...design, beads: base }, [], { left: 0, top: 0, width: 400, height: 400 });
   assert.ok(!harness.controller.getSnapshot().particles.some((p) => p.componentId === "rollback-bead"));
+  assert.ok(!harness.controller.getFlights().some((f) => f.componentId === "rollback-bead"));
 
   // A rollback intent that never had a body still consumes exactly once.
   harness.controller.sync({ ...design, beads: base }, [
@@ -238,6 +242,12 @@ test("single RAF loop applies transforms without React setters and stops on sett
     { requestId: "fly", componentId: "fly-in", originClientX: 8, originClientY: 12 }
   ], { left: 0, top: 0, width: 400, height: 400 });
   assert.equal(harness.fake.pendingCount(), 1, "exactly one RAF pending");
+  // Complete pre-entry flight, then physics frames write transforms.
+  const flightStart = harness.fake.runtime.now();
+  for (let index = 1; index <= 24; index += 1) {
+    harness.fake.flush(flightStart + index * 16);
+    if (harness.controller.getFlights().length === 0) break;
+  }
   const transformCallsBefore = harness.transforms.length;
   harness.fake.flush(harness.fake.runtime.now() + 16);
   assert.ok(harness.transforms.length > transformCallsBefore);
@@ -285,7 +295,7 @@ test("reduced motion skips the ballistic loop", () => {
       ...fake.runtime,
       requestAnimationFrame(cb) {
         rafAfterStart += 1;
-        return fake.runtime.requestAnimationFrame(cb);
+        return fake.runtime.requestAnimationFrame?.(cb) ?? 0;
       }
     },
     prefersReducedMotion: true,
