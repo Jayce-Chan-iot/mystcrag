@@ -181,6 +181,8 @@ type ActiveFlight = {
   radiusPx: number;
   kind: LooseBodyInput["kind"];
   startedAt: number;
+  /** Duration of the current path segment; initial flight uses FLIGHT_MS. */
+  durationMs: number;
   stageLeft: number;
   stageTop: number;
   handedOff: boolean;
@@ -268,12 +270,16 @@ export function createLooseStageController(options: LooseStageControllerOptions)
     onLayoutChanged(snapshot());
   }
 
+  function flightSegmentProgress(flight: ActiveFlight, now: number): number {
+    if (flight.handedOff) return 1;
+    if (flight.durationMs <= 0) return 1;
+    return Math.min(1, Math.max(0, (now - flight.startedAt) / flight.durationMs));
+  }
+
   function flightProgressList(): FlightProgress[] {
     const now = runtime.now();
     return [...flights.values()].map((flight) => {
-      const progress = flight.handedOff
-        ? 1
-        : Math.min(1, Math.max(0, (now - flight.startedAt) / FLIGHT_MS));
+      const progress = flightSegmentProgress(flight, now);
       const x = flight.fromStageX + (flight.entryX - flight.fromStageX) * progress;
       const y = flight.fromStageY + (flight.entryY - flight.fromStageY) * progress;
       return {
@@ -306,12 +312,25 @@ export function createLooseStageController(options: LooseStageControllerOptions)
     const top = stageRect?.top ?? lastStageRect?.top ?? 0;
     for (const flight of [...flights.values()]) {
       if (flight.handedOff) {
-        // Keep stage origin in sync for the handoff overlay frame.
+        // Overlay must match the in-tray particle's current center and radius.
+        const particle = state.particles.find((item) => item.componentId === flight.componentId);
         flight.stageLeft = left;
         flight.stageTop = top;
+        if (particle) {
+          flight.fromStageX = particle.x;
+          flight.fromStageY = particle.y;
+          flight.entryX = particle.x;
+          flight.entryY = particle.y;
+          flight.radiusPx = particle.radiusPx;
+          flight.fromClientX = left + particle.x;
+          flight.fromClientY = top + particle.y;
+        }
+        flight.startedAt = now;
+        flight.durationMs = 0;
         continue;
       }
-      const progress = Math.min(1, Math.max(0, (now - flight.startedAt) / FLIGHT_MS));
+      const progress = flightSegmentProgress(flight, now);
+      const remainingMs = Math.max(0, flight.durationMs * (1 - progress));
       const oldStageX = flight.fromStageX + (flight.entryX - flight.fromStageX) * progress;
       const oldStageY = flight.fromStageY + (flight.entryY - flight.fromStageY) * progress;
       const currentClientX = flight.stageLeft + oldStageX;
@@ -325,6 +344,7 @@ export function createLooseStageController(options: LooseStageControllerOptions)
         bounds,
         radiusPx
       );
+      // Current client point is progress=0 on the new segment; do not re-apply old progress.
       flight.fromStageX = nextFromStageX;
       flight.fromStageY = nextFromStageY;
       flight.fromClientX = currentClientX;
@@ -336,8 +356,8 @@ export function createLooseStageController(options: LooseStageControllerOptions)
       flight.radiusPx = radiusPx;
       flight.stageLeft = left;
       flight.stageTop = top;
-      // Preserve remaining duration: progress(now) unchanged, progress(now+remaining)=1.
-      flight.startedAt = now - progress * FLIGHT_MS;
+      flight.startedAt = now;
+      flight.durationMs = remainingMs;
     }
   }
 
@@ -424,7 +444,7 @@ export function createLooseStageController(options: LooseStageControllerOptions)
     }
     const now = runtime.now();
     for (const flight of [...flights.values()]) {
-      if (!flight.handedOff && (now - flight.startedAt) / FLIGHT_MS >= 1) {
+      if (!flight.handedOff && flightSegmentProgress(flight, now) >= 1) {
         handoffFlight(flight);
       }
     }
@@ -576,6 +596,7 @@ export function createLooseStageController(options: LooseStageControllerOptions)
       stageTop: stageRect?.top ?? 0,
       handedOff: false,
       handoffFrameIndex: -1,
+      durationMs: FLIGHT_MS,
       ...visual
     });
   }
