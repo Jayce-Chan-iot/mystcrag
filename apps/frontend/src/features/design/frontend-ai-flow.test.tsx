@@ -275,7 +275,10 @@ test("flat bracelet editor delegates loose mode to LooseBeadStage without busine
   assert.match(source, /LooseBeadStage/);
   assert.match(source, /launchQueue\?:/);
   assert.match(source, /onLaunchConsumed\?:/);
-  assert.match(source, /!connected/);
+  assert.match(source, /!visualConnected/);
+  assert.match(source, /MODE_TRANSITION_MS/);
+  assert.match(source, /data-mode-transition-ghost/);
+  assert.match(source, /prefers-reduced-motion/);
   assert.match(source, /duration-300 motion-reduce:transition-none/);
 });
 

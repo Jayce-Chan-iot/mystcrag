@@ -208,3 +208,46 @@ test("deterministic fallback places equal-diameter bodies without overlap", () =
   assertInsideBounds(first);
   assertNoOverlap(first);
 });
+
+test("real radii are never silently clamped to fit the tray", () => {
+  const wide: LooseBounds = { centerX: 100, centerY: 100, innerRadiusPx: 160 };
+  const huge = seedLooseParticles([bead("huge", 100)], wide);
+  assert.equal(huge.particles.length, 1);
+  assert.equal(huge.particles[0]!.radiusPx, 100);
+  assert.equal(huge.overflowComponentIds.length, 0);
+
+  const tiny: LooseBounds = { centerX: 10, centerY: 10, innerRadiusPx: 20 };
+  const tooBig = seedLooseParticles([bead("too-big", 15)], tiny);
+  if (tooBig.particles.length === 1) {
+    assert.equal(tooBig.particles[0]!.radiusPx, 15);
+    assert.ok(Math.abs(tooBig.particles[0]!.radiusPx - 8.4) > 0.01);
+  } else {
+    assert.equal(tooBig.overflowComponentIds[0], "too-big");
+  }
+  const fallback = deterministicFallbackLayout([bead("too-big", 15)], tiny);
+  if (fallback.particles.length === 1) {
+    assert.equal(fallback.particles[0]!.radiusPx, 15);
+  } else {
+    assert.equal(fallback.overflowComponentIds[0], "too-big");
+  }
+});
+
+test("tangent resting particles settle within twelve fixed steps instead of hard stop", () => {
+  const bounds: LooseBounds = { centerX: 0, centerY: 0, innerRadiusPx: 80 };
+  const radius = 10;
+  let state: LoosePhysicsState = {
+    elapsedMs: 0,
+    overflowComponentIds: [],
+    settled: false,
+    particles: [
+      { componentId: "left", kind: "BEAD", radiusPx: radius, x: -radius, y: 0, velocityX: 0, velocityY: 0, sleepingFrames: 0 },
+      { componentId: "right", kind: "BEAD", radiusPx: radius, x: radius, y: 0, velocityX: 0, velocityY: 0, sleepingFrames: 0 }
+    ]
+  };
+  for (let index = 0; index < 12; index += 1) {
+    state = stepLoosePhysics(state, bounds);
+  }
+  assert.equal(state.settled, true);
+  assert.ok(state.elapsedMs < 3000);
+  assert.ok(Math.hypot(state.particles[0]!.velocityX, state.particles[0]!.velocityY) === 0);
+});
