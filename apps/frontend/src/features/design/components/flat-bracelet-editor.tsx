@@ -7,7 +7,13 @@ import * as React from "react";
 
 import { evaluateBraceletFit, inlineAccessoryLengthMm, type BraceletFit } from "../model/bracelet-fit";
 import { isPointOutsideTray, type DisplayTrayMaterial } from "../model/display-tray";
-import { MODE_TRANSITION_MS, deriveLooseBodies } from "../model/loose-bead-controller";
+import {
+  MODE_TRANSITION_MS,
+  computeModeGhosts,
+  createModeTransitionController,
+  deriveLooseBodies,
+  type ModeGhost
+} from "../model/loose-bead-controller";
 import { deterministicFallbackLayout } from "../model/loose-bead-physics";
 import { getTrayVisual } from "../model/visual-assets";
 import { CrystalBeadImage } from "./crystal-bead-image";
@@ -173,30 +179,42 @@ export function FlatBraceletEditor({
   const [nativeOutsideTray, setNativeOutsideTray] = React.useState(false);
   const [nativeDragTarget, setNativeDragTarget] = React.useState<number | null>(null);
   const [visualConnected, setVisualConnected] = React.useState(connected);
-  const [transitionGhosts, setTransitionGhosts] = React.useState<
-    Array<{ componentId: string; fromX: number; fromY: number; toX: number; toY: number; sizePercent: number }>
-  >([]);
+  const [transitionGhosts, setTransitionGhosts] = React.useState<ModeGhost[]>([]);
   const modeStageRef = React.useRef<HTMLDivElement | null>(null);
+  const modeTransitionRef = React.useRef<ReturnType<typeof createModeTransitionController> | null>(null);
   const componentLayouts = calculateSizeAwareRingLayout(components, visualConnected);
   const ringRadiusPercent = componentLayouts[0]?.radiusPercent ?? 39;
 
   React.useEffect(() => {
-    if (connected === visualConnected) return;
-    const reduced =
-      typeof window !== "undefined" &&
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced) {
-      queueMicrotask(() => {
-        setVisualConnected(connected);
-        setTransitionGhosts([]);
+    if (!modeTransitionRef.current && typeof window !== "undefined") {
+      modeTransitionRef.current = createModeTransitionController({
+        durationMs: MODE_TRANSITION_MS,
+        isReducedMotion: () =>
+          typeof window.matchMedia === "function" &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+        onChange: (snapshot) => {
+          setTransitionGhosts(snapshot.ghosts);
+          setVisualConnected(snapshot.visualConnected);
+        }
       });
-      return;
     }
+    return () => {
+      modeTransitionRef.current?.destroy();
+      modeTransitionRef.current = null;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const controller = modeTransitionRef.current;
+    if (!controller) return;
+    if (connected === visualConnected) return;
+
     const stage = modeStageRef.current;
     const fromPositions = new Map<string, { x: number; y: number; size: number }>();
+    let stageSize = 320;
     if (stage) {
       const rect = stage.getBoundingClientRect();
+      stageSize = Math.max(1, Math.min(rect.width, rect.height));
       for (const node of stage.querySelectorAll<HTMLElement>("[data-component-id]")) {
         const componentId = node.dataset.componentId;
         if (!componentId) continue;
@@ -208,46 +226,40 @@ export function FlatBraceletEditor({
         });
       }
     }
-    const innerRadiusPx = Math.min(320, 320) * getTrayVisual(trayMaterial).innerRadiusRatio;
+    const innerRadiusPx = stageSize * getTrayVisual(trayMaterial).innerRadiusRatio;
     const looseLayout = deterministicFallbackLayout(deriveLooseBodies(design, innerRadiusPx).physical, {
-      centerX: 160,
-      centerY: 160,
+      centerX: stageSize / 2,
+      centerY: stageSize / 2,
       innerRadiusPx
     });
-    const looseById = new Map(looseLayout.particles.map((particle) => [particle.componentId, particle]));
-    const ghosts = components.map((component) => {
-      const from = fromPositions.get(component.componentId) ?? { x: 50, y: 50, size: 8 };
-      const loose = looseById.get(component.componentId);
-      const ring = componentLayouts.find((item) => item.component.componentId === component.componentId);
-      const to = connected
-        ? {
-            x: ring?.leftPercent ?? 50,
-            y: ring?.topPercent ?? 50,
-            size: ring?.widthPercent ?? 8
-          }
-        : {
-            x: loose ? (loose.x / 320) * 100 : 50,
-            y: loose ? (loose.y / 320) * 100 : 50,
-            size: loose ? (loose.radiusPx * 2 / 320) * 100 : 8
-          };
-      return {
-        componentId: component.componentId,
-        fromX: from.x,
-        fromY: from.y,
-        toX: to.x,
-        toY: to.y,
-        sizePercent: from.size || to.size || 8
-      };
-    });
-    queueMicrotask(() => {
-      setTransitionGhosts(ghosts);
-      setVisualConnected(connected);
-    });
-    const timeout = window.setTimeout(() => {
-      setTransitionGhosts([]);
-    }, MODE_TRANSITION_MS);
-    return () => window.clearTimeout(timeout);
-  }, [connected, componentLayouts, components, design, trayMaterial, visualConnected]);
+    const looseById = new Map(
+      looseLayout.particles.map((particle) => [
+        particle.componentId,
+        {
+          x: (particle.x / stageSize) * 100,
+          y: (particle.y / stageSize) * 100,
+          size: ((particle.radiusPx * 2) / stageSize) * 100
+        }
+      ])
+    );
+    // Destination layout is always computed with the target connected flag.
+    const connectedById = new Map(
+      calculateSizeAwareRingLayout(components, true).map((item) => [
+        item.component.componentId,
+        { x: item.leftPercent, y: item.topPercent, size: item.widthPercent }
+      ])
+    );
+
+    controller.requestTransition(connected, (targetConnected) =>
+      computeModeGhosts({
+        targetConnected,
+        componentIds: components.map((component) => component.componentId),
+        fromPositions,
+        connectedById,
+        looseById
+      })
+    );
+  }, [components, connected, design, trayMaterial, visualConnected]);
 
   React.useEffect(() => {
     if (transitionGhosts.length === 0) return;

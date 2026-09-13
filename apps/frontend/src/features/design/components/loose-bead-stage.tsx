@@ -3,6 +3,7 @@
 import type { PublicDesignV1 } from "@mystcrag/design-contract";
 import Image from "next/image";
 import * as React from "react";
+import { createPortal } from "react-dom";
 
 import type { DisplayTrayMaterial } from "../model/display-tray";
 import {
@@ -12,6 +13,7 @@ import {
   hitTargetSizePx,
   mmToRadiusPx,
   type BeadLaunchIntent,
+  type FlightProgress,
   type LooseStageController,
   type LooseStageSnapshot
 } from "../model/loose-bead-controller";
@@ -44,12 +46,12 @@ function anchorLabel(index: number): string {
 }
 
 function createBrowserRuntime(): Parameters<typeof createLooseStageController>[0]["runtime"] {
+  const hasRaf =
+    typeof requestAnimationFrame === "function" && typeof cancelAnimationFrame === "function";
   return {
-    requestAnimationFrame: (callback) =>
-      typeof requestAnimationFrame === "function" ? requestAnimationFrame(callback) : 0,
-    cancelAnimationFrame: (handle) => {
-      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(handle);
-    },
+    // Omit RAF entirely when unavailable so the controller never trusts a no-op wrapper.
+    requestAnimationFrame: hasRaf ? (callback) => requestAnimationFrame(callback) : undefined,
+    cancelAnimationFrame: hasRaf ? (handle) => cancelAnimationFrame(handle) : undefined,
     now: () => (typeof performance !== "undefined" ? performance.now() : Date.now()),
     matchMedia: (query) =>
       typeof window !== "undefined" && typeof window.matchMedia === "function"
@@ -57,6 +59,14 @@ function createBrowserRuntime(): Parameters<typeof createLooseStageController>[0
         : { matches: false },
     documentRef: typeof document === "undefined" ? undefined : document
   };
+}
+
+function prefersReducedMotionNow(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
 }
 
 export function LooseBeadStage({
@@ -99,6 +109,39 @@ export function LooseBeadStage({
     }
   }, []);
 
+  const flightOverlayRef = React.useRef<HTMLDivElement | null>(null);
+  const flightNodesRef = React.useRef(new Map<string, HTMLElement>());
+  const onFlightUpdate = React.useCallback((flights: readonly FlightProgress[]) => {
+    const overlay = flightOverlayRef.current;
+    if (!overlay) return;
+    const live = new Set(flights.map((flight) => flight.componentId));
+    for (const [componentId, node] of [...flightNodesRef.current.entries()]) {
+      if (!live.has(componentId)) {
+        node.remove();
+        flightNodesRef.current.delete(componentId);
+      }
+    }
+    for (const flight of flights) {
+      let node = flightNodesRef.current.get(flight.componentId);
+      if (!node) {
+        node = document.createElement("div");
+        node.dataset.looseFlight = flight.componentId;
+        node.dataset.componentId = flight.componentId;
+        node.setAttribute("aria-hidden", "true");
+        node.className = "pointer-events-none fixed z-[80] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--accent-soft)] shadow-[0_10px_24px_rgb(57_45_67/0.22)]";
+        overlay.append(node);
+        flightNodesRef.current.set(flight.componentId, node);
+      }
+      const size = Math.max(12, flight.radiusPx * 2);
+      node.style.width = `${size}px`;
+      node.style.height = `${size}px`;
+      node.style.transform = `translate3d(${flight.clientX}px, ${flight.clientY}px, 0) translate(-50%, -50%)`;
+      node.style.left = "0";
+      node.style.top = "0";
+      node.style.opacity = String(0.35 + 0.65 * (1 - Math.abs(flight.progress - 0.5) * 0.5));
+    }
+  }, []);
+
   React.useEffect(() => {
     if (typeof window === "undefined") return;
     const media = window.matchMedia?.("(prefers-reduced-motion: reduce)");
@@ -116,15 +159,21 @@ export function LooseBeadStage({
     const node = stageRef.current;
     if (!node || typeof window === "undefined") return;
     if (!controllerRef.current) {
+      // Seed reduced-motion at construction so the first mount is already REDUCED.
+      const prefers = prefersReducedMotionNow();
       controllerRef.current = createLooseStageController({
         runtime: createBrowserRuntime(),
         innerRadiusRatio: getTrayVisual(trayMaterial).innerRadiusRatio,
+        prefersReducedMotion: prefers,
         onLaunchConsumed: (requestId) => onLaunchConsumedRef.current(requestId),
         onApplyTransforms: applyTransforms,
-        onLayoutChanged: (next) => setSnapshot(next)
+        onLayoutChanged: (next) => setSnapshot(next),
+        onFlightUpdate
       });
+      queueMicrotask(() => setReducedMotion(prefers));
     }
     const controller = controllerRef.current;
+    controller.setPrefersReducedMotion(prefersReducedMotionNow());
     controller.setInnerRadiusRatio(getTrayVisual(trayMaterial).innerRadiusRatio);
     const measure = () => {
       const rect = node.getBoundingClientRect();
@@ -137,7 +186,7 @@ export function LooseBeadStage({
       ResizeObserverCtor,
       windowTarget: window
     });
-  }, [applyTransforms, design, launchQueue, trayMaterial]);
+  }, [applyTransforms, design, launchQueue, onFlightUpdate, trayMaterial]);
 
   React.useEffect(() => {
     if (typeof document === "undefined") return;
@@ -304,6 +353,18 @@ export function LooseBeadStage({
           </p>
         ) : null}
       </div>
+
+      {typeof document !== "undefined"
+        ? createPortal(
+            <div
+              aria-hidden="true"
+              className="pointer-events-none fixed inset-0 z-[80]"
+              data-loose-flight-overlay="true"
+              ref={flightOverlayRef}
+            />,
+            document.body
+          )
+        : null}
     </div>
   );
 }
