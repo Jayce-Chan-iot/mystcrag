@@ -9,6 +9,7 @@ import { evaluateBraceletFit, inlineAccessoryLengthMm, type BraceletFit } from "
 import { isPointOutsideTray, type DisplayTrayMaterial } from "../model/display-tray";
 import { CrystalBeadImage } from "./crystal-bead-image";
 import { DisplayTray } from "./display-tray";
+import { LooseBeadStage, type BeadLaunchIntent } from "./loose-bead-stage";
 
 export type RingComponent =
   | (PublicDesignV1["beads"][number] & { kind: "BEAD" })
@@ -140,6 +141,8 @@ export function FlatBraceletEditor({
   trayMaterial = "BONE_CHINA",
   fit: providedFit,
   fitDesktopViewport = false,
+  launchQueue,
+  onLaunchConsumed,
   onSelect,
   onMove,
   onRemove
@@ -151,6 +154,8 @@ export function FlatBraceletEditor({
   trayMaterial?: DisplayTrayMaterial;
   fit?: BraceletFit;
   fitDesktopViewport?: boolean;
+  launchQueue?: readonly BeadLaunchIntent[];
+  onLaunchConsumed?: (requestId: string) => void;
   onSelect: (componentId: string) => void;
   onMove: (componentId: string, targetPositionIndex: number) => void;
   onRemove: (componentId: string) => void;
@@ -185,6 +190,41 @@ export function FlatBraceletEditor({
     setNativeOutsideTray(false);
     setNativeDragTarget(null);
   };
+
+  if (!connected) {
+    return (
+      <div
+        aria-label="2D 手串编辑预览"
+        className="relative mx-auto aspect-square w-full max-w-[35rem] select-none"
+        data-bracelet-layout="loose"
+        data-flat-bracelet-editor="true"
+        style={fitDesktopViewport ? { maxWidth: "clamp(14rem, calc(100dvh - 20.5rem), 35rem)" } : undefined}
+      >
+        <LooseBeadStage
+          busy={busy}
+          design={design}
+          launchQueue={launchQueue ?? []}
+          onLaunchConsumed={onLaunchConsumed ?? (() => undefined)}
+          onSelect={onSelect}
+          selectedComponentId={selectedComponentId}
+          trayMaterial={trayMaterial}
+        />
+        {fit.message ? (
+          <div
+            aria-live="polite"
+            className={`pointer-events-none absolute left-1/2 top-1/2 z-30 w-[min(70%,17rem)] -translate-x-1/2 -translate-y-1/2 px-3 py-2 text-center ${
+              fit.status === "TOO_LARGE" ? "text-amber-800" : "text-[var(--accent-deep)]"
+            }`}
+            data-bracelet-fit-status={fit.status}
+            role="status"
+          >
+            <strong className="block text-sm font-semibold">{fit.message}</strong>
+            <span className="mt-1 block text-xs opacity-75">常见建议范围：13.0–20.0cm，不影响完成设计</span>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   const updateDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
     const currentDrag = dragRef.current;

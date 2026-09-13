@@ -199,11 +199,12 @@ test("DIY workbench exposes tray choice, current beads, diameter controls and ex
   assert.match(source, /展示托盘：/);
 });
 
-test("flat bracelet editor exposes the touch-first 2D ring", () => {
+test("flat bracelet editor exposes the touch-first 2D ring in connected mode", () => {
   const design = mockDesignOptions[0]!;
   const markup = renderToStaticMarkup(
     <FlatBraceletEditor
       busy={false}
+      connected
       design={design}
       fitDesktopViewport
       onMove={() => undefined}
@@ -213,7 +214,7 @@ test("flat bracelet editor exposes the touch-first 2D ring", () => {
     />
   );
   assert.match(markup, /data-flat-bracelet-editor="true"/);
-  assert.match(markup, /data-bracelet-layout="spread"/);
+  assert.match(markup, /data-bracelet-layout="connected"/);
   assert.match(markup, /2D 手串编辑预览/);
   assert.match(markup, /aria-pressed="true"/);
   assert.match(markup, /clamp\(14rem, calc\(100dvh - 20\.5rem\), 35rem\)/);
@@ -238,6 +239,34 @@ test("flat bracelet editor exposes the touch-first 2D ring", () => {
   assert.match(beadImageSource, /loading="eager"/);
   assert.match(source, /silver-star-ring-charm\.png/);
   assert.match(source, /loading="eager"/);
+});
+
+test("flat bracelet editor delegates loose mode to LooseBeadStage without business move callbacks", () => {
+  const design = mockDesignOptions[0]!;
+  let moveCalls = 0;
+  const markup = renderToStaticMarkup(
+    <FlatBraceletEditor
+      busy={false}
+      connected={false}
+      design={design}
+      onMove={() => {
+        moveCalls += 1;
+      }}
+      onRemove={() => undefined}
+      onSelect={() => undefined}
+      selectedComponentId={design.beads[0]!.componentId}
+    />
+  );
+  assert.equal(moveCalls, 0);
+  assert.match(markup, /data-loose-bead-stage="true"/);
+  assert.match(markup, /data-bracelet-layout="loose"/);
+  assert.doesNotMatch(markup, /拖出托盘即可删除/);
+  const source = readFileSync(new URL("./components/flat-bracelet-editor.tsx", import.meta.url), "utf8");
+  assert.match(source, /LooseBeadStage/);
+  assert.match(source, /launchQueue\?:/);
+  assert.match(source, /onLaunchConsumed\?:/);
+  assert.match(source, /!connected/);
+  assert.match(source, /duration-300 motion-reduce:transition-none/);
 });
 
 test("drag hit resolution maps each pointer position to the slot rendered under it", () => {
@@ -432,6 +461,7 @@ test("keyboard editing selects, moves and removes beads with prevented defaults 
   const markup = renderToStaticMarkup(
     <FlatBraceletEditor
       busy={false}
+      connected
       design={design}
       onMove={() => undefined}
       onRemove={() => undefined}
