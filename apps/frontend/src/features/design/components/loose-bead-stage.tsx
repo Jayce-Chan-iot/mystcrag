@@ -6,35 +6,22 @@ import * as React from "react";
 
 import type { DisplayTrayMaterial } from "../model/display-tray";
 import {
-  chooseLooseMotionMode,
-  consumeFrameDelta,
-  observeElementSize,
-  shouldForceFallback,
-  trackSlowFrame,
-  type FrameBudgetTracker,
-  type LooseMotionMode
-} from "../model/loose-bead-motion";
-import {
-  MAX_PHYSICS_BODIES,
-  deterministicFallbackLayout,
-  injectLooseParticle,
-  seedLooseParticles,
-  stepLoosePhysics,
-  type LooseBounds,
-  type LooseBodyInput,
-  type LooseParticle,
-  type LoosePhysicsState
-} from "../model/loose-bead-physics";
+  collectTransformMap,
+  createLooseStageController,
+  deriveLooseBodies,
+  hitTargetSizePx,
+  mmToRadiusPx,
+  type BeadLaunchIntent,
+  type LooseStageController,
+  type LooseStageSnapshot
+} from "../model/loose-bead-controller";
+import { observeElementSize } from "../model/loose-bead-motion";
+import { deterministicFallbackLayout, type LooseParticle } from "../model/loose-bead-physics";
 import { getTrayVisual } from "../model/visual-assets";
 import { CrystalBeadImage } from "./crystal-bead-image";
 import { DisplayTray } from "./display-tray";
 
-export type BeadLaunchIntent = {
-  requestId: string;
-  componentId: string;
-  originClientX: number;
-  originClientY: number;
-};
+export type { BeadLaunchIntent };
 
 export type LooseBeadStageProps = {
   busy: boolean;
@@ -47,104 +34,29 @@ export type LooseBeadStageProps = {
 };
 
 const DEFAULT_STAGE_SIZE = 320;
-const DEFAULT_BOUNDS: LooseBounds = {
-  centerX: DEFAULT_STAGE_SIZE / 2,
-  centerY: DEFAULT_STAGE_SIZE / 2,
-  innerRadiusPx: DEFAULT_STAGE_SIZE * 0.37
-};
-const COLLISION_TOLERANCE_PX = 1.5;
-const HARD_STOP_MS = 3000;
 
-export function mmToRadiusPx(diameterMm: number, innerRadiusPx: number): number {
-  const safeMm = Number.isFinite(diameterMm) && diameterMm > 0 ? diameterMm : 6;
-  const scale = innerRadiusPx / 56;
-  return Math.max(4, (safeMm / 2) * scale * 1.08);
-}
-
-export type LooseDerivedBodies = {
-  anchored: Array<{ componentId: string; label: string }>;
-  physical: LooseBodyInput[];
-};
-
-export function deriveLooseBodies(design: PublicDesignV1, innerRadiusPx: number): LooseDerivedBodies {
-  const physical: LooseBodyInput[] = design.beads.map((bead) => ({
-    componentId: bead.componentId,
-    kind: "BEAD" as const,
-    radiusPx: mmToRadiusPx(bead.diameterMm, innerRadiusPx)
-  }));
-  for (const accessory of design.accessories) {
-    if (accessory.placementMode !== "INLINE") continue;
-    const width = accessory.dimensions.widthMm ?? accessory.dimensions.diameterMm ?? 10;
-    const height = accessory.dimensions.heightMm ?? accessory.dimensions.diameterMm ?? width;
-    const largest = Math.max(width, height);
-    physical.push({
-      componentId: accessory.componentId,
-      kind: "INLINE_ACCESSORY",
-      radiusPx: mmToRadiusPx(largest, innerRadiusPx)
-    });
-  }
-  const anchored = design.accessories
-    .filter((accessory) => accessory.placementMode === "ANCHORED")
-    .map((accessory) => ({
-      componentId: accessory.componentId,
-      label: accessory.accessoryProductId
-    }));
-  return { anchored, physical };
-}
-
-export function reconcileLooseParticles(
-  state: LoosePhysicsState,
-  inputs: readonly LooseBodyInput[],
-  bounds: LooseBounds
-): LoosePhysicsState {
-  const nextInputs = inputs.slice(0, MAX_PHYSICS_BODIES);
-  const overflow = inputs.slice(MAX_PHYSICS_BODIES).map((input) => input.componentId);
-  const existing = new Map(state.particles.map((particle) => [particle.componentId, particle]));
-  const kept: LooseParticle[] = [];
-  for (const input of nextInputs) {
-    const prior = existing.get(input.componentId);
-    if (prior) {
-      kept.push({ ...prior, kind: input.kind, radiusPx: input.radiusPx });
-      continue;
-    }
-    const seeded = injectLooseParticle(
-      { ...state, particles: kept, settled: false },
-      input,
-      { x: bounds.centerX, y: bounds.centerY - bounds.innerRadiusPx },
-      bounds
-    );
-    const injected = seeded.particles.at(-1);
-    if (injected) kept.push(injected);
-  }
-  if (kept.length === state.particles.length && overflow.length === 0) {
-    const same = kept.every((particle, index) => particle.componentId === state.particles[index]?.componentId);
-    if (same) {
-      return { ...state, particles: kept, settled: false };
-    }
-  }
-  const relaxed = seedLooseParticles(
-    kept.map((particle) => ({
-      componentId: particle.componentId,
-      radiusPx: particle.radiusPx,
-      kind: particle.kind
-    })),
-    bounds
-  );
-  return {
-    elapsedMs: state.elapsedMs,
-    overflowComponentIds: [...relaxed.overflowComponentIds, ...overflow],
-    particles: relaxed.particles.map((particle) => ({
-      ...particle,
-      velocityX: 0,
-      velocityY: 0,
-      sleepingFrames: 0
-    })),
-    settled: false
-  };
+function particleTransform(particle: { x: number; y: number }): string {
+  return `translate3d(${particle.x}px, ${particle.y}px, 0) translate(-50%, -50%)`;
 }
 
 function anchorLabel(index: number): string {
   return `挂饰 ${index + 1}`;
+}
+
+function createBrowserRuntime(): Parameters<typeof createLooseStageController>[0]["runtime"] {
+  return {
+    requestAnimationFrame: (callback) =>
+      typeof requestAnimationFrame === "function" ? requestAnimationFrame(callback) : 0,
+    cancelAnimationFrame: (handle) => {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(handle);
+    },
+    now: () => (typeof performance !== "undefined" ? performance.now() : Date.now()),
+    matchMedia: (query) =>
+      typeof window !== "undefined" && typeof window.matchMedia === "function"
+        ? window.matchMedia(query)
+        : { matches: false },
+    documentRef: typeof document === "undefined" ? undefined : document
+  };
 }
 
 export function LooseBeadStage({
@@ -158,120 +70,34 @@ export function LooseBeadStage({
 }: LooseBeadStageProps) {
   const stageRef = React.useRef<HTMLDivElement | null>(null);
   const particleNodesRef = React.useRef(new Map<string, HTMLElement>());
-  const physicsRef = React.useRef<LoosePhysicsState | null>(null);
-  const boundsRef = React.useRef<LooseBounds>(DEFAULT_BOUNDS);
-  const radiusScaleRef = React.useRef(DEFAULT_BOUNDS.innerRadiusPx);
-  const rafRef = React.useRef<number | null>(null);
-  const accumulatorRef = React.useRef(0);
-  const lastTimeRef = React.useRef(0);
-  const budgetRef = React.useRef<FrameBudgetTracker>({ slowFrames: 0 });
-  const modeRef = React.useRef<LooseMotionMode>("PHYSICS");
-  const consumedLaunchIdsRef = React.useRef(new Set<string>());
-  const runningRef = React.useRef(false);
-  const [reducedMotion, setReducedMotion] = React.useState(false);
-  const [motionMode, setMotionMode] = React.useState<LooseMotionMode>("PHYSICS");
+  const controllerRef = React.useRef<LooseStageController | null>(null);
+  const onLaunchConsumedRef = React.useRef(onLaunchConsumed);
+  React.useEffect(() => {
+    onLaunchConsumedRef.current = onLaunchConsumed;
+  }, [onLaunchConsumed]);
 
-  const bodyCount =
-    design.beads.length +
-    design.accessories.filter((accessory) => accessory.placementMode === "INLINE").length;
+  const [snapshot, setSnapshot] = React.useState<LooseStageSnapshot>(() => ({
+    particles: [],
+    overflowComponentIds: [],
+    overflowActive: false,
+    mode: "PHYSICS",
+    stageSizePx: DEFAULT_STAGE_SIZE,
+    innerRadiusPx: DEFAULT_STAGE_SIZE * 0.37,
+    settled: true
+  }));
+  const [reducedMotion, setReducedMotion] = React.useState(false);
 
   const derived = React.useMemo(
-    () => deriveLooseBodies(design, DEFAULT_BOUNDS.innerRadiusPx),
-    [design]
+    () => deriveLooseBodies(design, snapshot.innerRadiusPx || DEFAULT_STAGE_SIZE * 0.37),
+    [design, snapshot.innerRadiusPx]
   );
 
-  const initialParticles = React.useMemo(
-    () => deterministicFallbackLayout(derived.physical, DEFAULT_BOUNDS).particles,
-    [derived.physical]
-  );
-
-  const applyTransforms = React.useCallback((state: LoosePhysicsState) => {
-    for (const particle of state.particles) {
+  const applyTransforms = React.useCallback((particles: readonly LooseParticle[]) => {
+    for (const particle of particles) {
       const node = particleNodesRef.current.get(particle.componentId);
-      if (node) node.style.transform = `translate3d(${particle.x}px, ${particle.y}px, 0) translate(-50%, -50%)`;
+      if (node) node.style.transform = particleTransform(particle);
     }
   }, []);
-
-  const stopLoop = React.useCallback(() => {
-    runningRef.current = false;
-    if (rafRef.current !== null && typeof cancelAnimationFrame === "function") {
-      cancelAnimationFrame(rafRef.current);
-    }
-    rafRef.current = null;
-  }, []);
-
-  const ensurePhysicsState = React.useCallback(
-    (inputs: readonly LooseBodyInput[], bounds: LooseBounds): LoosePhysicsState => {
-      if (!physicsRef.current) {
-        physicsRef.current = seedLooseParticles(inputs, bounds);
-        return physicsRef.current;
-      }
-      physicsRef.current = reconcileLooseParticles(physicsRef.current, inputs, bounds);
-      return physicsRef.current;
-    },
-    []
-  );
-
-  const placeDeterministic = React.useCallback(
-    (inputs: readonly LooseBodyInput[]) => {
-      physicsRef.current = deterministicFallbackLayout(inputs, boundsRef.current);
-      applyTransforms(physicsRef.current);
-    },
-    [applyTransforms]
-  );
-
-  const startLoop = React.useCallback(() => {
-    if (runningRef.current) return;
-    if (modeRef.current !== "PHYSICS") return;
-    if (typeof requestAnimationFrame !== "function") return;
-    runningRef.current = true;
-    lastTimeRef.current = typeof performance !== "undefined" ? performance.now() : Date.now();
-    const frame = (time: number) => {
-      if (!runningRef.current) return;
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-        stopLoop();
-        return;
-      }
-      const delta = Math.max(0, time - lastTimeRef.current);
-      lastTimeRef.current = time;
-      budgetRef.current = trackSlowFrame(budgetRef.current, delta);
-      if (shouldForceFallback(budgetRef.current)) {
-        modeRef.current = "FALLBACK";
-        setMotionMode("FALLBACK");
-        const state = physicsRef.current;
-        if (state) {
-          placeDeterministic(
-            state.particles.map((particle) => ({
-              componentId: particle.componentId,
-              radiusPx: particle.radiusPx,
-              kind: particle.kind
-            }))
-          );
-        }
-        stopLoop();
-        return;
-      }
-      const { accumulatorMs, steps } = consumeFrameDelta(accumulatorRef.current, delta);
-      accumulatorRef.current = accumulatorMs;
-      let state = physicsRef.current;
-      if (!state || state.settled) {
-        stopLoop();
-        return;
-      }
-      for (let index = 0; index < steps; index += 1) {
-        state = stepLoosePhysics(state, boundsRef.current);
-        physicsRef.current = state;
-        if (state.settled) break;
-      }
-      applyTransforms(state);
-      if (state.settled || state.elapsedMs >= HARD_STOP_MS) {
-        stopLoop();
-        return;
-      }
-      rafRef.current = requestAnimationFrame(frame);
-    };
-    rafRef.current = requestAnimationFrame(frame);
-  }, [applyTransforms, placeDeterministic, stopLoop]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -279,121 +105,72 @@ export function LooseBeadStage({
     const update = () => {
       const prefers = Boolean(media?.matches);
       setReducedMotion(prefers);
-      const mode = chooseLooseMotionMode({
-        bodyCount,
-        prefersReducedMotion: prefers,
-        requestAnimationFrameAvailable: typeof requestAnimationFrame === "function"
-      });
-      modeRef.current = mode;
-      setMotionMode(mode);
-      if (mode !== "PHYSICS") {
-        // REDUCED motion and FALLBACK both skip the ballistic solver.
-        stopLoop();
-        placeDeterministic(deriveLooseBodies(design, boundsRef.current.innerRadiusPx).physical);
-      }
+      controllerRef.current?.setPrefersReducedMotion(prefers);
     };
     update();
     media?.addEventListener?.("change", update);
-    return () => {
-      media?.removeEventListener?.("change", update);
-      stopLoop();
-    };
-  }, [bodyCount, design, placeDeterministic, stopLoop]);
+    return () => media?.removeEventListener?.("change", update);
+  }, []);
 
   React.useEffect(() => {
     const node = stageRef.current;
-    if (!node) return;
+    if (!node || typeof window === "undefined") return;
+    if (!controllerRef.current) {
+      controllerRef.current = createLooseStageController({
+        runtime: createBrowserRuntime(),
+        innerRadiusRatio: getTrayVisual(trayMaterial).innerRadiusRatio,
+        onLaunchConsumed: (requestId) => onLaunchConsumedRef.current(requestId),
+        onApplyTransforms: applyTransforms,
+        onLayoutChanged: (next) => setSnapshot(next)
+      });
+    }
+    const controller = controllerRef.current;
+    controller.setInnerRadiusRatio(getTrayVisual(trayMaterial).innerRadiusRatio);
     const measure = () => {
       const rect = node.getBoundingClientRect();
-      const size = Math.min(rect.width, rect.height) || DEFAULT_STAGE_SIZE;
-      const innerRadiusPx = size * getTrayVisual(trayMaterial).innerRadiusRatio;
-      boundsRef.current = {
-        centerX: rect.width / 2,
-        centerY: rect.height / 2,
-        innerRadiusPx
-      };
-      radiusScaleRef.current = innerRadiusPx;
-      const inputs = deriveLooseBodies(design, innerRadiusPx).physical;
-      if (modeRef.current !== "PHYSICS") {
-        placeDeterministic(inputs);
-        return;
-      }
-      const state = ensurePhysicsState(inputs, boundsRef.current);
-      applyTransforms(state);
-      startLoop();
+      controller.setStageSize(rect.width || DEFAULT_STAGE_SIZE, rect.height || DEFAULT_STAGE_SIZE);
+      controller.sync(design, launchQueue, rect);
     };
     measure();
     const ResizeObserverCtor = typeof ResizeObserver === "function" ? ResizeObserver : undefined;
     return observeElementSize(node, measure, {
       ResizeObserverCtor,
-      windowTarget: typeof window === "undefined" ? undefined : window
+      windowTarget: window
     });
-  }, [applyTransforms, design, ensurePhysicsState, placeDeterministic, startLoop, trayMaterial]);
+  }, [applyTransforms, design, launchQueue, trayMaterial]);
 
   React.useEffect(() => {
     if (typeof document === "undefined") return;
     const onVisibility = () => {
-      if (document.visibilityState === "hidden") {
-        stopLoop();
-        return;
-      }
-      if (modeRef.current === "PHYSICS" && physicsRef.current && !physicsRef.current.settled) {
-        startLoop();
-      }
+      controllerRef.current?.setVisibility(document.visibilityState === "hidden");
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
-      stopLoop();
+      controllerRef.current?.destroy();
+      controllerRef.current = null;
     };
-  }, [startLoop, stopLoop]);
+  }, []);
 
-  React.useEffect(() => {
-    stopLoop();
-  }, [design.beads.length, stopLoop]);
+  // SSR / first paint: deterministic fallback only for bodies that fit.
+  const ssrParticles = React.useMemo(() => {
+    if (snapshot.particles.length > 0) return null;
+    return deterministicFallbackLayout(
+      deriveLooseBodies(design, DEFAULT_STAGE_SIZE * 0.37).physical,
+      {
+        centerX: DEFAULT_STAGE_SIZE / 2,
+        centerY: DEFAULT_STAGE_SIZE / 2,
+        innerRadiusPx: DEFAULT_STAGE_SIZE * 0.37
+      }
+    );
+  }, [design, snapshot.particles.length]);
 
-  React.useEffect(() => {
-    if (launchQueue.length === 0) return;
-    for (const intent of launchQueue) {
-      if (consumedLaunchIdsRef.current.has(intent.requestId)) continue;
-      consumedLaunchIdsRef.current.add(intent.requestId);
-      const exists =
-        design.beads.some((bead) => bead.componentId === intent.componentId) ||
-        design.accessories.some((accessory) => accessory.componentId === intent.componentId);
-      if (!exists) continue;
-      const inputs = deriveLooseBodies(design, boundsRef.current.innerRadiusPx).physical;
-      const body = inputs.find((input) => input.componentId === intent.componentId);
-      if (!body) continue;
-      if (!physicsRef.current) {
-        physicsRef.current = seedLooseParticles(
-          inputs.filter((input) => input.componentId !== intent.componentId),
-          boundsRef.current
-        );
-      }
-      if (!physicsRef.current.particles.some((particle) => particle.componentId === intent.componentId)) {
-        const stageRect = stageRef.current?.getBoundingClientRect();
-        const origin = stageRect
-          ? { x: intent.originClientX - stageRect.left, y: intent.originClientY - stageRect.top }
-          : { x: boundsRef.current.centerX, y: boundsRef.current.centerY };
-        physicsRef.current = injectLooseParticle(physicsRef.current, body, origin, boundsRef.current);
-      }
-      if (modeRef.current === "PHYSICS") {
-        startLoop();
-      } else {
-        placeDeterministic(
-          physicsRef.current.particles.map((particle) => ({
-            componentId: particle.componentId,
-            radiusPx: particle.radiusPx,
-            kind: particle.kind
-          }))
-        );
-      }
-      onLaunchConsumed(intent.requestId);
-    }
-  }, [design, launchQueue, onLaunchConsumed, placeDeterministic, startLoop]);
-
-  const overflowActive = bodyCount > MAX_PHYSICS_BODIES;
-  const fallbackActive = motionMode !== "PHYSICS";
+  const visibleParticles =
+    snapshot.particles.length > 0
+      ? snapshot.particles
+      : (ssrParticles?.particles ?? []).slice(0, 48);
+  const overflowActive = snapshot.overflowActive || (ssrParticles?.overflowComponentIds.length ?? 0) > 0;
+  const fallbackActive = snapshot.mode !== "PHYSICS";
   const particleClass =
     fallbackActive || reducedMotion
       ? "transition-transform duration-150 motion-reduce:transition-none"
@@ -404,72 +181,85 @@ export function LooseBeadStage({
       aria-label="散珠托盘"
       className="relative mx-auto aspect-square w-full max-w-[35rem] select-none overflow-hidden"
       data-loose-bead-stage="true"
-      data-loose-motion-mode={motionMode}
+      data-loose-motion-mode={snapshot.mode}
+      data-loose-stage-size={snapshot.stageSizePx}
       ref={stageRef}
+      style={
+        typeof window !== "undefined"
+          ? ({ ["--loose-inner-radius" as string]: `${snapshot.innerRadiusPx}px` } as React.CSSProperties)
+          : undefined
+      }
     >
       <DisplayTray material={trayMaterial} />
 
       <div className="absolute inset-0 z-10" data-loose-particle-layer="true">
-        {derived.physical.map((body) => {
-          const seeded = initialParticles.find((particle) => particle.componentId === body.componentId);
-          const selected = body.componentId === selectedComponentId;
-          const bead = design.beads.find((item) => item.componentId === body.componentId);
-          const sizePx = Math.max(12, body.radiusPx * 2 - COLLISION_TOLERANCE_PX * 2);
+        {visibleParticles.map((particle, index) => {
+          const selected = particle.componentId === selectedComponentId;
+          const bead = design.beads.find((item) => item.componentId === particle.componentId);
+          const imageSizePx = Math.max(12, particle.radiusPx * 2);
+          const hitSizePx = hitTargetSizePx(imageSizePx);
           return (
             <button
               aria-label={
                 bead
                   ? `散珠：${bead.materialKey} ${bead.diameterMm}mm`
-                  : `直通配饰 ${body.componentId}`
+                  : `直通配饰 ${particle.componentId}`
               }
               aria-pressed={selected}
-              className={`absolute left-0 top-0 z-10 touch-none rounded-full ${particleClass} focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
+              className={`absolute left-0 top-0 z-10 grid touch-none place-items-center rounded-full ${particleClass} focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
                 selected ? "ring-2 ring-[var(--accent)] ring-offset-2 ring-offset-[var(--surface)]" : ""
               }`}
-              data-component-id={body.componentId}
-              data-loose-bead={body.componentId}
+              data-component-id={particle.componentId}
+              data-loose-bead={particle.componentId}
+              data-loose-image-size={imageSizePx}
+              data-loose-hit-size={hitSizePx}
               disabled={busy}
-              key={body.componentId}
-              onClick={() => onSelect(body.componentId)}
+              key={particle.componentId}
+              onClick={() => onSelect(particle.componentId)}
               ref={(node) => {
                 if (node) {
-                  particleNodesRef.current.set(body.componentId, node);
+                  particleNodesRef.current.set(particle.componentId, node);
                   const live =
-                    physicsRef.current?.particles.find((particle) => particle.componentId === body.componentId) ??
-                    seeded;
-                  if (live) node.style.transform = `translate3d(${live.x}px, ${live.y}px, 0) translate(-50%, -50%)`;
+                    controllerRef.current
+                      ?.getSnapshot()
+                      .particles.find((item) => item.componentId === particle.componentId) ?? particle;
+                  node.style.transform = particleTransform(live);
                 } else {
-                  particleNodesRef.current.delete(body.componentId);
+                  particleNodesRef.current.delete(particle.componentId);
                 }
               }}
               style={{
-                height: `${sizePx}px`,
-                transform: seeded
-                  ? `translate3d(${seeded.x}px, ${seeded.y}px, 0) translate(-50%, -50%)`
-                  : undefined,
-                width: `${sizePx}px`
+                height: `${hitSizePx}px`,
+                transform: particleTransform(particle),
+                width: `${hitSizePx}px`
               }}
               type="button"
             >
-              {bead ? (
-                <CrystalBeadImage
-                  alt=""
-                  materialKey={bead.materialKey}
-                  priority
-                  sizes="(max-width: 640px) 18vw, 96px"
-                  textureAssetKey={bead.textureAssetKey}
-                />
-              ) : (
-                <Image
-                  alt=""
-                  className="h-full w-full object-contain drop-shadow-[0_8px_8px_rgb(57_45_67/0.2)]"
-                  height={256}
-                  loading="eager"
-                  sizes="64px"
-                  src="/accessories/silver-star-ring-charm.png"
-                  width={256}
-                />
-              )}
+              <span
+                aria-hidden="true"
+                className="pointer-events-none block"
+                style={{ height: `${imageSizePx}px`, width: `${imageSizePx}px` }}
+              >
+                {bead ? (
+                  <CrystalBeadImage
+                    alt=""
+                    materialKey={bead.materialKey}
+                    priority={index < 4}
+                    sizes={`${Math.ceil(imageSizePx)}px`}
+                    textureAssetKey={bead.textureAssetKey}
+                  />
+                ) : (
+                  <Image
+                    alt=""
+                    className="h-full w-full object-contain drop-shadow-[0_8px_8px_rgb(57_45_67/0.2)]"
+                    height={256}
+                    loading="eager"
+                    sizes={`${Math.ceil(imageSizePx)}px`}
+                    src="/accessories/silver-star-ring-charm.png"
+                    width={256}
+                  />
+                )}
+              </span>
             </button>
           );
         })}
@@ -517,3 +307,5 @@ export function LooseBeadStage({
     </div>
   );
 }
+
+export { collectTransformMap, deriveLooseBodies, mmToRadiusPx };

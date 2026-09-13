@@ -39,6 +39,7 @@ const SLEEP_FRAMES = 12;
 const SOLVER_ITERATIONS = 4;
 const LINEAR_DAMPING = 0.82;
 const MAX_DISPLACEMENT_PX = 8;
+const OVERLAP_EPSILON = 0.35;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
 function hashString(value: string): number {
@@ -62,11 +63,6 @@ function cloneState(state: LoosePhysicsState): LoosePhysicsState {
 function clampRadius(radiusPx: number): number {
   if (!Number.isFinite(radiusPx) || radiusPx <= 0) return 1;
   return radiusPx;
-}
-
-function maxAvailableRadius(bounds: LooseBounds, radiusPx: number): number {
-  const maxRadius = Math.max(1, bounds.innerRadiusPx * 0.42);
-  return Math.min(radiusPx, maxRadius);
 }
 
 function candidateFor(componentId: string, index: number, count: number, bounds: LooseBounds, radiusPx: number): { x: number; y: number } {
@@ -112,7 +108,8 @@ function resolvePair(a: LooseParticle, b: LooseParticle): [LooseParticle, LooseP
   let dy = b.y - a.y;
   let distance = Math.hypot(dx, dy);
   const minDistance = radiusA + radiusB;
-  if (distance > minDistance) return [a, b];
+  // Tangency or free space must not wake resting bodies.
+  if (distance >= minDistance - OVERLAP_EPSILON) return [a, b];
 
   if (distance < 1e-6) {
     const angle = (hashString(a.componentId + b.componentId) % 360) * (Math.PI / 180);
@@ -170,14 +167,14 @@ function relaxPositions(particles: readonly LooseParticle[], bounds: LooseBounds
 
 function placeWithoutOverlap(inputs: readonly LooseBodyInput[], bounds: LooseBounds, capacity: number) {
   const ordered = [...inputs]
-    .map((input, index) => ({ index, input: { ...input, radiusPx: maxAvailableRadius(bounds, clampRadius(input.radiusPx)) } }))
+    .map((input) => ({ input: { ...input, radiusPx: clampRadius(input.radiusPx) } }))
     .sort((left, right) => left.input.componentId.localeCompare(right.input.componentId));
 
   const placed: LooseParticle[] = [];
   const overflow: string[] = [];
 
   for (const { input } of ordered) {
-    if (placed.length >= capacity) {
+    if (placed.length >= capacity || input.radiusPx > bounds.innerRadiusPx) {
       overflow.push(input.componentId);
       continue;
     }
@@ -215,7 +212,7 @@ function placeWithoutOverlap(inputs: readonly LooseBodyInput[], bounds: LooseBou
   const byId = new Map(placed.map((particle) => [particle.componentId, particle]));
   const visible = inputs
     .filter((input) => byId.has(input.componentId))
-    .map((input) => ({ ...byId.get(input.componentId)!, radiusPx: maxAvailableRadius(bounds, clampRadius(input.radiusPx)) }));
+    .map((input) => ({ ...byId.get(input.componentId)!, radiusPx: clampRadius(input.radiusPx) }));
 
   // If ordered-visible count was reduced by soft overflow, keep stable overflow ids sorted by input order.
   const overflowSet = new Set(overflow);
@@ -265,17 +262,15 @@ export function injectLooseParticle(
       overflowComponentIds: [...next.overflowComponentIds, input.componentId]
     };
   }
-  const radius = maxAvailableRadius(bounds, clampRadius(input.radiusPx));
-  const dx = origin.x - bounds.centerX;
-  const dy = origin.y - bounds.centerY;
-  const distance = Math.hypot(dx, dy) || 1;
-  const edgeScale = Math.max(0, bounds.innerRadiusPx - radius) / distance;
-  const startX = distance > bounds.innerRadiusPx - radius
-    ? bounds.centerX + dx * edgeScale
-    : origin.x;
-  const startY = distance > bounds.innerRadiusPx - radius
-    ? bounds.centerY + dy * edgeScale
-    : origin.y;
+  const radius = clampRadius(input.radiusPx);
+  if (radius > bounds.innerRadiusPx) {
+    return {
+      ...next,
+      overflowComponentIds: [...next.overflowComponentIds, input.componentId]
+    };
+  }
+  const startX = Number.isFinite(origin.x) ? origin.x : bounds.centerX;
+  const startY = Number.isFinite(origin.y) ? origin.y : bounds.centerY;
   const targetAngle = (hashString(input.componentId) % 360) * (Math.PI / 180);
   const targetDistance = Math.max(0, bounds.innerRadiusPx - radius) * 0.35;
   const targetX = bounds.centerX + Math.cos(targetAngle) * targetDistance;
