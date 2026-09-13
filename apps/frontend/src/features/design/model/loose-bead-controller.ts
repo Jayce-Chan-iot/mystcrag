@@ -68,6 +68,10 @@ export type FlightProgress = {
   clientY: number;
   progress: number;
   radiusPx: number;
+  kind: "BEAD" | "INLINE_ACCESSORY";
+  materialKey?: string;
+  textureAssetKey?: string | null;
+  diameterMm?: number;
 };
 
 export type LooseStageControllerOptions = {
@@ -169,45 +173,20 @@ function reconcileKeepPositions(
   inputs: readonly LooseBodyInput[],
   bounds: LooseBounds
 ): LoosePhysicsState {
+  // Capacity authority: deterministic placement with real radii (count + occupied space).
+  const plan = deterministicFallbackLayout(inputs, bounds);
+  const admittedIds = new Set(plan.particles.map((particle) => particle.componentId));
   const existing = new Map(previous.particles.map((particle) => [particle.componentId, particle]));
-  const nextInputs = inputs;
-  const particles: LooseParticle[] = [];
-  const seen = new Set<string>();
-
-  for (const input of nextInputs) {
-    if (seen.has(input.componentId)) continue;
-    const prior = existing.get(input.componentId);
+  const particles: LooseParticle[] = plan.particles.map((planParticle) => {
+    const prior = existing.get(planParticle.componentId);
     if (prior) {
-      particles.push({ ...prior, kind: input.kind, radiusPx: input.radiusPx });
-      seen.add(input.componentId);
-      continue;
+      return { ...prior, kind: planParticle.kind, radiusPx: planParticle.radiusPx };
     }
-    if (particles.length >= MAX_PHYSICS_BODIES || input.radiusPx > bounds.innerRadiusPx) {
-      continue;
-    }
-    const injected = injectLooseParticle(
-      {
-        elapsedMs: previous.elapsedMs,
-        overflowComponentIds: [],
-        particles,
-        settled: false
-      },
-      input,
-      { x: bounds.centerX, y: bounds.centerY - bounds.innerRadiusPx * 0.85 },
-      bounds
-    );
-    const added = injected.particles.find((particle) => particle.componentId === input.componentId);
-    if (added && !seen.has(added.componentId)) {
-      particles.push(added);
-      seen.add(added.componentId);
-    }
-  }
-
-  // Stale overflow is recomputed: only inputs that failed to become visible particles.
-  const overflowComponentIds = nextInputs
-    .filter((input) => !seen.has(input.componentId))
+    return { ...planParticle, velocityX: 0, velocityY: 0, sleepingFrames: 0 };
+  });
+  const overflowComponentIds = inputs
+    .filter((input) => !admittedIds.has(input.componentId))
     .map((input) => input.componentId);
-
   return {
     elapsedMs: previous.elapsedMs,
     overflowComponentIds,
@@ -232,6 +211,11 @@ type ActiveFlight = {
   startedAt: number;
   stageLeft: number;
   stageTop: number;
+  handedOff: boolean;
+  handoffFrameIndex: number;
+  materialKey?: string;
+  textureAssetKey?: string | null;
+  diameterMm?: number;
 };
 
 export type LooseStageController = {
@@ -285,6 +269,7 @@ export function createLooseStageController(options: LooseStageControllerOptions)
   let hidden = false;
   let lastDesign: PublicDesignV1 | null = null;
   let lastStageRect: StageRect | null = null;
+  let frameIndex = 0;
 
   function recomputeBounds() {
     const size = Math.max(1, Math.min(stageWidth, stageHeight));
@@ -314,7 +299,9 @@ export function createLooseStageController(options: LooseStageControllerOptions)
   function flightProgressList(): FlightProgress[] {
     const now = runtime.now();
     return [...flights.values()].map((flight) => {
-      const progress = Math.min(1, Math.max(0, (now - flight.startedAt) / FLIGHT_MS));
+      const progress = flight.handedOff
+        ? 1
+        : Math.min(1, Math.max(0, (now - flight.startedAt) / FLIGHT_MS));
       const x = flight.fromStageX + (flight.entryX - flight.fromStageX) * progress;
       const y = flight.fromStageY + (flight.entryY - flight.fromStageY) * progress;
       return {
@@ -323,7 +310,11 @@ export function createLooseStageController(options: LooseStageControllerOptions)
         clientX: flight.stageLeft + x,
         clientY: flight.stageTop + y,
         progress,
-        radiusPx: flight.radiusPx
+        radiusPx: flight.radiusPx,
+        kind: flight.kind,
+        materialKey: flight.materialKey,
+        textureAssetKey: flight.textureAssetKey,
+        diameterMm: flight.diameterMm
       };
     });
   }
@@ -349,31 +340,40 @@ export function createLooseStageController(options: LooseStageControllerOptions)
   }
 
   function hardStopFallback() {
-    const inputs = [
-      ...state.particles.map((particle) => ({
-        componentId: particle.componentId,
-        radiusPx: particle.radiusPx,
-        kind: particle.kind
-      })),
-      ...[...flights.values()].map((flight) => ({
-        componentId: flight.componentId,
-        radiusPx: flight.radiusPx,
-        kind: flight.kind
-      }))
-    ];
+    const inputs = lastDesign
+      ? deriveLooseBodies(lastDesign, bounds.innerRadiusPx).physical
+      : [
+          ...state.particles.map((particle) => ({
+            componentId: particle.componentId,
+            radiusPx: particle.radiusPx,
+            kind: particle.kind
+          })),
+          ...[...flights.values()].map((flight) => ({
+            componentId: flight.componentId,
+            radiusPx: flight.radiusPx,
+            kind: flight.kind
+          }))
+        ];
     mode = "FALLBACK";
     placeFallback(inputs);
     stopLoop();
   }
 
+  function noteNewMotionCycle() {
+    // A brand-new launch/flight starts a fresh simulation budget when the loop is idle.
+    if (!running) {
+      state = { ...state, elapsedMs: 0, settled: false };
+    }
+  }
+
   function handoffFlight(flight: ActiveFlight) {
-    flights.delete(flight.requestId);
     const body: LooseBodyInput = {
       componentId: flight.componentId,
       radiusPx: flight.radiusPx,
       kind: flight.kind
     };
-    // Place exactly at tray entry with continuous inbound velocity — never project an outside particle.
+    noteNewMotionCycle();
+    // Stage 1: particle exists at tray entry with continuous inbound velocity.
     state = {
       ...state,
       particles: [
@@ -389,15 +389,26 @@ export function createLooseStageController(options: LooseStageControllerOptions)
       ],
       settled: false
     };
+    flight.handedOff = true;
+    flight.handoffFrameIndex = frameIndex;
+    // Publish layout so React can mount the bead node; keep overlay until the next RAF.
+    publishLayout();
     onApplyTransforms(state.particles);
   }
 
   function advanceFlights() {
     if (flights.size === 0) return;
+    // Stage 2: drop overlays whose handoff was published on a previous frame.
+    for (const flight of [...flights.values()]) {
+      if (flight.handedOff && flight.handoffFrameIndex < frameIndex) {
+        flights.delete(flight.requestId);
+      }
+    }
     const now = runtime.now();
     for (const flight of [...flights.values()]) {
-      const progress = (now - flight.startedAt) / FLIGHT_MS;
-      if (progress >= 1) handoffFlight(flight);
+      if (!flight.handedOff && (now - flight.startedAt) / FLIGHT_MS >= 1) {
+        handoffFlight(flight);
+      }
     }
     publishFlights();
   }
@@ -406,6 +417,10 @@ export function createLooseStageController(options: LooseStageControllerOptions)
     if (destroyed || running || hidden) return;
     if (mode !== "PHYSICS") return;
     if (typeof runtime.requestAnimationFrame !== "function") return;
+    // Recover from a prior hard-stop/fallback budget without teleporting.
+    if (state.elapsedMs >= HARD_STOP_MS) {
+      state = { ...state, elapsedMs: 0, settled: false };
+    }
     running = true;
     loopStartedAt = runtime.now();
     lastFrameTime = loopStartedAt;
@@ -431,23 +446,24 @@ export function createLooseStageController(options: LooseStageControllerOptions)
         return;
       }
 
+      frameIndex += 1;
       advanceFlights();
 
-      if (flights.size === 0) {
-        const next = consumeFrameDelta(accumulatorMs, delta);
-        accumulatorMs = next.accumulatorMs;
-        let nextState = state;
-        for (let index = 0; index < next.steps; index += 1) {
-          nextState = stepLoosePhysics(nextState, bounds);
-          state = nextState;
-          if (state.settled) break;
-        }
-        onApplyTransforms(state.particles);
-        if (state.settled && flights.size === 0) {
-          stopLoop();
-          publishLayout();
-          return;
-        }
+      // In-tray bodies keep colliding/settling even while another bead is flying.
+      const next = consumeFrameDelta(accumulatorMs, delta);
+      accumulatorMs = next.accumulatorMs;
+      let nextState = state;
+      for (let index = 0; index < next.steps; index += 1) {
+        nextState = stepLoosePhysics(nextState, bounds);
+        state = nextState;
+        if (state.settled) break;
+      }
+      onApplyTransforms(state.particles);
+
+      if (state.settled && flights.size === 0) {
+        stopLoop();
+        publishLayout();
+        return;
       }
 
       if (runtime.now() - loopStartedAt >= HARD_STOP_MS) {
@@ -492,9 +508,15 @@ export function createLooseStageController(options: LooseStageControllerOptions)
     const distanceFromCenter = Math.hypot(origin.x - bounds.centerX, origin.y - bounds.centerY);
     const outside = distanceFromCenter + body.radiusPx > bounds.innerRadiusPx - FLIGHT_EPSILON;
     const useFlight = rafAvailable && !prefersReducedMotion && mode === "PHYSICS" && outside;
+    const bead = lastDesign?.beads.find((item) => item.componentId === body.componentId);
+    const visual = {
+      materialKey: bead?.materialKey,
+      textureAssetKey: bead?.textureAssetKey,
+      diameterMm: bead?.diameterMm
+    };
 
     if (!useFlight) {
-      // Reduced motion / no RAF / already inside: place at entry without ballistic flight.
+      noteNewMotionCycle();
       const { entryX, entryY, velocityX, velocityY } = trayEntryFor(origin, bounds, body.radiusPx);
       const startX = outside ? entryX : origin.x;
       const startY = outside ? entryY : origin.y;
@@ -504,9 +526,9 @@ export function createLooseStageController(options: LooseStageControllerOptions)
         { x: startX, y: startY },
         bounds
       );
-      // Restore intended velocity toward center for continuity.
       state = {
         ...state,
+        elapsedMs: running ? state.elapsedMs : 0,
         particles: state.particles.map((particle) =>
           particle.componentId === body.componentId
             ? { ...particle, x: startX, y: startY, velocityX, velocityY, sleepingFrames: 0 }
@@ -516,6 +538,7 @@ export function createLooseStageController(options: LooseStageControllerOptions)
       return;
     }
 
+    noteNewMotionCycle();
     const { entryX, entryY, velocityX, velocityY } = trayEntryFor(origin, bounds, body.radiusPx);
     flights.set(requestId, {
       requestId,
@@ -532,7 +555,10 @@ export function createLooseStageController(options: LooseStageControllerOptions)
       kind: body.kind,
       startedAt: runtime.now(),
       stageLeft: stageRect?.left ?? 0,
-      stageTop: stageRect?.top ?? 0
+      stageTop: stageRect?.top ?? 0,
+      handedOff: false,
+      handoffFrameIndex: -1,
+      ...visual
     });
   }
 

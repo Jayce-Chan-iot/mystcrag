@@ -111,34 +111,33 @@ export function LooseBeadStage({
 
   const flightOverlayRef = React.useRef<HTMLDivElement | null>(null);
   const flightNodesRef = React.useRef(new Map<string, HTMLElement>());
+  const flightIdsRef = React.useRef<string[]>([]);
+  const latestFlightsRef = React.useRef(new Map<string, FlightProgress>());
+  const [flightVisuals, setFlightVisuals] = React.useState<Record<string, FlightProgress>>({});
+
   const onFlightUpdate = React.useCallback((flights: readonly FlightProgress[]) => {
-    const overlay = flightOverlayRef.current;
-    if (!overlay) return;
-    const live = new Set(flights.map((flight) => flight.componentId));
-    for (const [componentId, node] of [...flightNodesRef.current.entries()]) {
-      if (!live.has(componentId)) {
-        node.remove();
-        flightNodesRef.current.delete(componentId);
-      }
+    const nextIds = flights.map((flight) => flight.componentId).sort();
+    const prevIds = flightIdsRef.current;
+    const changed =
+      nextIds.length !== prevIds.length || nextIds.some((id, index) => id !== prevIds[index]);
+    latestFlightsRef.current = new Map(flights.map((flight) => [flight.componentId, flight]));
+    if (changed) {
+      flightIdsRef.current = nextIds;
+      const visuals: Record<string, FlightProgress> = {};
+      for (const flight of flights) visuals[flight.componentId] = flight;
+      // React state only when the flight membership set changes — never per RAF frame.
+      setFlightVisuals(visuals);
     }
     for (const flight of flights) {
-      let node = flightNodesRef.current.get(flight.componentId);
-      if (!node) {
-        node = document.createElement("div");
-        node.dataset.looseFlight = flight.componentId;
-        node.dataset.componentId = flight.componentId;
-        node.setAttribute("aria-hidden", "true");
-        node.className = "pointer-events-none fixed z-[80] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--accent-soft)] shadow-[0_10px_24px_rgb(57_45_67/0.22)]";
-        overlay.append(node);
-        flightNodesRef.current.set(flight.componentId, node);
-      }
+      const node = flightNodesRef.current.get(flight.componentId);
+      if (!node) continue;
       const size = Math.max(12, flight.radiusPx * 2);
       node.style.width = `${size}px`;
       node.style.height = `${size}px`;
       node.style.transform = `translate3d(${flight.clientX}px, ${flight.clientY}px, 0) translate(-50%, -50%)`;
-      node.style.left = "0";
-      node.style.top = "0";
-      node.style.opacity = String(0.35 + 0.65 * (1 - Math.abs(flight.progress - 0.5) * 0.5));
+      node.style.left = "0px";
+      node.style.top = "0px";
+      node.style.opacity = String(0.55 + 0.45 * Math.min(1, flight.progress + 0.2));
     }
   }, []);
 
@@ -361,7 +360,53 @@ export function LooseBeadStage({
               className="pointer-events-none fixed inset-0 z-[80]"
               data-loose-flight-overlay="true"
               ref={flightOverlayRef}
-            />,
+            >
+              {Object.entries(flightVisuals).map(([componentId, flight]) => {
+                const size = Math.max(12, flight.radiusPx * 2);
+                return (
+                  <div
+                    className="pointer-events-none absolute left-0 top-0 -translate-x-1/2 -translate-y-1/2"
+                    data-loose-flight={componentId}
+                    key={componentId}
+                    ref={(node) => {
+                      if (node) {
+                        flightNodesRef.current.set(componentId, node);
+                        const live = latestFlightsRef.current.get(componentId);
+                        const size = Math.max(12, (live?.radiusPx ?? flight.radiusPx) * 2);
+                        node.style.width = `${size}px`;
+                        node.style.height = `${size}px`;
+                        if (live) {
+                          node.style.transform = `translate3d(${live.clientX}px, ${live.clientY}px, 0) translate(-50%, -50%)`;
+                        }
+                      } else {
+                        flightNodesRef.current.delete(componentId);
+                      }
+                    }}
+                    style={{ height: `${size}px`, width: `${size}px` }}
+                  >
+                    {flight.kind === "BEAD" ? (
+                      <CrystalBeadImage
+                        alt=""
+                        materialKey={flight.materialKey ?? "clear-quartz-v1"}
+                        priority={false}
+                        sizes={`${Math.ceil(size)}px`}
+                        textureAssetKey={flight.textureAssetKey ?? null}
+                      />
+                    ) : (
+                      <Image
+                        alt=""
+                        className="h-full w-full object-contain drop-shadow-[0_8px_8px_rgb(57_45_67/0.2)]"
+                        height={256}
+                        loading="eager"
+                        sizes={`${Math.ceil(size)}px`}
+                        src="/accessories/silver-star-ring-charm.png"
+                        width={256}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>,
             document.body
           )
         : null}
