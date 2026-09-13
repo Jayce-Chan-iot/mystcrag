@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import type { PublicDesignV1 } from "@mystcrag/design-contract";
@@ -409,75 +410,140 @@ test("flying bead that capacity planning overflows never becomes an extra tray p
   }));
   const extra = { ...design.beads[0]!, componentId: "zzzz", diameterMm: 10, positionIndex: 47 };
   const payload = { ...design, beads: [...base, extra] };
-  const plan = deterministicFallbackLayout(
-    payload.beads.map((bead) => ({
-      componentId: bead.componentId,
-      kind: "BEAD" as const,
-      radiusPx: mmToRadiusPx(bead.diameterMm, 400 * 0.37)
-    })),
-    { centerX: 200, centerY: 200, innerRadiusPx: 400 * 0.37 }
-  );
-  const planAdmitted = new Set(plan.particles.map((p) => p.componentId));
-  const planOverflow = payload.beads.filter((b) => !planAdmitted.has(b.componentId)).map((b) => b.componentId);
 
-  harness.controller.sync(payload, [
-    { requestId: "zzzz-fly", componentId: "zzzz", originClientX: 4, originClientY: 200 }
-  ], stage());
+  const planFor = (size: number) => {
+    const inner = size * 0.37;
+    return deterministicFallbackLayout(
+      payload.beads.map((bead) => ({
+        componentId: bead.componentId,
+        kind: "BEAD" as const,
+        radiusPx: mmToRadiusPx(bead.diameterMm, inner)
+      })),
+      { centerX: size / 2, centerY: size / 2, innerRadiusPx: inner }
+    );
+  };
 
-  const assertConservation = (label: string) => {
+  const assertExact = (label: string, plan: ReturnType<typeof deterministicFallbackLayout>) => {
     const snap = harness.controller.getSnapshot();
-    const visible = snap.particles.map((p) => p.componentId);
-    const overflow = [...snap.overflowComponentIds];
-    assert.deepEqual(visible, [...new Set(visible)], `${label}: no duplicate visible ids`);
-    assert.deepEqual(overflow, [...new Set(overflow)], `${label}: no duplicate overflow ids`);
+    const visible = new Set(snap.particles.map((p) => p.componentId));
+    const overflow = new Set(snap.overflowComponentIds);
+    const activeFlightIds = new Set(
+      harness.controller
+        .getFlights()
+        .filter((f) => f.progress < 1)
+        .map((f) => f.componentId)
+    );
+    const planVisible = new Set(plan.particles.map((p) => p.componentId));
+    const planOverflow = new Set(plan.overflowComponentIds);
+
+    assert.equal(visible.size, snap.particles.length, `${label}: visible ids unique`);
+    assert.equal(overflow.size, snap.overflowComponentIds.length, `${label}: overflow ids unique`);
     for (const id of visible) {
-      assert.ok(!overflow.includes(id), `${label}: ${id} cannot be both visible and overflow`);
+      assert.ok(!overflow.has(id), `${label}: ${id} cannot be both visible and overflow`);
     }
-    const all = new Set([...visible, ...overflow]);
-    for (const bead of payload.beads) {
-      // Actively flying ids may be temporarily absent from both sets only while overlay is in flight (progress < 1).
-      const flying = harness.controller.getFlights().some((f) => f.componentId === bead.componentId && f.progress < 1);
-      if (!flying) {
-        assert.ok(all.has(bead.componentId), `${label}: missing ${bead.componentId}`);
-      }
-    }
-    if (planOverflow.includes("zzzz")) {
-      assert.ok(!visible.includes("zzzz") || snap.overflowComponentIds.includes("zzzz") === false);
-      // If plan says overflow, zzzz must not remain a visible tray particle after handoff.
-      const stillFlying = harness.controller.getFlights().some((f) => f.componentId === "zzzz");
-      if (!stillFlying) {
-        assert.ok(!visible.includes("zzzz"), `${label}: overflow bead must not stay visible`);
-        assert.ok(overflow.includes("zzzz"), `${label}: overflow bead must be listed`);
+
+    // Exact set equality with the deterministic plan (minus still-flying ids).
+    const expectedVisible = new Set([...planVisible].filter((id) => !activeFlightIds.has(id)));
+    assert.deepEqual([...visible].sort(), [...expectedVisible].sort(), `${label}: visible must equal planVisible - activeFlights`);
+    assert.deepEqual([...overflow].sort(), [...planOverflow].sort(), `${label}: overflow must equal planOverflow exactly`);
+
+    const union = new Set([...visible, ...overflow, ...activeFlightIds]);
+    assert.deepEqual([...union].sort(), payload.beads.map((b) => b.componentId).sort(), `${label}: visible+overflow+activeFlights covers all input ids`);
+    if (planOverflow.has("zzzz")) {
+      assert.ok(overflow.has("zzzz") || activeFlightIds.has("zzzz") === false && !visible.has("zzzz"));
+      if (!activeFlightIds.has("zzzz")) {
+        assert.ok(overflow.has("zzzz"), `${label}: zzzz must be in overflow when not flying`);
+        assert.ok(!visible.has("zzzz"), `${label}: zzzz must not be visible when plan overflows`);
       }
     }
   };
 
-  assertConservation("after launch sync");
+  const plan400 = planFor(400);
+  harness.controller.sync(payload, [
+    { requestId: "zzzz-fly", componentId: "zzzz", originClientX: 4, originClientY: 200 }
+  ], stage());
+  assertExact("after launch sync", plan400);
 
   const start = harness.fake.now();
   for (let index = 1; index <= 30; index += 1) {
     harness.fake.flush(start + index * FIXED_STEP_MS);
   }
-  assertConservation("after flight frames");
+  assertExact("after flight frames", plan400);
   harness.controller.sync(payload, [], stage());
-  assertConservation("after resync");
+  assertExact("after resync", plan400);
+
+  // Real size change: 400 -> 200
+  harness.controller.setStageSize(200, 200);
+  harness.controller.sync(payload, [], { left: 0, top: 0, width: 200, height: 200 });
+  assertExact("after resize to 200", planFor(200));
   harness.controller.setStageSize(400, 400);
   harness.controller.sync(payload, [], stage());
-  assertConservation("after resize resync");
-  harness.fake.flush(harness.fake.now() + HARD_STOP_MS);
-  assertConservation("after hard stop");
+  assertExact("after resize back to 400", plan400);
 
-  // Final admitted/overflow sets match the plan.
-  const finalSnap = harness.controller.getSnapshot();
-  const finalVisible = new Set(finalSnap.particles.map((p) => p.componentId));
-  const finalOverflow = new Set(finalSnap.overflowComponentIds);
-  for (const id of planAdmitted) {
-    // Handed-off/flying remnants aside, admitted ids that are not flying must be visible.
-    const flying = harness.controller.getFlights().some((f) => f.componentId === id);
-    if (!flying) assert.ok(finalVisible.has(id) || finalOverflow.has(id));
+  harness.fake.flush(harness.fake.now() + HARD_STOP_MS);
+  assertExact("after hard stop", planFor(400));
+});
+
+test("active flight reprojects radius entry and continuity on stage resize", () => {
+  const design = designFixture();
+  const harness = createHarness();
+  const bead = { ...design.beads[0]!, componentId: "resize-fly", diameterMm: 10, positionIndex: 0 };
+  const payload = { ...design, beads: [bead] };
+  harness.controller.setStageSize(400, 400);
+  harness.controller.sync(payload, [
+    { requestId: "rf", componentId: "resize-fly", originClientX: 10, originClientY: 200 }
+  ], stage());
+
+  // Mid-flight
+  harness.fake.setTime(FIXED_STEP_MS * 4);
+  const before = harness.controller.getFlights().find((f) => f.componentId === "resize-fly")!;
+  assert.ok(before.progress > 0 && before.progress < 1);
+
+  // Shrink stage 400 -> 200; change left/top as well.
+  harness.controller.setStageSize(200, 200);
+  harness.controller.sync(payload, [], { left: 40, top: 80, width: 200, height: 200 });
+  const after = harness.controller.getFlights().find((f) => f.componentId === "resize-fly")!;
+  const newInner = 200 * 0.37;
+  const expectedRadius = mmToRadiusPx(10, newInner);
+  assert.ok(Math.abs(after.radiusPx - expectedRadius) < 0.5, `radius ${after.radiusPx} vs ${expectedRadius}`);
+  // Continuity: client position must not jump far from pre-resize client point.
+  assert.ok(Math.hypot(after.clientX - before.clientX, after.clientY - before.clientY) < 80, "client position must stay continuous across resize");
+  // New entry belongs to new bounds (stage-local entry inside new inner circle).
+  const bounds = harness.controller.getBounds();
+  assert.ok(Math.abs(bounds.innerRadiusPx - newInner) < 0.01);
+
+  // Grow back 200 -> 400 mid-flight
+  harness.fake.setTime(harness.fake.now() + FIXED_STEP_MS * 2);
+  harness.controller.setStageSize(400, 400);
+  harness.controller.sync(payload, [], stage());
+  const grown = harness.controller.getFlights().find((f) => f.componentId === "resize-fly");
+  const grownInner = 400 * 0.37;
+  if (grown) {
+    assert.ok(Math.abs(grown.radiusPx - mmToRadiusPx(10, grownInner)) < 0.5);
   }
-  for (const id of planOverflow) {
-    assert.ok(finalOverflow.has(id) || finalVisible.has(id) === false);
-    assert.ok(!finalVisible.has(id), `plan overflow ${id} must not be visible`);
+
+  // Complete handoff and verify particle uses authoritative radius inside new bounds.
+  const start = harness.fake.now();
+  for (let index = 1; index <= 30; index += 1) {
+    harness.fake.flush(start + index * FIXED_STEP_MS);
+    if (!harness.controller.getFlights().some((f) => f.componentId === "resize-fly" && f.progress < 1)) break;
   }
+  const particle = harness.controller.getSnapshot().particles.find((p) => p.componentId === "resize-fly");
+  assert.ok(particle, "particle must exist after handoff");
+  const finalBounds = harness.controller.getBounds();
+  assert.ok(Math.abs(particle!.radiusPx - mmToRadiusPx(10, finalBounds.innerRadiusPx)) < 0.5);
+  const dist = Math.hypot(particle!.x - finalBounds.centerX, particle!.y - finalBounds.centerY);
+  assert.ok(dist + particle!.radiusPx <= finalBounds.innerRadiusPx + 1, `particle must stay inside tray: ${dist}+${particle!.radiusPx} <= ${finalBounds.innerRadiusPx}`);
+});
+
+test("flight overlay uses a single centering transform", () => {
+  const source = readFileSync(new URL("../components/loose-bead-stage.tsx", import.meta.url), "utf8");
+  // One centering in the RAF/ref transform write only.
+  const centeringTransforms = source.match(/translate\(-50%,\s*-50%\)/g) ?? [];
+  assert.ok(centeringTransforms.length >= 1);
+  // Must not combine Tailwind translate utilities with inline -50% centering on the same flight node.
+  assert.doesNotMatch(source, /data-loose-flight=\{componentId\}[\s\S]{0,400}-translate-x-1\/2/);
+  assert.doesNotMatch(source, /-translate-x-1\/2 -translate-y-1\/2"\s*\n\s*data-loose-flight/);
+  // Particle transform helper also centers once.
+  assert.equal((source.match(/translate\(-50%,\s*-50%\)/g) ?? []).length >= 2, true);
 });
