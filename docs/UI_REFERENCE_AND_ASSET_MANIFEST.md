@@ -67,5 +67,5 @@ All bracelet projections consume the same Design JSON and Bracelet Engine layout
 
 - Existing Tarot card provenance is recorded in `apps/frontend/public/tarot/cards/UPSTREAM_SOURCE.md`.
 - Home scenes, trays, wrist guide, state scenes and demo avatar are project-owned generated assets.
-- `/home/entry-diy-loose-tray.webp` was project-owned generated media created for `TASK-ASSET-004` on 2026-09-14 (SHA-256: `5204a92e7f192ab8e6abf855a1f3e187397888eae8c2aa75c99f3975fe69f7a1`). No competitor image, user data, or planning screenshot was used as runtime media.
+- `/home/entry-diy-loose-tray.webp` was generated with Codex built-in image_gen on 2026-09-14 and integrated under `TASK-ASSET-004` (SHA-256: `9b8cc2febf2d523ef87e489d3271bcd6b62819b54cbf03f1f267245fff921281`). No competitor image, user data, or planning screenshot was used as runtime media.
 - Reference screenshots are internal implementation/QA evidence, not runtime assets.
