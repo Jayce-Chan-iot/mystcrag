@@ -209,6 +209,50 @@ test(
       assert.equal(sharedRows.length, 2);
       assert.notEqual(sharedRows[0]!.userId, sharedRows[1]!.userId);
       await harnessB.app.close();
+
+      const unverifiedVerifier: AccessTokenVerifier = {
+        async verifyAccessToken(token) {
+          const base = await verifierA.verifyAccessToken(token);
+          return {
+            ...base,
+            email: "unverified@example.test",
+            emailVerified: false
+          };
+        }
+      };
+      const unverifiedHarness = ownerScopedApp(
+        new AuthenticatedActorProvider({ provider: unverifiedVerifier, identities })
+      );
+      const unverifiedSubject = `auth0|unverified-${run}`;
+      const unverifiedToken = tokenFor(verifierA, unverifiedSubject);
+
+      const firstLogin = await unverifiedHarness.app.inject({
+        method: "POST",
+        url: "/owned/design-unverified",
+        headers: bearer(unverifiedToken)
+      });
+      assert.equal(firstLogin.statusCode, 200, "emailVerified=false must not be rejected as 401/403");
+      const unverifiedActor = firstLogin.json().owner as string;
+
+      const secondLogin = await unverifiedHarness.app.inject({
+        method: "GET",
+        url: "/owned/design-unverified",
+        headers: bearer(unverifiedToken)
+      });
+      assert.equal(secondLogin.statusCode, 200);
+      assert.equal(
+        secondLogin.json().owner,
+        unverifiedActor,
+        "repeat login must resolve to the same internal actor"
+      );
+
+      const unverifiedIdentity = await prisma.externalIdentity.findUniqueOrThrow({
+        where: { issuer_subject: { issuer: ISSUER_A, subject: unverifiedSubject } }
+      });
+      assert.equal(unverifiedIdentity.emailVerified, false);
+      assert.equal(unverifiedIdentity.userId, unverifiedActor);
+      assert.equal(unverifiedIdentity.email, "unverified@example.test");
+      await unverifiedHarness.app.close();
     } finally {
       await prisma.$disconnect();
     }
