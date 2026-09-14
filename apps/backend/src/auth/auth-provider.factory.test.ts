@@ -252,3 +252,87 @@ test("signed test provider rejects a token with an invalid signature", async () 
     (error: unknown) => error instanceof CredentialRejectedError && error.reason === "signature"
   );
 });
+
+
+test("exact issuer is not rewritten for JWT verification (with and without trailing slash)", async () => {
+  const { SignJWT, exportJWK, generateKeyPair } = await import("jose");
+  const { publicKey, privateKey } = await generateKeyPair("RS256", { extractable: true });
+  const publicJwk = { ...(await exportJWK(publicKey)), kid: "k1", use: "sig", alg: "RS256" };
+
+  async function verifyWithIssuer(issuer: string): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    const token = await new SignJWT({ email: "u@example.com", email_verified: true })
+      .setProtectedHeader({ alg: "RS256", kid: "k1" })
+      .setIssuer(issuer)
+      .setAudience("https://api.mystcrag.example.com")
+      .setSubject("authing|exact-iss")
+      .setIssuedAt(now)
+      .setExpirationTime(now + 900)
+      .sign(privateKey);
+
+    const verifier = createAccessTokenVerifierFromEnvironment(
+      {
+        ...productionAuthingEnvironment,
+        MYSTCRAG_AUTH_ISSUER: issuer
+      },
+      {
+        discoveryTransport: async (url) => ({
+          status: 200,
+          url: String(url),
+          json: async () => ({
+            issuer,
+            authorization_endpoint: "https://mystcrag-pool.authing.cn/oidc/auth",
+            token_endpoint: "https://mystcrag-pool.authing.cn/oidc/token",
+            jwks_uri: "https://mystcrag-pool.authing.cn/oidc/keys"
+          })
+        }),
+        jwksTransport: async () => ({
+          status: 200,
+          cacheControl: null,
+          json: async () => ({ keys: [publicJwk] })
+        })
+      }
+    );
+    const claims = await verifier.verifyAccessToken(token);
+    assert.equal(claims.issuer, issuer);
+    assert.equal(claims.subject, "authing|exact-iss");
+  }
+
+  await verifyWithIssuer("https://mystcrag-pool.authing.cn/oidc");
+  await verifyWithIssuer("https://mystcrag-pool.authing.cn/oidc/");
+
+  // Mismatched slash form must fail closed.
+  const now = Math.floor(Date.now() / 1000);
+  const mismatchToken = await new SignJWT({})
+    .setProtectedHeader({ alg: "RS256", kid: "k1" })
+    .setIssuer("https://mystcrag-pool.authing.cn/oidc")
+    .setAudience("https://api.mystcrag.example.com")
+    .setSubject("authing|exact-iss")
+    .setIssuedAt(now)
+    .setExpirationTime(now + 900)
+    .sign(privateKey);
+  const slashVerifier = createAccessTokenVerifierFromEnvironment(
+    {
+      ...productionAuthingEnvironment,
+      MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidc/"
+    },
+    {
+      discoveryTransport: async (url) => ({
+        status: 200,
+        url: String(url),
+        json: async () => ({
+          issuer: "https://mystcrag-pool.authing.cn/oidc/",
+          authorization_endpoint: "https://mystcrag-pool.authing.cn/oidc/auth",
+          token_endpoint: "https://mystcrag-pool.authing.cn/oidc/token",
+          jwks_uri: "https://mystcrag-pool.authing.cn/oidc/keys"
+        })
+      }),
+      jwksTransport: async () => ({
+        status: 200,
+        cacheControl: null,
+        json: async () => ({ keys: [publicJwk] })
+      })
+    }
+  );
+  await assert.rejects(() => slashVerifier.verifyAccessToken(mismatchToken));
+});

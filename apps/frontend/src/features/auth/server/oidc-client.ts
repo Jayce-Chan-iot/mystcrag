@@ -36,7 +36,7 @@ export async function loadDiscovery(config: AuthConfig): Promise<OidcDiscoveryDo
   if (config.authProvider !== "authing") {
     throw new ProviderUnavailableError("OIDC client is only available for the authing provider");
   }
-  return getOidcDiscoverySource(config.authIssuer).getDocument();
+  return getOidcDiscoverySource(config.authIssuer, config.authIssuerHostAllowlist ?? []).getDocument();
 }
 
 export function buildAuthorizeUrl(

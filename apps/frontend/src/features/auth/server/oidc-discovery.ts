@@ -25,7 +25,7 @@ export type OidcDiscoveryTransport = (
 
 const DEFAULT_MAX_CACHE_MS = 15 * 60_000;
 const DEFAULT_TIMEOUT_MS = 5_000;
-const DEFAULT_AUTHING_HOST_SUFFIXES = [".authing.cn", ".authing.co"];
+const DEFAULT_AUTHING_HOST_SUFFIXES = [".authing.cn"];
 
 function normalizeIssuerPath(issuer: string): string {
   return issuer.endsWith("/") ? issuer : `${issuer}/`;
@@ -253,11 +253,14 @@ export class OidcDiscoverySource {
 
 const sources = new Map<string, OidcDiscoverySource>();
 
-export function getOidcDiscoverySource(issuer: string): OidcDiscoverySource {
-  const key = issuer;
+export function getOidcDiscoverySource(
+  issuer: string,
+  hostAllowlist: readonly string[] = []
+): OidcDiscoverySource {
+  const key = `${issuer}|${hostAllowlist.join(",")}`;
   let source = sources.get(key);
   if (!source) {
-    source = new OidcDiscoverySource({ issuer });
+    source = new OidcDiscoverySource({ issuer, hostAllowlist });
     sources.set(key, source);
   }
   return source;

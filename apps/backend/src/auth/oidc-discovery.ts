@@ -11,8 +11,8 @@ export type OidcDiscoveryDocument = {
 
 export type OidcDiscoveryTransport = (
   url: string,
-  init: { readonly signal: AbortSignal }
-) => Promise<{ status: number; json(): Promise<unknown> }>;
+  init: { readonly signal: AbortSignal; readonly redirect: "manual" | "error" }
+) => Promise<{ status: number; url: string; json(): Promise<unknown> }>;
 
 export type OidcDiscoveryOptions = {
   readonly issuer: string;
@@ -45,7 +45,7 @@ export function discoveryDocumentUrl(issuer: string): string {
 }
 
 
-const DEFAULT_AUTHING_HOST_SUFFIXES = [".authing.cn", ".authing.co"];
+const DEFAULT_AUTHING_HOST_SUFFIXES = [".authing.cn"];
 
 function looksLikeIpv4(host: string): boolean {
   const parts = host.split(".");
@@ -128,16 +128,22 @@ function isDiscoveryShape(value: unknown, expectedIssuer: string): value is Oidc
 
 async function httpsDiscoveryTransport(
   url: string,
-  init: { signal: AbortSignal }
-): Promise<{ status: number; json(): Promise<unknown> }> {
+  init: { signal: AbortSignal; redirect: "manual" | "error" }
+): Promise<{ status: number; url: string; json(): Promise<unknown> }> {
   const response = await fetch(url, {
     method: "GET",
     headers: { accept: "application/json" },
     signal: init.signal,
+    redirect: "manual",
     cache: "no-store"
   });
+  // 3xx with manual redirect must fail closed — never follow Location.
+  if (response.status >= 300 && response.status < 400) {
+    fail("OIDC discovery redirects are not followed");
+  }
   return {
     status: response.status,
+    url: response.url || url,
     json: async () => response.json()
   };
 }
@@ -190,12 +196,16 @@ export class OidcDiscoverySource {
     const timer = setTimeout(() => controller.abort(), this.#requestTimeoutMs);
     timer.unref?.();
     try {
-      const response = await this.#transport(discoveryDocumentUrl(this.#issuer), {
-        signal: controller.signal
+      const discoveryUrl = discoveryDocumentUrl(this.#issuer);
+      const response = await this.#transport(discoveryUrl, {
+        signal: controller.signal,
+        redirect: "manual"
       });
       if (response.status !== 200) {
         fail(`OIDC discovery responded with status ${response.status}.`);
       }
+      // Final response URL must remain same-origin with the configured issuer.
+      assertSameIssuerOriginEndpoint(this.#issuer, response.url || discoveryUrl, "discovery document");
       const body = await response.json();
       if (!isDiscoveryShape(body, this.#issuer)) {
         fail("OIDC discovery document is malformed or does not match the configured issuer.");

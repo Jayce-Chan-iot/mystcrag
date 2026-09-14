@@ -55,6 +55,7 @@ test("discovery caches a valid Authing document and exposes jwks_uri", async () 
 test("discovery rejects a document whose issuer does not match configuration exactly", async () => {
   const transport: OidcDiscoveryTransport = async () => ({
     status: 200,
+    url: discoveryDocumentUrl(ISSUER),
     json: async () => documentFor("https://evil.example.com/oidc")
   });
   const source = new OidcDiscoverySource({ issuer: ISSUER, transport });
@@ -77,7 +78,7 @@ test("discovery rejects non-HTTPS endpoint URLs", async () => {
 test("discovery fails closed on non-200 and transport errors", async () => {
   const notFound = new OidcDiscoverySource({
     issuer: ISSUER,
-    transport: async () => ({ status: 404, json: async () => ({}) })
+    transport: async () => ({ status: 404, url: discoveryDocumentUrl(ISSUER), json: async () => ({}) })
   });
   await assert.rejects(() => notFound.getDocument(), ProviderUnavailableError);
 
@@ -94,6 +95,7 @@ test("discovery fails closed on non-200 and transport errors", async () => {
 test("discovery rejects issuer trailing-slash mismatch", async () => {
   const transport: OidcDiscoveryTransport = async () => ({
     status: 200,
+    url: discoveryDocumentUrl(ISSUER),
     json: async () => documentFor(ISSUER_SLASH)
   });
   const source = new OidcDiscoverySource({ issuer: ISSUER, transport });
@@ -122,4 +124,25 @@ test("discovery rejects untrusted issuer hosts at construction", () => {
     () => new OidcDiscoverySource({ issuer: "https://localhost/oidc" }),
     ProviderUnavailableError
   );
+});
+
+
+test("discovery does not follow 3xx redirects and fails closed", async () => {
+  const transport: OidcDiscoveryTransport = async (url) => ({
+    status: 302,
+    url: String(url),
+    json: async () => ({})
+  });
+  const source = new OidcDiscoverySource({ issuer: ISSUER, transport });
+  await assert.rejects(() => source.getDocument(), ProviderUnavailableError);
+});
+
+test("discovery rejects a forged cross-origin final response url", async () => {
+  const transport: OidcDiscoveryTransport = async () => ({
+    status: 200,
+    url: "https://evil.example.com/oidc/.well-known/openid-configuration",
+    json: async () => documentFor(ISSUER)
+  });
+  const source = new OidcDiscoverySource({ issuer: ISSUER, transport });
+  await assert.rejects(() => source.getDocument(), ProviderUnavailableError);
 });

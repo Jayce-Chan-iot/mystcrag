@@ -55,10 +55,10 @@ export async function fetchSessionSnapshot(
  */
 export function resolveAuthPromptMode(
   snapshot: SessionSnapshot
-): "auth0" | "desktop-recovery" {
+): "authing" | "desktop-recovery" {
   return snapshot.status === "authenticated" &&
     snapshot.session?.authenticated === true &&
     snapshot.session.logoutAvailable === false
     ? "desktop-recovery"
-    : "auth0";
+    : "authing";
 }

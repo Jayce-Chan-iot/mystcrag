@@ -169,7 +169,7 @@ Execution methods used below:
   fake document (method=POST, action=/auth/logout, append-then-submit, submit
   once); `useSession` calls this exact helper.
 - `route`: module-level contract tests for callback/session/logout/login/BFF/
-  page-proxy/cookie logic against the real Auth0 Next.js SDK 4.27.0 error
+  page-proxy/cookie logic against the real Authing OIDC BFF (jose JWE) 4.27.0 error
   shapes (`src/features/auth/server/*.test.tsx`), including privacy-safe auth
   event wiring with distinct semantics: session missing (`missing_session` AND
   no known session cookie on the request) vs session expired/malformed

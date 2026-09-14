@@ -18,7 +18,7 @@ import {
 } from "./oidc-session-store";
 import { OidcDiscoverySource } from "./oidc-discovery";
 import { ProviderUnavailableError } from "./oidc-errors";
-import { __resetConsumedCallbackStatesForTests, completeOidcCallback, getAccessToken } from "./oidc-server";
+import { completeOidcCallback, getAccessToken } from "./oidc-server";
 import { buildTransactionSetCookie } from "./oidc-transaction";
 import { makeConfig, makeRequest } from "./auth-test-fixtures";
 
@@ -89,6 +89,31 @@ test("session within 8h idle and 7d absolute is accepted", async () => {
   const request = requestWithCookies("https://app.mystcrag.com/auth/session", header);
   const result = await readSession(request, config);
   assert.ok(result);
+});
+
+test("idle exactly 28800 seconds is rejected and 28799 is accepted", async () => {
+  const config = cfg();
+  const now = Math.floor(Date.now() / 1000);
+  const exactIdle = session({
+    createdAt: now - 100,
+    lastActivityAt: now - SESSION_IDLE_SECONDS
+  });
+  const cookiesExact = await buildSessionSetCookies(exactIdle, config);
+  const headerExact = cookiesExact.map((c) => c.split(";")[0]).join("; ");
+  assert.equal(
+    await readSession(requestWithCookies("https://app.mystcrag.com/auth/session", headerExact), config),
+    null
+  );
+
+  const justInside = session({
+    createdAt: now - 100,
+    lastActivityAt: now - (SESSION_IDLE_SECONDS - 1)
+  });
+  const cookiesInside = await buildSessionSetCookies(justInside, config);
+  const headerInside = cookiesInside.map((c) => c.split(";")[0]).join("; ");
+  assert.ok(
+    await readSession(requestWithCookies("https://app.mystcrag.com/auth/session", headerInside), config)
+  );
 });
 
 test("absolute 7d ceiling still rejects", async () => {
@@ -376,9 +401,8 @@ test("access-token refresh writes session with updated lastActivityAt", async ()
 });
 
 
-test("callback rejects a replayed transaction cookie after successful consumption", async () => {
+test("callback rejects replay when provider returns invalid_grant on second code exchange", async () => {
   const config = cfg();
-  __resetConsumedCallbackStatesForTests();
   const transaction = {
     state: "state-replay",
     nonce: "nonce-ok",
@@ -391,6 +415,7 @@ test("callback rejects a replayed transaction cookie after successful consumptio
   const { generateKeyPair, exportJWK, SignJWT } = await import("jose");
   const { publicKey, privateKey } = await generateKeyPair("RS256", { extractable: true });
   const jwk = { ...(await exportJWK(publicKey)), kid: "k1", use: "sig", alg: "RS256" };
+  let tokenCalls = 0;
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("openid-configuration")) {
@@ -402,6 +427,10 @@ test("callback rejects a replayed transaction cookie after successful consumptio
       });
     }
     if (url.includes("/token")) {
+      tokenCalls += 1;
+      if (tokenCalls > 1) {
+        return Response.json({ error: "invalid_grant" }, { status: 400 });
+      }
       const now = Math.floor(Date.now() / 1000);
       const idToken = await new SignJWT({ nonce: "nonce-ok" })
         .setProtectedHeader({ alg: "RS256", kid: "k1" })
@@ -428,6 +457,7 @@ test("callback rejects a replayed transaction cookie after successful consumptio
       config
     );
     assert.equal(first.kind, "success");
+    assert.ok(first.setCookies.some((c) => c.startsWith("__txn_state-replay=;")));
     const second = await completeOidcCallback(
       makeRequest("https://app.mystcrag.com/auth/callback?code=c&state=state-replay", {
         cookieHeader: header
@@ -435,6 +465,7 @@ test("callback rejects a replayed transaction cookie after successful consumptio
       config
     );
     assert.equal(second.kind, "unauthorized");
+    assert.ok(second.setCookies.some((c) => c.startsWith("__txn_state-replay=;")));
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -450,4 +481,61 @@ test("discovery source process cache can be isolated for outage tests", async ()
     }
   });
   await assert.rejects(() => source.getDocument(), ProviderUnavailableError);
+});
+
+
+test("frontend accepts a custom Authing host only when allowlisted", async () => {
+  const { OidcDiscoverySource } = await import("./oidc-discovery");
+  assert.throws(
+    () => new OidcDiscoverySource({ issuer: "https://sso.example.com/oidc" }),
+    ProviderUnavailableError
+  );
+  const allowed = new OidcDiscoverySource({
+    issuer: "https://sso.example.com/oidc",
+    hostAllowlist: ["sso.example.com"],
+    transport: async (url) => ({
+      status: 200,
+      url: String(url),
+      json: async () => ({
+        issuer: "https://sso.example.com/oidc",
+        authorization_endpoint: "https://sso.example.com/oidc/auth",
+        token_endpoint: "https://sso.example.com/oidc/token",
+        jwks_uri: "https://sso.example.com/oidc/keys"
+      })
+    })
+  });
+  const doc = await allowed.getDocument();
+  assert.equal(doc.issuer, "https://sso.example.com/oidc");
+});
+
+test("malformed allowlist entries are rejected by AuthConfig", async () => {
+  const { resolveAuthConfig } = await import("../model/auth-config");
+  const base = {
+    NODE_ENV: "production",
+    MYSTCRAG_APP_ORIGIN: "https://app.example.com",
+    MYSTCRAG_AUTH_PROVIDER: "authing",
+    MYSTCRAG_AUTH_ISSUER: "https://sso.example.com/oidc",
+    MYSTCRAG_AUTH_AUDIENCE: "https://api.example.com",
+    MYSTCRAG_AUTH_CLIENT_ID: "cid",
+    MYSTCRAG_AUTH_CLIENT_SECRET: "secret",
+    MYSTCRAG_AUTH_CALLBACK_URL: "https://app.example.com/auth/callback",
+    MYSTCRAG_AUTH_LOGOUT_URL: "https://app.example.com",
+    MYSTCRAG_AUTH_SESSION_SECRET: "a".repeat(64),
+    MYSTCRAG_BACKEND_ORIGIN: "https://api.internal.example.com",
+    MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST: "sso.example.com"
+  };
+  const ok = resolveAuthConfig(base);
+  assert.deepEqual(ok.authIssuerHostAllowlist, ["sso.example.com"]);
+  assert.throws(() =>
+    resolveAuthConfig({
+      ...base,
+      MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST: "https://sso.example.com"
+    })
+  );
+  assert.throws(() =>
+    resolveAuthConfig({
+      ...base,
+      MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST: "*.example.com"
+    })
+  );
 });

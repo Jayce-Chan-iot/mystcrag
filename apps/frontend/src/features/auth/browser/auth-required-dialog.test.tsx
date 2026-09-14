@@ -46,7 +46,7 @@ test("dialog renders one accessible, labelled dialog with approved copy and 44px
   const markup = renderToStaticMarkup(
     <AuthRequiredDialog
       loginHref="/auth/login?returnTo=%2Fdiy%2Fabc"
-      initialPromptMode="auth0"
+      initialPromptMode="authing"
       onDismiss={noop}
     />
   );
@@ -150,7 +150,7 @@ test("initial login href is the fixed server-safe default when no prop is suppli
 });
 
 test("default dialog SSRs the fixed server-safe href so hydration cannot mismatch", () => {
-  const markup = renderToStaticMarkup(<AuthRequiredDialog initialPromptMode="auth0" onDismiss={noop} />);
+  const markup = renderToStaticMarkup(<AuthRequiredDialog initialPromptMode="authing" onDismiss={noop} />);
   assert.ok(markup.includes(`href="${SERVER_SAFE_LOGIN_HREF}"`), markup);
   assert.ok(!markup.includes("buildLoginHref"), "no window-derived href may leak into SSR output");
 });
@@ -163,11 +163,11 @@ test("only the explicit desktop session capability selects desktop recovery", ()
   }}), "desktop-recovery");
   assert.equal(resolveAuthPromptMode({ status: "unauthenticated", session: {
     authenticated: false
-  }}), "auth0");
+  }}), "authing");
   assert.equal(resolveAuthPromptMode({ status: "authenticated", session: {
     authenticated: true,
     user: { displayName: "普通用户" }
-  }}), "auth0");
+  }}), "authing");
 });
 
 test("session-client source never classifies desktop mode from displayName or secrets", () => {

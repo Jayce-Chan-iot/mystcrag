@@ -145,7 +145,7 @@ export function isSessionAbsolutelyExpired(session: OidcSessionPayload, nowEpoch
 
 export function isSessionIdleExpired(session: OidcSessionPayload, nowEpochSeconds: number): boolean {
   if (typeof session.lastActivityAt !== "number") return true;
-  return nowEpochSeconds - session.lastActivityAt > SESSION_IDLE_SECONDS;
+  return nowEpochSeconds - session.lastActivityAt >= SESSION_IDLE_SECONDS;
 }
 
 export async function readSession(

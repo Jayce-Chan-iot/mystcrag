@@ -41,6 +41,7 @@ export function makeConfig(overrides: Partial<AuthConfig> = {}): AuthConfig {
     enableSignedTestAuth: false,
     desktopAutoAuth: false,
     desktopAccessToken: "",
+    authIssuerHostAllowlist: [],
     ...overrides
   };
 }

@@ -8,7 +8,7 @@
  * - The request body is read exactly once as RAW BYTES (arrayBuffer), by the business
  *   forwarding path only, and the same bytes are forwarded to the Backend — never
  *   decoded/re-encoded (text() would strip a UTF-8 BOM and replace invalid UTF-8).
- *   SDK session/token operations receive a standalone bodyless request with identical
+ *   OIDC session/token operations receive a standalone bodyless request with identical
  *   URL/method and body-independent headers (see buildSessionSdkRequest), so a
  *   consumed, disturbed or locked body stream can never reach the SDK.
  * - Content-Length is never forwarded or computed by hand; the server fetch generates it.
@@ -17,7 +17,7 @@
  * - getAccessToken failures are classified: missing/expired/revoked/renewal-rejection →
  *   401 (and the invalid session cookie is cleared); provider/JWKS/SDK outage → 500 (the
  *   decrypted session is preserved).
- * - Every accepted request triggers the SDK's REAL passive session rolling (middleware
+ * - Every accepted request triggers the OIDC passive session rolling (middleware
  *   default-case touch) after the Origin check and before any token operation; rolling
  *   failure fails closed with a stable 500. Rolling can never extend the 7d absolute
  *   expiry (the SDK caps maxAge at createdAt + absoluteDuration).
@@ -25,7 +25,7 @@
  *   success and on terminating responses, including backend-unavailable responses.
  * - A Backend 401 (after the BFF attached the Bearer token) invalidates the local
  *   session: stable UNAUTHORIZED envelope + clearing of the session main cookie, chunks
- *   and SDK legacy cookies. Backend 403 preserves the session.
+ *   and legacy session cookies. Backend 403 preserves the session.
  * - Backend Set-Cookie is never forwarded to the browser.
  */
 
@@ -123,7 +123,7 @@ function extractTokenErrorCode(error: unknown): string | undefined {
  * Maps a getAccessToken failure to its privacy-safe auth event. The semantics are
  * deliberately distinct:
  * - missing_session WITHOUT any known session cookie on the request → session missing.
- *   The Auth0 SDK emits missing_session for BOTH "no cookie at all" and "a stale,
+ *   The session layer emits missing_session for BOTH "no cookie at all" and "a stale,
  *   corrupted or undecryptable cookie is present", so the event is resolved together
  *   with `hasSessionCookie(request, config)`: a present main/chunk/legacy cookie means
  *   session expired/malformed, NOT missing.
@@ -223,7 +223,7 @@ function appendSinkCookies(target: NextResponse, sink: NextResponse): void {
  * Content-Length or a chunked framing, which would form a contradictory request.
  *
  * Why this is required: in Next.js 16 Turbopack production builds the `NextRequest`
- * constructor bundled with the Auth0 SDK can differ from the one the app chunks
+ * historical Auth0 SDK constructors could differ from the one the app chunks
  * resolve, so the SDK's `input instanceof NextRequest` check (next-compat
  * `toNextRequest`) fails and the SDK reconstructs via
  * `new NextRequest(input.url, { method, headers, body: input.body, duplex })`.
@@ -343,7 +343,7 @@ export async function handleBffRequest(
     return errorEnvelope(500, "INTERNAL_ERROR", "Session service unavailable.", requestId);
   }
 
-  // 6. Obtain the access token server-side; capture any SDK session-rotation Set-Cookie.
+  // 6. Obtain the access token server-side; capture any OIDC session-rotation Set-Cookie.
   const sink = new NextResponse();
   let accessToken: string;
   try {
@@ -427,7 +427,7 @@ export async function handleBffRequest(
   // 9. A Backend 401 (after the BFF attached the server-side Bearer token) means the
   //    Backend observed an invalid/expired/wrong-issuer/wrong-audience/bad-signature/
   //    revoked token. Invalidate the local session: stable envelope + clearing of the
-  //    session main cookie, chunks and SDK legacy cookies. Rolling/rotation cookies are
+  //    session main cookie, chunks and legacy session cookies. Rolling/rotation cookies are
   //    intentionally NOT re-appended — they would resurrect the invalidated session.
   if (backendResponse.status === 401) {
     // Backend token verification failure — distinct from renewal rejection: the BFF's
@@ -444,7 +444,7 @@ export async function handleBffRequest(
     return response;
   }
 
-  // 10. Assemble the response: safe Backend headers (no Set-Cookie) + SDK cookies.
+  // 10. Assemble the response: safe Backend headers (no Set-Cookie) + session cookies.
   //    Rolling cookies first, rotation cookies last: if the token set was rotated the
   //    rotation carries the newer session and wins in Set-Cookie order.
   const responseHeaders = new Headers();

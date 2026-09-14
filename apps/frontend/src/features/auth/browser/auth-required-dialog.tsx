@@ -20,7 +20,7 @@ export const AUTH_REQUIRED_COPY = {
 
 /**
  * Approved copy for a stale desktop demo identity. The browser may only show launcher
- * restart guidance — never an Auth0 login link, reload, or secret-bearing recovery.
+ * restart guidance — never an inert login link in desktop mode, reload, or secret-bearing recovery.
  */
 export const DESKTOP_RECOVERY_COPY = {
   title: "本地演示身份需要刷新",
@@ -29,7 +29,7 @@ export const DESKTOP_RECOVERY_COPY = {
   secondaryAction: "暂不处理"
 } as const;
 
-export type AuthPromptMode = "checking" | "auth0" | "desktop-recovery";
+export type AuthPromptMode = "checking" | "authing" | "desktop-recovery"; // ordinary Authing OIDC login
 
 /**
  * Escape is the only keyboard dismissal; every other key is ignored by the dialog.
@@ -177,7 +177,7 @@ export function AuthRequiredDialog({
         if (active) setPromptMode(resolveAuthPromptMode(snapshot));
       })
       .catch(() => {
-        if (active) setPromptMode("auth0");
+        if (active) setPromptMode("authing");
       });
     return () => {
       active = false;
@@ -291,7 +291,7 @@ export function AuthRequiredDialog({
               className="inline-flex min-h-11 flex-1 items-center justify-center rounded-xl bg-[var(--accent-deep)] px-4 text-sm font-medium text-white"
               href={href}
               data-auth-required-primary="true"
-              data-auth-primary-state="auth0"
+              data-auth-primary-state="authing"
             >
               {AUTH_REQUIRED_COPY.primaryAction}
             </Link>

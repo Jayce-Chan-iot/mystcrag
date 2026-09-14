@@ -1,5 +1,5 @@
 /**
- * Authing OIDC BFF server facade (replaces Auth0 Next.js SDK wrapper).
+ * Authing OIDC BFF server facade (Authing OIDC BFF facade).
  *
  * Reads only MYSTCRAG_* variables. Session cookies are authenticated-encrypted
  * JWE payloads; rolling never extends absolute expiry; tokens never leave the
@@ -145,27 +145,6 @@ export async function startInteractiveLogin(options: {
   });
 }
 
-/**
- * Process-local single-use guard for callback `state` values. Complements the
- * HttpOnly transaction cookie clear so a replayed ciphertext/state cannot reuse
- * an already-consumed login transaction in this process.
- */
-const consumedCallbackStates = new Set<string>();
-const MAX_CONSUMED_STATES = 1_000;
-
-function markCallbackStateConsumed(state: string): void {
-  if (consumedCallbackStates.has(state)) return;
-  if (consumedCallbackStates.size >= MAX_CONSUMED_STATES) {
-    const oldest = consumedCallbackStates.values().next();
-    if (!oldest.done) consumedCallbackStates.delete(oldest.value);
-  }
-  consumedCallbackStates.add(state);
-}
-
-export function __resetConsumedCallbackStatesForTests(): void {
-  consumedCallbackStates.clear();
-}
-
 export type CallbackOutcome =
   | { kind: "success"; returnTo: string; setCookies: string[]; session: OidcSessionPayload }
   | { kind: "unauthorized"; setCookies: string[] }
@@ -191,11 +170,12 @@ export async function completeOidcCallback(
   // Always clear the consumed transaction cookie.
   const clearTxn = buildTransactionClearCookie(request, config, state);
 
-  if (!transaction || consumedCallbackStates.has(state)) {
-    if (transaction) markCallbackStateConsumed(state);
+  // One-time consumption relies on provider authorization-code single use,
+  // state/nonce/PKCE binding, and immediate transaction-cookie clearing.
+  // There is no cross-instance server session store.
+  if (!transaction) {
     return { kind: "unauthorized", setCookies: clearTxn };
   }
-  markCallbackStateConsumed(state);
 
   if (providerError) {
     const denial =

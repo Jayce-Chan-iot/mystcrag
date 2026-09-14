@@ -2,8 +2,8 @@ import { isIP } from "node:net";
 
 import { OidcAccessTokenVerifier } from "./oidc-access-token-verifier.js";
 import type { AccessTokenVerifier } from "./auth-provider.js";
-import { OidcDiscoverySource } from "./oidc-discovery.js";
-import { JwksKeySource } from "./jwks-key-source.js";
+import { OidcDiscoverySource, type OidcDiscoveryTransport } from "./oidc-discovery.js";
+import { JwksKeySource, type JwksTransport } from "./jwks-key-source.js";
 import { SignedTestTokenAuthProvider } from "./signed-test-auth-provider.js";
 
 export type AuthEnvironment = Readonly<Record<string, string | undefined>>;
@@ -26,7 +26,7 @@ function invalidIssuer(detail: string): Error {
  * Trailing slash is optional. Query, fragment, credentials, wildcard, IP and
  * loopback hosts are rejected.
  */
-const DEFAULT_AUTHING_HOST_SUFFIXES = [".authing.cn", ".authing.co"];
+const DEFAULT_AUTHING_HOST_SUFFIXES = [".authing.cn"];
 
 function looksLikeIpv4(host: string): boolean {
   const parts = host.split(".");
@@ -128,12 +128,21 @@ function requireCanonicalOidcIssuer(environment: AuthEnvironment): string {
  * document (`jwks_uri`); the factory never concatenates an Auth0-style
  * `{issuer}.well-known/jwks.json` path as the sole authority.
  */
-function createOidcVerifier(environment: AuthEnvironment): AccessTokenVerifier {
+export type OidcVerifierSeam = {
+  readonly discoveryTransport?: OidcDiscoveryTransport;
+  readonly jwksTransport?: JwksTransport;
+};
+
+function createOidcVerifier(
+  environment: AuthEnvironment,
+  seam?: OidcVerifierSeam
+): AccessTokenVerifier {
   const issuer = requireCanonicalOidcIssuer(environment);
   const audience = requireConfiguration(environment, "MYSTCRAG_AUTH_AUDIENCE");
   const discovery = new OidcDiscoverySource({
     issuer,
-    hostAllowlist: parseIssuerHostAllowlist(environment)
+    hostAllowlist: parseIssuerHostAllowlist(environment),
+    ...(seam?.discoveryTransport ? { transport: seam.discoveryTransport } : {})
   });
   let keySource: JwksKeySource | null = null;
   return new OidcAccessTokenVerifier({
@@ -143,7 +152,10 @@ function createOidcVerifier(environment: AuthEnvironment): AccessTokenVerifier {
       async getJwks(kid?: string) {
         if (keySource === null) {
           const jwksUri = await discovery.getJwksUri();
-          keySource = new JwksKeySource({ url: jwksUri });
+          keySource = new JwksKeySource({
+            url: jwksUri,
+            ...(seam?.jwksTransport ? { transport: seam.jwksTransport } : {})
+          });
         }
         return keySource.getJwks(kid);
       }
@@ -152,14 +164,15 @@ function createOidcVerifier(environment: AuthEnvironment): AccessTokenVerifier {
 }
 
 export function createAccessTokenVerifierFromEnvironment(
-  environment: AuthEnvironment = process.env
+  environment: AuthEnvironment = process.env,
+  seam?: OidcVerifierSeam
 ): AccessTokenVerifier {
   const providerName = environment.MYSTCRAG_AUTH_PROVIDER?.trim();
   if (!providerName) {
     throw new Error("Authentication provider is not configured.");
   }
   if (providerName === "authing") {
-    return createOidcVerifier(environment);
+    return createOidcVerifier(environment, seam);
   }
   if (providerName === "auth0") {
     throw new Error(

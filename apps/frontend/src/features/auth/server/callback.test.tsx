@@ -131,9 +131,10 @@ test("success path validates state, exchanges the code, sets session cookies and
     );
     assert.equal(response.status, 303);
     const location = response.headers.get("location")!;
-    assert.ok(location.startsWith("https://app.mystcrag.com/tarot/setup"));
-    assert.ok(location.includes("theme=love"));
-    assert.ok(location.includes("theme=love"));
+    const redirect = new URL(location);
+    assert.equal(redirect.pathname, "/tarot/setup");
+    assert.equal(redirect.searchParams.get("theme"), "love");
+    assert.equal(redirect.hash, "#step");
     const setCookies = response.headers.getSetCookie();
     assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session=") || c.startsWith("mystcrag_session=")));
     assert.ok(setCookies.some((c) => c.startsWith("__txn_state-ok=;")));

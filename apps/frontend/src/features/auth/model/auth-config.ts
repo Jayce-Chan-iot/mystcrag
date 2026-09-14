@@ -34,6 +34,11 @@ export type AuthConfig = {
    */
   readonly desktopAutoAuth: boolean;
   readonly desktopAccessToken: string;
+  /**
+   * Server-only custom Authing OIDC hostname allowlist (comma-separated hostnames).
+   * Empty means only the default trusted suffix `*.authing.cn`.
+   */
+  readonly authIssuerHostAllowlist: readonly string[];
 };
 
 export type AuthConfigError = {
@@ -120,6 +125,60 @@ function isValidAuthIssuer(value: string): boolean {
 
 // Issuer is stored exactly as configured — never mutate trailing slashes.
 
+function looksLikeIpv4(host: string): boolean {
+  const parts = host.split(".");
+  if (parts.length !== 4) return false;
+  return parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+}
+
+function isPrivateOrReservedHostname(hostname: string): boolean {
+  const bare = (hostname.endsWith(".") ? hostname.slice(0, -1) : hostname).toLowerCase();
+  if (bare === "localhost" || bare.endsWith(".localhost")) return true;
+  if (bare.endsWith(".local") || bare.endsWith(".internal")) return true;
+  if (looksLikeIpv4(bare) || bare.includes(":")) return true;
+  return false;
+}
+
+/**
+ * Strictly parses MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST.
+ * Entries must be bare DNS hostnames — no scheme/path/port/wildcard/credentials/IP/loopback.
+ */
+export function parseIssuerHostAllowlist(raw: string | undefined): {
+  readonly hosts: readonly string[];
+  readonly errors: readonly string[];
+} {
+  const value = raw?.trim() ?? "";
+  if (value.length === 0) {
+    return { hosts: [], errors: [] };
+  }
+  const errors: string[] = [];
+  const hosts: string[] = [];
+  for (const entry of value.split(",")) {
+    const host = entry.trim().toLowerCase();
+    if (host.length === 0) continue;
+    if (
+      host.includes("://") ||
+      host.includes("/") ||
+      host.includes(":") ||
+      host.includes("@") ||
+      host.includes("*") ||
+      isPrivateOrReservedHostname(host) ||
+      looksLikeIpv4(host)
+    ) {
+      errors.push(
+        `MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST entry must be a bare DNS hostname without scheme/path/port/wildcard/credentials/IP`
+      );
+      continue;
+    }
+    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) {
+      errors.push(`MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST entry is not a valid hostname: ${host}`);
+      continue;
+    }
+    hosts.push(host);
+  }
+  return { hosts, errors };
+}
+
 // Use Record<string, string | undefined> to accept any env-like object
 // without the strict NODE_ENV union type from NodeJS.ProcessEnv.
 type EnvLike = Record<string, string | undefined>;
@@ -140,6 +199,7 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
   const enableSignedTestAuth = env.MYSTCRAG_ENABLE_SIGNED_TEST_AUTH === "true";
   const desktopAutoAuth = env.MYSTCRAG_DESKTOP_AUTO_AUTH === "true";
   const desktopAccessToken = env.MYSTCRAG_DESKTOP_ACCESS_TOKEN?.trim() ?? "";
+  const issuerHostAllowlist = parseIssuerHostAllowlist(env.MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST);
 
   const nodeEnv: string = env.NODE_ENV ?? "development";
   const isProduction = nodeEnv === "production" || nodeEnv === "staging";
@@ -180,6 +240,25 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
     errors.push("MYSTCRAG_AUTH_ISSUER is required");
   } else if (authProvider === "authing" && !isValidAuthIssuer(authIssuer)) {
     errors.push("MYSTCRAG_AUTH_ISSUER must be HTTPS OIDC issuer with path '/' or '/oidc', no query/fragment/credentials/wildcard/IP/loopback");
+  } else if (authProvider === "authing" && authIssuer) {
+    try {
+      const issuerHost = new URL(authIssuer).hostname.toLowerCase();
+      const allowlisted =
+        issuerHost.endsWith(".authing.cn") ||
+        issuerHostAllowlist.hosts.some(
+          (host) => issuerHost === host || issuerHost.endsWith(`.${host}`)
+        );
+      if (!allowlisted) {
+        errors.push(
+          "MYSTCRAG_AUTH_ISSUER host must be *.authing.cn or listed in MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST"
+        );
+      }
+    } catch {
+      errors.push("MYSTCRAG_AUTH_ISSUER must be a valid HTTPS OIDC issuer URL");
+    }
+  }
+  for (const allowlistError of issuerHostAllowlist.errors) {
+    errors.push(allowlistError);
   }
 
   // Validate authAudience
@@ -293,6 +372,7 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
     // The desktop Token is only surfaced when desktop mode is active; otherwise it is
     // dropped so no inactive-path consumer can ever hold it.
     desktopAutoAuth,
-    desktopAccessToken: desktopAutoAuth ? desktopAccessToken : ""
+    desktopAccessToken: desktopAutoAuth ? desktopAccessToken : "",
+    authIssuerHostAllowlist: issuerHostAllowlist.hosts
   };
 }
