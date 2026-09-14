@@ -72,28 +72,29 @@ test("the reference-accurate home and questionnaire expose the photographed comp
   assert.match(home, /\/home\/hero-bracelet\.webp/);
   assert.match(home, /\/home\/entry-ai\.webp/);
   assert.match(home, /\/home\/entry-tarot\.webp/);
-  assert.match(home, /\/home\/entry-diy\.webp/);
+  assert.match(home, /\/home\/entry-diy-loose-tray\.webp/);
   assert.doesNotMatch(home, /BraceletPreview/);
   assert.doesNotMatch(home, /function BraceletArtwork/);
   assert.match(questionnaire, /data-questionnaire-stepper="true"/);
   assert.match(questionnaire, /QUESTIONNAIRE_STEPS\.map/);
 });
 
-test("the desktop homepage keeps the hero above three creation paths in the first viewport", () => {
+test("the homepage uses framed media, separated creation cards and motion-safe feedback", () => {
+  const home = source("../../../app/page.tsx");
   const css = source("../../../app/atelier.css");
-  const layout = source("../../../app/layout.tsx");
 
-  assert.match(
-    css,
-    /\.home-reference-shell\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*1\.35fr\)\s+minmax\(0,\s*1fr\)[^}]*height:\s*calc\(100dvh\s*-\s*3\.8125rem\)/s
-  );
-  assert.match(
-    css,
-    /\.home-reference-paths\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s
-  );
-  assert.doesNotMatch(css, /\.home-reference-shell\s*\{[^}]*grid-template-columns:\s*46%\s+54%/s);
-  assert.match(layout, /sm:h-\[3\.75rem\]/);
-  assert.match(css, /@media \(max-width: 767px\)[\s\S]*?\.home-reference-hero\s*\{[^}]*min-height:\s*min\(12\.75rem,\s*34dvh\)/);
+  assert.match(home, /image:\s*"\/home\/entry-diy-loose-tray\.webp"/);
+  assert.match(home, /尚未穿线的散珠/);
+  assert.match(home, /className="home-reference-hero-media"/);
+  assert.doesNotMatch(home, /image:\s*"\/home\/entry-diy\.webp"/);
+  assert.match(css, /\.home-reference-shell\s*\{[^}]*padding:\s*clamp\(/s);
+  assert.doesNotMatch(css, /\.home-reference-shell\s*\{[^}]*height:\s*calc\(100dvh/s);
+  assert.match(css, /\.home-reference-hero\s*\{[^}]*border-radius:\s*1\.5rem/s);
+  assert.match(css, /\.home-reference-paths\s*\{[^}]*gap:\s*clamp\([^;]*1\.5rem/s);
+  assert.match(css, /\.home-reference-card-link\s*\{[^}]*border-radius:\s*1\.5rem/s);
+  assert.match(css, /\.home-reference-card-link:is\(:hover,\s*:focus-visible\)[^{]*\{[^}]*transform:\s*translateY\(-4px\)\s+scale\(1\.025\)/s);
+  assert.match(css, /@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.home-reference-card-link[^}]*transition:\s*none/s);
+  assert.match(css, /@media \(max-width:\s*767px\)[\s\S]*?\.home-reference-paths\s*\{[^}]*grid-template-columns:\s*1fr/s);
 });
 
 test("the desktop workbench mirrors the reference catalog, tray, wrist and material regions", () => {
