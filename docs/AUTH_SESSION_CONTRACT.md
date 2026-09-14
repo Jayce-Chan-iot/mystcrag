@@ -305,11 +305,76 @@ Rules:
 - The desktop Access Token lives only in the launcher's `0600` runtime env and in Next.js server process memory; the BFF forwards it server-to-server as `Authorization: Bearer`. It never enters a browser cookie, React/client state, HTML/RSC payload, URL, log, or error message.
 - Desktop mode never instantiates or invokes the Auth0 SDK: page routing passes through, `/auth/login` 303s to a `validateReturnTo`-cleared same-origin path without creating a cookie, and there is no rolling, renewal or refresh. `POST /auth/logout` still performs the exact `Origin` check and returns a controlled, no-store, same-origin `200` with `{"status":"local-demo",...}`; it never builds an Auth0 logout URL, never sets/clears a cookie and never claims to revoke the process-scoped desktop identity, so it no longer yields a 500. When desktop mode is off, Auth0 cookie/rolling/refresh/logout/returnTo/Origin/error-classification behavior is unchanged.
 - The signed-test token uses `exp = now + 28800` seconds, a maximum eight-hour launcher lifetime. Backend still verifies signature, exact issuer, audience and expiry through `SignedTestTokenAuthProvider`; this task does not modify Backend.
-- Consumer `UNAUTHORIZED` responses render one shared `AuthRequiredDialog` (登录后继续); its primary action navigates to `/auth/login?returnTo=<validated path>`. The "注册" side is supplied by the Auth0 tenant's database-connection signup setting; the app only promises entry to the unified login/register endpoint and never fabricates a local consumer registration form.
-- The dialog's secondary "暂不登录" (and Escape/mask dismissal) is a pure close: it restores keyboard focus to the trigger element and is never wired to a business `onAction` retry/re-submit. Dismissing therefore does not re-issue the protected request; when the user performs the protected operation again and receives a fresh `401`, the dialog re-opens.
+- Consumer `UNAUTHORIZED` responses render one shared `AuthRequiredDialog`; its mode-aware primary action either navigates to `/auth/login?returnTo=<validated path>` or shows launcher-restart recovery. The "注册" side of the Auth0 mode is supplied by the Auth0 tenant's database-connection signup setting; the app only promises entry to the unified login/register endpoint and never fabricates a local consumer registration form.
+- The dialog's secondary action (and Escape/mask dismissal) is a pure close in every mode: it restores keyboard focus to the trigger element and is never wired to a business `onAction` retry/re-submit. Dismissing therefore does not re-issue the protected request; when the user performs the protected operation again and receives a fresh `401`, the dialog re-opens.
 - Callers may pass an explicit `returnFocusRef` so focus returns to the intended control even when the trigger was `disabled` during submit and `document.activeElement` had already collapsed to `document.body`. Tarot setup uses this for the "进入抽牌" button. Callers without an explicit ref keep the `document.activeElement` fallback.
 - `FlowNotice` exposes `onDismissAuthRequired` for the `UNAUTHORIZED` branch only. That callback must clear the parent's authentication error state and nothing else — never a business `onAction`, retry, re-submit, or network request. Clearing the parent code unmounts the dialog; a later `401` writes `UNAUTHORIZED` again and remounts a fresh open dialog. Non-auth codes keep their existing `onAction` behavior.
 - The independent bead-import admin `admin/admin` local authentication is unchanged and never shares the consumer dialog or desktop identity.
+
+## 12b. Mode-aware login recovery (TASK-AUTH-010)
+
+This section controls how the browser chooses between ordinary Auth0 login and desktop mismatch recovery. It changes prompt projection only. It does not alter `/auth/login`, BFF Access Token forwarding, Cookie Session rules, or `(issuer, subject)` identity mapping.
+
+### Session projection remains capability-only
+
+- `/auth/session` continues to expose only safe fields: `authenticated`, optional user display hints (`displayName`, `email`, `emailVerified`), expiry timestamps, and the optional non-sensitive capability `logoutAvailable`.
+- The browser never receives a runtime mode string, secret, token, issuer, subject, audience, internal `User.id`, desktop token, or full authentication URL from `/auth/session`.
+- **`logoutAvailable: false` is the sole desktop capability signal.** Classification must never inspect `displayName`, email, or any profile hint. The display name "本地演示用户" is presentation copy only.
+
+### Shared browser session snapshot
+
+The frontend owns one shared client (`session-client.ts`) used by `useSession` and `AuthRequiredDialog`:
+
+- `fetchSessionSnapshot(fetcher?)` reads `/auth/session` with `cache: "no-store"` and `credentials: "same-origin"`.
+- `resolveAuthPromptMode(snapshot)` returns `"desktop-recovery"` only when the snapshot is authenticated **and** `logoutAvailable === false`; every other outcome returns `"auth0"`.
+- The client must not export or invent a mode string on the wire, and must not read secrets or complete authentication URLs.
+
+### Auth-required dialog modes
+
+A protected API `401 UNAUTHORIZED` mounts `AuthRequiredDialog`. After mount the dialog fetches a `/auth/session` snapshot and resolves one of three UI modes:
+
+| Mode | When | Primary action | Secondary / Escape / backdrop |
+| --- | --- | --- | --- |
+| `checking` | Snapshot not yet resolved | Focusable 44px button with `aria-disabled="true"` and no click handler; no login link | Pure dismiss |
+| `auth0` | Unauthenticated, authenticated-with-logout, or session-check failure | Hydration-safe real login `<Link>` to `/auth/login?returnTo=<current relative path>` | Pure dismiss |
+| `desktop-recovery` | Authenticated snapshot with `logoutAvailable: false` | Purple button "我知道了" that only dismisses | Pure dismiss ("暂不处理") |
+
+Hydration-safe login href: SSR and first client render share the fixed server-safe default `SERVER_SAFE_LOGIN_HREF`; only after mount does the dialog replace it with `buildLoginHref(window.location)` so the real pathname+query+hash returnTo is preserved. Mode changes re-focus the currently resolved primary control via a single callback ref.
+
+### Ordinary Auth0 redirect
+
+1. User hits a protected action and receives `UNAUTHORIZED`.
+2. Dialog resolves `auth0` (or falls back to `auth0` when the session snapshot fails).
+3. User clicks "登录 / 注册".
+4. Browser navigates to `/auth/login?returnTo=<encoded current relative address>`.
+5. Server continues the existing fail-closed OpenID transaction and 303s to Auth0 `/authorize`. Universal Login supplies both login and signup; the app never invents a local consumer password form.
+
+### Pure dismissal and state retention
+
+- Secondary button, Escape, and backdrop only call `dismissDialog`: close, restore focus, optional `onDismissAuthRequired`.
+- They never call business retry, re-submit, `router.back()`, `history.back()`, or `location.reload()`.
+- Unsaved client state, scroll position, and the current relative URL remain untouched.
+- A later user-triggered `401` remounts a fresh open dialog.
+
+### Desktop mismatch recovery
+
+1. Desktop mode is active: `/auth/session` returns `authenticated: true` and `logoutAvailable: false`.
+2. The server-held desktop token becomes invalid/expired while the cookie-less browser tab still shows the authenticated projection.
+3. A protected API request returns `401 UNAUTHORIZED`.
+4. The dialog resolves `desktop-recovery` and must **not** render an Auth0 `/auth/login` link (that path is a no-op or wrong recovery in desktop mode).
+5. Fixed user-facing copy:
+   - Title: 本地演示身份需要刷新
+   - Message: 请保持此页面打开，重新运行桌面的玄矶系统启动脚本。服务重新启动后，再次执行刚才的操作。
+   - Primary: 我知道了
+   - Secondary: 暂不处理
+6. Both actions only dismiss. The dialog never auto-restarts processes, navigates, reloads, or reads/displays secrets.
+7. After the launcher regenerates a fresh server-side desktop token and both services are healthy again, the still-open tab can retry the protected action without leaving the route.
+
+### Privacy invariants
+
+- No `Bearer` token, desktop secret, issuer, subject, actor id, or password may appear in dialog markup, client state, URLs, or captured network bodies used for evidence.
+- Recovery guidance is textual only: keep the tab open and re-run the desktop launcher.
+- Desktop recovery is not an Auth0 login failure path; it is a stale server-held development-identity mismatch.
 
 ## 13. Current state
 
