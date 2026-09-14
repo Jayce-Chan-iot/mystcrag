@@ -136,19 +136,19 @@ export function AuthRequiredDialog({
   const href = initialLoginHref(loginHref ?? clientHref ?? undefined);
 
   // One callback ref for whichever primary control the resolved mode renders
-  // (checking button, auth0 Link, or desktop-recovery button). Attaching focuses it.
+  // (checking button, auth0 Link, or desktop-recovery button). It only stores the
+  // node — focusing is owned by effects so the mount effect can first capture the
+  // real pre-dialog `document.activeElement` (the trigger), not the just-attached
+  // primary that commit-phase focus would otherwise overwrite.
   const setPrimaryNode = React.useCallback((node: HTMLElement | null) => {
     primaryRef.current = node;
-    if (node) {
-      node.focus();
-    }
   }, []);
 
-  // Capture the element that had focus before the dialog opened and move focus to the
-  // primary action. Focus is restored explicitly on dismissal (see `dismiss`) and again
-  // as a backup on an actual unmount. An explicit `returnFocusRef` always wins because
-  // a disabled trigger (e.g. "进入抽牌" during submit) leaves `document.activeElement`
-  // as `document.body`.
+  // Capture the element that had focus before the dialog opened, then move focus to
+  // the primary action. Focus is restored explicitly on dismissal (see `dismiss`) and
+  // again as a backup on an actual unmount. An explicit `returnFocusRef` always wins
+  // because a disabled trigger (e.g. "进入抽牌" during submit) leaves
+  // `document.activeElement` as `document.body`.
   React.useEffect(() => {
     previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
     primaryRef.current?.focus();

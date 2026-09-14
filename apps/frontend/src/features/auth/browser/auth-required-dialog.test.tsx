@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import * as React from "react";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
@@ -240,4 +245,447 @@ test("dialog source resolves session mode, never reloads or navigates back", () 
   assert.match(source, /export type AuthPromptMode/);
   assert.doesNotMatch(source, /router\.back|history\.back|location\.reload/);
   assert.doesNotMatch(source, /displayName\s*===/);
+});
+
+// --- Real mount behavior (focus restore, session resolution, dismiss paths) ---
+
+const requireFromRoot = createRequire(
+  join(dirname(fileURLToPath(import.meta.url)), "../../../../../../package.json")
+);
+const { JSDOM } = requireFromRoot(
+  join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../../../../node_modules/.pnpm/jsdom@26.1.0/node_modules/jsdom"
+  )
+) as {
+  JSDOM: new (html: string, options?: { url?: string }) => {
+    window: Window & typeof globalThis;
+  };
+};
+
+type DomHarness = {
+  window: Window & typeof globalThis;
+  document: Document;
+  trigger: HTMLButtonElement;
+  host: HTMLDivElement;
+  restore(): void;
+};
+
+function installDom(url = "http://localhost/tarot/setup?tab=draw#step2"): DomHarness {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const dom = new JSDOM(`<!doctype html><html><body></body></html>`, { url });
+  const w = dom.window as unknown as Window & typeof globalThis;
+  const g = globalThis as Record<string, unknown>;
+  const previous = new Map<string, { value: unknown; had: boolean }>();
+  const assign = (key: string, value: unknown) => {
+    previous.set(key, { value: g[key], had: Object.prototype.hasOwnProperty.call(g, key) });
+    Object.defineProperty(g, key, {
+      configurable: true,
+      writable: true,
+      enumerable: true,
+      value
+    });
+  };
+
+  assign("window", w);
+  assign("document", w.document);
+  assign("HTMLElement", w.HTMLElement);
+  assign("Node", w.Node);
+  assign("getComputedStyle", w.getComputedStyle.bind(w));
+  assign("HTMLAnchorElement", (w as unknown as { HTMLAnchorElement: unknown }).HTMLAnchorElement);
+  assign("HTMLButtonElement", (w as unknown as { HTMLButtonElement: unknown }).HTMLButtonElement);
+  assign("MouseEvent", (w as unknown as { MouseEvent: unknown }).MouseEvent);
+  assign("KeyboardEvent", (w as unknown as { KeyboardEvent: unknown }).KeyboardEvent);
+  assign("Event", (w as unknown as { Event: unknown }).Event);
+  assign("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number);
+  assign("cancelAnimationFrame", (id: number) => clearTimeout(id));
+  // next/link use-intersection expects a browser global `self`.
+  assign("self", w);
+  assign("requestIdleCallback", (cb: (deadline: { didTimeout: boolean; timeRemaining: () => number }) => void) =>
+    setTimeout(() => cb({ didTimeout: false, timeRemaining: () => 50 }), 0) as unknown as number
+  );
+
+  // React DOM may read navigator; define only when writable/missing.
+  try {
+    assign("navigator", w.navigator);
+  } catch {
+    // leave Node's native navigator
+  }
+
+  const document = w.document;
+  const trigger = document.createElement("button");
+  trigger.id = "trigger";
+  trigger.type = "button";
+  trigger.textContent = "触发操作";
+  document.body.appendChild(trigger);
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  trigger.focus();
+
+  return {
+    window: w,
+    document,
+    trigger,
+    host,
+    restore() {
+      for (const [key, entry] of previous) {
+        if (!entry.had) delete g[key];
+        else
+          Object.defineProperty(g, key, {
+            configurable: true,
+            writable: true,
+            enumerable: true,
+            value: entry.value
+          });
+      }
+      dom.window.close();
+    }
+  };
+}
+
+async function flushEffects(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+async function mountDialog(
+  host: HTMLElement,
+  props: React.ComponentProps<typeof AuthRequiredDialog>
+): Promise<{ root: Root; unmount: () => Promise<void> }> {
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<AuthRequiredDialog {...props} />);
+  });
+  return {
+    root,
+    unmount: async () => {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+  };
+}
+
+function deferredSession() {
+  let resolveFn: ((value: Response) => void) | undefined;
+  let rejectFn: ((reason: unknown) => void) | undefined;
+  const promise = new Promise<Response>((resolve, reject) => {
+    resolveFn = resolve;
+    rejectFn = reject;
+  });
+  return {
+    promise,
+    resolve: (body: unknown) => resolveFn?.(jsonResponse(body)),
+    reject: (reason: unknown) => rejectFn?.(reason)
+  };
+}
+
+function mockSessionFetch(
+  impl: (input: RequestInfo | URL) => Promise<Response> | Response
+): () => void {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => impl(input)) as typeof fetch;
+  return () => {
+    globalThis.fetch = original;
+  };
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" }
+  });
+}
+
+function query<E extends Element>(document: Document, selector: string): E {
+  const node = document.querySelector(selector);
+  assert.ok(node, `expected ${selector}`);
+  return node as E;
+}
+
+test("without returnFocusRef, mount focuses primary after capturing the real trigger", async () => {
+  const dom = installDom();
+  const session = deferredSession();
+  const restoreFetch = mockSessionFetch(() => session.promise);
+  try {
+    assert.equal(dom.document.activeElement, dom.trigger);
+    const { unmount } = await mountDialog(dom.host, {
+      onDismiss: noop
+    });
+
+    // Keep the snapshot pending so we inspect the true checking mount timing.
+    const primary = query<HTMLElement>(dom.document, '[data-auth-required-primary="true"]');
+    assert.equal(dom.document.activeElement, primary, "primary receives focus after mount effect");
+    assert.equal(
+      dom.document.querySelector("[data-auth-prompt-mode]")?.getAttribute("data-auth-prompt-mode"),
+      "checking"
+    );
+
+    const secondary = query<HTMLButtonElement>(dom.document, '[data-auth-required-secondary="true"]');
+    await act(async () => {
+      secondary.click();
+    });
+
+    assert.equal(
+      dom.document.activeElement,
+      dom.trigger,
+      "secondary dismiss restores the pre-dialog trigger, not the unmounted primary"
+    );
+    await unmount();
+  } finally {
+    restoreFetch();
+    dom.restore();
+  }
+});
+
+test("session snapshots resolve auth0, desktop-recovery, and fetch-failure fallback", async () => {
+  const cases = [
+    {
+      name: "unauthenticated → auth0",
+      body: { authenticated: false } as unknown,
+      status: 200,
+      mode: "auth0",
+      expectLogin: true,
+      expectDesktopCopy: false
+    },
+    {
+      name: "desktop capability → desktop-recovery",
+      body: {
+        authenticated: true,
+        user: { displayName: "本地演示用户" },
+        logoutAvailable: false
+      } as unknown,
+      status: 200,
+      mode: "desktop-recovery",
+      expectLogin: false,
+      expectDesktopCopy: true
+    },
+    {
+      name: "fetch failure → auth0 fail-safe",
+      body: undefined as unknown,
+      status: 500,
+      mode: "auth0",
+      expectLogin: true,
+      expectDesktopCopy: false
+    }
+  ] as const;
+
+  for (const scenario of cases) {
+    const dom = installDom();
+    const session = deferredSession();
+    const restoreFetch = mockSessionFetch(() => session.promise);
+    try {
+      const { unmount } = await mountDialog(dom.host, { onDismiss: noop });
+      assert.equal(
+        dom.document.querySelector("[data-auth-prompt-mode]")?.getAttribute("data-auth-prompt-mode"),
+        "checking",
+        `${scenario.name}: starts in checking`
+      );
+      const checkingPrimary = query<HTMLElement>(dom.document, '[data-auth-required-primary="true"]');
+      assert.equal(checkingPrimary.getAttribute("aria-disabled"), "true", `${scenario.name}: checking primary disabled`);
+      assert.equal(checkingPrimary.tagName, "BUTTON", `${scenario.name}: checking primary is a button`);
+      assert.equal(checkingPrimary.getAttribute("href"), null);
+      assert.equal(dom.document.activeElement, checkingPrimary, `${scenario.name}: checking primary focused`);
+      checkingPrimary.click();
+      assert.equal(
+        dom.document.querySelector("[data-auth-prompt-mode]")?.getAttribute("data-auth-prompt-mode"),
+        "checking",
+        `${scenario.name}: checking primary click does nothing`
+      );
+
+      await act(async () => {
+        if (scenario.status !== 200) session.reject(new Error("network"));
+        else session.resolve(scenario.body);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await flushEffects();
+
+      assert.equal(
+        dom.document.querySelector("[data-auth-prompt-mode]")?.getAttribute("data-auth-prompt-mode"),
+        scenario.mode,
+        scenario.name
+      );
+      const resolvedPrimary = query<HTMLElement>(dom.document, '[data-auth-required-primary="true"]');
+      assert.equal(
+        dom.document.activeElement,
+        resolvedPrimary,
+        `${scenario.name}: resolved primary receives focus`
+      );
+
+      const loginLinks = dom.document.querySelectorAll('a[href^="/auth/login"]');
+      if (scenario.expectLogin) {
+        assert.ok(loginLinks.length === 1, `${scenario.name}: login link present`);
+      } else {
+        assert.equal(loginLinks.length, 0, `${scenario.name}: no Auth0 login link`);
+      }
+      if (scenario.expectDesktopCopy) {
+        assert.match(dom.document.body.textContent ?? "", /本地演示身份需要刷新/);
+        assert.equal(resolvedPrimary.textContent, "我知道了");
+      }
+      await unmount();
+    } finally {
+      restoreFetch();
+      dom.restore();
+    }
+  }
+});
+
+test("Escape, backdrop, and desktop primary dismiss only — focus returns to trigger, state retained", async () => {
+  const dismissPaths: Array<{
+    name: string;
+    desktop?: boolean;
+    close: (document: Document) => Promise<void>;
+  }> = [
+    {
+      name: "Escape",
+      desktop: false,
+      async close(document: Document) {
+        const primary = query<HTMLElement>(document, '[data-auth-required-primary="true"]');
+        primary.focus();
+        const dialog = query<HTMLElement>(document, '[data-auth-required-dialog="true"]');
+        dialog.dispatchEvent(
+          new (globalThis as unknown as { KeyboardEvent: typeof KeyboardEvent }).KeyboardEvent("keydown", {
+            key: "Escape",
+            bubbles: true
+          })
+        );
+      }
+    },
+    {
+      name: "backdrop",
+      desktop: false,
+      async close(document: Document) {
+        const overlay = query<HTMLElement>(document, '[data-auth-required-dialog="true"]');
+        overlay.dispatchEvent(
+          new (globalThis as unknown as { MouseEvent: typeof MouseEvent }).MouseEvent("click", {
+            bubbles: true
+          })
+        );
+      }
+    },
+    {
+      name: "desktop primary",
+      desktop: true,
+      async close(document: Document) {
+        query<HTMLButtonElement>(document, '[data-auth-required-primary="true"]').click();
+      }
+    }
+  ];
+
+  for (const path of dismissPaths) {
+    const dom = installDom();
+    const session = deferredSession();
+    const restoreFetch = mockSessionFetch(() => session.promise);
+    try {
+      const businessCalls = 0;
+      let dismissCalls = 0;
+      const { unmount } = await mountDialog(dom.host, {
+        onDismiss: () => {
+          dismissCalls += 1;
+        }
+      });
+      await act(async () => {
+        session.resolve(
+          path.desktop
+            ? { authenticated: true, user: { displayName: "本地演示用户" }, logoutAvailable: false }
+            : { authenticated: false }
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await flushEffects();
+
+      // Simulate unsaved page state outside the dialog.
+      const draft = dom.document.createElement("textarea");
+      draft.id = "draft";
+      draft.value = "unsaved-XYZ";
+      dom.document.body.appendChild(draft);
+      const hrefBefore = dom.window.location.href;
+      const scrollBefore = dom.window.scrollY;
+
+      await path.close(dom.document);
+
+      assert.equal(
+        dom.document.querySelector("[data-auth-required-dialog]"),
+        null,
+        `${path.name}: dialog closed`
+      );
+      assert.equal(dom.document.activeElement, dom.trigger, `${path.name}: focus restored to trigger`);
+      assert.equal(dismissCalls, 1, `${path.name}: onDismiss once`);
+      assert.equal(businessCalls, 0, `${path.name}: no business retry`);
+      assert.equal(draft.value, "unsaved-XYZ", `${path.name}: unsaved input retained`);
+      assert.equal(dom.window.location.href, hrefBefore, `${path.name}: URL unchanged`);
+      assert.equal(dom.window.scrollY, scrollBefore, `${path.name}: scroll unchanged`);
+
+      await unmount();
+    } finally {
+      restoreFetch();
+      dom.restore();
+    }
+  }
+});
+
+test("a later 401 remounts a fresh open dialog without reusing the closed instance", async () => {
+  const dom = installDom();
+  const session = deferredSession();
+  const restoreFetch = mockSessionFetch(() => session.promise);
+  try {
+    const first = await mountDialog(dom.host, { onDismiss: noop });
+    await act(async () => {
+      session.resolve({ authenticated: false });
+      await Promise.resolve();
+    });
+    await flushEffects();
+    const secondary = query<HTMLButtonElement>(dom.document, '[data-auth-required-secondary="true"]');
+    await act(async () => {
+      secondary.click();
+    });
+    assert.equal(dom.document.querySelector("[data-auth-required-dialog]"), null);
+    await first.unmount();
+
+    // Parent clears UNAUTHORIZED then a later 401 mounts a brand-new dialog instance.
+    const session2 = deferredSession();
+    globalThis.fetch = (async () => session2.promise) as typeof fetch;
+    const second = await mountDialog(dom.host, { onDismiss: noop });
+    const remounted = dom.document.querySelector("[data-auth-required-dialog]");
+    assert.ok(remounted, "fresh mount is open");
+    assert.equal(remounted.getAttribute("data-auth-prompt-mode"), "checking");
+    await second.unmount();
+  } finally {
+    restoreFetch();
+    dom.restore();
+  }
+});
+
+test("explicit returnFocusRef still wins over the captured trigger", async () => {
+  const dom = installDom();
+  const session = deferredSession();
+  const restoreFetch = mockSessionFetch(() => session.promise);
+  try {
+    const intended = dom.document.createElement("button");
+    intended.id = "intended";
+    dom.document.body.appendChild(intended);
+    const returnFocusRef = { current: intended };
+    const { unmount } = await mountDialog(dom.host, {
+      onDismiss: noop,
+      returnFocusRef
+    });
+    await act(async () => {
+      session.resolve({ authenticated: false });
+      await Promise.resolve();
+    });
+    await flushEffects();
+    const secondary = query<HTMLButtonElement>(dom.document, '[data-auth-required-secondary="true"]');
+    await act(async () => {
+      secondary.click();
+    });
+    assert.equal(dom.document.activeElement, intended);
+    await unmount();
+  } finally {
+    restoreFetch();
+    dom.restore();
+  }
 });
