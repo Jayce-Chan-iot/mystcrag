@@ -56,7 +56,8 @@ const VALID_SESSION: OidcSessionPayload = {
   user: { name: "User", email: "user@example.com", email_verified: true },
   accessToken: "secret-token",
   accessTokenExpiresAt: Math.floor(Date.now() / 1000) + 900,
-  createdAt: Math.floor(Date.now() / 1000)
+  createdAt: Math.floor(Date.now() / 1000),
+  lastActivityAt: Math.floor(Date.now() / 1000)
 };
 
 test("valid session returns the real projection and writes the rolling cookie", async () => {
@@ -106,7 +107,8 @@ test("absolute ceiling is never extended by idle rolling", async () => {
   const createdAt = Math.floor(Date.now() / 1000) - (604800 - 3600);
   const oldSession: OidcSessionPayload = {
     ...VALID_SESSION,
-    createdAt
+    createdAt,
+    lastActivityAt: Math.floor(Date.now() / 1000)
   };
   const request = makeRequest("https://app.mystcrag.com/auth/session", {
     cookieHeader: "__Host-mystcrag_session=cipher"

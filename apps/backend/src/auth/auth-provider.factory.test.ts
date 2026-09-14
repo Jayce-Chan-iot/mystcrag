@@ -120,6 +120,7 @@ test("the authing issuer must be HTTPS and reject unsafe forms", () => {
     "https://mystcrag-pool.authing.cn/oidc#fragment",
     "https://mystcrag-pool.authing.cn/oidc?query=1",
     "https://mystcrag-pool.authing.cn/custom-path",
+    "https://evil.example.com/oidc",
     "https://user:pass@mystcrag-pool.authing.cn/oidc",
     "https://localhost/oidc",
     "https://LOCALHOST/oidc",
@@ -163,7 +164,7 @@ test("Authing /oidc issuers are accepted with or without a trailing slash", () =
   for (const issuer of [
     "https://mystcrag-pool.authing.cn/oidc",
     "https://mystcrag-pool.authing.cn/oidc/",
-    "https://auth.mystcrag.example.com/oidc"
+    "https://login.authing.cn/oidc"
   ]) {
     const verifier = createAccessTokenVerifierFromEnvironment({
       ...productionAuthingEnvironment,
@@ -173,12 +174,42 @@ test("Authing /oidc issuers are accepted with or without a trailing slash", () =
   }
 });
 
-test("root-path HTTPS issuers remain accepted", () => {
+test("root-path HTTPS Authing issuers remain accepted", () => {
   const verifier = createAccessTokenVerifierFromEnvironment({
     ...productionAuthingEnvironment,
-    MYSTCRAG_AUTH_ISSUER: "https://auth.mystcrag.example.com/"
+    MYSTCRAG_AUTH_ISSUER: "https://login.authing.cn/"
   });
   assert.ok(verifier instanceof OidcAccessTokenVerifier);
+});
+
+test("untrusted custom hosts are rejected unless allowlisted", () => {
+  assert.throws(
+    () =>
+      createAccessTokenVerifierFromEnvironment({
+        ...productionAuthingEnvironment,
+        MYSTCRAG_AUTH_ISSUER: "https://auth.mystcrag.example.com/"
+      }),
+    /MYSTCRAG_AUTH_ISSUER/
+  );
+  const verifier = createAccessTokenVerifierFromEnvironment({
+    ...productionAuthingEnvironment,
+    MYSTCRAG_AUTH_ISSUER: "https://auth.mystcrag.example.com/",
+    MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST: "auth.mystcrag.example.com"
+  });
+  assert.ok(verifier instanceof OidcAccessTokenVerifier);
+});
+
+test("issuer is passed to the verifier exactly as configured", async () => {
+  const withoutSlash = createAccessTokenVerifierFromEnvironment({
+    ...productionAuthingEnvironment,
+    MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidc"
+  });
+  const withSlash = createAccessTokenVerifierFromEnvironment({
+    ...productionAuthingEnvironment,
+    MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidc/"
+  });
+  assert.ok(withoutSlash instanceof OidcAccessTokenVerifier);
+  assert.ok(withSlash instanceof OidcAccessTokenVerifier);
 });
 
 test("development and test also require an HTTPS authing issuer", () => {

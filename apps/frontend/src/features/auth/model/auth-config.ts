@@ -118,9 +118,7 @@ function isValidAuthIssuer(value: string): boolean {
   }
 }
 
-function normalizeOidcIssuer(value: string): string {
-  return value.endsWith("/") ? value : `${value}/`;
-}
+// Issuer is stored exactly as configured — never mutate trailing slashes.
 
 // Use Record<string, string | undefined> to accept any env-like object
 // without the strict NODE_ENV union type from NodeJS.ProcessEnv.
@@ -283,7 +281,7 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
     appOrigin,
     environment,
     authProvider: authProvider as "authing" | "signed-test",
-    authIssuer: authProvider === "authing" ? normalizeOidcIssuer(authIssuer) : authIssuer,
+    authIssuer,
     authAudience,
     authClientId,
     authClientSecret,

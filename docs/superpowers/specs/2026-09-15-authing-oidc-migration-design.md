@@ -92,9 +92,9 @@ Rename Auth0-specific verifier to OIDC verifier. Factory accepts `authing` (and 
 | `@authing/nextjs` `0.1.2` | Peer `next ^12.0.9` only; incompatible with Next 16 |
 | Authing Guard / browser SDK | Browser token/localStorage model violates session contract |
 | Keep Auth0 SDK + Authing domain | Dual vendor runtime, Auth0-specific claim/route coupling |
-| openid-client as sole stack | Accepted as protocol helper if pinned; jose remains crypto authority for cookies/JWKS/RS256 so Edge-safe rolling does not depend on Node-only client internals |
+| openid-client as sole stack | Rejected as a direct runtime dependency; discovery/authorize/token/end_session use fetch + jose |
 
-**Dependency decision:** pin `openid-client@6.8.8` (MIT, ESM) for discovery/authorize/token/end_session protocol helpers in Node route handlers; pin `jose@6.2.10` (already workspace override) for session JWE and token verification. Remove `@auth0/nextjs-auth0`.
+**Dependency decision:** pin `jose@6.2.10` only. Do not add `openid-client`. Token endpoint uses Authing `client_secret_post`. Issuer is compared exactly. Discovery endpoints must share the issuer origin on a trusted Authing host.
 
 ## 7. Acceptance matrix (code-level)
 

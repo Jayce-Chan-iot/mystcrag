@@ -20,6 +20,7 @@ export type OidcDiscoveryOptions = {
   readonly now?: () => number;
   readonly maxCacheMs?: number;
   readonly requestTimeoutMs?: number;
+  readonly hostAllowlist?: readonly string[];
 };
 
 const DEFAULT_MAX_CACHE_MS = 15 * 60_000;
@@ -38,20 +39,87 @@ function isHttpsUrl(value: unknown): value is string {
   }
 }
 
-function normalizeIssuerPath(issuer: string): string {
-  return issuer.endsWith("/") ? issuer : `${issuer}/`;
+export function discoveryDocumentUrl(issuer: string): string {
+  const base = issuer.endsWith("/") ? issuer : `${issuer}/`;
+  return `${base}.well-known/openid-configuration`;
 }
 
-export function discoveryDocumentUrl(issuer: string): string {
-  return `${normalizeIssuerPath(issuer)}.well-known/openid-configuration`;
+
+const DEFAULT_AUTHING_HOST_SUFFIXES = [".authing.cn", ".authing.co"];
+
+function looksLikeIpv4(host: string): boolean {
+  const parts = host.split(".");
+  if (parts.length !== 4) return false;
+  return parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+}
+
+function isPrivateOrReservedHostname(hostname: string): boolean {
+  const bare = (hostname.endsWith(".") ? hostname.slice(0, -1) : hostname).toLowerCase();
+  if (bare === "localhost" || bare.endsWith(".localhost")) return true;
+  if (bare.endsWith(".local") || bare.endsWith(".internal")) return true;
+  if (looksLikeIpv4(bare)) {
+    const a = Number(bare.split(".")[0]);
+    const b = Number(bare.split(".")[1]);
+    if (a === 0 || a === 127 || a === 10) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 169 && b === 254) return true;
+    if (a >= 224) return true;
+    return false;
+  }
+  if (bare.includes(":")) return true;
+  return false;
+}
+
+function isTrustedAuthingHost(hostname: string, allowlist: readonly string[]): boolean {
+  if (isPrivateOrReservedHostname(hostname)) return false;
+  const lower = hostname.toLowerCase();
+  if (allowlist.length === 0) {
+    return DEFAULT_AUTHING_HOST_SUFFIXES.some((suffix) => lower.endsWith(suffix));
+  }
+  return allowlist.some((entry) => {
+    const host = entry.toLowerCase();
+    return lower === host || lower.endsWith(`.${host}`);
+  });
+}
+
+export function assertTrustedOidcIssuer(issuer: string, allowlist: readonly string[] = []): void {
+  let url: URL;
+  try {
+    url = new URL(issuer);
+  } catch {
+    fail("OIDC issuer is not a valid URL");
+  }
+  if (url.protocol !== "https:") fail("OIDC issuer must use HTTPS");
+  if (url.username || url.password || url.search || url.hash) {
+    fail("OIDC issuer must not contain credentials, query, or fragment");
+  }
+  if (!isTrustedAuthingHost(url.hostname, allowlist)) {
+    fail("OIDC issuer host is not a trusted Authing domain");
+  }
+}
+
+function assertSameIssuerOriginEndpoint(issuer: string, endpoint: string, label: string): void {
+  let issuerUrl: URL;
+  let endpointUrl: URL;
+  try {
+    issuerUrl = new URL(issuer);
+    endpointUrl = new URL(endpoint);
+  } catch {
+    fail(`OIDC ${label} is not a valid URL`);
+  }
+  if (endpointUrl.protocol !== "https:") fail(`OIDC ${label} must use HTTPS`);
+  if (endpointUrl.origin !== issuerUrl.origin) {
+    fail(`OIDC ${label} must share the issuer origin`);
+  }
 }
 
 function isDiscoveryShape(value: unknown, expectedIssuer: string): value is OidcDiscoveryDocument {
   if (typeof value !== "object" || value === null) return false;
   const doc = value as Record<string, unknown>;
   if (typeof doc.issuer !== "string" || doc.issuer.length === 0) return false;
-  // Authing may or may not include the trailing slash; compare normalized forms.
-  if (normalizeIssuerPath(doc.issuer) !== normalizeIssuerPath(expectedIssuer)) return false;
+  // Exact configured issuer comparison — never rewrite trailing slashes.
+  if (doc.issuer !== expectedIssuer) return false;
   if (!isHttpsUrl(doc.authorization_endpoint)) return false;
   if (!isHttpsUrl(doc.token_endpoint)) return false;
   if (!isHttpsUrl(doc.jwks_uri)) return false;
@@ -89,6 +157,7 @@ export class OidcDiscoverySource {
   #inflight: Promise<OidcDiscoveryDocument> | null = null;
 
   constructor(options: OidcDiscoveryOptions) {
+    assertTrustedOidcIssuer(options.issuer, options.hostAllowlist ?? []);
     this.#issuer = options.issuer;
     this.#transport = options.transport ?? httpsDiscoveryTransport;
     this.#now = options.now ?? (() => Date.now());
@@ -130,6 +199,12 @@ export class OidcDiscoverySource {
       const body = await response.json();
       if (!isDiscoveryShape(body, this.#issuer)) {
         fail("OIDC discovery document is malformed or does not match the configured issuer.");
+      }
+      assertSameIssuerOriginEndpoint(this.#issuer, body.authorization_endpoint, "authorization_endpoint");
+      assertSameIssuerOriginEndpoint(this.#issuer, body.token_endpoint, "token_endpoint");
+      assertSameIssuerOriginEndpoint(this.#issuer, body.jwks_uri, "jwks_uri");
+      if (body.end_session_endpoint) {
+        assertSameIssuerOriginEndpoint(this.#issuer, body.end_session_endpoint, "end_session_endpoint");
       }
       const document: OidcDiscoveryDocument = {
         issuer: body.issuer,

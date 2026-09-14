@@ -97,10 +97,11 @@ export function projectSessionState(
   };
   const now = Math.floor(Date.now() / 1000);
   const absoluteExpiresAt = new Date((session.createdAt + SESSION_ABSOLUTE_SECONDS) * 1000).toISOString();
+  const lastActivity = typeof session.lastActivityAt === "number" ? session.lastActivityAt : now;
   const idleExpiry =
     typeof rollingMaxAge === "number"
       ? now + Math.min(rollingMaxAge, session.createdAt + SESSION_ABSOLUTE_SECONDS - now)
-      : Math.min(now + SESSION_IDLE_SECONDS, session.createdAt + SESSION_ABSOLUTE_SECONDS);
+      : Math.min(lastActivity + SESSION_IDLE_SECONDS, session.createdAt + SESSION_ABSOLUTE_SECONDS);
   return {
     authenticated: true,
     user,
@@ -144,10 +145,31 @@ export async function startInteractiveLogin(options: {
   });
 }
 
+/**
+ * Process-local single-use guard for callback `state` values. Complements the
+ * HttpOnly transaction cookie clear so a replayed ciphertext/state cannot reuse
+ * an already-consumed login transaction in this process.
+ */
+const consumedCallbackStates = new Set<string>();
+const MAX_CONSUMED_STATES = 1_000;
+
+function markCallbackStateConsumed(state: string): void {
+  if (consumedCallbackStates.has(state)) return;
+  if (consumedCallbackStates.size >= MAX_CONSUMED_STATES) {
+    const oldest = consumedCallbackStates.values().next();
+    if (!oldest.done) consumedCallbackStates.delete(oldest.value);
+  }
+  consumedCallbackStates.add(state);
+}
+
+export function __resetConsumedCallbackStatesForTests(): void {
+  consumedCallbackStates.clear();
+}
+
 export type CallbackOutcome =
   | { kind: "success"; returnTo: string; setCookies: string[]; session: OidcSessionPayload }
   | { kind: "unauthorized"; setCookies: string[] }
-  | { kind: "internal" };
+  | { kind: "internal"; setCookies: string[] };
 
 /**
  * Completes the OIDC callback. Never trusts provider error details in responses.
@@ -169,9 +191,11 @@ export async function completeOidcCallback(
   // Always clear the consumed transaction cookie.
   const clearTxn = buildTransactionClearCookie(request, config, state);
 
-  if (!transaction) {
+  if (!transaction || consumedCallbackStates.has(state)) {
+    if (transaction) markCallbackStateConsumed(state);
     return { kind: "unauthorized", setCookies: clearTxn };
   }
+  markCallbackStateConsumed(state);
 
   if (providerError) {
     const denial =
@@ -183,7 +207,7 @@ export async function completeOidcCallback(
     if (denial) {
       return { kind: "unauthorized", setCookies: clearTxn };
     }
-    return { kind: "internal" };
+    return { kind: "internal", setCookies: clearTxn };
   }
 
   if (!code) {
@@ -202,7 +226,7 @@ export async function completeOidcCallback(
       tokens,
       transaction.nonce
     );
-    const sessionCookies = await buildSessionSetCookies(session, config);
+    const sessionCookies = await buildSessionSetCookies(session, config, { request });
     return {
       kind: "success",
       returnTo: transaction.returnTo,
@@ -214,12 +238,12 @@ export async function completeOidcCallback(
       return { kind: "unauthorized", setCookies: clearTxn };
     }
     if (error instanceof ProviderUnavailableError) {
-      return { kind: "internal" };
+      return { kind: "internal", setCookies: clearTxn };
     }
     const kind = classifyOidcFailure(error);
     return kind === "unauthorized"
       ? { kind: "unauthorized", setCookies: clearTxn }
-      : { kind: "internal" };
+      : { kind: "internal", setCookies: clearTxn };
   }
 }
 
@@ -248,9 +272,10 @@ export async function getSession(
  * compatible with the existing BFF classifier.
  */
 export async function getAccessToken(
-  request: NextRequest
+  request: NextRequest,
+  explicitConfig?: AuthConfig
 ): Promise<{ token: string; setCookies: string[] }> {
-  const config = requireAuthingConfig();
+  const config = explicitConfig ?? requireAuthingConfig();
   const session = await readSession(request, config);
   if (!session) {
     const error = hasSessionCookie(request, config)
@@ -280,9 +305,10 @@ export async function getAccessToken(
       ...session,
       accessToken: tokens.access_token,
       accessTokenExpiresAt: now + expiresIn,
+      lastActivityAt: now,
       ...(tokens.refresh_token ? { refreshToken: tokens.refresh_token } : {})
     };
-    const setCookies = await buildSessionSetCookies(updated, config);
+    const setCookies = await buildSessionSetCookies(updated, config, { request });
     return { token: updated.accessToken, setCookies };
   } catch (error) {
     if (error instanceof AuthenticationRejectedError) {

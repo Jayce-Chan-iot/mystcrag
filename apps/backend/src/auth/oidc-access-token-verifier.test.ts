@@ -341,3 +341,38 @@ test("a jwks request timeout fails closed", async () => {
 
   await assert.rejects(verifier.verifyAccessToken(token), ProviderUnavailableError);
 });
+
+
+test("a token with a future nbf claim is rejected", async () => {
+  const harness = await createHarness();
+  const nowEpoch = 1_700_000_000;
+  const token = await keyA.mint({
+    iss: ISSUER,
+    aud: AUDIENCE,
+    sub: "authing|nbf-user",
+    exp: nowEpoch + 900,
+    nbf: nowEpoch + 3600
+  });
+  await assert.rejects(
+    () => harness.verifier.verifyAccessToken(token),
+    (error: unknown) => error instanceof CredentialRejectedError
+  );
+});
+
+test("a non-RS256 foreign algorithm token is rejected as algorithm/malformed", async () => {
+  const harness = await createHarness();
+  const { SignJWT, generateSecret } = await import("jose");
+  const secret = await generateSecret("HS256", { extractable: true });
+  const token = await new SignJWT({
+    iss: ISSUER,
+    aud: AUDIENCE,
+    sub: "authing|hs-user",
+    exp: 1_700_000_900
+  })
+    .setProtectedHeader({ alg: "HS256", kid: "oidc-key-a" })
+    .sign(secret);
+  await assert.rejects(
+    () => harness.verifier.verifyAccessToken(token),
+    (error: unknown) => error instanceof CredentialRejectedError
+  );
+});

@@ -61,7 +61,7 @@ test("valid authing production configuration is accepted", () => {
   const config = resolveAuthConfig(validAuthingConfig);
   assert.equal(config.appOrigin, "https://mystcrag.com");
   assert.equal(config.authProvider, "authing");
-  assert.equal(config.authIssuer, "https://mystcrag-pool.authing.cn/oidc/");
+  assert.equal(config.authIssuer, validAuthingConfig.MYSTCRAG_AUTH_ISSUER);
   assert.equal(config.authCallbackUrl, "https://mystcrag.com/auth/callback");
   assert.equal(config.authLogoutUrl, "https://mystcrag.com");
   assert.equal(config.backendOrigin, "https://api.mystcrag.com");
@@ -150,12 +150,12 @@ test("issuer must be HTTPS", () => {
   );
 });
 
-test("issuer accepts Authing /oidc with or without trailing slash and normalizes it", () => {
+test("issuer accepts Authing /oidc with or without trailing slash and keeps the exact value", () => {
   const withoutSlash = resolveAuthConfig({
     ...validAuthingConfig,
     MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidc"
   });
-  assert.equal(withoutSlash.authIssuer, "https://mystcrag-pool.authing.cn/oidc/");
+  assert.equal(withoutSlash.authIssuer, "https://mystcrag-pool.authing.cn/oidc");
   const withSlash = resolveAuthConfig({
     ...validAuthingConfig,
     MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidc/"

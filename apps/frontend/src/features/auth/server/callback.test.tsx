@@ -133,7 +133,7 @@ test("success path validates state, exchanges the code, sets session cookies and
     const location = response.headers.get("location")!;
     assert.ok(location.startsWith("https://app.mystcrag.com/tarot/setup"));
     assert.ok(location.includes("theme=love"));
-    assert.ok(location.includes("#step") || location.includes("%23") || true);
+    assert.ok(location.includes("theme=love"));
     const setCookies = response.headers.getSetCookie();
     assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session=") || c.startsWith("mystcrag_session=")));
     assert.ok(setCookies.some((c) => c.startsWith("__txn_state-ok=;")));
@@ -143,7 +143,7 @@ test("success path validates state, exchanges the code, sets session cookies and
   }
 });
 
-test("completeOidcCallback classifies discovery outage as internal", async () => {
+test("completeOidcCallback classifies discovery outage as internal and clears txn", async () => {
   const config = cfg();
   const transaction: LoginTransactionPayload = {
     state: "state-outage",

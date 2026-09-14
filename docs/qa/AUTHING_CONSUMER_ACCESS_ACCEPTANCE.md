@@ -20,12 +20,19 @@ This record contains no client secret, session secret, cookie, token, raw subjec
 | Production provider selector `authing` | VERIFIED |
 | `auth0` runtime provider removed (startup rejects) | VERIFIED |
 | `signed-test` development/test gate unchanged | VERIFIED |
-| Issuer allows Authing `/oidc` with optional trailing slash | VERIFIED |
+| Issuer allows Authing `/oidc`; configured string is exact (no slash rewrite) | VERIFIED |
 | Issuer rejects HTTP/loopback/wildcard/credentials/query/hash/IP | VERIFIED |
 | Discovery supplies `jwks_uri` + `end_session_endpoint` | VERIFIED (synthetic) |
 | Backend OIDC RS256 verifier + JWKS cache/outage/rotation | VERIFIED (unit) |
 | Frontend encrypted Cookie Session (JWE, HttpOnly, host-only) | VERIFIED (unit) |
 | Idle 8h / absolute 7d / rolling cap | VERIFIED (unit) |
+| Server-side idle expiry inside authenticated JWE payload | VERIFIED (unit) |
+| Explicit bounded session chunk protocol (`__meta` count) | VERIFIED (unit) |
+| Token endpoint `client_secret_post` (no Basic) | VERIFIED (unit) |
+| Outbound OIDC 5s timeouts | VERIFIED (unit) |
+| Callback transaction cleared on 401 and 500 | VERIFIED (unit) |
+| Discovery same-origin + trusted Authing host + no redirects | VERIFIED (unit) |
+| Exact issuer string (no trailing-slash rewrite) | VERIFIED (unit) |
 | `/auth/session` projection excludes tokens | VERIFIED (unit) |
 | Logout GET 405 / POST Origin / clear cookies / 303 end_session | VERIFIED (unit) |
 | BFF Bearer only server-side | VERIFIED (unit) |
@@ -78,6 +85,7 @@ When a tenant owner provides access, record only:
 10. Token algorithm RS256
 11. Access Token TTL minutes (≤ 15)
 12. Refresh Token policy
+13. Token endpoint authentication method = `client_secret_post` (must match BFF)
 
 Never request or record client secret / session secret in chat.
 

@@ -26,8 +26,53 @@ function invalidIssuer(detail: string): Error {
  * Trailing slash is optional. Query, fragment, credentials, wildcard, IP and
  * loopback hosts are rejected.
  */
+const DEFAULT_AUTHING_HOST_SUFFIXES = [".authing.cn", ".authing.co"];
+
+function looksLikeIpv4(host: string): boolean {
+  const parts = host.split(".");
+  if (parts.length !== 4) return false;
+  return parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+}
+
+function isPrivateOrReservedHostname(hostname: string): boolean {
+  const bare = (hostname.endsWith(".") ? hostname.slice(0, -1) : hostname).toLowerCase();
+  if (bare === "localhost" || bare.endsWith(".localhost")) return true;
+  if (bare.endsWith(".local") || bare.endsWith(".internal")) return true;
+  if (looksLikeIpv4(bare)) {
+    const a = Number(bare.split(".")[0]);
+    const b = Number(bare.split(".")[1]);
+    if (a === 0 || a === 127 || a === 10) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 169 && b === 254) return true;
+    if (a >= 224) return true;
+    return false;
+  }
+  if (bare.includes(":")) return true;
+  return false;
+}
+
+function parseIssuerHostAllowlist(environment: AuthEnvironment): string[] {
+  const raw = environment.MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST?.trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0);
+}
+
+function isTrustedAuthingHost(hostname: string, allowlist: readonly string[]): boolean {
+  if (isPrivateOrReservedHostname(hostname)) return false;
+  const lower = hostname.toLowerCase();
+  if (allowlist.length === 0) {
+    return DEFAULT_AUTHING_HOST_SUFFIXES.some((suffix) => lower.endsWith(suffix));
+  }
+  return allowlist.some((entry) => lower === entry || lower.endsWith(`.${entry}`));
+}
+
 function requireCanonicalOidcIssuer(environment: AuthEnvironment): string {
   const raw = requireConfiguration(environment, "MYSTCRAG_AUTH_ISSUER");
+  // The configured issuer is the exact JWT `iss` authority. Never rewrite slashes.
 
   if (!/^https:\/\/[^\s]+$/.test(raw)) {
     throw invalidIssuer("it must be an HTTPS URL with no whitespace");
@@ -57,6 +102,11 @@ function requireCanonicalOidcIssuer(environment: AuthEnvironment): string {
   if (bareHostname === "localhost" || bareHostname === "localhost.") {
     throw invalidIssuer("loopback hosts are not accepted as OIDC issuers");
   }
+  if (!isTrustedAuthingHost(bareHostname, parseIssuerHostAllowlist(environment))) {
+    throw invalidIssuer(
+      "the issuer host must be a trusted Authing domain (*.authing.cn) or listed in MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST"
+    );
+  }
   if (issuer.username !== "" || issuer.password !== "") {
     throw invalidIssuer("credentials in the issuer URL are not allowed");
   }
@@ -70,7 +120,7 @@ function requireCanonicalOidcIssuer(environment: AuthEnvironment): string {
   if (path !== "/" && path !== "/oidc") {
     throw invalidIssuer("the only allowed issuer paths are '/' and '/oidc'");
   }
-  return raw.endsWith("/") ? raw : `${raw}/`;
+  return raw;
 }
 
 /**
@@ -81,7 +131,10 @@ function requireCanonicalOidcIssuer(environment: AuthEnvironment): string {
 function createOidcVerifier(environment: AuthEnvironment): AccessTokenVerifier {
   const issuer = requireCanonicalOidcIssuer(environment);
   const audience = requireConfiguration(environment, "MYSTCRAG_AUTH_AUDIENCE");
-  const discovery = new OidcDiscoverySource({ issuer });
+  const discovery = new OidcDiscoverySource({
+    issuer,
+    hostAllowlist: parseIssuerHostAllowlist(environment)
+  });
   let keySource: JwksKeySource | null = null;
   return new OidcAccessTokenVerifier({
     issuer,

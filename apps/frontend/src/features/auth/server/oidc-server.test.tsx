@@ -48,6 +48,7 @@ function sessionPayload(overrides: Partial<OidcSessionPayload> = {}): OidcSessio
     accessTokenExpiresAt: Math.floor(Date.now() / 1000) + 900,
     refreshToken: "server-only-refresh-token",
     createdAt: Math.floor(Date.now() / 1000),
+    lastActivityAt: Math.floor(Date.now() / 1000),
     ...overrides
   };
 }

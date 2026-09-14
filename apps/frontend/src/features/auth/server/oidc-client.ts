@@ -1,8 +1,10 @@
 /**
  * Standard OIDC Authorization Code + PKCE (S256) client for Authing.
  *
- * Uses discovery endpoints only. Tokens stay server-side. Never uses client
- * secret to verify Access Tokens (RS256 + JWKS only).
+ * - Token endpoint auth: client_secret_post (body client_id/client_secret, no Basic).
+ * - Discovery endpoints only; all outbound calls are bounded (5s total).
+ * - Tokens stay server-side. Access Tokens are never verified with client secret.
+ * - Issuer is compared exactly (no trailing-slash mutation).
  */
 
 import { createLocalJWKSet, jwtVerify, type JWK } from "jose";
@@ -10,8 +12,10 @@ import { createLocalJWKSet, jwtVerify, type JWK } from "jose";
 import type { AuthConfig } from "../model/auth-config";
 import { getOidcDiscoverySource, type OidcDiscoveryDocument } from "./oidc-discovery";
 import { AuthenticationRejectedError, ProviderUnavailableError } from "./oidc-errors";
-import { generateNonce, generatePkcePair, generateState, sha256Base64Url } from "./oidc-session-crypto";
+import { generateNonce, generatePkcePair, generateState } from "./oidc-session-crypto";
 import type { OidcSessionPayload, OidcSessionUser } from "./oidc-session-store";
+
+const OIDC_TOTAL_TIMEOUT_MS = 5_000;
 
 export type AuthorizeRequest = {
   readonly returnTo: string;
@@ -50,7 +54,6 @@ export function buildAuthorizeUrl(
   url.searchParams.set("code_challenge", request.codeChallenge);
   url.searchParams.set("code_challenge_method", "S256");
   if (config.authAudience) {
-    // Authing API audience is optional per application; omit when empty.
     url.searchParams.set("audience", config.authAudience);
   }
   return url.toString();
@@ -62,8 +65,6 @@ export function buildEndSessionUrl(
 ): string {
   const endpoint = document.end_session_endpoint;
   if (!endpoint) {
-    // Fall back to same-origin app logout destination when the pool does not
-    // advertise RP-initiated logout; local cookies are already cleared by the caller.
     return config.authLogoutUrl;
   }
   const url = new URL(endpoint);
@@ -72,28 +73,60 @@ export function buildEndSessionUrl(
   return url.toString();
 }
 
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = OIDC_TOTAL_TIMEOUT_MS
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref?.();
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+      redirect: "manual",
+      cache: "no-store"
+    });
+  } catch (error) {
+    if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) {
+      throw new ProviderUnavailableError("OIDC request exceeded the total timeout", { cause: error });
+    }
+    throw new ProviderUnavailableError("OIDC request failed", { cause: error });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function postToken(
   tokenEndpoint: string,
   body: URLSearchParams,
   clientId: string,
   clientSecret: string
 ): Promise<TokenEndpointSuccess> {
-  const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+  // Authing default confidential-client method is client_secret_post.
+  body.set("client_id", clientId);
+  body.set("client_secret", clientSecret);
+
   let response: Response;
   try {
-    response = await fetch(tokenEndpoint, {
+    response = await fetchWithTimeout(tokenEndpoint, {
       method: "POST",
       headers: {
         "content-type": "application/x-www-form-urlencoded",
-        authorization: `Basic ${credentials}`,
         accept: "application/json"
       },
-      body,
-      cache: "no-store"
+      body
     });
   } catch (error) {
+    if (error instanceof ProviderUnavailableError) throw error;
     throw new ProviderUnavailableError("OIDC token endpoint is unreachable", { cause: error });
   }
+
+  if (response.status >= 300 && response.status < 400) {
+    throw new ProviderUnavailableError("OIDC token endpoint redirects are not followed");
+  }
+
   let payload: unknown;
   try {
     payload = await response.json();
@@ -151,19 +184,26 @@ export async function validateIdToken(
   expectedNonce: string
 ): Promise<OidcSessionUser> {
   let jwksBody: unknown;
+  let response: Response;
   try {
-    const response = await fetch(document.jwks_uri, {
+    response = await fetchWithTimeout(document.jwks_uri, {
       method: "GET",
-      headers: { accept: "application/json" },
-      cache: "no-store"
+      headers: { accept: "application/json" }
     });
-    if (!response.ok) {
-      throw new ProviderUnavailableError(`OIDC JWKS status ${response.status}`);
-    }
-    jwksBody = await response.json();
   } catch (error) {
     if (error instanceof ProviderUnavailableError) throw error;
     throw new ProviderUnavailableError("OIDC JWKS request failed", { cause: error });
+  }
+  if (response.status >= 300 && response.status < 400) {
+    throw new ProviderUnavailableError("OIDC JWKS redirects are not followed");
+  }
+  if (!response.ok) {
+    throw new ProviderUnavailableError(`OIDC JWKS status ${response.status}`);
+  }
+  try {
+    jwksBody = await response.json();
+  } catch (error) {
+    throw new ProviderUnavailableError("OIDC JWKS returned a non-JSON body", { cause: error });
   }
   const keys = (jwksBody as { keys?: unknown }).keys;
   if (!Array.isArray(keys) || keys.length === 0) {
@@ -173,6 +213,7 @@ export async function validateIdToken(
   let payload: Record<string, unknown>;
   try {
     const verified = await jwtVerify(idToken, createLocalJWKSet({ keys: keys as JWK[] }), {
+      // Exact configured/discovery issuer — no trailing-slash mutation.
       issuer: document.issuer,
       audience: config.authClientId,
       algorithms: ["RS256"],
@@ -193,7 +234,7 @@ export async function validateIdToken(
     throw new AuthenticationRejectedError("id_token_invalid");
   }
 
-  const user: OidcSessionUser = {
+  return {
     ...(typeof payload.name === "string" && payload.name.trim()
       ? { name: payload.name.trim() }
       : {}),
@@ -204,7 +245,6 @@ export async function validateIdToken(
       ? { email_verified: payload.email_verified }
       : {})
   };
-  return user;
 }
 
 export async function createSessionFromTokenResponse(
@@ -218,7 +258,6 @@ export async function createSessionFromTokenResponse(
   }
   const user = await validateIdToken(document, config, tokens.id_token, expectedNonce);
   const now = Math.floor(Date.now() / 1000);
-  // Access Token target lifetime ≤ 15 minutes; honor a shorter provider expires_in.
   const expiresIn = typeof tokens.expires_in === "number" && tokens.expires_in > 0
     ? Math.min(tokens.expires_in, 900)
     : 900;
@@ -228,7 +267,8 @@ export async function createSessionFromTokenResponse(
     accessTokenExpiresAt: now + expiresIn,
     ...(tokens.refresh_token ? { refreshToken: tokens.refresh_token } : {}),
     ...(tokens.id_token ? { idToken: tokens.id_token } : {}),
-    createdAt: now
+    createdAt: now,
+    lastActivityAt: now
   };
 }
 
@@ -266,5 +306,3 @@ export async function beginLoginTransaction(
     }
   };
 }
-
-export { sha256Base64Url };

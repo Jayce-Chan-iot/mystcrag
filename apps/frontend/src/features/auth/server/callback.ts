@@ -67,7 +67,11 @@ export async function handleCallback(request: NextRequest, deps: CallbackDeps): 
       requestId,
       outcome: "failure"
     });
-    return errorResponse("internal", requestId);
+    const response = errorResponse("internal", requestId);
+    for (const cookie of outcome.setCookies) {
+      response.headers.append("Set-Cookie", cookie);
+    }
+    return response;
   }
 
   const location = new URL(outcome.returnTo, config.appOrigin).toString();

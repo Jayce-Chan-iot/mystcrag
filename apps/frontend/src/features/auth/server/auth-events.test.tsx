@@ -586,7 +586,8 @@ test("session endpoint actually-produced rolling Set-Cookie logs auth.session_ro
     user: { name: "User", email: "user@example.com", email_verified: true },
     accessToken: "t",
     accessTokenExpiresAt: Math.floor(Date.now() / 1000) + 900,
-    createdAt: Math.floor(Date.now() / 1000)
+    createdAt: Math.floor(Date.now() / 1000),
+    lastActivityAt: Math.floor(Date.now() / 1000)
   };
   const deps: SessionDeps = {
     getConfig: () => makeConfig(),
