@@ -30,7 +30,9 @@ test("UNAUTHORIZED renders the auth-required dialog and not an onAction retry bu
   assert.match(markup, /data-auth-required-dialog="true"/);
   assert.match(markup, new RegExp(AUTH_REQUIRED_COPY.title));
   assert.match(markup, new RegExp(AUTH_REQUIRED_COPY.secondaryAction.replace("/", "\\/")));
-  assert.match(markup, /登录 \/ 注册/);
+  // SSR starts in checking mode until the shared session snapshot resolves.
+  assert.match(markup, /正在检查登录方式/);
+  assert.match(markup, /aria-disabled="true"/);
 
   assert.doesNotMatch(markup, /data-error-code="UNAUTHORIZED"/);
   assert.doesNotMatch(markup, /onClick/);
@@ -112,7 +114,11 @@ test("AuthRequiredDialog source accepts returnFocusRef and prefers it on dismiss
 
 test("returnTo, focus trap, Escape and approved copy remain intact on the dialog", () => {
   const markup = renderToStaticMarkup(
-    <AuthRequiredDialog loginHref="/auth/login?returnTo=%2Ftarot%2Fsetup" onDismiss={() => undefined} />
+    <AuthRequiredDialog
+      loginHref="/auth/login?returnTo=%2Ftarot%2Fsetup"
+      initialPromptMode="auth0"
+      onDismiss={() => undefined}
+    />
   );
   assert.equal((markup.match(/role="dialog"/g) ?? []).length, 1);
   assert.match(markup, /aria-modal="true"/);
@@ -130,4 +136,11 @@ test("non-auth FlowNotice codes still render inline notices with onAction", () =
   assert.match(markup, /data-error-code="NETWORK_ERROR"/);
   assert.doesNotMatch(markup, /data-auth-required-dialog/);
   assert.equal(actionCalls, 0, "rendering must not invoke onAction");
+});
+
+test("neither FlowNotice nor the dialog navigates back or reloads on dismiss", () => {
+  const flowSource = readFileSync(new URL("../../../components/flow-notice.tsx", import.meta.url), "utf8");
+  const dialogSource = readFileSync(new URL("./auth-required-dialog.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(flowSource, /router\.back|history\.back|location\.reload/);
+  assert.doesNotMatch(dialogSource, /router\.back|history\.back|location\.reload/);
 });

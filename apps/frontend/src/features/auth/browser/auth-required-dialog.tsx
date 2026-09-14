@@ -4,6 +4,7 @@ import Link from "next/link";
 import * as React from "react";
 
 import { buildLoginHref } from "../model/auth-actions";
+import { fetchSessionSnapshot, resolveAuthPromptMode } from "./session-client";
 
 /**
  * Approved user-facing copy for the authentication-required dialog. Owned here so the
@@ -16,6 +17,19 @@ export const AUTH_REQUIRED_COPY = {
   primaryAction: "登录 / 注册",
   secondaryAction: "暂不登录"
 } as const;
+
+/**
+ * Approved copy for a stale desktop demo identity. The browser may only show launcher
+ * restart guidance — never an Auth0 login link, reload, or secret-bearing recovery.
+ */
+export const DESKTOP_RECOVERY_COPY = {
+  title: "本地演示身份需要刷新",
+  message: "请保持此页面打开，重新运行桌面的玄矶系统启动脚本。服务重新启动后，再次执行刚才的操作。",
+  primaryAction: "我知道了",
+  secondaryAction: "暂不处理"
+} as const;
+
+export type AuthPromptMode = "checking" | "auth0" | "desktop-recovery";
 
 /**
  * Escape is the only keyboard dismissal; every other key is ignored by the dialog.
@@ -94,23 +108,41 @@ export function dismissDialog(close: () => void, restoreFrom: unknown, onDismiss
 export function AuthRequiredDialog({
   onDismiss,
   loginHref,
-  returnFocusRef
+  returnFocusRef,
+  initialPromptMode
 }: {
   onDismiss?: () => void;
   loginHref?: string;
   returnFocusRef?: React.RefObject<HTMLElement | null>;
+  /**
+   * Deterministic render/testing input only. Production callers omit this prop so the
+   * dialog resolves mode from `/auth/session` after mount.
+   */
+  initialPromptMode?: AuthPromptMode;
 }) {
   const [open, setOpen] = React.useState(true);
+  const [promptMode, setPromptMode] = React.useState<AuthPromptMode>(
+    initialPromptMode ?? "checking"
+  );
   const titleId = React.useId();
   const descriptionId = React.useId();
   const containerRef = React.useRef<HTMLDivElement>(null);
-  const primaryRef = React.useRef<HTMLAnchorElement>(null);
+  const primaryRef = React.useRef<HTMLElement | null>(null);
   const previouslyFocusedRef = React.useRef<HTMLElement | null>(null);
 
   // Two-phase login href: the SSR and first client render share the fixed server-safe
   // default (no hydration mismatch); only after mount do we reflect the real location.
   const [clientHref, setClientHref] = React.useState<string | null>(null);
   const href = initialLoginHref(loginHref ?? clientHref ?? undefined);
+
+  // One callback ref for whichever primary control the resolved mode renders
+  // (checking button, auth0 Link, or desktop-recovery button). Attaching focuses it.
+  const setPrimaryNode = React.useCallback((node: HTMLElement | null) => {
+    primaryRef.current = node;
+    if (node) {
+      node.focus();
+    }
+  }, []);
 
   // Capture the element that had focus before the dialog opened and move focus to the
   // primary action. Focus is restored explicitly on dismissal (see `dismiss`) and again
@@ -134,6 +166,28 @@ export function AuthRequiredDialog({
       setClientHref(buildLoginHref(window.location));
     }
   }, [loginHref]);
+
+  // Resolve Auth0 vs desktop-recovery from the shared session snapshot. A session-check
+  // failure falls back to Auth0, where `/auth/login` keeps server-side fail-closed config.
+  React.useEffect(() => {
+    if (initialPromptMode !== undefined) return;
+    let active = true;
+    fetchSessionSnapshot()
+      .then((snapshot) => {
+        if (active) setPromptMode(resolveAuthPromptMode(snapshot));
+      })
+      .catch(() => {
+        if (active) setPromptMode("auth0");
+      });
+    return () => {
+      active = false;
+    };
+  }, [initialPromptMode]);
+
+  // When the resolved mode swaps the primary control, re-focus the new node.
+  React.useEffect(() => {
+    primaryRef.current?.focus();
+  }, [promptMode]);
 
   const dismiss = React.useCallback(() => {
     // Reads the trigger element lazily at dismissal time (never during render) and runs
@@ -165,10 +219,22 @@ export function AuthRequiredDialog({
     focusables[nextTabIndex(event.key, event.shiftKey, base, focusables.length)]?.focus();
   };
 
+  const isDesktopRecovery = promptMode === "desktop-recovery";
+  const title = isDesktopRecovery ? DESKTOP_RECOVERY_COPY.title : AUTH_REQUIRED_COPY.title;
+  const message = isDesktopRecovery
+    ? DESKTOP_RECOVERY_COPY.message
+    : promptMode === "checking"
+      ? "正在检查登录方式…"
+      : AUTH_REQUIRED_COPY.message;
+  const secondaryLabel = isDesktopRecovery
+    ? DESKTOP_RECOVERY_COPY.secondaryAction
+    : AUTH_REQUIRED_COPY.secondaryAction;
+
   return (
     <div
       className="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4"
       data-auth-required-dialog="true"
+      data-auth-prompt-mode={promptMode}
       onClick={(event) => {
         if (event.target === event.currentTarget) dismiss();
       }}
@@ -183,10 +249,10 @@ export function AuthRequiredDialog({
         className="w-full max-w-sm rounded-2xl border border-[var(--border)] bg-white p-6"
       >
         <h2 id={titleId} className="text-base font-medium text-[var(--foreground)]">
-          {AUTH_REQUIRED_COPY.title}
+          {title}
         </h2>
         <p id={descriptionId} className="mt-2 text-sm leading-6 text-[var(--muted)]">
-          {AUTH_REQUIRED_COPY.message}
+          {message}
         </p>
         <div className="mt-6 flex flex-col gap-2 sm:flex-row">
           <button
@@ -195,16 +261,41 @@ export function AuthRequiredDialog({
             type="button"
             data-auth-required-secondary="true"
           >
-            {AUTH_REQUIRED_COPY.secondaryAction}
+            {secondaryLabel}
           </button>
-          <Link
-            ref={primaryRef}
-            className="inline-flex min-h-11 flex-1 items-center justify-center rounded-xl bg-[var(--accent-deep)] px-4 text-sm font-medium text-white"
-            href={href}
-            data-auth-required-primary="true"
-          >
-            {AUTH_REQUIRED_COPY.primaryAction}
-          </Link>
+          {promptMode === "checking" ? (
+            <button
+              ref={setPrimaryNode}
+              className="inline-flex min-h-11 flex-1 items-center justify-center rounded-xl bg-[var(--accent-deep)] px-4 text-sm font-medium text-white"
+              type="button"
+              aria-disabled="true"
+              data-auth-required-primary="true"
+              data-auth-primary-state="checking"
+            >
+              {AUTH_REQUIRED_COPY.primaryAction}
+            </button>
+          ) : promptMode === "desktop-recovery" ? (
+            <button
+              ref={setPrimaryNode}
+              className="inline-flex min-h-11 flex-1 items-center justify-center rounded-xl bg-[var(--accent-deep)] px-4 text-sm font-medium text-white"
+              onClick={dismiss}
+              type="button"
+              data-auth-required-primary="true"
+              data-auth-primary-state="desktop-recovery"
+            >
+              {DESKTOP_RECOVERY_COPY.primaryAction}
+            </button>
+          ) : (
+            <Link
+              ref={setPrimaryNode as React.Ref<HTMLAnchorElement>}
+              className="inline-flex min-h-11 flex-1 items-center justify-center rounded-xl bg-[var(--accent-deep)] px-4 text-sm font-medium text-white"
+              href={href}
+              data-auth-required-primary="true"
+              data-auth-primary-state="auth0"
+            >
+              {AUTH_REQUIRED_COPY.primaryAction}
+            </Link>
+          )}
         </div>
       </div>
     </div>

@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   AUTH_REQUIRED_COPY,
   AuthRequiredDialog,
+  DESKTOP_RECOVERY_COPY,
   dismissDialog,
   initialLoginHref,
   isDialogDismissKey,
@@ -36,7 +37,11 @@ test("focus trap wraps forward and backward without escaping", () => {
 
 test("dialog renders one accessible, labelled dialog with approved copy and 44px actions", () => {
   const markup = renderToStaticMarkup(
-    <AuthRequiredDialog loginHref="/auth/login?returnTo=%2Fdiy%2Fabc" onDismiss={noop} />
+    <AuthRequiredDialog
+      loginHref="/auth/login?returnTo=%2Fdiy%2Fabc"
+      initialPromptMode="auth0"
+      onDismiss={noop}
+    />
   );
 
   assert.equal((markup.match(/role="dialog"/g) ?? []).length, 1);
@@ -156,7 +161,7 @@ test("initial login href is the fixed server-safe default when no prop is suppli
 });
 
 test("default dialog SSRs the fixed server-safe href so hydration cannot mismatch", () => {
-  const markup = renderToStaticMarkup(<AuthRequiredDialog onDismiss={noop} />);
+  const markup = renderToStaticMarkup(<AuthRequiredDialog initialPromptMode="auth0" onDismiss={noop} />);
   assert.ok(markup.includes(`href="${SERVER_SAFE_LOGIN_HREF}"`), markup);
   assert.ok(!markup.includes("buildLoginHref"), "no window-derived href may leak into SSR output");
 });
@@ -187,4 +192,52 @@ test("session-client source never classifies desktop mode from displayName or se
   assert.match(source, /export async function fetchSessionSnapshot/);
   assert.match(source, /export type SessionState/);
   assert.match(source, /export type SessionSnapshot/);
+});
+
+// --- Mode-aware auth-required dialog (TASK-AUTH-010 Task 2) ---
+
+test("desktop recovery copy is the exact approved wording", () => {
+  assert.equal(DESKTOP_RECOVERY_COPY.title, "本地演示身份需要刷新");
+  assert.equal(
+    DESKTOP_RECOVERY_COPY.message,
+    "请保持此页面打开，重新运行桌面的玄矶系统启动脚本。服务重新启动后，再次执行刚才的操作。"
+  );
+  assert.equal(DESKTOP_RECOVERY_COPY.primaryAction, "我知道了");
+  assert.equal(DESKTOP_RECOVERY_COPY.secondaryAction, "暂不处理");
+});
+
+test("checking mode shows a focusable disabled primary and no login link", () => {
+  const markup = renderToStaticMarkup(<AuthRequiredDialog onDismiss={noop} />);
+  assert.match(markup, /data-auth-required-dialog="true"/);
+  assert.match(markup, /登录后继续/);
+  assert.match(markup, /正在检查登录方式/);
+  assert.match(markup, /aria-disabled="true"/);
+  assert.match(markup, /min-h-11/);
+  assert.doesNotMatch(markup, /href="\/auth\/login/);
+  assert.doesNotMatch(markup, /本地演示身份需要刷新/);
+});
+
+test("desktop-recovery mode renders recovery copy with no Auth0 login link", () => {
+  const markup = renderToStaticMarkup(
+    <AuthRequiredDialog initialPromptMode="desktop-recovery" onDismiss={noop} />
+  );
+  assert.match(markup, /本地演示身份需要刷新/);
+  assert.match(markup, /请保持此页面打开，重新运行桌面的玄矶系统启动脚本。服务重新启动后，再次执行刚才的操作。/);
+  assert.match(markup, /我知道了/);
+  assert.match(markup, /暂不处理/);
+  assert.match(markup, /min-h-11/);
+  assert.doesNotMatch(markup, /href="\/auth\/login/);
+  assert.doesNotMatch(markup, /登录 \/ 注册/);
+  assert.doesNotMatch(markup, /Bearer/i);
+  assert.doesNotMatch(markup, /access_token|desktop-secret|issuer|subject/i);
+});
+
+test("dialog source resolves session mode, never reloads or navigates back", () => {
+  const source = readFileSync(new URL("./auth-required-dialog.tsx", import.meta.url), "utf8");
+  assert.match(source, /fetchSessionSnapshot\(\)/);
+  assert.match(source, /resolveAuthPromptMode\(/);
+  assert.match(source, /promptMode === "desktop-recovery"/);
+  assert.match(source, /export type AuthPromptMode/);
+  assert.doesNotMatch(source, /router\.back|history\.back|location\.reload/);
+  assert.doesNotMatch(source, /displayName\s*===/);
 });
