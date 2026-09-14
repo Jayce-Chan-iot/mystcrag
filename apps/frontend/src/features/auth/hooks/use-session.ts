@@ -4,46 +4,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { buildLoginHref, buildReturnTo, type BrowserLocation } from "../model/auth-actions";
 import { submitLogoutForm } from "../browser/logout-form";
 import {
+  fetchSessionSnapshot,
+  type SessionSnapshot,
+  type SessionState
+} from "../browser/session-client";
+import {
   INITIAL_SESSION_STATUS,
-  classifySessionResponse,
   reduceSessionStatus,
   type SessionStatus
 } from "../model/session-status";
 
-export type { SessionStatus };
-
-export type SessionState = {
-  authenticated: boolean;
-  user?: {
-    displayName?: string;
-    email?: string;
-    emailVerified?: boolean;
-  };
-  /**
-   * Server capability signal. `false` (desktop demo) means the UI must not offer a
-   * logout control; absent/true keeps the interactive "退出" action.
-   */
-  logoutAvailable?: boolean;
-  idleExpiresAt?: string;
-  absoluteExpiresAt?: string;
-};
-
-async function fetchSessionData(): Promise<{ status: SessionStatus; session: SessionState | null }> {
-  const response = await fetch("/auth/session", {
-    cache: "no-store",
-    credentials: "same-origin"
-  });
-
-  if (!response.ok) {
-    throw new Error(`Session request failed: ${response.status}`);
-  }
-
-  const data: SessionState = await response.json();
-  return {
-    status: classifySessionResponse(data),
-    session: data
-  };
-}
+export type { SessionSnapshot, SessionState, SessionStatus };
 
 /**
  * The returnTo value for login navigations: the current location exactly as the user
@@ -65,7 +36,7 @@ export function useSession() {
     mountedRef.current = true;
     let cancelled = false;
 
-    fetchSessionData().then((result) => {
+    fetchSessionSnapshot().then((result: SessionSnapshot) => {
       if (!cancelled && mountedRef.current) {
         setStatus(result.status);
         setSession(result.session);
@@ -110,7 +81,7 @@ export function useSession() {
   const refresh = useCallback(async () => {
     try {
       setStatus((current) => reduceSessionStatus(current, { type: "reset" }));
-      const result = await fetchSessionData();
+      const result = await fetchSessionSnapshot();
       if (mountedRef.current) {
         setStatus(result.status);
         setSession(result.session);

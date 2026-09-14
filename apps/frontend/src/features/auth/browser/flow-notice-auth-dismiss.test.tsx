@@ -1,9 +1,11 @@
 /**
  * FlowNotice authentication-dismiss contract.
  *
- * Migrated from the shallow `src/components/flow-notice.test.tsx` so the package
- * `src/**` test glob expands correctly and these cases live inside the auth feature
- * that owns the dialog.
+ * Committed tests prove the REAL FlowNotice props wiring without an undeclared
+ * DOM package: FlowNotice is a hook-free function component, so calling it
+ * yields the exact element handed to AuthRequiredDialog. Click/focus/remount
+ * behavior is covered by the ignored Playwright harness
+ * (`output/playwright/task-auth-010/`), which mounts FlowNotice with live spies.
  */
 
 import assert from "node:assert/strict";
@@ -17,9 +19,20 @@ import { FlowNotice } from "../../../components/flow-notice";
 import {
   AUTH_REQUIRED_COPY,
   AuthRequiredDialog,
-  dismissDialog,
   resolveReturnFocusTarget
 } from "./auth-required-dialog";
+
+type AuthRequiredElement = React.ReactElement<{
+  onDismiss?: () => void;
+}>;
+
+function renderFlowNoticeTree(
+  props: React.ComponentProps<typeof FlowNotice>
+): AuthRequiredElement {
+  const tree = FlowNotice(props) as AuthRequiredElement;
+  assert.ok(tree, "FlowNotice must return an element");
+  return tree;
+}
 
 test("UNAUTHORIZED renders the auth-required dialog and not an onAction retry button", () => {
   let onActionCalls = 0;
@@ -30,70 +43,101 @@ test("UNAUTHORIZED renders the auth-required dialog and not an onAction retry bu
   assert.match(markup, /data-auth-required-dialog="true"/);
   assert.match(markup, new RegExp(AUTH_REQUIRED_COPY.title));
   assert.match(markup, new RegExp(AUTH_REQUIRED_COPY.secondaryAction.replace("/", "\\/")));
-  assert.match(markup, /登录 \/ 注册/);
+  assert.match(markup, /正在检查登录方式/);
+  assert.match(markup, /aria-disabled="true"/);
 
   assert.doesNotMatch(markup, /data-error-code="UNAUTHORIZED"/);
   assert.doesNotMatch(markup, /onClick/);
   assert.equal(onActionCalls, 0);
 });
 
-test("FlowNotice UNAUTHORIZED wires onDismissAuthRequired and never onAction as onDismiss", () => {
+test("FlowNotice UNAUTHORIZED passes onDismissAuthRequired — never onAction — as the dialog onDismiss", () => {
+  const onAction = () => { /* business retry spy */ };
+  const onDismissAuthRequired = () => { /* auth-only cleanup spy */ };
+
+  const tree = renderFlowNoticeTree({
+    code: "UNAUTHORIZED",
+    onAction,
+    onDismissAuthRequired
+  });
+
+  assert.equal(tree.type, AuthRequiredDialog);
+  assert.equal(
+    tree.props.onDismiss,
+    onDismissAuthRequired,
+    "dialog onDismiss must be the auth cleanup spy, not a new wrapper"
+  );
+  assert.notEqual(tree.props.onDismiss, onAction, "dialog onDismiss must never be the business onAction spy");
+
+  // If dismiss is invoked the way the dialog does, only the auth spy fires.
+  let businessCalls = 0;
+  let dismissAuthCalls = 0;
+  const wiredAction = () => { businessCalls += 1; };
+  const wiredDismiss = () => { dismissAuthCalls += 1; };
+  const wired = renderFlowNoticeTree({
+    code: "UNAUTHORIZED",
+    onAction: wiredAction,
+    onDismissAuthRequired: wiredDismiss
+  });
+  wired.props.onDismiss?.();
+  assert.equal(dismissAuthCalls, 1, "onDismissAuthRequired exactly once");
+  assert.equal(businessCalls, 0, "onAction must stay 0 when FlowNotice dismiss wiring is correct");
+});
+
+test("FlowNotice source still forbids wiring onAction as AuthRequiredDialog onDismiss", () => {
   const source = readFileSync(new URL("../../../components/flow-notice.tsx", import.meta.url), "utf8");
   assert.match(source, /onDismissAuthRequired/);
   assert.match(source, /<AuthRequiredDialog onDismiss=\{onDismissAuthRequired\} \/>/);
   assert.doesNotMatch(source, /AuthRequiredDialog onDismiss=\{onAction\}/);
 });
 
-test("dismissing the auth dialog invokes only the auth cleanup callback, not business onAction", () => {
+test("parent clears only the auth code on dismiss, then a later UNAUTHORIZED remounts a fresh open dialog", () => {
+  // Mirrors the production parent state machine without a DOM: UNAUTHORIZED mounts
+  // FlowNotice/dialog; onDismissAuthRequired clears the code; a later 401 writes it again.
+  type ParentCode = "UNAUTHORIZED" | null;
+  let parentCode: ParentCode = "UNAUTHORIZED";
   let businessCalls = 0;
-  let authCleanupCalls = 0;
+  let dismissAuthCalls = 0;
 
-  // Mirrors the FlowNotice wiring: onAction is a business retry; onDismiss is auth-only.
-  const onAction = () => { businessCalls += 1; };
-  const onDismissAuthRequired = () => { authCleanupCalls += 1; };
-
-  const markup = renderToStaticMarkup(
-    <FlowNotice code="UNAUTHORIZED" onAction={onAction} onDismissAuthRequired={onDismissAuthRequired} />
-  );
-  assert.match(markup, /data-auth-required-dialog="true"/);
-
-  // Rendering never fires either callback.
+  const first = renderFlowNoticeTree({
+    code: parentCode,
+    onAction: () => { businessCalls += 1; },
+    onDismissAuthRequired: () => {
+      dismissAuthCalls += 1;
+      parentCode = null;
+    }
+  });
+  assert.equal(first.type, AuthRequiredDialog);
+  first.props.onDismiss?.();
+  assert.equal(dismissAuthCalls, 1);
   assert.equal(businessCalls, 0);
-  assert.equal(authCleanupCalls, 0);
+  assert.equal(parentCode, null);
 
-  // Behavioral: the dialog's dismiss primitive only calls onDismiss.
-  dismissDialog(() => {}, { focus: () => {} }, onDismissAuthRequired);
-  assert.equal(authCleanupCalls, 1);
-  assert.equal(businessCalls, 0, "auth dismiss must never invoke the business onAction");
-});
-
-test("clearing the parent auth error then writing UNAUTHORIZED again remounts an open dialog", () => {
-  // Parent state machine: UNAUTHORIZED mounts FlowNotice/dialog; dismiss clears the
-  // parent code so the dialog unmounts; a later 401 writes UNAUTHORIZED again and
-  // React mounts a fresh AuthRequiredDialog whose initial open state is true.
-  let parentCode: "UNAUTHORIZED" | null = "UNAUTHORIZED";
-  const first = renderToStaticMarkup(
-    parentCode === "UNAUTHORIZED" ? <FlowNotice code={parentCode} /> : <span />
-  );
-  assert.match(first, /data-auth-required-dialog="true"/);
-
-  // onDismissAuthRequired clears only the parent auth error (no business retry).
-  parentCode = null;
+  // Parent no longer renders the dialog.
   const afterDismiss = renderToStaticMarkup(
-    parentCode === "UNAUTHORIZED" ? <FlowNotice code={parentCode} /> : <span data-cleared="true" />
+    parentCode === "UNAUTHORIZED"
+      ? <FlowNotice code="UNAUTHORIZED" />
+      : <span data-cleared="true" />
   );
   assert.doesNotMatch(afterDismiss, /data-auth-required-dialog/);
   assert.match(afterDismiss, /data-cleared="true"/);
 
-  // A fresh 401 writes the same code; because the previous dialog unmounted, this is
-  // a new mount and AuthRequiredDialog starts open.
+  // Later 401 writes UNAUTHORIZED again → fresh open dialog.
   parentCode = "UNAUTHORIZED";
-  const second = renderToStaticMarkup(<FlowNotice code={parentCode} />);
-  assert.match(second, /data-auth-required-dialog="true"/);
-  assert.match(second, /登录后继续/);
+  const second = renderFlowNoticeTree({
+    code: parentCode,
+    onAction: () => { businessCalls += 1; },
+    onDismissAuthRequired: () => { dismissAuthCalls += 1; parentCode = null; }
+  });
+  assert.equal(second.type, AuthRequiredDialog);
+  const secondMarkup = renderToStaticMarkup(
+    <FlowNotice code="UNAUTHORIZED" onDismissAuthRequired={() => { parentCode = null; }} />
+  );
+  assert.match(secondMarkup, /data-auth-required-dialog="true"/);
+  assert.match(secondMarkup, /登录后继续/);
 });
 
-test("explicit returnFocusRef takes priority over the document.activeElement fallback", () => {
+test("explicit returnFocusRef still wins over the document.activeElement fallback", () => {
   const trigger = { focus: () => {} };
   const body = { focus: () => {} };
 
@@ -112,7 +156,11 @@ test("AuthRequiredDialog source accepts returnFocusRef and prefers it on dismiss
 
 test("returnTo, focus trap, Escape and approved copy remain intact on the dialog", () => {
   const markup = renderToStaticMarkup(
-    <AuthRequiredDialog loginHref="/auth/login?returnTo=%2Ftarot%2Fsetup" onDismiss={() => undefined} />
+    <AuthRequiredDialog
+      loginHref="/auth/login?returnTo=%2Ftarot%2Fsetup"
+      initialPromptMode="auth0"
+      onDismiss={() => undefined}
+    />
   );
   assert.equal((markup.match(/role="dialog"/g) ?? []).length, 1);
   assert.match(markup, /aria-modal="true"/);
@@ -130,4 +178,11 @@ test("non-auth FlowNotice codes still render inline notices with onAction", () =
   assert.match(markup, /data-error-code="NETWORK_ERROR"/);
   assert.doesNotMatch(markup, /data-auth-required-dialog/);
   assert.equal(actionCalls, 0, "rendering must not invoke onAction");
+});
+
+test("neither FlowNotice nor the dialog navigates back or reloads on dismiss", () => {
+  const flowSource = readFileSync(new URL("../../../components/flow-notice.tsx", import.meta.url), "utf8");
+  const dialogSource = readFileSync(new URL("./auth-required-dialog.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(flowSource, /router\.back|history\.back|location\.reload/);
+  assert.doesNotMatch(dialogSource, /router\.back|history\.back|location\.reload/);
 });
