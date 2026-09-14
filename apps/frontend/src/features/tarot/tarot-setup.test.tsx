@@ -69,7 +69,7 @@ test("disabled landing omits only the Tarot entry", () => {
   assert.match(landing, /href="\/diy"/);
   assert.match(landing, /hero-bracelet\.webp/);
   assert.match(landing, /entry-ai\.webp/);
-  assert.match(landing, /entry-diy\.webp/);
+  assert.match(landing, /entry-diy-loose-tray\.webp/);
   assert.doesNotMatch(landing, /entry-tarot\.webp/);
 });
 

@@ -48,8 +48,8 @@ export default function HomePage() {
       note: "直接进入珠子备选库，自由挑选与排列。",
       href: "/diy",
       action: "进入 DIY 创作",
-      image: "/home/entry-diy.webp",
-      imageAlt: "放有水晶手链与配件的透明创作托盘"
+      image: "/home/entry-diy-loose-tray.webp",
+      imageAlt: "象牙白圆形创作盘中自然散放着尚未穿线的散珠与穿线工具"
     }
   ];
 
@@ -57,17 +57,19 @@ export default function HomePage() {
     <main data-atelier-surface="home">
       <div className="home-reference-shell">
         <section className="home-reference-hero" data-reference-home-hero="true">
-          <Image
-            alt="米白色工作台上的浅紫与海蓝水晶手链"
-            fill
-            priority
-            sizes="100vw"
-            src="/home/hero-bracelet.webp"
-          />
           <div className="home-reference-hero-copy">
             <h1>当灵感与矿石相遇，<br />每一串手链都是你的答案。</h1>
             <p>AI 设计 · 塔罗引导 · DIY 创作</p>
             <span>从你的当下、色彩与风格出发，为你提炼三种设计方向。每一颗珠子，都仍由你决定。</span>
+          </div>
+          <div className="home-reference-hero-media">
+            <Image
+              alt="米白色工作台上的浅紫与海蓝水晶手链"
+              fill
+              priority
+              sizes="(max-width: 767px) calc(100vw - 2rem), (max-width: 1536px) calc(60vw - 2.4rem), 55rem"
+              src="/home/hero-bracelet.webp"
+            />
           </div>
         </section>
 
@@ -76,7 +78,7 @@ export default function HomePage() {
             <article data-creation-path={path.id} key={path.id}>
               <Link aria-label={path.action} className="home-reference-card-link" href={path.href} title={path.action}>
                 <div className="home-reference-entry-image" data-reference-entry-image="true">
-                  <Image alt={path.imageAlt} fill sizes="(max-width: 767px) 44vw, 31vw" src={path.image} />
+                  <Image alt={path.imageAlt} fill sizes="(max-width: 767px) calc(100vw - 2rem), (max-width: 1536px) calc((100vw - 8rem) / 2), 44rem" src={path.image} />
                 </div>
                 <div className="home-reference-entry-copy">
                   <h2>{path.title}</h2>
