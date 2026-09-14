@@ -67,3 +67,7 @@
 
 - 创建测试用户并提交注册表单；
 - 删除测试用户或任何其他外部账号变更。
+
+## 7. 契约差异提示（超出本任务授权范围）
+
+`docs/AUTH_SESSION_CONTRACT.md` 第 12 节称桌面 Access Token“仅存在于启动器 `0600` runtime env 与 Next.js 服务端进程内存”。实测启动器生成的 `0600` 权限 `runtime-env.sh` 会被 Frontend 与 Backend 两个 LaunchAgent 共同 source，两个服务进程均继承 token；仅 Frontend 认证代码消费并以 server-to-server `Authorization: Bearer` 转发，Backend 仅校验请求中的 token。该契约表述与实现存在偏差，可能需要另立 contract / launcher remediation 任务核对；本任务无权修改该文件。
