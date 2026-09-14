@@ -163,11 +163,11 @@ NODE_ENV=production pnpm build
 
 1. **保持出错的原标签页打开**，不要刷新，也不要点击“登录 / 注册”按钮。刷新页面或点击登录按钮都无法修复服务端 token 不一致：桌面模式下 `/auth/login` 只做同源 `303` 返回，不会重新签发 token。
 2. 用启动器正常停止服务：选菜单 5“停止 Frontend 和 Backend”（其 `stop_all` 实际同时停止 Asset Worker）或 `玄矶系统.command --stop`。不要只关闭终端/脚本窗口——那不会停止 LaunchAgents 管理的服务。
-3. 重新启动并重新生成 token：选菜单 4“重启整套系统”或 `玄矶系统.command --restart`（内部 `stop_all` + `start_all`）。启动器会重新生成一个**最长 8 小时**的 `signed-test` token，写入权限 `0600` 的 `runtime-env.sh`；Frontend 与 Backend 两个 LaunchAgent 都会 source 该文件，使两个服务进程都继承 `MYSTCRAG_DESKTOP_ACCESS_TOKEN`。
+3. 重新启动并重新生成 token：选菜单 4“重启整套系统”或 `玄矶系统.command --restart`（内部 `stop_all` + `start_all`）。启动器会重新生成一个**最长 8 小时**的 `signed-test` token，写入权限 `0600` 的 `runtime-env.sh`；Frontend、Backend、Asset Worker 三个 LaunchAgent 都会 source 该文件，使三类服务进程都继承 `MYSTCRAG_DESKTOP_ACCESS_TOKEN`（Asset Worker 继承但不消费）。
 4. 等待前后端健康：确认 `http://localhost:4000/health` 与 `http://localhost:3000` 均可用。
 5. 回到仍保持打开的标签页，停留在原相对 URL，重新执行刚才的受保护操作。
 
 约束：
 
-- token 只由启动器服务端生成，保存在 `0600` 权限的 `runtime-env.sh` 中，并被 Frontend 与 Backend 两个服务进程继承；**只有 Frontend 认证代码消费该变量**，以 server-to-server `Authorization: Bearer` 转发，Backend 进程虽继承环境，但其职责是校验请求中的 token。**浏览器/client 永远不接收 token**，也不得从客户端输出或以任何方式接触 token。
+- token 只由启动器服务端生成，保存在 `0600` 权限的 `runtime-env.sh` 中，并被 Frontend、Backend、Asset Worker 三类服务进程继承；**只有 Frontend 认证代码消费该变量**，以 server-to-server `Authorization: Bearer` 转发，Backend 校验请求中的 token，Asset Worker 继承但不消费该变量。**浏览器/client 永远不接收 token**，也不得从客户端输出或以任何方式接触 token。
 - 未提交的内存草稿**只有原标签页保持打开时才可能保留**；刷新、关闭标签页或跨页跳转都可能丢弃未提交的表单与设计状态。
