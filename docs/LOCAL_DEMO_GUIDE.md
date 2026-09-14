@@ -156,3 +156,18 @@ NODE_ENV=production pnpm build
 - 勾选保存问题后收到行内校验：这是空密钥的预期 fail-closed 行为；取消勾选或为本地测试配置临时有效密钥。
 
 停止 Frontend/Backend 用 `Ctrl+C`，停止数据库容器用 `pnpm db:down`。
+
+## 9. 桌面身份失效与恢复
+
+桌面自动登录（`MYSTCRAG_DESKTOP_AUTO_AUTH=true` + `MYSTCRAG_DESKTOP_ACCESS_TOKEN`）的登录态由 Frontend 服务端持有，浏览器不保管 token。当页面显示为“已登录”、但受保护操作返回 `401 UNAUTHORIZED` 时，说明浏览器侧的已登录投影与 Backend 实际校验的 token 已经不一致。这种不一致只能通过重新生成 token 并重启服务恢复：
+
+1. **保持出错的原标签页打开**，不要刷新，也不要点击“登录 / 注册”按钮。刷新页面或点击登录按钮都无法修复服务端 token 不一致：桌面模式下 `/auth/login` 只做同源 `303` 返回，不会重新签发 token。
+2. 使用启动器的正常停止方式停止本地服务（关闭 `玄矶系统.command` 的对应进程组或选择其停止菜单），不要残留前台进程。
+3. 重新运行桌面启动器 `玄矶系统.command`，让它重新生成一个**最长 8 小时**且**仅由服务端持有**的 `signed-test` token，并把同一个 token 应用到 Frontend 与 Backend 的启动环境。
+4. 等待前后端健康：确认 `http://localhost:4000/health` 与 `http://localhost:3000` 均可用。
+5. 回到仍保持打开的标签页，停留在原相对 URL，重新执行刚才的受保护操作。
+
+约束：
+
+- token 只由服务端生成，只保存在启动器的 `0600` 运行时环境与 Next.js 服务端进程内存中。**浏览器不得生成 token**，也不得从客户端输出或任何方式接触 token。
+- 未提交的内存草稿**只有原标签页保持打开时才可能保留**；刷新、关闭标签页或跨页跳转都可能丢弃未提交的表单与设计状态。
