@@ -5,7 +5,7 @@
  * - The returnTo parameter is validated server-side (same-origin relative paths only);
  *   a rejected returnTo falls back to "/" and emits auth.open_redirect_rejected carrying
  *   the SAME requestId as the response — never the raw returnTo value.
- * - Configuration/SDK initialization failures (getAuth0Client throwing during
+ * - Configuration/SDK initialization failures (OIDC client initialization failing during
  *   startInteractiveLogin) fail closed with a stable 500 INTERNAL_ERROR envelope and a
  *   privacy-safe auth.dependency_failed event. The single generated requestId is shared
  *   by the response envelope and the structured log record.

@@ -95,10 +95,10 @@ test("production startup smoke matrix", { skip: !databaseUrl }, async (t) => {
     assert.match(outcome.output, /Signed test authentication is disabled/);
   });
 
-  await t.test("production refuses an incomplete auth0 configuration", async () => {
+  await t.test("production refuses an incomplete authing configuration", async () => {
     const outcome = await spawnBackend({
       NODE_ENV: "production",
-      MYSTCRAG_AUTH_PROVIDER: "auth0",
+      MYSTCRAG_AUTH_PROVIDER: "authing",
       MYSTCRAG_AUTH_AUDIENCE: "https://api.mystcrag.example.com"
     });
 
@@ -106,24 +106,36 @@ test("production startup smoke matrix", { skip: !databaseUrl }, async (t) => {
     assert.match(outcome.output, /MYSTCRAG_AUTH_ISSUER/);
   });
 
-  await t.test("production refuses non-canonical, wildcard, and IP-literal auth0 issuers", async () => {
+  await t.test("production refuses the removed auth0 provider", async () => {
+    const outcome = await spawnBackend({
+      NODE_ENV: "production",
+      MYSTCRAG_AUTH_PROVIDER: "auth0",
+      MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidc",
+      MYSTCRAG_AUTH_AUDIENCE: "https://api.mystcrag.example.com"
+    });
+
+    assert.notEqual(outcome.code, 0, "the process must fail before listening");
+    assert.match(outcome.output, /auth0/);
+  });
+
+  await t.test("production refuses non-canonical, wildcard, and IP-literal authing issuers", async () => {
     const rejectedIssuers = [
-      "https://localhost/",
-      "https://127.0.0.1/",
-      "https://[::1]/",
-      "https://mystcrag-tenant.auth0.example.com/?query=1",
-      "https://mystcrag-tenant.auth0.example.com/#fragment",
-      "https://mystcrag-tenant.auth0.example.com",
-      "http://mystcrag-tenant.auth0.example.com/",
-      "https://*.example.com/",
-      "https://0.0.0.0/",
-      "https://8.8.8.8/",
-      "https://[2001:db8::1]/"
+      "https://localhost/oidc",
+      "https://127.0.0.1/oidc",
+      "https://[::1]/oidc",
+      "https://mystcrag-pool.authing.cn/oidc?query=1",
+      "https://mystcrag-pool.authing.cn/oidc#fragment",
+      "https://mystcrag-pool.authing.cn/not-oidc",
+      "http://mystcrag-pool.authing.cn/oidc",
+      "https://*.authing.cn/oidc",
+      "https://0.0.0.0/oidc",
+      "https://8.8.8.8/oidc",
+      "https://[2001:db8::1]/oidc"
     ];
     for (const issuer of rejectedIssuers) {
       const outcome = await spawnBackend({
         NODE_ENV: "production",
-        MYSTCRAG_AUTH_PROVIDER: "auth0",
+        MYSTCRAG_AUTH_PROVIDER: "authing",
         MYSTCRAG_AUTH_ISSUER: issuer,
         MYSTCRAG_AUTH_AUDIENCE: "https://api.mystcrag.example.com"
       });
@@ -133,7 +145,7 @@ test("production startup smoke matrix", { skip: !databaseUrl }, async (t) => {
     }
   });
 
-  await t.test("a configured auth0 provider starts, protects routes, and stops cleanly", async () => {
+  await t.test("a configured authing provider starts, protects routes, and stops cleanly", async () => {
     const port = await allocatePort();
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
@@ -143,8 +155,8 @@ test("production startup smoke matrix", { skip: !databaseUrl }, async (t) => {
     }
     env.NODE_ENV = "production";
     env.BACKEND_PORT = String(port);
-    env.MYSTCRAG_AUTH_PROVIDER = "auth0";
-    env.MYSTCRAG_AUTH_ISSUER = "https://mystcrag-tenant.auth0.example.com/";
+    env.MYSTCRAG_AUTH_PROVIDER = "authing";
+    env.MYSTCRAG_AUTH_ISSUER = "https://mystcrag-pool.authing.cn/oidc";
     env.MYSTCRAG_AUTH_AUDIENCE = "https://api.mystcrag.example.com";
 
     const child = spawn(process.execPath, ["--import", tsxLoader, "src/index.ts"], {

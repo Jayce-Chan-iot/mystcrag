@@ -60,3 +60,32 @@ AUTH-005 must explicitly configure the stateless encrypted Cookie Session with `
 - AUTH-006 consumes root Playwright `1.62.1` for isolated browser security/E2E coverage.
 - Rollback is one revert of the AUTH-002 commit followed by `pnpm install --frozen-lockfile`; no schema, secret, provider Application, or runtime data migration exists in this task. If a later probe disproves compatibility, block the consumer task and revise this dependency decision through a new reviewed task rather than changing the AUTH-001 topology.
 - Remaining implementation probes: AUTH-004 must exercise the JWKS/issuer/audience/timeout matrix; AUTH-005 must prove proxy rolling behavior, encrypted host-only HttpOnly cookie flags/lifetimes, token custody, and POST logout Origin enforcement; Operations must compare each isolated staging/production Auth0 allowlist byte-for-byte. A failed probe blocks its consumer/release.
+
+
+## DEC-AUTH-011 — Authing OIDC dependency decision
+
+**Task:** TASK-AUTH-011<br>
+**Verified:** 2026-09-15<br>
+**State:** `IMPLEMENTED`; live Authing tenant smoke remains operationally gated
+
+### Selected
+
+| Package | Exact version | Owner package | Evidence | License |
+| --- | --- | --- | --- | --- |
+| `jose` | `6.2.10` | frontend + backend | Already frozen via workspace override; ESM/WebCrypto; session JWE + RS256 JWKS verification | MIT |
+
+### Rejected
+
+| Package | Reason |
+| --- | --- |
+| `@authing/nextjs@0.1.2` | peer `next ^12.0.9` only; incompatible with Next 16 |
+| Authing Guard / browser SDK | Browser token/localStorage model violates AUTH_SESSION_CONTRACT |
+| `@auth0/nextjs-auth0@4.27.0` | Removed as the production identity SDK for Authing; no dual production stack |
+| `openid-client@6.8.8` | Evaluated (MIT, ESM). Not added as a direct runtime dependency: the BFF only needs discovery document fetch, authorize URL construction, code/refresh token POST, and end_session URL — implemented with `fetch` + `jose` so Edge-safe rolling and cookie crypto stay on the already-frozen WebCrypto library without a second OIDC stack. |
+
+### Probes
+
+- Frontend typecheck/lint/build after removing `@auth0/nextjs-auth0`.
+- Backend factory/verifier/discovery unit tests.
+- Synthetic OIDC callback success/denial/outage tests.
+- Secret scan: no tokens in cookie ciphertext or client-visible session projection.

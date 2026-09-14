@@ -44,7 +44,7 @@ function desktopConfig() {
 
 test("detectAuthMode is derived from the explicit desktop flag", () => {
   assert.equal(detectAuthMode(desktopConfig()), "desktop");
-  assert.equal(detectAuthMode(makeConfig()), "auth0");
+  assert.equal(detectAuthMode(makeConfig()), "authing");
 });
 
 test("projectDesktopSession returns only the safe local projection", () => {

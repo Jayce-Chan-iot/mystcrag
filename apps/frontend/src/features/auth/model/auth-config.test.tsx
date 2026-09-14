@@ -17,11 +17,11 @@ import test from "node:test";
 
 import { resolveAuthConfig, type AuthConfigError } from "./auth-config";
 
-const validAuth0Config = {
+const validAuthingConfig = {
   NODE_ENV: "production",
   MYSTCRAG_APP_ORIGIN: "https://mystcrag.com",
-  MYSTCRAG_AUTH_PROVIDER: "auth0",
-  MYSTCRAG_AUTH_ISSUER: "https://mystcrag.auth0.com/",
+  MYSTCRAG_AUTH_PROVIDER: "authing",
+  MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidc",
   MYSTCRAG_AUTH_AUDIENCE: "mystcrag-backend",
   MYSTCRAG_AUTH_CLIENT_ID: "client-id-123",
   MYSTCRAG_AUTH_CLIENT_SECRET: "client-secret-456",
@@ -57,11 +57,11 @@ function expectConfigError(fn: () => unknown, messageIncludes?: string): void {
 
 // --- Strict config matrix ---
 
-test("valid auth0 production configuration is accepted", () => {
-  const config = resolveAuthConfig(validAuth0Config);
+test("valid authing production configuration is accepted", () => {
+  const config = resolveAuthConfig(validAuthingConfig);
   assert.equal(config.appOrigin, "https://mystcrag.com");
-  assert.equal(config.authProvider, "auth0");
-  assert.equal(config.authIssuer, "https://mystcrag.auth0.com/");
+  assert.equal(config.authProvider, "authing");
+  assert.equal(config.authIssuer, "https://mystcrag-pool.authing.cn/oidc/");
   assert.equal(config.authCallbackUrl, "https://mystcrag.com/auth/callback");
   assert.equal(config.authLogoutUrl, "https://mystcrag.com");
   assert.equal(config.backendOrigin, "https://api.mystcrag.com");
@@ -82,14 +82,14 @@ test("missing all required fields fails with multiple errors", () => {
 
 test("production rejects HTTP app origin", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_APP_ORIGIN: "http://mystcrag.com" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_APP_ORIGIN: "http://mystcrag.com" }),
     "HTTPS"
   );
 });
 
 test("production rejects HTTP backend origin", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_BACKEND_ORIGIN: "http://api.mystcrag.com" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_BACKEND_ORIGIN: "http://api.mystcrag.com" }),
     "HTTPS"
   );
 });
@@ -122,21 +122,21 @@ test("development rejects HTTP non-loopback backend origin", () => {
 
 test("app origin rejects embedded username/password", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_APP_ORIGIN: "https://user:pass@mystcrag.com" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_APP_ORIGIN: "https://user:pass@mystcrag.com" }),
     "MYSTCRAG_APP_ORIGIN"
   );
 });
 
 test("backend origin rejects embedded username/password", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_BACKEND_ORIGIN: "https://user:pass@api.mystcrag.com" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_BACKEND_ORIGIN: "https://user:pass@api.mystcrag.com" }),
     "MYSTCRAG_BACKEND_ORIGIN"
   );
 });
 
 test("logout URL rejects embedded username/password", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_LOGOUT_URL: "https://user:pass@mystcrag.com" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_LOGOUT_URL: "https://user:pass@mystcrag.com" }),
     "credentials"
   );
 });
@@ -145,70 +145,83 @@ test("logout URL rejects embedded username/password", () => {
 
 test("issuer must be HTTPS", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_ISSUER: "http://mystcrag.auth0.com/" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_ISSUER: "http://mystcrag-pool.authing.cn/oidc" }),
     "MYSTCRAG_AUTH_ISSUER"
   );
 });
 
-test("issuer must have trailing slash", () => {
-  expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_ISSUER: "https://mystcrag.auth0.com" }),
-    "MYSTCRAG_AUTH_ISSUER"
-  );
+test("issuer accepts Authing /oidc with or without trailing slash and normalizes it", () => {
+  const withoutSlash = resolveAuthConfig({
+    ...validAuthingConfig,
+    MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidc"
+  });
+  assert.equal(withoutSlash.authIssuer, "https://mystcrag-pool.authing.cn/oidc/");
+  const withSlash = resolveAuthConfig({
+    ...validAuthingConfig,
+    MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidc/"
+  });
+  assert.equal(withSlash.authIssuer, "https://mystcrag-pool.authing.cn/oidc/");
 });
 
 test("issuer rejects path component", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_ISSUER: "https://mystcrag.auth0.com/path/" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidcpath/" }),
     "MYSTCRAG_AUTH_ISSUER"
+  );
+});
+
+test("removed auth0 provider is rejected", () => {
+  expectConfigError(
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_PROVIDER: "auth0" }),
+    "MYSTCRAG_AUTH_PROVIDER"
   );
 });
 
 test("issuer rejects query string", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_ISSUER: "https://mystcrag.auth0.com/?foo=bar" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidc?foo=bar" }),
     "MYSTCRAG_AUTH_ISSUER"
   );
 });
 
 test("issuer rejects fragment", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_ISSUER: "https://mystcrag.auth0.com/#frag" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidc#frag" }),
     "MYSTCRAG_AUTH_ISSUER"
   );
 });
 
 test("issuer rejects wildcard", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_ISSUER: "https://*.auth0.com/" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_ISSUER: "https://*.authing.cn/oidc" }),
     "MYSTCRAG_AUTH_ISSUER"
   );
 });
 
 test("issuer rejects IPv4 literal", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_ISSUER: "https://192.168.1.1/" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_ISSUER: "https://192.168.1.1/" }),
     "MYSTCRAG_AUTH_ISSUER"
   );
 });
 
 test("issuer rejects IPv6 literal", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_ISSUER: "https://[::1]/" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_ISSUER: "https://[::1]/" }),
     "MYSTCRAG_AUTH_ISSUER"
   );
 });
 
 test("issuer rejects credentials", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_ISSUER: "https://user:pass@mystcrag.auth0.com/" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_ISSUER: "https://user:pass@mystcrag-pool.authing.cn/oidc" }),
     "MYSTCRAG_AUTH_ISSUER"
   );
 });
 
 test("issuer rejects localhost", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_ISSUER: "https://localhost/" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_ISSUER: "https://localhost/" }),
     "MYSTCRAG_AUTH_ISSUER"
   );
 });
@@ -217,14 +230,14 @@ test("issuer rejects localhost", () => {
 
 test("callback URL must exactly match appOrigin/auth/callback", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_CALLBACK_URL: "https://mystcrag.com/wrong/callback" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_CALLBACK_URL: "https://mystcrag.com/wrong/callback" }),
     "must exactly equal"
   );
 });
 
 test("callback URL with different origin fails", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_CALLBACK_URL: "https://other.com/auth/callback" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_CALLBACK_URL: "https://other.com/auth/callback" }),
     "must exactly equal"
   );
 });
@@ -233,7 +246,7 @@ test("callback URL with different origin fails", () => {
 
 test("logout URL must be same-origin as app origin", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_LOGOUT_URL: "https://other.com" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_LOGOUT_URL: "https://other.com" }),
     "same-origin"
   );
 });
@@ -242,20 +255,20 @@ test("logout URL must be same-origin as app origin", () => {
 
 test("session secret must be exactly 64 hex characters", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_SESSION_SECRET: "too-short" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_SESSION_SECRET: "too-short" }),
     "64 hexadecimal"
   );
 });
 
 test("session secret rejects non-hex characters", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_SESSION_SECRET: "g".repeat(64) }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_SESSION_SECRET: "g".repeat(64) }),
     "64 hexadecimal"
   );
 });
 
 test("session secret accepts 64 hex chars (case insensitive)", () => {
-  const config = resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_SESSION_SECRET: "aAbBcCdDeEfF00112233445566778899aAbBcCdDeEfF00112233445566778899" });
+  const config = resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_SESSION_SECRET: "aAbBcCdDeEfF00112233445566778899aAbBcCdDeEfF00112233445566778899" });
   assert.equal(config.authSessionSecret, "aAbBcCdDeEfF00112233445566778899aAbBcCdDeEfF00112233445566778899");
 });
 
@@ -263,19 +276,19 @@ test("session secret accepts 64 hex chars (case insensitive)", () => {
 
 test("backend origin is required — no fallback to NEXT_PUBLIC_API_BASE_URL", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_BACKEND_ORIGIN: "" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_BACKEND_ORIGIN: "" }),
     "MYSTCRAG_BACKEND_ORIGIN is required"
   );
 });
 
 test("backend origin strips trailing slash", () => {
-  const config = resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_BACKEND_ORIGIN: "https://api.mystcrag.com/" });
+  const config = resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_BACKEND_ORIGIN: "https://api.mystcrag.com/" });
   assert.equal(config.backendOrigin, "https://api.mystcrag.com");
 });
 
 test("production rejects loopback backend origin", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_BACKEND_ORIGIN: "http://127.0.0.1:4000" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_BACKEND_ORIGIN: "http://127.0.0.1:4000" }),
     "HTTPS"
   );
 });
@@ -284,14 +297,14 @@ test("production rejects loopback backend origin", () => {
 
 test("app origin with path component fails", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_APP_ORIGIN: "https://mystcrag.com/path" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_APP_ORIGIN: "https://mystcrag.com/path" }),
     "without path"
   );
 });
 
 test("production rejects loopback app origin", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_APP_ORIGIN: "http://localhost:3000" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_APP_ORIGIN: "http://localhost:3000" }),
     "HTTPS"
   );
 });
@@ -312,16 +325,16 @@ test("signed-test without enable flag fails", () => {
   );
 });
 
-test("auth0 requires client ID", () => {
+test("authing requires client ID", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_CLIENT_ID: "" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_CLIENT_ID: "" }),
     "MYSTCRAG_AUTH_CLIENT_ID"
   );
 });
 
-test("auth0 requires client secret", () => {
+test("authing requires client secret", () => {
   expectConfigError(
-    () => resolveAuthConfig({ ...validAuth0Config, MYSTCRAG_AUTH_CLIENT_SECRET: "" }),
+    () => resolveAuthConfig({ ...validAuthingConfig, MYSTCRAG_AUTH_CLIENT_SECRET: "" }),
     "MYSTCRAG_AUTH_CLIENT_SECRET"
   );
 });
@@ -329,9 +342,9 @@ test("auth0 requires client secret", () => {
 // --- Environment classification (cookie NAME source, independent of Secure) ---
 
 test("environment classification is resolved reliably from NODE_ENV", () => {
-  assert.equal(resolveAuthConfig(validAuth0Config).environment, "production");
+  assert.equal(resolveAuthConfig(validAuthingConfig).environment, "production");
   assert.equal(
-    resolveAuthConfig({ ...validAuth0Config, NODE_ENV: "staging" }).environment,
+    resolveAuthConfig({ ...validAuthingConfig, NODE_ENV: "staging" }).environment,
     "staging"
   );
   assert.equal(resolveAuthConfig(validSignedTestConfig).environment, "development");
@@ -367,10 +380,10 @@ test("desktop mode with empty token fails closed", () => {
   );
 });
 
-test("desktop flag with auth0 provider fails closed", () => {
+test("desktop flag with authing provider fails closed", () => {
   expectConfigError(
     () => resolveAuthConfig({
-      ...validAuth0Config,
+      ...validAuthingConfig,
       MYSTCRAG_DESKTOP_AUTO_AUTH: "true",
       MYSTCRAG_DESKTOP_ACCESS_TOKEN: "desktop-token-value"
     }),

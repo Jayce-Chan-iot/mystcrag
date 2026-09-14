@@ -4,12 +4,12 @@ import test from "node:test";
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
 
 import { CredentialRejectedError, ProviderUnavailableError } from "./auth-errors.js";
-import { Auth0AccessTokenVerifier } from "./auth0-access-token-verifier.js";
+import { OidcAccessTokenVerifier } from "./oidc-access-token-verifier.js";
 import { JwksKeySource, type JwksTransport } from "./jwks-key-source.js";
 
-const ISSUER = "https://mystcrag-tenant.auth0.example.com/";
+const ISSUER = "https://mystcrag-pool.authing.cn/oidc";
 const AUDIENCE = "https://api.mystcrag.example.com";
-const JWKS_URL = "https://mystcrag-tenant.auth0.example.com/.well-known/jwks.json";
+const JWKS_URL = "https://mystcrag-pool.authing.cn/oidc.well-known/jwks.json";
 
 type KeyMaterial = {
   kid: string;
@@ -34,12 +34,12 @@ let keyA: KeyMaterial;
 let keyB: KeyMaterial;
 
 test.before(async () => {
-  keyA = await keyMaterialFor("auth0-key-a");
-  keyB = await keyMaterialFor("auth0-key-b");
+  keyA = await keyMaterialFor("oidc-key-a");
+  keyB = await keyMaterialFor("oidc-key-b");
 });
 
 type Harness = {
-  verifier: Auth0AccessTokenVerifier;
+  verifier: OidcAccessTokenVerifier;
   transport: JwksTransport;
   calls: () => number;
   respondWith: (kids: readonly KeyMaterial[], cacheControl?: string) => void;
@@ -70,7 +70,7 @@ async function createHarness(options: { kids?: readonly KeyMaterial[] } = {}): P
     transport,
     now: () => nowMs
   });
-  const verifier = new Auth0AccessTokenVerifier({
+  const verifier = new OidcAccessTokenVerifier({
     issuer: ISSUER,
     audience: AUDIENCE,
     keySource,
@@ -331,7 +331,7 @@ test("a jwks request timeout fails closed", async () => {
     now: () => nowMs,
     requestTimeoutMs: 50
   });
-  const verifier = new Auth0AccessTokenVerifier({
+  const verifier = new OidcAccessTokenVerifier({
     issuer: ISSUER,
     audience: AUDIENCE,
     keySource,

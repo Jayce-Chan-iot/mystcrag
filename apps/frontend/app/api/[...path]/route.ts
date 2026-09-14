@@ -1,5 +1,10 @@
 import { NextRequest } from "next/server";
-import { getAuth0Client, getAuthConfig, generateRequestId, touchSession } from "../../../src/features/auth/server/auth0-server";
+import {
+  getAuthConfig,
+  generateRequestId,
+  getAccessToken,
+  touchSession
+} from "../../../src/features/auth/server/oidc-server";
 import { handleBffRequest, type BffDeps } from "../../../src/features/auth/server/bff";
 import { logAuthEvent } from "../../../src/features/auth/server/auth-events";
 import { makeAccessTokenResolver, makeTouchSession } from "../../../src/features/auth/server/runtime-auth";
@@ -7,22 +12,25 @@ import { makeAccessTokenResolver, makeTouchSession } from "../../../src/features
 export const dynamic = "force-dynamic";
 
 /**
- * BFF (Backend-for-Frontend) proxy route. The full contract logic lives in
- * `src/features/auth/server/bff.ts` so it is unit-testable; this file is the thin
- * Next.js adapter that wires the real Auth0 SDK dependencies. In desktop mode the
- * access-token/rolling primitives are swapped for the server-only desktop identity so
- * the Auth0 SDK is never instantiated; the BFF contract itself is unchanged.
+ * BFF proxy route. Desktop mode swaps in the server-only desktop identity so the
+ * Authing OIDC client is never instantiated.
  */
 
-const getAccessToken = makeAccessTokenResolver(
+const oidcAccessTokenResolver = makeAccessTokenResolver(
   () => getAuthConfig(),
-  (request, sink) => getAuth0Client().getAccessToken(request, sink)
+  async (request, sink) => {
+    const result = await getAccessToken(request);
+    for (const cookie of result.setCookies) {
+      sink.headers.append("Set-Cookie", cookie);
+    }
+    return { token: result.token };
+  }
 );
 const touchSessionForMode = makeTouchSession(() => getAuthConfig(), touchSession);
 
 const deps: BffDeps = {
   getConfig: () => getAuthConfig(),
-  getAccessToken,
+  getAccessToken: (request, sink) => oidcAccessTokenResolver(request, sink),
   touchSession: touchSessionForMode,
   fetch: (url, init) => fetch(url, init),
   generateRequestId,

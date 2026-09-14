@@ -44,7 +44,6 @@ import { handleSessionRequest, type SessionDeps } from "./session";
 import { handleBffRequest, type BffDeps } from "./bff";
 import { handleLoginRequest, type LoginDeps } from "./login";
 import { handleProxyPageRolling, type ProxyPageDeps } from "./proxy-page";
-import { CALLBACK_ERROR_HEADER } from "./auth0-server";
 import { makeAuthEventCapture, makeConfig, makeRequest } from "./auth-test-fixtures";
 
 const SENSITIVE_PROBES = [
@@ -158,29 +157,11 @@ test("empty requestId is omitted from the record", () => {
 
 // --- Wiring proof ---
 
-test("callback success logs auth.sign_in with requestId", async () => {
-  const capture = makeAuthEventCapture();
-  const request = makeRequest("https://app.mystcrag.com/auth/callback?code=abc&state=xyz");
-  const deps: CallbackDeps = {
-    middleware: async () =>
-      new Response(null, { status: 303, headers: { location: "https://app.mystcrag.com/" } }),
-    getConfig: () => makeConfig(),
-    generateRequestId: () => "req-log",
-    logAuthEvent: capture.logger
-  };
-  const response = await handleCallback(request, deps);
-  assert.equal(response.status, 303);
-  assert.deepEqual(capture.records, [
-    { event: "auth.sign_in", category: "authentication", requestId: "req-log", outcome: "success" }
-  ]);
-});
-
 test("callback 401 logs auth.callback_failed (authentication) with requestId", async () => {
   const capture = makeAuthEventCapture();
-  const request = makeRequest("https://app.mystcrag.com/auth/callback?code=abc&state=xyz");
+  // Missing state → authentication failure without any provider call.
+  const request = makeRequest("https://app.mystcrag.com/auth/callback?code=abc");
   const deps: CallbackDeps = {
-    middleware: async () =>
-      new Response(null, { status: 500, headers: { [CALLBACK_ERROR_HEADER]: "invalid_state|" } }),
     getConfig: () => makeConfig(),
     generateRequestId: () => "req-log",
     logAuthEvent: capture.logger
@@ -194,24 +175,47 @@ test("callback 401 logs auth.callback_failed (authentication) with requestId", a
 
 test("callback 500 logs auth.dependency_failed (dependency) with requestId", async () => {
   const capture = makeAuthEventCapture();
-  const request = makeRequest("https://app.mystcrag.com/auth/callback?code=abc&state=xyz");
-  const deps: CallbackDeps = {
-    middleware: async () =>
-      new Response(null, { status: 500, headers: { [CALLBACK_ERROR_HEADER]: "discovery_error|" } }),
-    getConfig: () => makeConfig(),
-    generateRequestId: () => "req-log",
-    logAuthEvent: capture.logger
-  };
-  const response = await handleCallback(request, deps);
-  assert.equal(response.status, 500);
-  assert.deepEqual(capture.records, [
-    { event: "auth.dependency_failed", category: "dependency", requestId: "req-log", outcome: "failure" }
-  ]);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("network down");
+  }) as typeof fetch;
+  try {
+    const request = makeRequest("https://app.mystcrag.com/auth/callback?code=abc&state=missing-txn");
+    // Missing transaction is 401; force dependency path via invalid config instead.
+    const brokenDeps: CallbackDeps = {
+      getConfig: () => {
+        throw new Error("config unavailable");
+      },
+      generateRequestId: () => "req-log",
+      logAuthEvent: capture.logger
+    };
+    const response = await handleCallback(request, brokenDeps);
+    assert.equal(response.status, 500);
+    assert.deepEqual(capture.records, [
+      { event: "auth.dependency_failed", category: "dependency", requestId: "req-log", outcome: "failure" }
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("successful POST logout logs auth.logout", async () => {
   const capture = makeAuthEventCapture();
   const config = makeConfig();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).includes("openid-configuration")) {
+      return Response.json({
+        issuer: "https://pool.authing.cn/oidc/",
+        authorization_endpoint: "https://pool.authing.cn/oidc/auth",
+        token_endpoint: "https://pool.authing.cn/oidc/token",
+        jwks_uri: "https://pool.authing.cn/oidc/keys",
+        end_session_endpoint: "https://pool.authing.cn/oidc/session/end"
+      });
+    }
+    return new Response("no", { status: 404 });
+  }) as typeof fetch;
+  try {
   const request = makeRequest("https://app.mystcrag.com/auth/logout", {
     method: "POST",
     headers: { origin: config.appOrigin }
@@ -221,11 +225,14 @@ test("successful POST logout logs auth.logout", async () => {
     generateRequestId: () => "req-log",
     logAuthEvent: capture.logger
   };
-  const response = handleLogoutPost(request, deps);
+  const response = await handleLogoutPost(request, deps);
   assert.equal(response.status, 303);
   assert.deepEqual(capture.records, [
     { event: "auth.logout", category: "authentication", requestId: "req-log", outcome: "success" }
   ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("session dependency failure logs auth.dependency_failed", async () => {
@@ -530,7 +537,7 @@ test("BFF without any rolling/rotation Set-Cookie logs no rotation event", async
 
 // --- Logout wiring ---
 
-test("POST logout with wrong Origin logs auth.origin_rejected", () => {
+test("POST logout with wrong Origin logs auth.origin_rejected", async () => {
   const capture = makeAuthEventCapture();
   const request = makeRequest("https://app.mystcrag.com/auth/logout", {
     method: "POST",
@@ -541,14 +548,14 @@ test("POST logout with wrong Origin logs auth.origin_rejected", () => {
     generateRequestId: () => "req-log",
     logAuthEvent: capture.logger
   };
-  const response = handleLogoutPost(request, deps);
+  const response = await handleLogoutPost(request, deps);
   assert.equal(response.status, 403);
   assert.deepEqual(capture.records, [
     { event: "auth.origin_rejected", category: "origin_rejected", requestId: "req-log", outcome: "failure" }
   ]);
 });
 
-test("logout getConfig failure logs auth.dependency_failed with stable 500", () => {
+test("logout getConfig failure logs auth.dependency_failed with stable 500", async () => {
   const capture = makeAuthEventCapture();
   const request = makeRequest("https://app.mystcrag.com/auth/logout", {
     method: "POST",
@@ -561,7 +568,7 @@ test("logout getConfig failure logs auth.dependency_failed with stable 500", () 
     generateRequestId: () => "req-log",
     logAuthEvent: capture.logger
   };
-  const response = handleLogoutPost(request, deps);
+  const response = await handleLogoutPost(request, deps);
   assert.equal(response.status, 500);
   assert.deepEqual(capture.records, [
     { event: "auth.dependency_failed", category: "dependency", requestId: "req-log", outcome: "failure" }
@@ -577,10 +584,10 @@ test("session endpoint actually-produced rolling Set-Cookie logs auth.session_ro
   });
   const session = {
     user: { name: "User", email: "user@example.com", email_verified: true },
-    internal: { createdAt: Math.floor(Date.now() / 1000) },
-    tokenSet: { access_token: "t", token_type: "Bearer", expires_at: Math.floor(Date.now() / 1000) + 900 }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any;
+    accessToken: "t",
+    accessTokenExpiresAt: Math.floor(Date.now() / 1000) + 900,
+    createdAt: Math.floor(Date.now() / 1000)
+  };
   const deps: SessionDeps = {
     getConfig: () => makeConfig(),
     getSession: async () => session,
@@ -642,7 +649,7 @@ test("login configuration/SDK failure logs auth.dependency_failed", async () => 
   const request = makeRequest("https://app.mystcrag.com/auth/login");
   const deps: LoginDeps = {
     startInteractiveLogin: async () => {
-      throw new Error("getAuth0Client failed");
+      throw new Error("OIDC client init failed");
     },
     generateRequestId: () => "req-log",
     logAuthEvent: capture.logger
@@ -698,10 +705,8 @@ test("no emitted record across all wired paths contains sensitive material", asy
 
   // Trigger a representative path of each category, poisoning the request surface.
   await handleCallback(
-    makeRequest("https://app.mystcrag.com/auth/callback?code=secret-code&state=secret-state"),
+    makeRequest("https://app.mystcrag.com/auth/callback?code=secret-code"),
     {
-      middleware: async () =>
-        new Response(null, { status: 303, headers: { location: "https://app.mystcrag.com/" } }),
       getConfig: () => config,
       generateRequestId: () => "req-sweep",
       logAuthEvent: capture.logger

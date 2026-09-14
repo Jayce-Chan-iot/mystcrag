@@ -2,7 +2,7 @@
  * Page-navigation SDK middleware handling for the Next.js 16 network boundary.
  *
  * Frozen contract (fail closed):
- * - Any failure of getAuth0Client()/configuration resolution or of the SDK middleware
+ * - Any failure of OIDC rolling()/configuration resolution or of the SDK middleware
  *   during a page navigation returns a stable HTTP 500 with the unified error envelope
  *   `{error:{code:"INTERNAL_ERROR",message,requestId}}`, Cache-Control: no-store and
  *   Pragma: no-cache. It is NEVER `NextResponse.next()` — a page request must not enter

@@ -1,7 +1,8 @@
 import { isIP } from "node:net";
 
-import { Auth0AccessTokenVerifier } from "./auth0-access-token-verifier.js";
+import { OidcAccessTokenVerifier } from "./oidc-access-token-verifier.js";
 import type { AccessTokenVerifier } from "./auth-provider.js";
+import { OidcDiscoverySource } from "./oidc-discovery.js";
 import { JwksKeySource } from "./jwks-key-source.js";
 import { SignedTestTokenAuthProvider } from "./signed-test-auth-provider.js";
 
@@ -13,64 +14,87 @@ function requireConfiguration(environment: AuthEnvironment, name: string): strin
   return value;
 }
 
-function requireCanonicalAuth0Issuer(environment: AuthEnvironment): string {
-  const raw = requireConfiguration(environment, "MYSTCRAG_AUTH_ISSUER");
-  const invalid = (detail: string): Error =>
-    new Error(
-      `MYSTCRAG_AUTH_ISSUER must be the exact canonical HTTPS issuer URL (for example https://tenant.auth0.com/): ${detail}.`
-    );
+function invalidIssuer(detail: string): Error {
+  return new Error(
+    `MYSTCRAG_AUTH_ISSUER must be the exact canonical HTTPS OIDC issuer URL (for example https://example.authing.cn/oidc): ${detail}.`
+  );
+}
 
-  if (!/^https:\/\/[^\s]+\/$/.test(raw)) {
-    throw invalid("it must be an HTTPS URL with a trailing slash and no whitespace");
+/**
+ * Validates an Authing-compatible OIDC issuer.
+ * HTTPS DNS host only. Path may be `/` or `/oidc` (Authing user-pool OIDC base).
+ * Trailing slash is optional. Query, fragment, credentials, wildcard, IP and
+ * loopback hosts are rejected.
+ */
+function requireCanonicalOidcIssuer(environment: AuthEnvironment): string {
+  const raw = requireConfiguration(environment, "MYSTCRAG_AUTH_ISSUER");
+
+  if (!/^https:\/\/[^\s]+$/.test(raw)) {
+    throw invalidIssuer("it must be an HTTPS URL with no whitespace");
   }
   let issuer: URL;
   try {
     issuer = new URL(raw);
   } catch {
-    throw invalid("it must be a parseable URL");
+    throw invalidIssuer("it must be a parseable URL");
   }
   if (issuer.protocol !== "https:") {
-    throw invalid("only the https scheme is allowed");
+    throw invalidIssuer("only the https scheme is allowed");
   }
   if (issuer.hostname.length === 0) {
-    throw invalid("a hostname is required");
+    throw invalidIssuer("a hostname is required");
   }
   if (issuer.hostname.includes("*")) {
-    throw invalid("wildcard hostnames are not accepted as Auth0 issuers");
+    throw invalidIssuer("wildcard hostnames are not accepted as OIDC issuers");
   }
   const bareHostname =
     issuer.hostname.startsWith("[") && issuer.hostname.endsWith("]")
       ? issuer.hostname.slice(1, -1)
       : issuer.hostname;
   if (isIP(bareHostname) !== 0) {
-    throw invalid("the issuer host must be a DNS hostname, not an IP literal");
+    throw invalidIssuer("the issuer host must be a DNS hostname, not an IP literal");
   }
   if (bareHostname === "localhost" || bareHostname === "localhost.") {
-    throw invalid("loopback hosts are not accepted as Auth0 issuers");
+    throw invalidIssuer("loopback hosts are not accepted as OIDC issuers");
   }
   if (issuer.username !== "" || issuer.password !== "") {
-    throw invalid("credentials in the issuer URL are not allowed");
+    throw invalidIssuer("credentials in the issuer URL are not allowed");
   }
   if (issuer.search !== "") {
-    throw invalid("query strings are not allowed");
+    throw invalidIssuer("query strings are not allowed");
   }
   if (issuer.hash !== "") {
-    throw invalid("fragments are not allowed");
+    throw invalidIssuer("fragments are not allowed");
   }
-  if (issuer.pathname !== "/") {
-    throw invalid("paths are not allowed");
+  const path = issuer.pathname.replace(/\/$/, "") || "/";
+  if (path !== "/" && path !== "/oidc") {
+    throw invalidIssuer("the only allowed issuer paths are '/' and '/oidc'");
   }
-  return raw;
+  return raw.endsWith("/") ? raw : `${raw}/`;
 }
 
-function createAuth0Verifier(environment: AuthEnvironment): AccessTokenVerifier {
-  const issuer = requireCanonicalAuth0Issuer(environment);
+/**
+ * Builds a discovery-backed OIDC verifier. JWKS URI comes from the discovery
+ * document (`jwks_uri`); the factory never concatenates an Auth0-style
+ * `{issuer}.well-known/jwks.json` path as the sole authority.
+ */
+function createOidcVerifier(environment: AuthEnvironment): AccessTokenVerifier {
+  const issuer = requireCanonicalOidcIssuer(environment);
   const audience = requireConfiguration(environment, "MYSTCRAG_AUTH_AUDIENCE");
-  const jwksUrl = `${issuer}.well-known/jwks.json`;
-  return new Auth0AccessTokenVerifier({
+  const discovery = new OidcDiscoverySource({ issuer });
+  let keySource: JwksKeySource | null = null;
+  return new OidcAccessTokenVerifier({
     issuer,
     audience,
-    keySource: new JwksKeySource({ url: jwksUrl })
+    keySource: {
+      async getJwks(kid?: string) {
+        if (keySource === null) {
+          const jwksUri = await discovery.getJwksUri();
+          keySource = new JwksKeySource({ url: jwksUri });
+        }
+        return keySource.getJwks(kid);
+      }
+    }
   });
 }
 
@@ -81,8 +105,13 @@ export function createAccessTokenVerifierFromEnvironment(
   if (!providerName) {
     throw new Error("Authentication provider is not configured.");
   }
+  if (providerName === "authing") {
+    return createOidcVerifier(environment);
+  }
   if (providerName === "auth0") {
-    return createAuth0Verifier(environment);
+    throw new Error(
+      "Authentication provider 'auth0' was removed. Set MYSTCRAG_AUTH_PROVIDER to 'authing' for production OIDC or 'signed-test' for local development."
+    );
   }
   if (providerName !== "signed-test") {
     throw new Error(`Unsupported authentication provider: ${providerName}`);

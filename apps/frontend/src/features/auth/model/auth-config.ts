@@ -18,7 +18,7 @@ export type AuthConfig = {
    * cookie Secure flag is derived exclusively from the app origin protocol.
    */
   readonly environment: AuthEnvironment;
-  readonly authProvider: "auth0" | "signed-test";
+  readonly authProvider: "authing" | "signed-test";
   readonly authIssuer: string;
   readonly authAudience: string;
   readonly authClientId: string;
@@ -95,9 +95,9 @@ function isLoopbackOrigin(origin: string): boolean {
 }
 
 /**
- * Validates an Auth0 issuer URL.
- * Must be canonical https://dns-host/ form with trailing slash.
- * No path, query, fragment, credentials, wildcard, or IP literals.
+ * Validates an Authing-compatible OIDC issuer URL.
+ * HTTPS DNS host only. Path may be `/` or `/oidc` (trailing slash optional).
+ * No query, fragment, credentials, wildcard, or IP literals.
  */
 function isValidAuthIssuer(value: string): boolean {
   try {
@@ -105,18 +105,21 @@ function isValidAuthIssuer(value: string): boolean {
     if (url.protocol !== "https:") return false;
     if (!url.host) return false;
     if (url.username || url.password) return false;
-    if (url.pathname !== "/") return false;
     if (url.search) return false;
     if (url.hash) return false;
     if (WILDCARD_PATTERN.test(url.host)) return false;
     if (IP_LITERAL_PATTERN.test(url.hostname)) return false;
     if (url.hostname === "localhost" || url.hostname.endsWith(".localhost")) return false;
-    // Must end with trailing slash (canonical form)
-    if (!value.endsWith("/")) return false;
+    const path = url.pathname.replace(/\/$/, "") || "/";
+    if (path !== "/" && path !== "/oidc") return false;
     return true;
   } catch {
     return false;
   }
+}
+
+function normalizeOidcIssuer(value: string): string {
+  return value.endsWith("/") ? value : `${value}/`;
 }
 
 // Use Record<string, string | undefined> to accept any env-like object
@@ -164,8 +167,10 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
   // Validate authProvider
   if (!authProvider) {
     errors.push("MYSTCRAG_AUTH_PROVIDER is required");
-  } else if (authProvider !== "auth0" && authProvider !== "signed-test") {
-    errors.push("MYSTCRAG_AUTH_PROVIDER must be 'auth0' or 'signed-test'");
+  } else if (authProvider === "auth0") {
+    errors.push("MYSTCRAG_AUTH_PROVIDER='auth0' was removed; use 'authing' for production OIDC");
+  } else if (authProvider !== "authing" && authProvider !== "signed-test") {
+    errors.push("MYSTCRAG_AUTH_PROVIDER must be 'authing' or 'signed-test'");
   } else if (authProvider === "signed-test" && isProduction) {
     errors.push("MYSTCRAG_AUTH_PROVIDER='signed-test' is not allowed in production/staging");
   } else if (authProvider === "signed-test" && !enableSignedTestAuth) {
@@ -175,8 +180,8 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
   // Validate authIssuer
   if (!authIssuer) {
     errors.push("MYSTCRAG_AUTH_ISSUER is required");
-  } else if (authProvider === "auth0" && !isValidAuthIssuer(authIssuer)) {
-    errors.push("MYSTCRAG_AUTH_ISSUER must be canonical https://dns-host/ with trailing slash, no path/query/fragment/credentials/wildcard/IP");
+  } else if (authProvider === "authing" && !isValidAuthIssuer(authIssuer)) {
+    errors.push("MYSTCRAG_AUTH_ISSUER must be HTTPS OIDC issuer with path '/' or '/oidc', no query/fragment/credentials/wildcard/IP/loopback");
   }
 
   // Validate authAudience
@@ -184,13 +189,13 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
     errors.push("MYSTCRAG_AUTH_AUDIENCE is required");
   }
 
-  // Validate authClientId and authClientSecret for auth0
-  if (authProvider === "auth0") {
+  // Validate authClientId and authClientSecret for authing
+  if (authProvider === "authing") {
     if (!authClientId) {
-      errors.push("MYSTCRAG_AUTH_CLIENT_ID is required for auth0 provider");
+      errors.push("MYSTCRAG_AUTH_CLIENT_ID is required for authing provider");
     }
     if (!authClientSecret) {
-      errors.push("MYSTCRAG_AUTH_CLIENT_SECRET is required for auth0 provider");
+      errors.push("MYSTCRAG_AUTH_CLIENT_SECRET is required for authing provider");
     }
   }
 
@@ -277,8 +282,8 @@ export function resolveAuthConfig(env: EnvLike = process.env as EnvLike): AuthCo
   return {
     appOrigin,
     environment,
-    authProvider: authProvider as "auth0" | "signed-test",
-    authIssuer,
+    authProvider: authProvider as "authing" | "signed-test",
+    authIssuer: authProvider === "authing" ? normalizeOidcIssuer(authIssuer) : authIssuer,
     authAudience,
     authClientId,
     authClientSecret,

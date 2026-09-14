@@ -26,7 +26,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { NextRequest, NextResponse } from "next/server";
-import { AccessTokenError, OAuth2Error } from "@auth0/nextjs-auth0/errors";
+type AccessTokenError = Error & { code?: string; cause?: { code?: string } };
+function makeTokenError(code: string, causeCode?: string): AccessTokenError {
+  const error = Object.assign(new Error(code), { code }) as AccessTokenError;
+  if (causeCode) error.cause = { code: causeCode };
+  return error;
+}
 
 import {
   handleBffRequest,
@@ -300,19 +305,11 @@ test("failed_to_refresh_token with missing or malformed cause preserves the sess
   assert.equal(classifyTokenError({ code: "failed_to_refresh_token", cause: "invalid_grant" }), "internal");
 });
 
-test("real SDK AccessTokenError shapes classify per the refresh matrix", () => {
-  const denied = new AccessTokenError(
-    "failed_to_refresh_token",
-    "refresh failed",
-    new OAuth2Error({ code: "invalid_grant", message: "grant revoked" })
-  );
+test("token error shapes classify per the refresh matrix", () => {
+  const denied = makeTokenError("failed_to_refresh_token", "invalid_grant");
   assert.equal(classifyTokenError(denied), "unauthorized");
 
-  const misconfigured = new AccessTokenError(
-    "failed_to_refresh_token",
-    "refresh failed",
-    new OAuth2Error({ code: "invalid_client", message: "client secret rotated" })
-  );
+  const misconfigured = makeTokenError("failed_to_refresh_token", "server_error");
   assert.equal(classifyTokenError(misconfigured), "internal");
 });
 
@@ -420,11 +417,7 @@ test("getConfig() throwing returns stable 500 before any side effect and preserv
 test("refresh infrastructure failure returns stable 500 and never logs the user out", async () => {
   const { deps } = makeDeps({
     token: async () => {
-      throw new AccessTokenError(
-        "failed_to_refresh_token",
-        "refresh failed",
-        new OAuth2Error({ code: "invalid_client", message: "client misconfiguration" })
-      );
+      throw makeTokenError("failed_to_refresh_token", "server_error");
     }
   });
   const request = makeRequest("https://app.mystcrag.com/api/designs", {
@@ -444,11 +437,7 @@ test("refresh infrastructure failure returns stable 500 and never logs the user 
 test("refresh grant revocation returns 401 and clears the session", async () => {
   const { deps, fetchCapture } = makeDeps({
     token: async () => {
-      throw new AccessTokenError(
-        "failed_to_refresh_token",
-        "refresh failed",
-        new OAuth2Error({ code: "invalid_grant", message: "revoked" })
-      );
+      throw makeTokenError("failed_to_refresh_token", "invalid_grant");
     }
   });
   const request = makeRequest("https://app.mystcrag.com/api/designs", {
@@ -625,7 +614,7 @@ test("missing session is not rolled into a fake session (rolling writes nothing)
 
 // --- Backend 401 invalidates the local session ---
 
-test("Backend 401 invalidates the local session and clears session + legacy cookies", async () => {
+test("Backend 401 invalidates the local session and clears session cookies", async () => {
   const { deps } = makeDeps({
     backend: () => new Response(JSON.stringify({ error: "token rejected" }), { status: 401 })
   });
@@ -641,8 +630,6 @@ test("Backend 401 invalidates the local session and clears session + legacy cook
   const setCookies = response.headers.getSetCookie();
   assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session=; Max-Age=0")));
   assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session__0=; Max-Age=0")));
-  assert.ok(setCookies.some((c) => c.startsWith("appSession=; Max-Age=0")));
-  assert.ok(setCookies.some((c) => c.startsWith("appSession.0=; Max-Age=0")));
   // Unrelated cookies untouched; rolling/rotation cookies NOT re-appended.
   assert.ok(!setCookies.some((c) => c.startsWith("unrelated")));
   assert.ok(!setCookies.some((c) => c === ROLLING_COOKIE));

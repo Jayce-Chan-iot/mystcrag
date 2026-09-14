@@ -29,8 +29,8 @@ export function makeConfig(overrides: Partial<AuthConfig> = {}): AuthConfig {
   return {
     appOrigin: "https://app.mystcrag.com",
     environment: "production",
-    authProvider: "auth0",
-    authIssuer: "https://mystcrag.auth0.com/",
+    authProvider: "authing",
+    authIssuer: "https://pool.authing.cn/oidc/",
     authAudience: "mystcrag-backend",
     authClientId: "client-id",
     authClientSecret: "client-secret",

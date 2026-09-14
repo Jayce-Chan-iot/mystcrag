@@ -4,23 +4,25 @@
 
 **Task:** TASK-AUTH-001
 
-**Decision date:** 2026-08-25
+**Decision date:** 2026-08-25 (Auth0 baseline); 2026-09-15 TASK-AUTH-011 migrates production provider to Authing
 **State:** `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`
 
 This document is the controlling production identity and browser-session contract. TASK-AUTH-001 freezes behavior only. AUTH-002 may select and pin dependencies and environment templates; AUTH-003 through AUTH-005 implement persistence, Backend verification, and the Next.js session boundary; AUTH-006 establishes security/E2E gates; only AUTH-007 may issue final Feature acceptance.
 
+TASK-AUTH-011 (2026-09-15): production identity provider is **Authing** (China user pool first) using the same standard OIDC Authorization Code + PKCE (`S256`) topology. The Next.js BFF remains a confidential client holding the encrypted Cookie Session. `signed-test` remains development/test only. Auth0-specific SDK runtime is removed; issuer may be `https://<pool>/oidc`. Discovery supplies `jwks_uri` and `end_session_endpoint`. Cookie, returnTo, session projection, logout Origin, and `(issuer, subject)` rules below are unchanged.
+
 ## 1. Approved architecture
 
-- Identity provider: Auth0, using OIDC/OAuth 2.0 Authorization Code Flow with PKCE (`S256`).
-- Environments: development, staging, and production use separate Auth0 Applications/Clients. Each has exact callback, logout, and web-origin allowlists. Wildcard callback/origin entries are forbidden.
+- Identity provider: **Authing**, using OIDC/OAuth 2.0 Authorization Code Flow with PKCE (`S256`).
+- Environments: development, staging, and production use separate Authing applications. Each has exact callback, logout, and web-origin allowlists. Wildcard callback/origin entries are forbidden.
 - Browser topology:
 
 ```text
 Browser
   -> opaque HttpOnly session cookie
-  -> Next.js Server/BFF
+  -> Next.js Server/BFF (custom OIDC client + jose JWE session)
   -> short-lived Access Token in Authorization header
-  -> Fastify AuthProvider
+  -> Fastify OIDC AuthProvider
   -> ExternalIdentity (issuer, subject)
   -> internal User.id
   -> actor-scoped repositories

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { Auth0AccessTokenVerifier } from "./auth0-access-token-verifier.js";
+import { OidcAccessTokenVerifier } from "./oidc-access-token-verifier.js";
 import { CredentialRejectedError } from "./auth-errors.js";
 import { createAccessTokenVerifierFromEnvironment } from "./auth-provider.factory.js";
 import {
@@ -18,15 +18,15 @@ const configuredTestEnvironment = {
   MYSTCRAG_AUTH_AUDIENCE: "mystcrag-backend"
 };
 
-const productionAuth0Environment = {
+const productionAuthingEnvironment = {
   NODE_ENV: "production",
-  MYSTCRAG_AUTH_PROVIDER: "auth0",
-  MYSTCRAG_AUTH_ISSUER: "https://mystcrag-tenant.auth0.example.com/",
+  MYSTCRAG_AUTH_PROVIDER: "authing",
+  MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidc",
   MYSTCRAG_AUTH_AUDIENCE: "https://api.mystcrag.example.com"
 };
 
-const developmentAuth0Environment = {
-  ...productionAuth0Environment,
+const developmentAuthingEnvironment = {
+  ...productionAuthingEnvironment,
   NODE_ENV: "development"
 };
 
@@ -72,60 +72,65 @@ test("an unsupported provider is rejected", () => {
   assert.throws(
     () =>
       createAccessTokenVerifierFromEnvironment({
-        ...productionAuth0Environment,
+        ...productionAuthingEnvironment,
         MYSTCRAG_AUTH_PROVIDER: "oauth-proxy"
       }),
     /Unsupported authentication provider/
   );
 });
 
-test("a fully configured production auth0 environment builds the auth0 verifier", () => {
-  const verifier = createAccessTokenVerifierFromEnvironment(productionAuth0Environment);
-  assert.ok(verifier instanceof Auth0AccessTokenVerifier);
+test("the removed auth0 provider is rejected with a migration message", () => {
+  assert.throws(
+    () =>
+      createAccessTokenVerifierFromEnvironment({
+        ...productionAuthingEnvironment,
+        MYSTCRAG_AUTH_PROVIDER: "auth0"
+      }),
+    /auth0/
+  );
 });
 
-test("auth0 configuration without an issuer fails closed", () => {
-  const { MYSTCRAG_AUTH_ISSUER: _issuer, ...withoutIssuer } = productionAuth0Environment;
+test("a fully configured production authing environment builds the OIDC verifier", () => {
+  const verifier = createAccessTokenVerifierFromEnvironment(productionAuthingEnvironment);
+  assert.ok(verifier instanceof OidcAccessTokenVerifier);
+});
+
+test("authing configuration without an issuer fails closed", () => {
+  const { MYSTCRAG_AUTH_ISSUER: _issuer, ...withoutIssuer } = productionAuthingEnvironment;
   assert.throws(
     () => createAccessTokenVerifierFromEnvironment(withoutIssuer),
     /MYSTCRAG_AUTH_ISSUER/
   );
 });
 
-test("auth0 configuration without an audience fails closed", () => {
+test("authing configuration without an audience fails closed", () => {
   const { MYSTCRAG_AUTH_AUDIENCE: _audience, ...withoutAudience } =
-    productionAuth0Environment;
+    productionAuthingEnvironment;
   assert.throws(
     () => createAccessTokenVerifierFromEnvironment(withoutAudience),
     /MYSTCRAG_AUTH_AUDIENCE/
   );
 });
 
-test("the auth0 issuer must be the exact canonical HTTPS form", () => {
+test("the authing issuer must be HTTPS and reject unsafe forms", () => {
   const rejectedIssuers = [
-    "http://mystcrag-tenant.auth0.example.com/",
+    "http://mystcrag-pool.authing.cn/oidc",
     "not a url",
-    "ftp://mystcrag-tenant.auth0.example.com/",
-    "https://mystcrag-tenant.auth0.example.com",
-    "https://mystcrag-tenant.auth0.example.com/#fragment",
-    "https://mystcrag-tenant.auth0.example.com/?query=1",
-    "https://mystcrag-tenant.auth0.example.com/path/",
-    "https://user:pass@mystcrag-tenant.auth0.example.com/",
-    "https://localhost/",
-    "https://LOCALHOST/",
-    "https://localhost./",
-    "https://127.0.0.1/",
-    "https://127.0.0.7/",
-    "https://127.1/",
-    "https://[::1]/",
-    "https://[0:0:0:0:0:0:0:1]/",
-    "https://[::ffff:127.0.0.1]/"
+    "ftp://mystcrag-pool.authing.cn/oidc",
+    "https://mystcrag-pool.authing.cn/oidc#fragment",
+    "https://mystcrag-pool.authing.cn/oidc?query=1",
+    "https://mystcrag-pool.authing.cn/custom-path",
+    "https://user:pass@mystcrag-pool.authing.cn/oidc",
+    "https://localhost/oidc",
+    "https://LOCALHOST/oidc",
+    "https://127.0.0.1/oidc",
+    "https://[::1]/oidc"
   ];
   for (const issuer of rejectedIssuers) {
     assert.throws(
       () =>
         createAccessTokenVerifierFromEnvironment({
-          ...productionAuth0Environment,
+          ...productionAuthingEnvironment,
           MYSTCRAG_AUTH_ISSUER: issuer
         }),
       { message: /MYSTCRAG_AUTH_ISSUER/ },
@@ -134,21 +139,18 @@ test("the auth0 issuer must be the exact canonical HTTPS form", () => {
   }
 });
 
-test("the auth0 issuer host must be an exact DNS hostname", () => {
+test("the authing issuer host must be an exact DNS hostname", () => {
   const rejectedIssuers = [
-    "https://*.example.com/",
-    "https://tenant.*.auth0.example.com/",
-    "https://8.8.8.8/",
-    "https://0.0.0.0/",
-    "https://192.168.1.10/",
-    "https://[2001:db8::1]/",
-    "https://[fe80::1]/"
+    "https://*.authing.cn/oidc",
+    "https://pool.*.authing.cn/oidc",
+    "https://8.8.8.8/oidc",
+    "https://192.168.1.10/oidc"
   ];
   for (const issuer of rejectedIssuers) {
     assert.throws(
       () =>
         createAccessTokenVerifierFromEnvironment({
-          ...productionAuth0Environment,
+          ...productionAuthingEnvironment,
           MYSTCRAG_AUTH_ISSUER: issuer
         }),
       { message: /MYSTCRAG_AUTH_ISSUER/ },
@@ -157,40 +159,48 @@ test("the auth0 issuer host must be an exact DNS hostname", () => {
   }
 });
 
-test("custom-domain canonical HTTPS issuers are accepted", () => {
+test("Authing /oidc issuers are accepted with or without a trailing slash", () => {
   for (const issuer of [
-    "https://auth.mystcrag.example.com/",
-    "https://mystcrag-tenant.auth0.example.com/",
-    "https://login.mystcrag.example/"
+    "https://mystcrag-pool.authing.cn/oidc",
+    "https://mystcrag-pool.authing.cn/oidc/",
+    "https://auth.mystcrag.example.com/oidc"
   ]) {
     const verifier = createAccessTokenVerifierFromEnvironment({
-      ...productionAuth0Environment,
+      ...productionAuthingEnvironment,
       MYSTCRAG_AUTH_ISSUER: issuer
     });
-    assert.ok(verifier instanceof Auth0AccessTokenVerifier, `issuer=${issuer}`);
+    assert.ok(verifier instanceof OidcAccessTokenVerifier, `issuer=${issuer}`);
   }
 });
 
-test("development and test also require an HTTPS auth0 issuer", () => {
+test("root-path HTTPS issuers remain accepted", () => {
+  const verifier = createAccessTokenVerifierFromEnvironment({
+    ...productionAuthingEnvironment,
+    MYSTCRAG_AUTH_ISSUER: "https://auth.mystcrag.example.com/"
+  });
+  assert.ok(verifier instanceof OidcAccessTokenVerifier);
+});
+
+test("development and test also require an HTTPS authing issuer", () => {
   assert.throws(
     () =>
       createAccessTokenVerifierFromEnvironment({
-        ...developmentAuth0Environment,
-        MYSTCRAG_AUTH_ISSUER: "http://mystcrag-tenant.auth0.example.com/"
+        ...developmentAuthingEnvironment,
+        MYSTCRAG_AUTH_ISSUER: "http://mystcrag-pool.authing.cn/oidc"
       }),
     /MYSTCRAG_AUTH_ISSUER/
   );
   assert.throws(
     () =>
       createAccessTokenVerifierFromEnvironment({
-        ...developmentAuth0Environment,
-        MYSTCRAG_AUTH_ISSUER: "https://localhost/"
+        ...developmentAuthingEnvironment,
+        MYSTCRAG_AUTH_ISSUER: "https://localhost/oidc"
       }),
     /MYSTCRAG_AUTH_ISSUER/
   );
   assert.ok(
-    createAccessTokenVerifierFromEnvironment(developmentAuth0Environment) instanceof
-      Auth0AccessTokenVerifier
+    createAccessTokenVerifierFromEnvironment(developmentAuthingEnvironment) instanceof
+      OidcAccessTokenVerifier
   );
 });
 
