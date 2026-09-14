@@ -16,6 +16,7 @@ import {
   restoreFocusTo,
   SERVER_SAFE_LOGIN_HREF
 } from "./auth-required-dialog";
+import { resolveAuthPromptMode } from "./session-client";
 
 const noop = () => undefined;
 
@@ -158,4 +159,32 @@ test("default dialog SSRs the fixed server-safe href so hydration cannot mismatc
   const markup = renderToStaticMarkup(<AuthRequiredDialog onDismiss={noop} />);
   assert.ok(markup.includes(`href="${SERVER_SAFE_LOGIN_HREF}"`), markup);
   assert.ok(!markup.includes("buildLoginHref"), "no window-derived href may leak into SSR output");
+});
+
+// --- Shared session snapshot classification (TASK-AUTH-010) ---
+
+test("only the explicit desktop session capability selects desktop recovery", () => {
+  assert.equal(resolveAuthPromptMode({ status: "authenticated", session: {
+    authenticated: true,
+    user: { displayName: "本地演示用户" },
+    logoutAvailable: false
+  }}), "desktop-recovery");
+  assert.equal(resolveAuthPromptMode({ status: "unauthenticated", session: {
+    authenticated: false
+  }}), "auth0");
+  assert.equal(resolveAuthPromptMode({ status: "authenticated", session: {
+    authenticated: true,
+    user: { displayName: "普通用户" }
+  }}), "auth0");
+});
+
+test("session-client source never classifies desktop mode from displayName or secrets", () => {
+  const source = readFileSync(new URL("./session-client.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /displayName\s*===|displayName\.includes|includes\(["']本地演示/);
+  assert.doesNotMatch(source, /__NEXT_PUBLIC|access_token|Bearer|issuer|subject|secret/i);
+  assert.match(source, /logoutAvailable === false/);
+  assert.match(source, /export function resolveAuthPromptMode/);
+  assert.match(source, /export async function fetchSessionSnapshot/);
+  assert.match(source, /export type SessionState/);
+  assert.match(source, /export type SessionSnapshot/);
 });
