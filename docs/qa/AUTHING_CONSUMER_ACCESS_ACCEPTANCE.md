@@ -2,7 +2,7 @@
 
 **Task:** TASK-AUTH-011
 **Branch:** `task/auth-011-authing-oidc-migration`
-**Operator:** Xiaomi MiMo (implementation) / Codex review pending
+**Operator:** Xiaomi MiMo (implementation) / Codex review accepted at `db17fb1`
 **Date:** 2026-09-15
 **Overall status:** CODE_VERIFIED / LIVE_TENANT_BLOCKED
 
@@ -91,5 +91,5 @@ Never request or record client secret / session secret in chat.
 
 ## 5. Handoff
 
-- Live tenant smoke remains a separate operations task after Codex accepts this code candidate.
+- TASK-AUTH-011 code is accepted; live tenant smoke remains a separate operations task.
 - `pnpm validate` baseline failure on missing `apps/backend/src/modules/community` is pre-existing and outside this task.
