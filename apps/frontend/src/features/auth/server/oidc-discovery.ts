@@ -1,11 +1,11 @@
 /**
  * OIDC discovery cache for Authing.
  *
- * Security boundaries:
+ * Security boundaries (hostname syntax + allowlist policy; not DNS-resolve protection):
  * - Endpoints must be HTTPS and same-origin as the configured issuer.
- * - Issuer host must be a trusted Authing domain (*.authing.cn by default).
+ * - Issuer host must match *.authing.cn or an additive allowlist entry.
  * - Redirects are not followed; every hop/final URL is re-validated.
- * - Loopback / link-local / private hosts are rejected.
+ * - Literal IP / localhost / .local / .internal hostnames are rejected.
  */
 
 import { ProviderUnavailableError } from "./oidc-errors";
@@ -79,8 +79,9 @@ function isPrivateOrReservedHostname(hostname: string): boolean {
 function isTrustedAuthingHost(hostname: string, allowlist: readonly string[]): boolean {
   if (isPrivateOrReservedHostname(hostname)) return false;
   const lower = hostname.toLowerCase();
-  if (allowlist.length === 0) {
-    return DEFAULT_AUTHING_HOST_SUFFIXES.some((suffix) => lower.endsWith(suffix));
+  // Allowlist is additive to default *.authing.cn trust.
+  if (DEFAULT_AUTHING_HOST_SUFFIXES.some((suffix) => lower.endsWith(suffix))) {
+    return true;
   }
   return allowlist.some((entry) => {
     const host = entry.toLowerCase();

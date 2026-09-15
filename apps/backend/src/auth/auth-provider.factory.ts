@@ -52,20 +52,54 @@ function isPrivateOrReservedHostname(hostname: string): boolean {
   return false;
 }
 
-function parseIssuerHostAllowlist(environment: AuthEnvironment): string[] {
+const ALLOWLIST_HOSTNAME_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+
+/**
+ * Strict MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST parser (parity with frontend AuthConfig).
+ * Entries are additive bare DNS hostnames with at least one dot. Rejects scheme/path/
+ * port/wildcard/credentials/IP/loopback/.local/.internal/single-label TLD values.
+ * Empty comma tokens are skipped on both sides.
+ */
+export function parseIssuerHostAllowlist(environment: AuthEnvironment): string[] {
   const raw = environment.MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST?.trim();
   if (!raw) return [];
-  return raw
-    .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter((entry) => entry.length > 0);
+  const hosts: string[] = [];
+  for (const entry of raw.split(",")) {
+    const host = entry.trim().toLowerCase();
+    if (host.length === 0) continue;
+    if (
+      host.includes("://") ||
+      host.includes("/") ||
+      host.includes(":") ||
+      host.includes("@") ||
+      host.includes("*") ||
+      host.includes("..") ||
+      isPrivateOrReservedHostname(host) ||
+      looksLikeIpv4(host)
+    ) {
+      throw new Error(
+        "MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST entries must be bare multi-label DNS hostnames without scheme/path/port/wildcard/credentials/IP"
+      );
+    }
+    if (!ALLOWLIST_HOSTNAME_PATTERN.test(host)) {
+      throw new Error(
+        `MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST entry is not a valid hostname: ${host}`
+      );
+    }
+    hosts.push(host);
+  }
+  return hosts;
 }
 
+/**
+ * Allowlist is additive to the default *.authing.cn trust.
+ * A non-empty custom allowlist must not drop default Authing trust.
+ */
 function isTrustedAuthingHost(hostname: string, allowlist: readonly string[]): boolean {
   if (isPrivateOrReservedHostname(hostname)) return false;
   const lower = hostname.toLowerCase();
-  if (allowlist.length === 0) {
-    return DEFAULT_AUTHING_HOST_SUFFIXES.some((suffix) => lower.endsWith(suffix));
+  if (DEFAULT_AUTHING_HOST_SUFFIXES.some((suffix) => lower.endsWith(suffix))) {
+    return true;
   }
   return allowlist.some((entry) => lower === entry || lower.endsWith(`.${entry}`));
 }

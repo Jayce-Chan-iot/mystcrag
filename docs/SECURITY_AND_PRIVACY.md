@@ -31,7 +31,7 @@ Community sharing requires user permission.
 
 [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md) is authoritative and is currently `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`.
 
-- Auth0 uses OIDC Authorization Code + PKCE (`S256`) through the Next.js Server/BFF. Development, staging, and production have isolated clients and exact callback/logout/web-origin allowlists; wildcard callbacks are forbidden.
+- Authing uses standard OIDC Authorization Code + PKCE (`S256`) through the Next.js Server/BFF. Development, staging, and production have isolated clients and exact callback/logout/web-origin allowlists; wildcard callbacks are forbidden.
 - The sole FEAT-018 session mode is the Authing OIDC BFF (jose JWE) authenticated-encrypted, host-only HttpOnly Cookie Session: production `__Host-mystcrag_session`, `Secure`, `SameSite=Lax`, `Path=/`, no `Domain`. It may contain encrypted session/token material but never plaintext Token or Claim. Idle expiry is 8 hours and absolute expiry is 7 days; rolling activity may reissue the encrypted cookie but never extends absolute expiry. No Redis, persistent `SessionStore`, session database, or `AuthSession` Prisma model is authorized.
 - Tokens, codes, verifiers, transaction values, and session secrets are forbidden in browser storage, client state, HTML/RSC payloads, URLs, client bundles, logs, telemetry, public configuration, and every `NEXT_PUBLIC_*` value.
 - Login binds single-use state, nonce, PKCE verifier, exact callback, and a validated same-origin relative `returnTo`. Callback mismatch/replay creates no session. `POST /auth/logout` and all cookie-authenticated mutations require exact Origin validation.

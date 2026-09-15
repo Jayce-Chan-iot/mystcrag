@@ -29,7 +29,7 @@ export const DESKTOP_RECOVERY_COPY = {
   secondaryAction: "暂不处理"
 } as const;
 
-export type AuthPromptMode = "checking" | "authing" | "desktop-recovery"; // ordinary Authing OIDC login
+export type AuthPromptMode = "checking" | "oidc" | "desktop-recovery"; // ordinary Authing OIDC login
 
 /**
  * Escape is the only keyboard dismissal; every other key is ignored by the dialog.
@@ -136,7 +136,7 @@ export function AuthRequiredDialog({
   const href = initialLoginHref(loginHref ?? clientHref ?? undefined);
 
   // One callback ref for whichever primary control the resolved mode renders
-  // (checking button, auth0 Link, or desktop-recovery button). It only stores the
+  // (checking button, oidc Link, or desktop-recovery button). It only stores the
   // node — focusing is owned by effects so the mount effect can first capture the
   // real pre-dialog `document.activeElement` (the trigger), not the just-attached
   // primary that commit-phase focus would otherwise overwrite.
@@ -167,8 +167,8 @@ export function AuthRequiredDialog({
     }
   }, [loginHref]);
 
-  // Resolve Auth0 vs desktop-recovery from the shared session snapshot. A session-check
-  // failure falls back to Auth0, where `/auth/login` keeps server-side fail-closed config.
+  // Resolve oidc vs desktop-recovery from the shared session snapshot. A session-check
+  // failure falls back to oidc, where `/auth/login` keeps server-side fail-closed config.
   React.useEffect(() => {
     if (initialPromptMode !== undefined) return;
     let active = true;
@@ -177,7 +177,7 @@ export function AuthRequiredDialog({
         if (active) setPromptMode(resolveAuthPromptMode(snapshot));
       })
       .catch(() => {
-        if (active) setPromptMode("authing");
+        if (active) setPromptMode("oidc");
       });
     return () => {
       active = false;
@@ -291,7 +291,7 @@ export function AuthRequiredDialog({
               className="inline-flex min-h-11 flex-1 items-center justify-center rounded-xl bg-[var(--accent-deep)] px-4 text-sm font-medium text-white"
               href={href}
               data-auth-required-primary="true"
-              data-auth-primary-state="authing"
+              data-auth-primary-state="oidc"
             >
               {AUTH_REQUIRED_COPY.primaryAction}
             </Link>

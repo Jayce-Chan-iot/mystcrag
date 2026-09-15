@@ -70,7 +70,7 @@ export function useSession() {
 
   /**
    * Logout uses a top-level POST navigation via a dynamically created form.
-   * This ensures the browser follows the 303 redirect from Auth0
+   * This ensures the browser follows the 303 redirect from Authing end_session
    * (not a fetch following a cross-origin 303). The DOM form creation/submission is
    * the single tested helper `submitLogoutForm`.
    */

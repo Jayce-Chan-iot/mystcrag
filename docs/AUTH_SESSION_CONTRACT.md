@@ -117,7 +117,7 @@ The Authing OIDC BFF encrypted Cookie Session is the only FEAT-018 session mode.
 - Idle or absolute expiry: BFF invalidates the session, clears the cookie, returns unauthenticated session state, and never refreshes beyond absolute expiry.
 - Provider/admin grant revocation: the current browser Cookie Session is rejected and cleared when renewal reports revocation, or after the current Access Token reaches its at-most-15-minute expiry. This scope makes no promise of earlier cross-browser invalidation.
 - Refresh/grant renewal failure clears the current browser Cookie Session and requires interactive login. It is not retried in a loop.
-- Active logout is idempotent and immediately expires the current browser's Cookie Session even if Authing is unavailable, then initiates the configured Auth0/OIDC logout. Failure to clear the upstream SSO session cannot resurrect the cleared local cookie.
+- Active logout is idempotent and immediately expires the current browser's Cookie Session even if Authing is unavailable, then initiates the discovery end_session logout. Failure to clear the upstream SSO session cannot resurrect the cleared local cookie.
 - Session-secret rotation is a controlled forced logout for existing Cookie Sessions: deploy the new secret, reject cookies that cannot be decrypted by it, clear them on response, and require interactive login. FEAT-018 does not require a multi-key session store or cross-secret overlap.
 
 ### 4.4 CSRF, origin, transaction, redirect, and cache controls
@@ -161,7 +161,7 @@ No second auth-specific envelope is authorized. Public messages are generic; det
 - Success: after local invalidation and cookie deletion, return `303 See Other` to the discovery end_session_endpoint using only the configured client id and exact allowlisted `MYSTCRAG_AUTH_LOGOUT_URL`. No ID/Access/Refresh Token is placed in the URL. Authing then returns the browser to that configured same-origin URL.
 - Cookie change: expire transaction and session cookies with identical name/path/security attributes.
 - Cache: `no-store`, `Pragma: no-cache`.
-- Stable failures: missing/mismatched Origin returns `403 FORBIDDEN` and does not disclose session presence. Repeated logout remains an idempotent `303` sequence. Auth0 outage or failed upstream navigation does not undo local logout and is recorded as a redacted operational warning when observable.
+- Stable failures: missing/mismatched Origin returns `403 FORBIDDEN` and does not disclose session presence. Repeated logout remains an idempotent `303` sequence. Authing outage or failed upstream navigation does not undo local logout and is recorded as a redacted operational warning when observable.
 
 ### `GET /auth/session`
 
@@ -289,7 +289,7 @@ Accessed 2026-08-25. Retained as historical evidence only; production runtime is
 
 ## 12. Desktop development identity (server-only, loopback, development-only)
 
-TASK-AUTH-009 adds a server-only desktop convenience identity for the explicit local macOS launcher. It is not a second production session, not a fixed-user fallback, and not reachable outside explicit loopback development. The sole production browser session remains the Auth0 encrypted Cookie Session in section 4.
+TASK-AUTH-009 adds a server-only desktop convenience identity for the explicit local macOS launcher. It is not a second production session, not a fixed-user fallback, and not reachable outside explicit loopback development. The sole production browser session remains the Authing OIDC encrypted Cookie Session in section 4.
 
 The mode is enabled only when **all** of the following hold, otherwise the Frontend startup fails closed (never a silent downgrade):
 
@@ -305,9 +305,9 @@ Rules:
 - The only new variables are `MYSTCRAG_DESKTOP_AUTO_AUTH` and `MYSTCRAG_DESKTOP_ACCESS_TOKEN`; both are server-only and never `NEXT_PUBLIC_*`. The legacy `NEXT_PUBLIC_MYSTCRAG_ACCESS_TOKEN` template has no consumer.
 - `/auth/session` in desktop mode returns `200` with `Cache-Control: no-store` and the safe projection `{"authenticated":true,"user":{"displayName":"本地演示用户"},"logoutAvailable":false}`. `logoutAvailable:false` is a non-sensitive capability signal that makes the UI show a read-only "本地演示模式" badge instead of an actionable "退出" control. No token, issuer, subject, audience, or internal `User.id` is returned.
 - The desktop Access Token lives only in the launcher's `0600` runtime env and in Next.js server process memory; the BFF forwards it server-to-server as `Authorization: Bearer`. It never enters a browser cookie, React/client state, HTML/RSC payload, URL, log, or error message.
-- Desktop mode never instantiates or invokes the production OIDC client: page routing passes through, `/auth/login` 303s to a `validateReturnTo`-cleared same-origin path without creating a cookie, and there is no rolling, renewal or refresh. `POST /auth/logout` still performs the exact `Origin` check and returns a controlled, no-store, same-origin `200` with `{"status":"local-demo",...}`; it never builds an Auth0 logout URL, never sets/clears a cookie and never claims to revoke the process-scoped desktop identity, so it no longer yields a 500. When desktop mode is off, Auth0 cookie/rolling/refresh/logout/returnTo/Origin/error-classification behavior is unchanged.
+- Desktop mode never instantiates or invokes the production OIDC client: page routing passes through, `/auth/login` 303s to a `validateReturnTo`-cleared same-origin path without creating a cookie, and there is no rolling, renewal or refresh. `POST /auth/logout` still performs the exact `Origin` check and returns a controlled, no-store, same-origin `200` with `{"status":"local-demo",...}`; it never builds an upstream logout URL, never sets/clears a cookie and never claims to revoke the process-scoped desktop identity, so it no longer yields a 500. When desktop mode is off, OIDC cookie/rolling/refresh/logout/returnTo/Origin/error-classification behavior is unchanged.
 - The signed-test token uses `exp = now + 28800` seconds, a maximum eight-hour launcher lifetime. Backend still verifies signature, exact issuer, audience and expiry through `SignedTestTokenAuthProvider`; this task does not modify Backend.
-- Consumer `UNAUTHORIZED` responses render one shared `AuthRequiredDialog`; its mode-aware primary action either navigates to `/auth/login?returnTo=<validated path>` or shows launcher-restart recovery. The "注册" side of the Auth0 mode is supplied by the Auth0 tenant's database-connection signup setting; the app only promises entry to the unified login/register endpoint and never fabricates a local consumer registration form.
+- Consumer `UNAUTHORIZED` responses render one shared `AuthRequiredDialog`; its mode-aware primary action either navigates to `/auth/login?returnTo=<validated path>` or shows launcher-restart recovery. The "注册" side of the ordinary OIDC mode is supplied by the Authing user-pool signup setting; the app only promises entry to the unified login/register endpoint and never fabricates a local consumer registration form.
 - The dialog's secondary action (and Escape/mask dismissal) is a pure close in every mode: it restores keyboard focus to the trigger element and is never wired to a business `onAction` retry/re-submit. Dismissing therefore does not re-issue the protected request; when the user performs the protected operation again and receives a fresh `401`, the dialog re-opens.
 - Callers may pass an explicit `returnFocusRef` so focus returns to the intended control even when the trigger was `disabled` during submit and `document.activeElement` had already collapsed to `document.body`. Tarot setup uses this for the "进入抽牌" button. Callers without an explicit ref keep the `document.activeElement` fallback.
 - `FlowNotice` exposes `onDismissAuthRequired` for the `UNAUTHORIZED` branch only. That callback must clear the parent's authentication error state and nothing else — never a business `onAction`, retry, re-submit, or network request. Clearing the parent code unmounts the dialog; a later `401` writes `UNAUTHORIZED` again and remounts a fresh open dialog. Non-auth codes keep their existing `onAction` behavior.
@@ -328,7 +328,7 @@ This section controls how the browser chooses between ordinary Authing login and
 The frontend owns one shared client (`session-client.ts`) used by `useSession` and `AuthRequiredDialog`:
 
 - `fetchSessionSnapshot(fetcher?)` reads `/auth/session` with `cache: "no-store"` and `credentials: "same-origin"`.
-- `resolveAuthPromptMode(snapshot)` returns `"desktop-recovery"` only when the snapshot is authenticated **and** `logoutAvailable === false`; every other outcome returns `"auth0"`.
+- `resolveAuthPromptMode(snapshot)` returns `"desktop-recovery"` only when the snapshot is authenticated **and** `logoutAvailable === false`; every other outcome returns `"oidc"`.
 - The client must not export or invent a mode string on the wire, and must not read secrets or complete authentication URLs.
 
 ### Auth-required dialog modes
@@ -382,4 +382,4 @@ Hydration-safe login href: SSR and first client render share the fixed server-sa
 
 `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`
 
-AUTH-002 through AUTH-006 and the narrowly registered AUTH-008 repair are integrated on `main`. AUTH-007 replayed the complete workspace, PostgreSQL, browser security, cleanup, and artifact gates successfully. Product Owner approved the numeric performance contract above and intentionally deferred staging/production deployment; real Origins, byte-exact Auth0 allowlists, the staging benchmark and real login/logout smoke therefore remain pending release evidence. Only AUTH-007 may record final production acceptance after those gates are evidenced. The Auth implementation is frozen except for an explicitly registered P0 security defect. This deployment-only blocker does not prevent separately registered non-auth Features from proceeding under normal governance.
+AUTH-002 through AUTH-006 and the narrowly registered AUTH-008 repair are integrated on `main`. AUTH-007 replayed the complete workspace, PostgreSQL, browser security, cleanup, and artifact gates successfully. Product Owner approved the numeric performance contract above and intentionally deferred staging/production deployment; real Origins, byte-exact Authing allowlists, the staging benchmark and real login/logout smoke therefore remain pending release evidence. Only AUTH-007 may record final production acceptance after those gates are evidenced. The Auth implementation is frozen except for an explicitly registered P0 security defect. This deployment-only blocker does not prevent separately registered non-auth Features from proceeding under normal governance.

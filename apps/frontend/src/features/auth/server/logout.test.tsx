@@ -5,7 +5,7 @@
  * - GET → unified-envelope 405 ({error:{code,message,requestId}}, Allow: POST,
  *   Cache-Control: no-store) and never mutates cookies.
  * - POST validates exact Origin first; missing/mismatched Origin → 403, no cookies.
- * - Success → real 303 See Other to the server-constructed Auth0 logout URL.
+ * - Success → real 303 See Other to the server-constructed Authing end_session URL.
  * - Never returns 200 inline-script HTML.
  * - Real SDK cookie cleanup: session main cookie, `{name}__{index}` chunks, SDK legacy
  *   `appSession`/`appSession.N` cookies and `__txn_*` transaction cookies present on

@@ -74,8 +74,9 @@ function isPrivateOrReservedHostname(hostname: string): boolean {
 function isTrustedAuthingHost(hostname: string, allowlist: readonly string[]): boolean {
   if (isPrivateOrReservedHostname(hostname)) return false;
   const lower = hostname.toLowerCase();
-  if (allowlist.length === 0) {
-    return DEFAULT_AUTHING_HOST_SUFFIXES.some((suffix) => lower.endsWith(suffix));
+  // Allowlist is additive to default *.authing.cn trust.
+  if (DEFAULT_AUTHING_HOST_SUFFIXES.some((suffix) => lower.endsWith(suffix))) {
+    return true;
   }
   return allowlist.some((entry) => {
     const host = entry.toLowerCase();

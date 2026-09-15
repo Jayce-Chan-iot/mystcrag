@@ -2,7 +2,7 @@
  * Auth configuration validation tests.
  *
  * Coverage:
- * - strict config matrix (valid auth0 + signed-test)
+ * - strict config matrix (valid authing + signed-test)
  * - production HTTP rejection
  * - issuer wildcard/IP/localhost/path/query rejection
  * - callback/logout exact URL equality

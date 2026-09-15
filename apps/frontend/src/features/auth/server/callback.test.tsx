@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 
 import { handleCallback, type CallbackDeps } from "./callback";
 import { completeOidcCallback } from "./oidc-server";
+import { __resetOidcDiscoveryCacheForTests } from "./oidc-discovery";
 import { makeConfig, makeRequest, noopAuthEventLogger } from "./auth-test-fixtures";
 import { buildTransactionSetCookie, type LoginTransactionPayload } from "./oidc-transaction";
 import type { AuthEventLogger } from "./auth-events";
@@ -68,6 +69,7 @@ test("provider access_denied is unauthorized", async () => {
 });
 
 test("success path validates state, exchanges the code, sets session cookies and 303s", async () => {
+  __resetOidcDiscoveryCacheForTests();
   const config = cfg();
   const transaction: LoginTransactionPayload = {
     state: "state-ok",

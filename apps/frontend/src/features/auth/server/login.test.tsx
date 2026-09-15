@@ -29,7 +29,7 @@ function makeDeps(options: {
       }
       return new NextResponse(null, {
         status: 302,
-        headers: { location: "https://mystcrag.auth0.com/authorize" }
+        headers: { location: "https://pool.authing.cn/oidc/authorize" }
       });
     },
     generateRequestId: () => "req-login",

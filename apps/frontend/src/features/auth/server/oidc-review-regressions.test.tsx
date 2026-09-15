@@ -526,16 +526,82 @@ test("malformed allowlist entries are rejected by AuthConfig", async () => {
   };
   const ok = resolveAuthConfig(base);
   assert.deepEqual(ok.authIssuerHostAllowlist, ["sso.example.com"]);
-  assert.throws(() =>
+  const rejects = (fn: () => unknown): void => {
+    assert.throws(fn, (error: unknown) => (error as { code?: string }).code === "INVALID_CONFIG");
+  };
+  rejects(() =>
     resolveAuthConfig({
       ...base,
       MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST: "https://sso.example.com"
     })
   );
-  assert.throws(() =>
+  rejects(() =>
     resolveAuthConfig({
       ...base,
       MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST: "*.example.com"
     })
   );
+});
+
+
+test("allowlist rejects bare TLD and unsafe entries; accepts multi-label custom host", async () => {
+  const { resolveAuthConfig } = await import("../model/auth-config");
+  const base = {
+    NODE_ENV: "production",
+    MYSTCRAG_APP_ORIGIN: "https://app.example.com",
+    MYSTCRAG_AUTH_PROVIDER: "authing",
+    MYSTCRAG_AUTH_ISSUER: "https://sso.example.com/oidc",
+    MYSTCRAG_AUTH_AUDIENCE: "https://api.example.com",
+    MYSTCRAG_AUTH_CLIENT_ID: "cid",
+    MYSTCRAG_AUTH_CLIENT_SECRET: "secret",
+    MYSTCRAG_AUTH_CALLBACK_URL: "https://app.example.com/auth/callback",
+    MYSTCRAG_AUTH_LOGOUT_URL: "https://app.example.com",
+    MYSTCRAG_AUTH_SESSION_SECRET: "a".repeat(64),
+    MYSTCRAG_BACKEND_ORIGIN: "https://api.internal.example.com"
+  };
+  const rejectsConfig = (fn: () => unknown): void => {
+    assert.throws(fn, (error: unknown) => {
+      const authError = error as { code?: string; message?: string };
+      return (
+        authError?.code === "INVALID_CONFIG" &&
+        typeof authError.message === "string" &&
+        /MYSTCRAG_AUTH_ISSUER/.test(authError.message)
+      );
+    });
+  };
+  for (const allowlist of [
+    "com",
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+    "https://x",
+    "x/y",
+    "x:443",
+    "*.example.com",
+    "example..com",
+    "-x.com",
+    "x-.com"
+  ]) {
+    rejectsConfig(() =>
+      resolveAuthConfig({
+        ...base,
+        MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST: allowlist
+      })
+    );
+  }
+
+  const ok = resolveAuthConfig({
+    ...base,
+    MYSTCRAG_AUTH_ISSUER: "https://auth.mystcrag.example.com/oidc",
+    MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST: "auth.mystcrag.example.com"
+  });
+  assert.deepEqual(ok.authIssuerHostAllowlist, ["auth.mystcrag.example.com"]);
+
+  // Default *.authing.cn remains trusted when a custom allowlist is present.
+  const withAuthing = resolveAuthConfig({
+    ...base,
+    MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidc",
+    MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST: "auth.mystcrag.example.com"
+  });
+  assert.equal(withAuthing.authIssuer, "https://mystcrag-pool.authing.cn/oidc");
 });

@@ -158,7 +158,7 @@ test("returnTo, focus trap, Escape and approved copy remain intact on the dialog
   const markup = renderToStaticMarkup(
     <AuthRequiredDialog
       loginHref="/auth/login?returnTo=%2Ftarot%2Fsetup"
-      initialPromptMode="authing"
+      initialPromptMode="oidc"
       onDismiss={() => undefined}
     />
   );

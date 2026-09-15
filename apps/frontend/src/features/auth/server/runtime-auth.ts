@@ -18,10 +18,10 @@ import type { AuthConfig } from "../model/auth-config";
 import { isReturnToRejected, validateReturnTo } from "../model/return-to";
 import type { AuthEventLogger } from "./auth-events";
 
-export type AuthRuntimeMode = "authing" | "desktop";
+export type AuthRuntimeMode = "oidc" | "desktop";
 
 export function detectAuthMode(config: AuthConfig): AuthRuntimeMode {
-  return config.desktopAutoAuth ? "desktop" : "authing";
+  return config.desktopAutoAuth ? "desktop" : "oidc";
 }
 
 export const DESKTOP_DISPLAY_NAME = "本地演示用户";

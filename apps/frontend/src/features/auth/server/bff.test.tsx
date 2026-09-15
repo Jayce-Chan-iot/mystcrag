@@ -672,7 +672,7 @@ test("rolling cookies survive backend outage (502)", async () => {
 // reconstruction seam, so they FAIL on baseline 4cac24cb and PASS after the repair.
 
 /**
- * Reproduces the Auth0 SDK's next-compat `toNextRequest` reconstruction from the
+ * Historical: reproduces the Auth0 SDK's next-compat `toNextRequest` reconstruction from the
  * request's own body stream. In production the Turbopack chunk split makes the
  * `instanceof NextRequest` fast path fail, forcing exactly this reconstruction; doing
  * it unconditionally makes the seam observable in unit tests.

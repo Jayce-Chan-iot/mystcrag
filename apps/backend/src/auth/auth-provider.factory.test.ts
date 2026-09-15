@@ -336,3 +336,62 @@ test("exact issuer is not rewritten for JWT verification (with and without trail
   );
   await assert.rejects(() => slashVerifier.verifyAccessToken(mismatchToken));
 });
+
+
+test("allowlist rejects unsafe entries and accepts multi-label custom hosts", () => {
+  const base = {
+    ...productionAuthingEnvironment,
+    MYSTCRAG_AUTH_ISSUER: "https://sso.example.com/oidc"
+  };
+  const rejected = [
+    "com",
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+    "https://x",
+    "x/y",
+    "x:443",
+    "*.example.com",
+    "example..com",
+    "-x.com",
+    "x-.com",
+    "foo.local",
+    "bar.internal"
+  ];
+  for (const allowlist of rejected) {
+    assert.throws(
+      () =>
+        createAccessTokenVerifierFromEnvironment({
+          ...base,
+          MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST: allowlist
+        }),
+      /MYSTCRAG_AUTH_ISSUER/,
+      `allowlist=${allowlist}`
+    );
+  }
+
+  const accepted = createAccessTokenVerifierFromEnvironment({
+    ...base,
+    MYSTCRAG_AUTH_ISSUER: "https://auth.mystcrag.example.com/oidc",
+    MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST: "auth.mystcrag.example.com"
+  });
+  assert.ok(accepted instanceof OidcAccessTokenVerifier);
+
+  // Allowlist is additive: default *.authing.cn remains trusted.
+  const stillAuthing = createAccessTokenVerifierFromEnvironment({
+    ...productionAuthingEnvironment,
+    MYSTCRAG_AUTH_ISSUER: "https://mystcrag-pool.authing.cn/oidc",
+    MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST: "auth.mystcrag.example.com"
+  });
+  assert.ok(stillAuthing instanceof OidcAccessTokenVerifier);
+
+  // Bare TLD must not open every .com issuer.
+  assert.throws(
+    () =>
+      createAccessTokenVerifierFromEnvironment({
+        ...base,
+        MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST: "com"
+      }),
+    /MYSTCRAG_AUTH_ISSUER_HOST_ALLOWLIST|MYSTCRAG_AUTH_ISSUER/
+  );
+});
