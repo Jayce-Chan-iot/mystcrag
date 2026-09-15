@@ -20,7 +20,7 @@ export const AUTH_REQUIRED_COPY = {
 
 /**
  * Approved copy for a stale desktop demo identity. The browser may only show launcher
- * restart guidance — never an Auth0 login link, reload, or secret-bearing recovery.
+ * restart guidance — never an inert login link in desktop mode, reload, or secret-bearing recovery.
  */
 export const DESKTOP_RECOVERY_COPY = {
   title: "本地演示身份需要刷新",
@@ -29,7 +29,7 @@ export const DESKTOP_RECOVERY_COPY = {
   secondaryAction: "暂不处理"
 } as const;
 
-export type AuthPromptMode = "checking" | "auth0" | "desktop-recovery";
+export type AuthPromptMode = "checking" | "oidc" | "desktop-recovery"; // ordinary Authing OIDC login
 
 /**
  * Escape is the only keyboard dismissal; every other key is ignored by the dialog.
@@ -136,7 +136,7 @@ export function AuthRequiredDialog({
   const href = initialLoginHref(loginHref ?? clientHref ?? undefined);
 
   // One callback ref for whichever primary control the resolved mode renders
-  // (checking button, auth0 Link, or desktop-recovery button). It only stores the
+  // (checking button, oidc Link, or desktop-recovery button). It only stores the
   // node — focusing is owned by effects so the mount effect can first capture the
   // real pre-dialog `document.activeElement` (the trigger), not the just-attached
   // primary that commit-phase focus would otherwise overwrite.
@@ -167,8 +167,8 @@ export function AuthRequiredDialog({
     }
   }, [loginHref]);
 
-  // Resolve Auth0 vs desktop-recovery from the shared session snapshot. A session-check
-  // failure falls back to Auth0, where `/auth/login` keeps server-side fail-closed config.
+  // Resolve oidc vs desktop-recovery from the shared session snapshot. A session-check
+  // failure falls back to oidc, where `/auth/login` keeps server-side fail-closed config.
   React.useEffect(() => {
     if (initialPromptMode !== undefined) return;
     let active = true;
@@ -177,7 +177,7 @@ export function AuthRequiredDialog({
         if (active) setPromptMode(resolveAuthPromptMode(snapshot));
       })
       .catch(() => {
-        if (active) setPromptMode("auth0");
+        if (active) setPromptMode("oidc");
       });
     return () => {
       active = false;
@@ -291,7 +291,7 @@ export function AuthRequiredDialog({
               className="inline-flex min-h-11 flex-1 items-center justify-center rounded-xl bg-[var(--accent-deep)] px-4 text-sm font-medium text-white"
               href={href}
               data-auth-required-primary="true"
-              data-auth-primary-state="auth0"
+              data-auth-primary-state="oidc"
             >
               {AUTH_REQUIRED_COPY.primaryAction}
             </Link>

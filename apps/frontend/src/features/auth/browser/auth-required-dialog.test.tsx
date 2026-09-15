@@ -46,7 +46,7 @@ test("dialog renders one accessible, labelled dialog with approved copy and 44px
   const markup = renderToStaticMarkup(
     <AuthRequiredDialog
       loginHref="/auth/login?returnTo=%2Fdiy%2Fabc"
-      initialPromptMode="auth0"
+      initialPromptMode="oidc"
       onDismiss={noop}
     />
   );
@@ -150,7 +150,7 @@ test("initial login href is the fixed server-safe default when no prop is suppli
 });
 
 test("default dialog SSRs the fixed server-safe href so hydration cannot mismatch", () => {
-  const markup = renderToStaticMarkup(<AuthRequiredDialog initialPromptMode="auth0" onDismiss={noop} />);
+  const markup = renderToStaticMarkup(<AuthRequiredDialog initialPromptMode="oidc" onDismiss={noop} />);
   assert.ok(markup.includes(`href="${SERVER_SAFE_LOGIN_HREF}"`), markup);
   assert.ok(!markup.includes("buildLoginHref"), "no window-derived href may leak into SSR output");
 });
@@ -163,11 +163,11 @@ test("only the explicit desktop session capability selects desktop recovery", ()
   }}), "desktop-recovery");
   assert.equal(resolveAuthPromptMode({ status: "unauthenticated", session: {
     authenticated: false
-  }}), "auth0");
+  }}), "oidc");
   assert.equal(resolveAuthPromptMode({ status: "authenticated", session: {
     authenticated: true,
     user: { displayName: "普通用户" }
-  }}), "auth0");
+  }}), "oidc");
 });
 
 test("session-client source never classifies desktop mode from displayName or secrets", () => {
@@ -202,7 +202,7 @@ test("checking mode shows a focusable disabled primary and no login link", () =>
   assert.doesNotMatch(markup, /本地演示身份需要刷新/);
 });
 
-test("desktop-recovery mode renders recovery copy with no Auth0 login link", () => {
+test("desktop-recovery mode renders recovery copy with no inert login link", () => {
   const markup = renderToStaticMarkup(
     <AuthRequiredDialog initialPromptMode="desktop-recovery" onDismiss={noop} />
   );

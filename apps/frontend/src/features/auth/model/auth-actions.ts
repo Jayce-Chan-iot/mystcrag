@@ -33,7 +33,7 @@ export function buildLoginHref(location: BrowserLocation): string {
 
 /**
  * Logout contract: a top-level POST form navigation to /auth/logout (never fetch),
- * so the browser itself follows the server's 303 See Other to the Auth0 logout URL.
+ * so the browser itself follows the server's 303 See Other to the Authing end_session URL.
  */
 export const LOGOUT_FORM_SPEC = {
   method: "POST",

@@ -14,13 +14,13 @@ import {
 import type { AccessTokenVerifier, VerifiedAuthClaims } from "./auth-provider.js";
 import { UnknownJwksKeyError, type JsonWebKeySet, type JwksKeySource } from "./jwks-key-source.js";
 
-const AUTH0_CLOCK_SKEW_SECONDS = 60;
-const AUTH0_SIGNING_ALGORITHM = "RS256";
+const OIDC_CLOCK_SKEW_SECONDS = 60;
+const OIDC_SIGNING_ALGORITHM = "RS256";
 const KID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_EMAIL_HINT_LENGTH = 254;
 const MAX_DISPLAY_NAME_HINT_LENGTH = 128;
 
-export type Auth0AccessTokenVerifierOptions = {
+export type OidcAccessTokenVerifierOptions = {
   readonly issuer: string;
   readonly audience: string;
   readonly keySource: Pick<JwksKeySource, "getJwks"> | { getJwks(kid?: string): Promise<JsonWebKeySet> };
@@ -90,13 +90,18 @@ function rejectionFor(
   });
 }
 
-export class Auth0AccessTokenVerifier implements AccessTokenVerifier {
+/**
+ * Provider-neutral OIDC Access Token verifier (Authing and any standard OIDC issuer).
+ * Validates RS256 signature, exact issuer/audience, expiry and required claims using
+ * discovery-backed JWKS. Never uses client secret as a verification key.
+ */
+export class OidcAccessTokenVerifier implements AccessTokenVerifier {
   readonly #issuer: string;
   readonly #audience: string;
-  readonly #keySource: Auth0AccessTokenVerifierOptions["keySource"];
+  readonly #keySource: OidcAccessTokenVerifierOptions["keySource"];
   readonly #now: () => Date;
 
-  constructor(options: Auth0AccessTokenVerifierOptions) {
+  constructor(options: OidcAccessTokenVerifierOptions) {
     this.#issuer = options.issuer;
     this.#audience = options.audience;
     this.#keySource = options.keySource;
@@ -112,7 +117,7 @@ export class Auth0AccessTokenVerifier implements AccessTokenVerifier {
       } catch {
         throw new CredentialRejectedError("malformed");
       }
-      if (header.alg !== AUTH0_SIGNING_ALGORITHM) {
+      if (header.alg !== OIDC_SIGNING_ALGORITHM) {
         throw new CredentialRejectedError("algorithm", safeKid(header.kid));
       }
       kid = safeKid(header.kid);
@@ -129,8 +134,8 @@ export class Auth0AccessTokenVerifier implements AccessTokenVerifier {
       const { payload } = await jwtVerify(token, createLocalJWKSet(keySet), {
         issuer: this.#issuer,
         audience: this.#audience,
-        algorithms: [AUTH0_SIGNING_ALGORITHM],
-        clockTolerance: AUTH0_CLOCK_SKEW_SECONDS,
+        algorithms: [OIDC_SIGNING_ALGORITHM],
+        clockTolerance: OIDC_CLOCK_SKEW_SECONDS,
         currentDate: this.#now(),
         requiredClaims: ["exp", "sub"]
       });

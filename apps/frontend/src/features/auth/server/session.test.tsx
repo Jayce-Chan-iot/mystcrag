@@ -16,7 +16,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { SessionData } from "@auth0/nextjs-auth0/types";
+import type { OidcSessionPayload } from "./oidc-session-store";
 
 import { handleSessionRequest, type SessionDeps } from "./session";
 import { makeAuthEventCapture, makeConfig, makeRequest, noopAuthEventLogger } from "./auth-test-fixtures";
@@ -28,7 +28,7 @@ function rollingCookie(maxAge: number): string {
 }
 
 function makeDeps(
-  session: () => Promise<SessionData | null>,
+  session: () => Promise<OidcSessionPayload | null>,
   options: { touch?: () => Promise<string[]>; logAuthEvent?: AuthEventLogger } = {}
 ): { deps: SessionDeps; touchCalls: { count: number } } {
   const touchCalls = { count: 0 };
@@ -52,15 +52,13 @@ function makeDeps(
   return { deps, touchCalls };
 }
 
-const VALID_SESSION = {
+const VALID_SESSION: OidcSessionPayload = {
   user: { name: "User", email: "user@example.com", email_verified: true },
-  internal: { createdAt: Math.floor(Date.now() / 1000) },
-  tokenSet: {
-    access_token: "secret-token",
-    token_type: "Bearer",
-    expires_at: Math.floor(Date.now() / 1000) + 900
-  }
-} as unknown as SessionData;
+  accessToken: "secret-token",
+  accessTokenExpiresAt: Math.floor(Date.now() / 1000) + 900,
+  createdAt: Math.floor(Date.now() / 1000),
+  lastActivityAt: Math.floor(Date.now() / 1000)
+};
 
 test("valid session returns the real projection and writes the rolling cookie", async () => {
   const request = makeRequest("https://app.mystcrag.com/auth/session", {
@@ -107,10 +105,11 @@ test("absolute ceiling is never extended by idle rolling", async () => {
   // The SDK's calculateMaxAge caps at createdAt + absoluteDuration, so the written
   // Max-Age is 3600 (not 28800), and the projection must follow the written value.
   const createdAt = Math.floor(Date.now() / 1000) - (604800 - 3600);
-  const oldSession = {
+  const oldSession: OidcSessionPayload = {
     ...VALID_SESSION,
-    internal: { createdAt }
-  } as unknown as SessionData;
+    createdAt,
+    lastActivityAt: Math.floor(Date.now() / 1000)
+  };
   const request = makeRequest("https://app.mystcrag.com/auth/session", {
     cookieHeader: "__Host-mystcrag_session=cipher"
   });
@@ -175,7 +174,7 @@ test("expired/malformed cookie returns authenticated:false AND clears the cookie
   const setCookies = response.headers.getSetCookie();
   assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session=; Max-Age=0")));
   assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session__0=; Max-Age=0")));
-  assert.ok(setCookies.some((c) => c.startsWith("appSession=; Max-Age=0")));
+  assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session=; Max-Age=0")));
   // Transaction cookies are NOT cleared by the session endpoint.
   assert.ok(!setCookies.some((c) => c.startsWith("__txn_")));
   // Invalid sessions are never rolled.

@@ -29,7 +29,7 @@ function makeDeps(options: {
       }
       return new NextResponse(null, {
         status: 302,
-        headers: { location: "https://mystcrag.auth0.com/authorize" }
+        headers: { location: "https://pool.authing.cn/oidc/authorize" }
       });
     },
     generateRequestId: () => "req-login",
@@ -69,7 +69,7 @@ test("rejected returnTo falls back to / and logs open_redirect_rejected with the
 test("configuration/SDK failure returns stable 500 sharing the log requestId", async () => {
   const { deps, capture } = makeDeps({
     startInteractiveLogin: async () => {
-      // Simulates getAuth0Client()/config resolution throwing inside the dep.
+      // Simulates OIDC client/config resolution throwing inside the dep.
       throw new Error("MYSTCRAG_AUTH_ISSUER missing (secret detail SHOULD_NOT_APPEAR)");
     }
   });

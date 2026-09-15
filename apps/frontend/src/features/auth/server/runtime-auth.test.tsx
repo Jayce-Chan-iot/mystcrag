@@ -2,10 +2,10 @@
  * Server-only desktop identity runtime adapter tests.
  *
  * Coverage:
- * - mode detection (auth0 vs desktop)
+ * - mode detection (oidc vs desktop)
  * - safe local session projection (no token/issuer/subject/audience/id)
  * - desktop login sanitizes returnTo before a same-origin 303 and never creates a cookie
- * - desktop BFF access token and rolling shims never invoke the Auth0 primitives
+ * - desktop BFF access token and rolling shims never invoke the OIDC primitives
  * - token never reaches a projection, redirect Location, or logged event
  */
 
@@ -44,7 +44,7 @@ function desktopConfig() {
 
 test("detectAuthMode is derived from the explicit desktop flag", () => {
   assert.equal(detectAuthMode(desktopConfig()), "desktop");
-  assert.equal(detectAuthMode(makeConfig()), "auth0");
+  assert.equal(detectAuthMode(makeConfig()), "oidc");
 });
 
 test("projectDesktopSession returns only the safe local projection", () => {
@@ -108,47 +108,47 @@ test("desktop login rejects a dangerous returnTo to same-origin root and logs re
   assert.doesNotMatch(serializedRecords, /evil\.example|desktop-secret-token/);
 });
 
-test("desktop access token resolver returns the token without calling the Auth0 resolver", async () => {
-  let auth0Calls = 0;
+test("desktop access token resolver returns the token without calling the OIDC resolver", async () => {
+  let oidcCalls = 0;
   const resolver = makeAccessTokenResolver(
     () => desktopConfig(),
     () => {
-      auth0Calls += 1;
-      return Promise.resolve({ token: "auth0-token" });
+      oidcCalls += 1;
+      return Promise.resolve({ token: "oidc-token" });
     }
   );
   const sink = new Response() as NextResponse;
   const result = await resolver(makeRequest("http://localhost:3000/api/design"), sink);
   assert.deepEqual(result, { token: "desktop-secret-token" });
-  assert.equal(auth0Calls, 0);
+  assert.equal(oidcCalls, 0);
 });
 
-test("auth0 access token resolver delegates unchanged", async () => {
-  let auth0Calls = 0;
+test("oidc access token resolver delegates unchanged", async () => {
+  let oidcCalls = 0;
   const resolver = makeAccessTokenResolver(
     () => makeConfig(),
     () => {
-      auth0Calls += 1;
-      return Promise.resolve({ token: "auth0-token" });
+      oidcCalls += 1;
+      return Promise.resolve({ token: "oidc-token" });
     }
   );
   const sink = new Response() as NextResponse;
   const result = await resolver(makeRequest("https://app.mystcrag.com/api/design"), sink);
-  assert.deepEqual(result, { token: "auth0-token" });
-  assert.equal(auth0Calls, 1);
+  assert.deepEqual(result, { token: "oidc-token" });
+  assert.equal(oidcCalls, 1);
 });
 
-test("desktop touchSession returns no rolling cookies without calling Auth0", async () => {
-  let auth0Calls = 0;
+test("desktop touchSession returns no rolling cookies without calling OIDC", async () => {
+  let oidcCalls = 0;
   const touch = makeTouchSession(
     () => desktopConfig(),
     () => {
-      auth0Calls += 1;
+      oidcCalls += 1;
       return Promise.resolve(["mystcrag_session=rolled; Path=/"]);
     }
   );
   assert.deepEqual(await touch(makeRequest("http://localhost:3000/")), []);
-  assert.equal(auth0Calls, 0);
+  assert.equal(oidcCalls, 0);
 });
 
 test("desktop logout requires exact Origin and rejects a mismatched Origin with 403", () => {
@@ -171,7 +171,7 @@ test("desktop logout requires exact Origin and rejects a mismatched Origin with 
   ]);
 });
 
-test("desktop logout is a controlled no-store same-origin result that never builds an Auth0 URL", async () => {
+test("desktop logout is a controlled no-store same-origin result that never builds an upstream URL", async () => {
   const request = makeRequest("http://localhost:3000/auth/logout", {
     method: "POST",
     headers: { origin: "http://localhost:3000" }
@@ -185,7 +185,7 @@ test("desktop logout is a controlled no-store same-origin result that never buil
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(response.headers.get("pragma"), "no-cache");
   assert.equal(response.headers.get("set-cookie"), null);
-  // No upstream Auth0 logout URL is constructed or pointed at.
+  // No upstream Authing logout URL is constructed or pointed at.
   assert.equal(response.headers.get("location"), null);
   const body = await response.json();
   assert.equal(body.status, "local-demo");
@@ -195,16 +195,16 @@ test("desktop logout is a controlled no-store same-origin result that never buil
   assert.doesNotMatch(serialized, /desktop-secret-token|client_id|oidc/);
 });
 
-test("auth0 touchSession delegates unchanged", async () => {
-  let auth0Calls = 0;
+test("oidc touchSession delegates unchanged", async () => {
+  let oidcCalls = 0;
   const touch = makeTouchSession(
     () => makeConfig(),
     () => {
-      auth0Calls += 1;
+      oidcCalls += 1;
       return Promise.resolve(["mystcrag_session=rolled; Path=/"]);
     }
   );
   const cookies = await touch(makeRequest("https://app.mystcrag.com/"));
   assert.deepEqual(cookies, ["mystcrag_session=rolled; Path=/"]);
-  assert.equal(auth0Calls, 1);
+  assert.equal(oidcCalls, 1);
 });

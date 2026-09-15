@@ -5,7 +5,7 @@
  * - GET → unified-envelope 405 ({error:{code,message,requestId}}, Allow: POST,
  *   Cache-Control: no-store) and never mutates cookies.
  * - POST validates exact Origin first; missing/mismatched Origin → 403, no cookies.
- * - Success → real 303 See Other to the server-constructed Auth0 logout URL.
+ * - Success → real 303 See Other to the server-constructed Authing end_session URL.
  * - Never returns 200 inline-script HTML.
  * - Real SDK cookie cleanup: session main cookie, `{name}__{index}` chunks, SDK legacy
  *   `appSession`/`appSession.N` cookies and `__txn_*` transaction cookies present on
@@ -18,9 +18,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { handleLogoutGet, handleLogoutPost, buildUpstreamLogoutUrl, type LogoutDeps } from "./logout";
+import { handleLogoutGet, handleLogoutPost, type LogoutDeps } from "./logout";
 import { makeAuthEventCapture, makeConfig, makeDevConfig, makeRequest, noopAuthEventLogger } from "./auth-test-fixtures";
 import type { AuthEventLogger } from "./auth-events";
+
+
+async function withDiscoveryMock<T>(fn: () => Promise<T>): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).includes("openid-configuration")) {
+      return Response.json({
+        issuer: "https://pool.authing.cn/oidc/",
+        authorization_endpoint: "https://pool.authing.cn/oidc/auth",
+        token_endpoint: "https://pool.authing.cn/oidc/token",
+        jwks_uri: "https://pool.authing.cn/oidc/keys",
+        end_session_endpoint: "https://pool.authing.cn/oidc/session/end"
+      });
+    }
+    return new Response("no", { status: 404 });
+  }) as typeof fetch;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
 
 function makeDeps(config = makeConfig(), logAuthEvent: AuthEventLogger = noopAuthEventLogger): LogoutDeps {
   return {
@@ -32,7 +54,7 @@ function makeDeps(config = makeConfig(), logAuthEvent: AuthEventLogger = noopAut
 
 const SESSION_COOKIES =
   "__Host-mystcrag_session=cipher; __Host-mystcrag_session__0=chunk0; __Host-mystcrag_session__1=chunk1; " +
-  "appSession=legacy; appSession.0=legacychunk; __txn_state123=txn; unrelated=keep";
+  "__txn_state123=txn; unrelated=keep";
 
 // --- GET is 405 and non-mutating ---
 
@@ -54,12 +76,12 @@ test("GET /auth/logout returns the unified 405 envelope and never sets cookies",
 
 // --- Origin validation ---
 
-test("POST with missing Origin returns 403 and clears nothing", () => {
+test("POST with missing Origin returns 403 and clears nothing", async () => {
   const request = makeRequest("https://app.mystcrag.com/auth/logout", {
     method: "POST",
     cookieHeader: SESSION_COOKIES
   });
-  const response = handleLogoutPost(request, makeDeps());
+  const response = await handleLogoutPost(request, makeDeps());
   assert.equal(response.status, 403);
   const body = response.json();
   assert.equal(response.headers.getSetCookie().length, 0);
@@ -69,14 +91,14 @@ test("POST with missing Origin returns 403 and clears nothing", () => {
   });
 });
 
-test("POST with mismatched Origin returns 403, clears nothing and logs auth.origin_rejected", () => {
+test("POST with mismatched Origin returns 403, clears nothing and logs auth.origin_rejected", async () => {
   const capture = makeAuthEventCapture();
   const request = makeRequest("https://app.mystcrag.com/auth/logout", {
     method: "POST",
     headers: { origin: "https://evil.example.com" },
     cookieHeader: SESSION_COOKIES
   });
-  const response = handleLogoutPost(request, makeDeps(makeConfig(), capture.logger));
+  const response = await handleLogoutPost(request, makeDeps(makeConfig(), capture.logger));
   assert.equal(response.status, 403);
   assert.equal(response.headers.getSetCookie().length, 0);
   assert.deepEqual(capture.records, [
@@ -86,20 +108,20 @@ test("POST with mismatched Origin returns 403, clears nothing and logs auth.orig
 
 // --- Success: real 303 to server-constructed logout URL ---
 
-test("POST returns a real 303 See Other to the Auth0 logout URL", () => {
+test("POST returns a real 303 See Other to the discovery end_session URL", async () => {
   const request = makeRequest("https://app.mystcrag.com/auth/logout", {
     method: "POST",
     headers: { origin: "https://app.mystcrag.com" },
     cookieHeader: SESSION_COOKIES
   });
-  const response = handleLogoutPost(request, makeDeps());
+  const response = await withDiscoveryMock(() => handleLogoutPost(request, makeDeps()));
 
   assert.equal(response.status, 303);
   const location = response.headers.get("location");
   assert.ok(location);
   const url = new URL(location as string);
-  assert.equal(url.origin, "https://mystcrag.auth0.com");
-  assert.equal(url.pathname, "/oidc/logout");
+  assert.equal(url.origin, "https://pool.authing.cn");
+  assert.equal(url.pathname, "/oidc/session/end");
   assert.equal(url.searchParams.get("client_id"), "client-id");
   assert.equal(url.searchParams.get("post_logout_redirect_uri"), "https://app.mystcrag.com");
   // No token/session material in the logout URL.
@@ -110,34 +132,31 @@ test("POST returns a real 303 See Other to the Auth0 logout URL", () => {
   assert.equal(response.headers.get("pragma"), "no-cache");
 });
 
-test("POST never returns 200 HTML", () => {
+test("POST never returns 200 HTML", async () => {
   const request = makeRequest("https://app.mystcrag.com/auth/logout", {
     method: "POST",
     headers: { origin: "https://app.mystcrag.com" },
     cookieHeader: SESSION_COOKIES
   });
-  const response = handleLogoutPost(request, makeDeps());
+  const response = await handleLogoutPost(request, makeDeps());
   assert.notEqual(response.status, 200);
   assert.ok(!(response.headers.get("content-type") ?? "").includes("text/html"));
 });
 
 // --- Real SDK cookie cleanup ---
 
-test("POST clears session main cookie, SDK chunks, legacy cookies and transaction cookies", () => {
+test("POST clears session main cookie, chunks and transaction cookies", async () => {
   const request = makeRequest("https://app.mystcrag.com/auth/logout", {
     method: "POST",
     headers: { origin: "https://app.mystcrag.com" },
     cookieHeader: SESSION_COOKIES
   });
-  const response = handleLogoutPost(request, makeDeps());
+  const response = await withDiscoveryMock(() => handleLogoutPost(request, makeDeps()));
   const setCookies = response.headers.getSetCookie();
 
   assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session=; ")));
   assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session__0=; ")));
   assert.ok(setCookies.some((c) => c.startsWith("__Host-mystcrag_session__1=; ")));
-  // SDK legacy cookies (v3) are also recognized and cleared.
-  assert.ok(setCookies.some((c) => c.startsWith("appSession=; ")));
-  assert.ok(setCookies.some((c) => c.startsWith("appSession.0=; ")));
   assert.ok(setCookies.some((c) => c.startsWith("__txn_state123=; ")));
 
   // Deletion attributes mirror creation attributes.
@@ -156,13 +175,13 @@ test("POST clears session main cookie, SDK chunks, legacy cookies and transactio
   assert.ok(!setCookies.some((c) => c.startsWith("__Host-mystcrag_session.0=")));
 });
 
-test("Secure attribute derives from app origin, not NODE_ENV (dev loopback HTTP)", () => {
+test("Secure attribute derives from app origin, not NODE_ENV (dev loopback HTTP)", async () => {
   const request = makeRequest("http://localhost:3000/auth/logout", {
     method: "POST",
     headers: { origin: "http://localhost:3000" },
     cookieHeader: "mystcrag_session=cipher; mystcrag_session__0=chunk0"
   });
-  const response = handleLogoutPost(request, makeDeps(makeDevConfig()));
+  const response = await withDiscoveryMock(() => handleLogoutPost(request, makeDeps(makeDevConfig())));
   const setCookies = response.headers.getSetCookie();
 
   assert.ok(setCookies.some((c) => c.startsWith("mystcrag_session=; ")));
@@ -174,46 +193,61 @@ test("Secure attribute derives from app origin, not NODE_ENV (dev loopback HTTP)
 
 // --- Idempotence ---
 
-test("repeated POSTs are idempotent 303 sequences", () => {
+test("repeated POSTs are idempotent 303 sequences", async () => {
   const deps = makeDeps();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/.well-known/openid-configuration")) {
+      return Response.json({
+        issuer: "https://pool.authing.cn/oidc/",
+        authorization_endpoint: "https://pool.authing.cn/oidc/auth",
+        token_endpoint: "https://pool.authing.cn/oidc/token",
+        jwks_uri: "https://pool.authing.cn/oidc/keys",
+        end_session_endpoint: "https://pool.authing.cn/oidc/session/end"
+      });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
 
-  // First logout clears everything.
-  const first = handleLogoutPost(
-    makeRequest("https://app.mystcrag.com/auth/logout", {
-      method: "POST",
-      headers: { origin: "https://app.mystcrag.com" },
-      cookieHeader: SESSION_COOKIES
-    }),
-    deps
-  );
-  assert.equal(first.status, 303);
-  const firstLocation = first.headers.get("location");
+  try {
+    // First logout clears everything.
+    const first = await handleLogoutPost(
+      makeRequest("https://app.mystcrag.com/auth/logout", {
+        method: "POST",
+        headers: { origin: "https://app.mystcrag.com" },
+        cookieHeader: SESSION_COOKIES
+      }),
+      deps
+    );
+    assert.equal(first.status, 303);
+    const firstLocation = first.headers.get("location");
+    assert.ok(firstLocation?.includes("/session/end"));
 
-  // Second logout: the browser no longer sends the cleared cookies.
-  const second = handleLogoutPost(
-    makeRequest("https://app.mystcrag.com/auth/logout", {
-      method: "POST",
-      headers: { origin: "https://app.mystcrag.com" }
-    }),
-    deps
-  );
-  assert.equal(second.status, 303);
-  assert.equal(second.headers.get("location"), firstLocation);
+    // Second logout: the browser no longer sends the cleared cookies.
+    const second = await handleLogoutPost(
+      makeRequest("https://app.mystcrag.com/auth/logout", {
+        method: "POST",
+        headers: { origin: "https://app.mystcrag.com" }
+      }),
+      deps
+    );
+    assert.equal(second.status, 303);
+    assert.equal(second.headers.get("location"), firstLocation);
 
-  // Nothing chunk/transaction-specific remains to clear.
-  const setCookies = second.headers.getSetCookie();
-  assert.ok(!setCookies.some((c) => c.startsWith("__Host-mystcrag_session__0=")));
-  assert.ok(!setCookies.some((c) => c.startsWith("__txn_")));
+    // Nothing chunk/transaction-specific remains to clear.
+    const setCookies = second.headers.getSetCookie();
+    assert.ok(!setCookies.some((c) => c.startsWith("__Host-mystcrag_session__0=")));
+    assert.ok(!setCookies.some((c) => c.startsWith("__txn_")));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 // --- Upstream URL construction ---
 
-test("buildUpstreamLogoutUrl uses only client id and allowlisted post-logout URL", () => {
-  const url = buildUpstreamLogoutUrl("https://mystcrag.auth0.com/", "cid", "https://app.mystcrag.com");
-  assert.equal(url, "https://mystcrag.auth0.com/oidc/logout?client_id=cid&post_logout_redirect_uri=https%3A%2F%2Fapp.mystcrag.com");
-});
 
-test("config failure surfaces as stable 500 envelope with dependency event, not a redirect", () => {
+test("config failure surfaces as stable 500 envelope with dependency event, not a redirect", async () => {
   const capture = makeAuthEventCapture();
   const deps: LogoutDeps = {
     getConfig: () => {
@@ -227,7 +261,7 @@ test("config failure surfaces as stable 500 envelope with dependency event, not 
     headers: { origin: "https://app.mystcrag.com" },
     cookieHeader: SESSION_COOKIES
   });
-  const response = handleLogoutPost(request, deps);
+  const response = await handleLogoutPost(request, deps);
   assert.equal(response.status, 500);
   assert.equal(response.headers.get("cache-control"), "no-store");
   const body = response.json();
