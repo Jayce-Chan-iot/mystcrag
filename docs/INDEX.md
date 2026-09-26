@@ -16,6 +16,7 @@ Repository governance entry points:
 - Bead asset import: `superpowers/specs/2026-08-31-bead-asset-import-assistant-design.md`, `superpowers/plans/2026-08-31-bead-asset-import-assistant-implementation-plan.md`
 - QA/output evidence retention: `governance/QA_EVIDENCE_RETENTION.md`
 - Consumer login prompt and desktop development identity: `superpowers/specs/2026-09-12-auth-login-prompt-desktop-auto-auth.md`, `superpowers/plans/2026-09-12-auth-login-prompt-desktop-auto-auth.md`, `AUTH_SESSION_CONTRACT.md`
+- Star Oracle and full customer UI redesign: `superpowers/specs/2026-09-26-star-oracle-crystal-design.md`, `superpowers/plans/2026-09-26-phase0-priority-ui-repairs.md`, `superpowers/plans/2026-09-26-star-oracle-integration.md`, `superpowers/plans/2026-09-26-star-platform-full-ui-redesign.md`
 
 | Task | Controlling documents |
 | --- | --- |
@@ -36,6 +37,7 @@ Repository governance entry points:
 | Consumer authentication / desktop development identity | `AUTH_SESSION_CONTRACT.md`, `SECURITY_AND_PRIVACY.md`, `superpowers/specs/2026-09-12-auth-login-prompt-desktop-auto-auth.md`, `superpowers/plans/2026-09-12-auth-login-prompt-desktop-auto-auth.md` |
 | Dependencies / OSS | `DEPENDENCY_DECISIONS.md`, `OSS_RESEARCH.md` |
 | Tarot-guided design | `superpowers/specs/2026-08-19-tarot-guided-bracelet-design.md`, `superpowers/plans/2026-08-20-tarot-guided-bracelet-integration.md`, `API_SPECIFICATION.md`, `SECURITY_AND_PRIVACY.md` |
+| Star Oracle / customer UI redesign | `superpowers/specs/2026-09-26-star-oracle-crystal-design.md`, `superpowers/plans/2026-09-26-phase0-priority-ui-repairs.md`, `superpowers/plans/2026-09-26-star-oracle-integration.md`, `superpowers/plans/2026-09-26-star-platform-full-ui-redesign.md` |
 
 Files ending in `_REPORT.md` or `_PLAN.md` describe earlier implementation phases. Consult them when tracing a decision, regression, or prior verification result. `DECISION_LOG.md` remains the cross-module decision record.
 
