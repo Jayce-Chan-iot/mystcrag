@@ -4,12 +4,12 @@ import test from "node:test";
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
 
 import { CredentialRejectedError, ProviderUnavailableError } from "./auth-errors.js";
-import { Auth0AccessTokenVerifier } from "./auth0-access-token-verifier.js";
+import { OidcAccessTokenVerifier } from "./oidc-access-token-verifier.js";
 import { JwksKeySource, type JwksTransport } from "./jwks-key-source.js";
 
-const ISSUER = "https://mystcrag-tenant.auth0.example.com/";
+const ISSUER = "https://mystcrag-pool.authing.cn/oidc";
 const AUDIENCE = "https://api.mystcrag.example.com";
-const JWKS_URL = "https://mystcrag-tenant.auth0.example.com/.well-known/jwks.json";
+const JWKS_URL = "https://mystcrag-pool.authing.cn/oidc.well-known/jwks.json";
 
 type KeyMaterial = {
   kid: string;
@@ -34,12 +34,12 @@ let keyA: KeyMaterial;
 let keyB: KeyMaterial;
 
 test.before(async () => {
-  keyA = await keyMaterialFor("auth0-key-a");
-  keyB = await keyMaterialFor("auth0-key-b");
+  keyA = await keyMaterialFor("oidc-key-a");
+  keyB = await keyMaterialFor("oidc-key-b");
 });
 
 type Harness = {
-  verifier: Auth0AccessTokenVerifier;
+  verifier: OidcAccessTokenVerifier;
   transport: JwksTransport;
   calls: () => number;
   respondWith: (kids: readonly KeyMaterial[], cacheControl?: string) => void;
@@ -70,7 +70,7 @@ async function createHarness(options: { kids?: readonly KeyMaterial[] } = {}): P
     transport,
     now: () => nowMs
   });
-  const verifier = new Auth0AccessTokenVerifier({
+  const verifier = new OidcAccessTokenVerifier({
     issuer: ISSUER,
     audience: AUDIENCE,
     keySource,
@@ -331,7 +331,7 @@ test("a jwks request timeout fails closed", async () => {
     now: () => nowMs,
     requestTimeoutMs: 50
   });
-  const verifier = new Auth0AccessTokenVerifier({
+  const verifier = new OidcAccessTokenVerifier({
     issuer: ISSUER,
     audience: AUDIENCE,
     keySource,
@@ -340,4 +340,39 @@ test("a jwks request timeout fails closed", async () => {
   const token = await validToken();
 
   await assert.rejects(verifier.verifyAccessToken(token), ProviderUnavailableError);
+});
+
+
+test("a token with a future nbf claim is rejected", async () => {
+  const harness = await createHarness();
+  const nowEpoch = 1_700_000_000;
+  const token = await keyA.mint({
+    iss: ISSUER,
+    aud: AUDIENCE,
+    sub: "authing|nbf-user",
+    exp: nowEpoch + 900,
+    nbf: nowEpoch + 3600
+  });
+  await assert.rejects(
+    () => harness.verifier.verifyAccessToken(token),
+    (error: unknown) => error instanceof CredentialRejectedError
+  );
+});
+
+test("a non-RS256 foreign algorithm token is rejected as algorithm/malformed", async () => {
+  const harness = await createHarness();
+  const { SignJWT, generateSecret } = await import("jose");
+  const secret = await generateSecret("HS256", { extractable: true });
+  const token = await new SignJWT({
+    iss: ISSUER,
+    aud: AUDIENCE,
+    sub: "authing|hs-user",
+    exp: 1_700_000_900
+  })
+    .setProtectedHeader({ alg: "HS256", kid: "oidc-key-a" })
+    .sign(secret);
+  await assert.rejects(
+    () => harness.verifier.verifyAccessToken(token),
+    (error: unknown) => error instanceof CredentialRejectedError
+  );
 });

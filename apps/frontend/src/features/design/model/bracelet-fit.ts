@@ -35,9 +35,17 @@ export function calculateBraceletCircumferenceMm(design: PublicDesignV1): number
   return beadLengthTotal + inlineAccessoryLength;
 }
 
+export function formatEstimatedFitCm(circumferenceMm: number): string {
+  if (!Number.isFinite(circumferenceMm) || circumferenceMm < 0) {
+    throw new RangeError("circumferenceMm must be a non-negative finite number");
+  }
+  const roundedMillimetres = Math.floor(circumferenceMm + 0.5);
+  return (roundedMillimetres / 10).toFixed(1);
+}
+
 export function evaluateBraceletFit(design: PublicDesignV1): BraceletFit {
   const circumferenceMm = calculateBraceletCircumferenceMm(design);
-  const circumferenceCmLabel = (circumferenceMm / 10).toFixed(1);
+  const circumferenceCmLabel = formatEstimatedFitCm(circumferenceMm);
   const engineFit = evaluateEngineFit({
     assembledMaterialPathMm: circumferenceMm,
     elasticAllowanceMm: design.bracelet.elasticAllowanceMm,

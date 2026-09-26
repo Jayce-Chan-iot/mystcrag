@@ -176,7 +176,8 @@ test("DIY editor keeps the focused mobile column and adds the desktop workbench"
   assert.match(source, /设计已确认，订单快照已生成/);
   assert.match(source, /清空设计/);
   assert.match(source, /收缩成串/);
-  assert.match(source, /散开查看/);
+  assert.match(source, /散开到托盘/);
+  assert.doesNotMatch(source, /散开查看/);
   assert.match(source, /h-\[calc\(100dvh-3\.25rem\)\]/);
   assert.match(source, /grid-rows-\[minmax\(0,1fr\)_11\.25rem\]/);
   assert.match(source, /fitDesktopViewport/);
@@ -197,13 +198,23 @@ test("DIY workbench exposes tray choice, current beads, diameter controls and ex
   assert.match(source, /max-w-\[30rem\]/);
   assert.match(source, /displayTrayCanvasPalette\(trayMaterial\)/);
   assert.match(source, /展示托盘：/);
+  assert.match(source, /launchQueue/);
+  assert.match(source, /setLaunchQueue/);
+  assert.match(source, /onLaunchConsumed/);
+  assert.match(source, /已选用的珠子/);
+  assert.match(source, /成品手围与尺寸/);
+  assert.match(source, /预计适配手围/);
+  assert.match(source, /当前组合长度/);
+  assert.doesNotMatch(source, /常用水晶/);
+  assert.doesNotMatch(source, />已选水晶</);
 });
 
-test("flat bracelet editor exposes the touch-first 2D ring", () => {
+test("flat bracelet editor exposes the touch-first 2D ring in connected mode", () => {
   const design = mockDesignOptions[0]!;
   const markup = renderToStaticMarkup(
     <FlatBraceletEditor
       busy={false}
+      connected
       design={design}
       fitDesktopViewport
       onMove={() => undefined}
@@ -213,7 +224,7 @@ test("flat bracelet editor exposes the touch-first 2D ring", () => {
     />
   );
   assert.match(markup, /data-flat-bracelet-editor="true"/);
-  assert.match(markup, /data-bracelet-layout="spread"/);
+  assert.match(markup, /data-bracelet-layout="connected"/);
   assert.match(markup, /2D 手串编辑预览/);
   assert.match(markup, /aria-pressed="true"/);
   assert.match(markup, /clamp\(14rem, calc\(100dvh - 20\.5rem\), 35rem\)/);
@@ -238,6 +249,37 @@ test("flat bracelet editor exposes the touch-first 2D ring", () => {
   assert.match(beadImageSource, /loading="eager"/);
   assert.match(source, /silver-star-ring-charm\.png/);
   assert.match(source, /loading="eager"/);
+});
+
+test("flat bracelet editor delegates loose mode to LooseBeadStage without business move callbacks", () => {
+  const design = mockDesignOptions[0]!;
+  let moveCalls = 0;
+  const markup = renderToStaticMarkup(
+    <FlatBraceletEditor
+      busy={false}
+      connected={false}
+      design={design}
+      onMove={() => {
+        moveCalls += 1;
+      }}
+      onRemove={() => undefined}
+      onSelect={() => undefined}
+      selectedComponentId={design.beads[0]!.componentId}
+    />
+  );
+  assert.equal(moveCalls, 0);
+  assert.match(markup, /data-loose-bead-stage="true"/);
+  assert.match(markup, /data-bracelet-layout="loose"/);
+  assert.doesNotMatch(markup, /拖出托盘即可删除/);
+  const source = readFileSync(new URL("./components/flat-bracelet-editor.tsx", import.meta.url), "utf8");
+  assert.match(source, /LooseBeadStage/);
+  assert.match(source, /launchQueue\?:/);
+  assert.match(source, /onLaunchConsumed\?:/);
+  assert.match(source, /!visualConnected/);
+  assert.match(source, /MODE_TRANSITION_MS/);
+  assert.match(source, /data-mode-transition-ghost/);
+  assert.match(source, /prefers-reduced-motion/);
+  assert.match(source, /duration-300 motion-reduce:transition-none/);
 });
 
 test("drag hit resolution maps each pointer position to the slot rendered under it", () => {
@@ -432,6 +474,7 @@ test("keyboard editing selects, moves and removes beads with prevented defaults 
   const markup = renderToStaticMarkup(
     <FlatBraceletEditor
       busy={false}
+      connected
       design={design}
       onMove={() => undefined}
       onRemove={() => undefined}

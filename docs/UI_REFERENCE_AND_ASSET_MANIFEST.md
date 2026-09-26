@@ -32,7 +32,7 @@ All paths below are relative to `apps/frontend/public`.
 | Home hero photograph | `/home/hero-bracelet.webp` | Home hero | Use `object-fit: cover`; preserve the left text-safe region and bracelet crop. |
 | AI entry scene | `/home/entry-ai.webp` | Home AI card | Full-bleed card image with its own top crop. Entire card is clickable. |
 | Tarot entry scene | `/home/entry-tarot.webp` | Home Tarot card | Full-bleed card image. Entire card is clickable. |
-| DIY entry scene | `/home/entry-diy.webp` | Home DIY card | Full-bleed card image. Entire card is clickable. |
+| DIY loose-bead entry scene | `/home/entry-diy-loose-tray.webp` | Home DIY card | Project-owned generated 1200×900 WebP. Show a round creation tray with 12-18 loose, unthreaded mixed-size beads and restrained tools; never present a completed bracelet. Entire card is clickable. |
 | Clear acrylic tray | `/trays/clear-acrylic.webp` | DIY workbench background | Display background only. Does not enter price, inventory, or Design JSON. |
 | Bone china tray | `/trays/bone-china.webp` | DIY workbench default | Display background only. |
 | Oak tray | `/trays/oak-wood.webp` | DIY workbench alternate | Display background only. |
@@ -67,4 +67,5 @@ All bracelet projections consume the same Design JSON and Bracelet Engine layout
 
 - Existing Tarot card provenance is recorded in `apps/frontend/public/tarot/cards/UPSTREAM_SOURCE.md`.
 - Home scenes, trays, wrist guide, state scenes and demo avatar are project-owned generated assets.
+- `/home/entry-diy-loose-tray.webp` was generated with Codex built-in image_gen on 2026-09-14 and integrated under `TASK-ASSET-004` (SHA-256: `9b8cc2febf2d523ef87e489d3271bcd6b62819b54cbf03f1f267245fff921281`). No competitor image, user data, or planning screenshot was used as runtime media.
 - Reference screenshots are internal implementation/QA evidence, not runtime assets.

@@ -1,6 +1,6 @@
 /**
  * Logout is a top-level POST form navigation to /auth/logout (never fetch), so the
- * browser itself follows the server's 303 See Other to the Auth0 logout URL.
+ * browser itself follows the server's 303 See Other to the Authing end_session URL.
  *
  * The DOM form creation/submission is a single injectable helper so the contract
  * (method=POST, action=/auth/logout, append to body, submit) is testable against a

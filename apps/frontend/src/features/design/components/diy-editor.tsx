@@ -56,6 +56,7 @@ import { getTrayVisual } from "../model/visual-assets";
 import { ComplianceNotice } from "./compliance-notice";
 import { CrystalBeadImage } from "./crystal-bead-image";
 import { calculateSizeAwareRingLayout, FlatBraceletEditor } from "./flat-bracelet-editor";
+import type { BeadLaunchIntent } from "./loose-bead-stage";
 
 export const DIY_LAYOUT_CLASS = "mx-auto w-full max-w-[70rem]";
 
@@ -203,6 +204,7 @@ export function DiyEditor({ designId }: { designId: string }) {
   } | null>(null);
   const [savedAt, setSavedAt] = React.useState<string | null>(null);
   const [order, setOrder] = React.useState<CreateOrderFromDesignResponse | null>(null);
+  const [launchQueue, setLaunchQueue] = React.useState<BeadLaunchIntent[]>([]);
 
   const recoveryKey = `${RECOVERY_KEY_PREFIX}${designId}`;
   const design = optimistic ? projectDesign(optimistic) : null;
@@ -394,16 +396,33 @@ export function DiyEditor({ designId }: { designId: string }) {
     if (nextSelection !== undefined) setSelectedComponentId(nextSelection);
   };
 
-  const addMaterial = (material: CatalogMaterialProduct) => {
+  const addMaterial = (material: CatalogMaterialProduct, origin?: HTMLElement | null) => {
     const insertAt = selectedBead ? selectedBead.positionIndex + 1 : ringLength;
     const componentId = `component-${crypto.randomUUID()}`;
     const request = createAddRequest(design, material, insertAt, componentId);
+    if (origin && typeof origin.getBoundingClientRect === "function") {
+      const rect = origin.getBoundingClientRect();
+      const requestId = `launch-${componentId}`;
+      setLaunchQueue((queue) => [
+        ...queue,
+        {
+          requestId,
+          componentId,
+          originClientX: rect.left + rect.width / 2,
+          originClientY: rect.top + rect.height / 2
+        }
+      ]);
+    }
     submitEdit(
       request.operations,
       [{ operation: "REMOVE_COMPONENT", componentId }],
       "珠子已加入手串。",
       componentId
     );
+  };
+
+  const consumeLaunch = (requestId: string) => {
+    setLaunchQueue((queue) => queue.filter((intent) => intent.requestId !== requestId));
   };
 
   const moveBead = (componentId: string, targetPositionIndex: number) => {
@@ -893,7 +912,7 @@ export function DiyEditor({ designId }: { designId: string }) {
 
             <div className="mt-4 grid grid-cols-3 gap-1.5" data-desktop-catalog-grid="true">
               {materialOptions.slice(0, 15).map((material, index) => (
-                <button aria-label={`加入 ${material.crystalNameCn}`} className="group min-h-[7.5rem] border border-[var(--border)] bg-white px-1.5 py-2 text-center disabled:opacity-55" disabled={isConflict} key={material.beadProductId} onClick={() => addMaterial(material)} type="button">
+                <button aria-label={`加入 ${material.crystalNameCn}`} className="group min-h-[7.5rem] border border-[var(--border)] bg-white px-1.5 py-2 text-center disabled:opacity-55" disabled={isConflict} key={material.beadProductId} onClick={(event) => addMaterial(material, event.currentTarget)} type="button">
                   <span className="mx-auto block h-12 w-12"><CrystalBeadImage alt="" materialKey={material.materialKey} textureAssetKey={material.textureAssetKey} priority={index < 6} sizes="48px" /></span>
                   <span className="mt-1 block truncate text-[0.68rem] font-medium">{material.crystalNameCn}</span>
                   <span className="mt-1 block text-[0.6rem] text-[var(--muted)]">{material.diameterMm}mm · {formatMinorAmount({ amountMinor: material.unitPriceMinor, currency: design.currency, locale: design.locale })}</span>
@@ -917,7 +936,7 @@ export function DiyEditor({ designId }: { designId: string }) {
               onClick={() => setBraceletConnected((current) => !current)}
               type="button"
             >
-              {braceletConnected ? "散开查看" : "收缩成串"}
+              {braceletConnected ? "散开到托盘" : "收缩成串"}
             </button>
             {editMessage ? (
               <p className="absolute left-8 top-4 z-30 rounded-full bg-[var(--accent-soft)] px-5 py-2 text-sm text-[var(--success)] shadow-sm" role="status">
@@ -931,6 +950,8 @@ export function DiyEditor({ designId }: { designId: string }) {
                 design={design}
                 fit={braceletFit}
                 fitDesktopViewport
+                launchQueue={launchQueue}
+                onLaunchConsumed={consumeLaunch}
                 onMove={(componentId, targetPositionIndex) => { moveBead(componentId, targetPositionIndex); }}
                 onRemove={(componentId) => { removeBead(componentId); }}
                 onSelect={setSelectedComponentId}
@@ -972,32 +993,20 @@ export function DiyEditor({ designId }: { designId: string }) {
 
           <aside className="row-span-2 flex min-h-0 flex-col border-l border-[var(--border)]/70 bg-white px-5 py-6" aria-labelledby="selected-material-title">
             <section className="border-b border-[var(--border)] pb-4" data-wrist-inspector="true">
-              <div className="flex items-center justify-between"><h2 className="text-sm font-medium">手围与尺寸</h2><span className="text-[var(--muted)]">✎</span></div>
-              <p className="mt-3 text-xs text-[var(--muted)]">手围 <strong className="ml-3 font-serif text-2xl text-[var(--foreground)]">{(design.bracelet.targetInnerCircumferenceMm / 10).toFixed(1)}</strong> cm</p>
-              <p className="mt-1 text-[0.65rem] text-[var(--muted)]">推荐成品内径 5.0–5.2 cm</p>
-              <NextImage alt="手围测量示意" className="mt-3 aspect-[2.4/1] w-full object-cover object-center" height={320} loading="eager" src="/guides/wrist-measurement.webp" width={760} />
+              <h2 className="text-sm font-medium">成品手围与尺寸</h2>
+              <p className="mt-3 text-xs text-[var(--muted)]">预计适配手围</p>
+              <p className="mt-1 font-serif text-2xl text-[var(--foreground)]" data-estimated-fit-label="true">{braceletFit.circumferenceCmLabel}<span className="ml-1 text-sm text-[var(--muted)]">cm</span></p>
+              <p className="mt-2 text-[0.65rem] text-[var(--muted)]">根据当前珠子与直通配饰尺寸自动计算</p>
+              <p className="mt-3 text-xs text-[var(--muted)]">当前组合长度</p>
+              <p className="mt-1 text-sm text-[var(--foreground)]" data-assembled-length-label="true">{braceletFit.circumferenceCmLabel} cm</p>
             </section>
             <section>
               <div className="flex items-end justify-between gap-3">
-                <h2 className="font-serif text-lg" id="selected-material-title">已选水晶</h2>
+                <h2 className="font-serif text-lg" id="selected-material-title">当前选中</h2>
                 <span className="text-xs text-[var(--muted)]">{design.beads.length} 颗</span>
               </div>
-              <div className="mt-4 grid max-h-32 grid-cols-5 gap-2 overflow-y-auto pr-1" data-current-bracelet-materials="true">
-                {[...design.beads].sort((left, right) => left.positionIndex - right.positionIndex).map((bead) => (
-                  <button
-                    aria-label={`选择第 ${bead.positionIndex + 1} 颗珠子`}
-                    aria-pressed={bead.componentId === selectedComponentId}
-                    className={`aspect-square rounded-full p-1 transition ${bead.componentId === selectedComponentId ? "ring-2 ring-[var(--accent)] ring-offset-2" : "hover:bg-[var(--surface-soft)]"}`}
-                    key={bead.componentId}
-                    onClick={() => setSelectedComponentId(bead.componentId)}
-                    type="button"
-                  >
-                    <CrystalBeadImage alt="" materialKey={bead.materialKey} textureAssetKey={bead.textureAssetKey} sizes="42px" />
-                  </button>
-                ))}
-              </div>
               {selectedBead ? (
-                <div className="mt-5 flex items-center gap-4 border-t border-[var(--border)]/70 pt-4">
+                <div className="mt-5 flex items-center gap-4 border-t border-[var(--border)]/70 pt-4" data-current-bracelet-materials="true">
                   <span className="block h-16 w-16 shrink-0">
                     <CrystalBeadImage alt="" materialKey={selectedBead.materialKey} textureAssetKey={selectedBead.textureAssetKey} sizes="64px" />
                   </span>
@@ -1029,7 +1038,7 @@ export function DiyEditor({ designId }: { designId: string }) {
                     ))}
                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-2">
-                    <button className="min-h-11 rounded-xl border border-[var(--border)] text-sm transition hover:border-[var(--accent)] disabled:opacity-40" disabled={isConflict} onClick={() => addMaterial(selectedMaterial)} type="button">＋ 再加一颗</button>
+                    <button className="min-h-11 rounded-xl border border-[var(--border)] text-sm transition hover:border-[var(--accent)] disabled:opacity-40" disabled={isConflict} onClick={(event) => addMaterial(selectedMaterial, event.currentTarget)} type="button">＋ 再加一颗</button>
                     <button className="min-h-11 rounded-xl border border-[var(--danger)]/35 text-sm text-[var(--danger)] disabled:opacity-35" disabled={isConflict || design.beads.length <= 1 || selectedAnchorsAccessory} onClick={() => removeBead(selectedBead.componentId)} type="button">移出手串</button>
                   </div>
                 </div>
@@ -1136,31 +1145,34 @@ export function DiyEditor({ designId }: { designId: string }) {
 
           <section className="min-w-0 overflow-hidden bg-[#fbf8f2] px-5 py-3" aria-labelledby="desktop-material-shelf-title" data-material-preview-strip="true">
             <div className="flex items-center justify-between">
-              <h2 className="font-serif text-lg" id="desktop-material-shelf-title">常用水晶</h2>
+              <h2 className="font-serif text-lg" id="desktop-material-shelf-title">已选用的珠子</h2>
               <span className="text-xs text-[var(--muted)]">点击即加入</span>
             </div>
-            <div className="mt-2 flex gap-3 overflow-x-auto pb-2" aria-label="桌面可加入的珠子">
-              {materialOptions.map((material, index) => (
+            <div className="mt-2 flex gap-3 overflow-x-auto pb-2" aria-label="桌面已选用的珠子">
+              {designSummary.map((item, index) => (
                 <button
-                  aria-label={`加入 ${material.crystalNameCn}`}
+                  aria-label={`再加一颗 ${item.name}`}
                   className="group h-[8.75rem] w-[7.5rem] shrink-0 rounded-2xl border border-[var(--border)] bg-white/72 px-3 py-2 text-center transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:bg-white motion-reduce:transition-none disabled:cursor-wait disabled:opacity-55"
                   disabled={isConflict}
-                  key={material.beadProductId}
-                  onClick={() => addMaterial(material)}
+                  key={item.beadProductId}
+                  onClick={(event) => {
+                    const material = catalogMaterials.find((candidate) => candidate.beadProductId === item.beadProductId);
+                    if (material) addMaterial(material, event.currentTarget);
+                  }}
                   type="button"
                 >
                   <span className="mx-auto block h-14 w-14 transition-transform group-hover:scale-105">
-                    <CrystalBeadImage alt="" materialKey={material.materialKey} textureAssetKey={material.textureAssetKey} priority={index < 6} sizes="56px" />
+                    <CrystalBeadImage alt="" materialKey={item.materialKey} textureAssetKey={item.textureAssetKey} priority={index < 6} sizes="56px" />
                   </span>
-                  <span className="mt-1 block truncate text-sm font-medium">{material.crystalNameCn}</span>
-                  <span className="mt-1 block text-xs text-[var(--muted)]">{material.diameterMm}mm</span>
+                  <span className="mt-1 block truncate text-sm font-medium">{item.name}</span>
+                  <span className="mt-1 block text-xs text-[var(--muted)]">{item.diameterMm}mm · × {item.count}</span>
                   <span className="mt-1 block text-sm">
-                    {formatMinorAmount({ amountMinor: material.unitPriceMinor, currency: design.currency, locale: design.locale })}
+                    {formatMinorAmount({ amountMinor: item.unitPriceMinor * item.count, currency: design.currency, locale: design.locale })}
                   </span>
                 </button>
               ))}
-              {materialOptions.length === 0 ? (
-                <p className="grid min-h-40 w-full place-items-center text-sm text-[var(--muted)]">{catalogProductType === "CRYSTAL" ? "没有符合条件的珠子，请调整筛选。" : "该品类目录已预留，商品将在后续接入。"}</p>
+              {designSummary.length === 0 ? (
+                <p className="grid min-h-40 w-full place-items-center text-sm text-[var(--muted)]">从左侧珠子库开始添加第一颗珠子。</p>
               ) : null}
             </div>
           </section>
@@ -1180,7 +1192,8 @@ export function DiyEditor({ designId }: { designId: string }) {
 
           <dl className="flex items-center gap-x-4 overflow-x-auto whitespace-nowrap border-b border-[var(--border)]/60 bg-white/55 px-4 py-2 text-xs text-[var(--muted)]" data-mobile-design-info-strip="true">
             <div className="flex shrink-0 items-center gap-1"><dt>手围</dt><dd className="font-medium text-[var(--foreground)]">{(braceletFit.targetInnerCircumferenceMm / 10).toFixed(1)}cm</dd></div>
-            <div className="flex shrink-0 items-center gap-1"><dt>设计</dt><dd className="font-medium text-[var(--foreground)]">{braceletFit.circumferenceCmLabel}cm</dd></div>
+            <div className="flex shrink-0 items-center gap-1"><dt>预计适配手围</dt><dd className="font-medium text-[var(--foreground)]" data-estimated-fit-label="true">{braceletFit.circumferenceCmLabel}cm</dd></div>
+            <div className="flex shrink-0 items-center gap-1"><dt>当前组合长度</dt><dd className="font-medium text-[var(--foreground)]">{braceletFit.circumferenceCmLabel}cm</dd></div>
             <div className="flex shrink-0 items-center gap-1"><dt>合身</dt><dd className="font-medium text-[var(--foreground)]">{braceletFit.status === "VALID" ? "常见范围内" : braceletFit.status === "TOO_SMALL" ? "偏小" : "偏大"}</dd></div>
             <div className="flex shrink-0 items-center gap-1"><dt>珠数</dt><dd className="font-medium text-[var(--foreground)]">{design.beads.length} 颗</dd></div>
             <div className="flex shrink-0 items-center gap-1"><dt>合计</dt><dd className="font-medium text-[var(--accent-deep)]" data-server-authoritative-price="true">{formatMinorAmount({ amountMinor: design.pricing.totalPriceMinor, currency: design.currency, locale: design.locale })}</dd></div>
@@ -1207,7 +1220,7 @@ export function DiyEditor({ designId }: { designId: string }) {
                 onClick={() => setBraceletConnected((current) => !current)}
                 type="button"
               >
-                {braceletConnected ? "散开查看" : "收缩成串"}
+                {braceletConnected ? "散开到托盘" : "收缩成串"}
               </button>
             </div>
             <FlatBraceletEditor
@@ -1215,6 +1228,8 @@ export function DiyEditor({ designId }: { designId: string }) {
               connected={braceletConnected}
               design={design}
               fit={braceletFit}
+              launchQueue={launchQueue}
+              onLaunchConsumed={consumeLaunch}
               onMove={(componentId, targetPositionIndex) => { moveBead(componentId, targetPositionIndex); }}
               onRemove={(componentId) => { removeBead(componentId); }}
               onSelect={setSelectedComponentId}
@@ -1284,7 +1299,7 @@ export function DiyEditor({ designId }: { designId: string }) {
                     {material.diameterMm}mm
                   </button>
                 ))}
-                <button className="min-h-10 shrink-0 rounded-xl border border-[var(--border)] bg-white px-3 text-xs" disabled={isConflict} onClick={() => addMaterial(selectedMaterial)} type="button">＋同款</button>
+                <button className="min-h-10 shrink-0 rounded-xl border border-[var(--border)] bg-white px-3 text-xs" disabled={isConflict} onClick={(event) => addMaterial(selectedMaterial, event.currentTarget)} type="button">＋同款</button>
               </div>
             ) : null}
 
@@ -1330,7 +1345,7 @@ export function DiyEditor({ designId }: { designId: string }) {
                   className={`group min-h-36 rounded-2xl border border-[var(--border)] bg-white/58 p-2 text-center transition hover:border-[var(--accent)] hover:bg-white disabled:cursor-wait disabled:opacity-55 sm:p-3 ${catalogSheetState === "collapsed" ? "w-[7.25rem] shrink-0" : "min-w-0"}`}
                   disabled={isConflict}
                   key={material.beadProductId}
-                  onClick={() => addMaterial(material)}
+                  onClick={(event) => addMaterial(material, event.currentTarget)}
                   type="button"
                 >
                   <span className="mx-auto block h-16 w-16 transition-transform group-hover:scale-105 sm:h-20 sm:w-20">

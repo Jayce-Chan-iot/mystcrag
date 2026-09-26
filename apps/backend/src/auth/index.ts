@@ -10,6 +10,8 @@ export {
   createAccessTokenVerifierFromEnvironment,
   type AuthEnvironment
 } from "./auth-provider.factory.js";
+export { OidcAccessTokenVerifier, type OidcAccessTokenVerifierOptions } from "./oidc-access-token-verifier.js";
+export { OidcDiscoverySource, discoveryDocumentUrl, type OidcDiscoveryDocument } from "./oidc-discovery.js";
 export { AuthenticatedActorProvider } from "./authenticated-actor-provider.js";
 export type {
   AuthenticatedActorProviderOptions,

@@ -1,24 +1,29 @@
-"""Convert generated white-background bead photos into 512x512 RGBA webp assets.
+"""Convert source bead photos into centered 512x512 RGBA webp assets.
 
-Flood-fills from the four corners so interior highlights stay opaque,
-then crops to the bead's bounding box and rescales to ~85% frame coverage.
+Flood-fills white studio backgrounds from the four corners so interior
+highlights stay opaque, then crops to the alpha bounds and rescales the
+longest side to the target frame fill without distorting aspect ratio.
 """
+
+from __future__ import annotations
+
+import argparse
 import sys
 from pathlib import Path
 
 from PIL import Image
 
 FRAME = 512
-TARGET_FILL = 0.85
+DEFAULT_TARGET_FILL = 0.85
+FILL_MIN = 0.84
+FILL_MAX = 0.86
 
 
-def process(source: Path, target: Path) -> None:
-    image = Image.open(source).convert("RGBA")
-    image = image.resize((FRAME, FRAME), Image.LANCZOS) if image.size != (FRAME, FRAME) else image
+def _flood_fill_white(image: Image.Image) -> Image.Image:
     width, height = image.size
     pixels = image.load()
     visited = bytearray(width * height)
-    stack = []
+    stack: list[tuple[int, int]] = []
     for x in range(width):
         stack.append((x, 0))
         stack.append((x, height - 1))
@@ -59,26 +64,65 @@ def process(source: Path, target: Path) -> None:
             )
             if near_transparent:
                 pixels[x, y] = (r, g, b, 140)
+    return image
 
+
+def _prepare_source(source: Path) -> Image.Image:
+    image = Image.open(source).convert("RGBA")
+    # JPEG / opaque studio photos need white-background removal.
+    if source.suffix.lower() in {".jpg", ".jpeg"}:
+        if max(image.size) > FRAME:
+            scale = FRAME / max(image.size)
+            image = image.resize(
+                (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
+                Image.LANCZOS,
+            )
+        image = _flood_fill_white(image)
+    return image
+
+
+def process(source: Path, target: Path, target_fill: float = DEFAULT_TARGET_FILL) -> None:
+    if not FILL_MIN <= target_fill <= FILL_MAX:
+        raise SystemExit(f"--target-fill must be between {FILL_MIN} and {FILL_MAX}, got {target_fill}")
+    if source.resolve() == target.resolve():
+        raise SystemExit("source and target must differ")
+
+    image = _prepare_source(source)
     alpha = image.getchannel("A")
     bbox = alpha.getbbox()
-    if bbox:
-        content = image.crop(bbox)
-        longest = max(content.size)
-        scaled = int(FRAME * TARGET_FILL / longest * max(content.size))
-        scaled = max(1, min(FRAME, scaled))
-        content = content.resize((scaled, scaled), Image.LANCZOS)
-        canvas = Image.new("RGBA", (FRAME, FRAME), (0, 0, 0, 0))
-        canvas.paste(
-            content,
-            ((FRAME - content.size[0]) // 2, (FRAME - content.size[1]) // 2),
-            content
-        )
-        image = canvas
+    if not bbox:
+        raise SystemExit(f"source has empty alpha bounds: {source}")
 
-    image.save(target, "WEBP", quality=92, method=6)
-    print(f"wrote {target}")
+    content = image.crop(bbox)
+    longest = max(content.size)
+    target_longest = round(FRAME * target_fill)
+    if longest != target_longest:
+        scale = target_longest / longest
+        new_size = (
+            max(1, round(content.width * scale)),
+            max(1, round(content.height * scale)),
+        )
+        content = content.resize(new_size, Image.LANCZOS)
+
+    canvas = Image.new("RGBA", (FRAME, FRAME), (0, 0, 0, 0))
+    paste_x = (FRAME - content.width) // 2
+    paste_y = (FRAME - content.height) // 2
+    canvas.paste(content, (paste_x, paste_y), content)
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(target, "WEBP", quality=92, method=6)
+    print(f"wrote {target} fill={target_fill} longest={max(content.size)}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Normalize one bead photo into a 512x512 RGBA webp.")
+    parser.add_argument("source", type=Path)
+    parser.add_argument("target", type=Path)
+    parser.add_argument("--target-fill", type=float, default=DEFAULT_TARGET_FILL)
+    args = parser.parse_args(argv)
+    process(args.source, args.target, args.target_fill)
+    return 0
 
 
 if __name__ == "__main__":
-    process(Path(sys.argv[1]), Path(sys.argv[2]))
+    sys.exit(main())

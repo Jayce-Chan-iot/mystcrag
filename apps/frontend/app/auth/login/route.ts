@@ -1,6 +1,10 @@
 import { NextRequest } from "next/server";
 import type { AuthConfig } from "../../../src/features/auth/model/auth-config";
-import { getAuth0Client, getAuthConfig, generateRequestId } from "../../../src/features/auth/server/auth0-server";
+import {
+  getAuthConfig,
+  generateRequestId,
+  startInteractiveLogin
+} from "../../../src/features/auth/server/oidc-server";
 import { handleLoginRequest, type LoginDeps } from "../../../src/features/auth/server/login";
 import { logAuthEvent } from "../../../src/features/auth/server/auth-events";
 import { detectAuthMode, handleDesktopLoginRequest } from "../../../src/features/auth/server/runtime-auth";
@@ -8,28 +12,25 @@ import { detectAuthMode, handleDesktopLoginRequest } from "../../../src/features
 export const dynamic = "force-dynamic";
 
 /**
- * GET /auth/login — interactive login initiation.
- *
- * Thin adapter: the full contract logic (server-validated returnTo, open-redirect
- * rejection logging with the response requestId, configuration/SDK dependency failure
- * failing closed with a stable 500 envelope, no-store caching) lives in
- * `src/features/auth/server/login.ts` so it is unit-testable. A getAuth0Client()
- * configuration failure surfaces as a thrown dependency inside startInteractiveLogin
- * and fails closed there.
+ * GET /auth/login — interactive login initiation against Authing Universal Login.
+ * Desktop signed-test mode never instantiates the OIDC client.
  */
 
-const deps: LoginDeps = {
-  startInteractiveLogin: (options) => getAuth0Client().startInteractiveLogin(options),
-  generateRequestId,
-  logAuthEvent
-};
+function makeDeps(request: NextRequest): LoginDeps {
+  return {
+    startInteractiveLogin: (options) =>
+      startInteractiveLogin({ returnTo: options.returnTo, request }),
+    generateRequestId,
+    logAuthEvent
+  };
+}
 
 export async function GET(request: NextRequest) {
   let config: AuthConfig;
   try {
     config = getAuthConfig();
   } catch {
-    return handleLoginRequest(request, deps);
+    return handleLoginRequest(request, makeDeps(request));
   }
   if (detectAuthMode(config) === "desktop") {
     return handleDesktopLoginRequest(request, config, {
@@ -37,5 +38,5 @@ export async function GET(request: NextRequest) {
       logAuthEvent
     });
   }
-  return handleLoginRequest(request, deps);
+  return handleLoginRequest(request, makeDeps(request));
 }

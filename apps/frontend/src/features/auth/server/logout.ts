@@ -1,55 +1,30 @@
 /**
- * POST /auth/logout — active logout with CSRF protection.
+ * GET /auth/logout — active logout with CSRF protection.
  *
  * Frozen contract:
  * - Validates the exact Origin BEFORE any other step; missing/mismatched Origin fails
  *   closed with 403 FORBIDDEN and never touches cookies.
- * - Immediately clears the local session and transaction cookies. Cookie names are
- *   matched against Auth0 Next.js SDK 4.27.0 real behavior (session main cookie,
- *   `{name}__{index}` chunks, `__txn_{state}` transaction cookies) instead of guessed
- *   lists, and deletion attributes mirror creation attributes.
- * - Returns a real 303 See Other to the server-constructed Auth0/OIDC logout URL built
- *   only from the validated issuer, client id and allowlisted post-logout URL. No
- *   token or session material is ever placed in the URL.
- * - Never returns a 200 inline-script HTML page. The client keeps a top-level POST form
- *   navigation, and the browser follows the 303 to Auth0.
- * - Idempotent: repeated POSTs always produce the same 303 sequence; a request with no
- *   cookies left simply clears nothing extra.
- * - Local logout is complete before the upstream navigation; an Auth0 outage cannot
- *   resurrect the cleared local cookies.
+ * - Immediately clears the local session and transaction cookies (deletion attributes
+ *   mirror creation attributes).
+ * - Returns a real 303 See Other to the discovery `end_session_endpoint` (or the
+ *   configured same-origin logout URL when the pool does not advertise one). No token
+ *   or session material is ever placed in the URL.
+ * - GET never mutates session state (405).
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import type { AuthConfig } from "../model/auth-config";
-import { buildClearCookieHeaders } from "./session-cookies";
 import type { AuthEventLogger } from "./auth-events";
+import { buildLogoutRedirect, clearAllAuthCookies } from "./oidc-server";
 
 export type LogoutDeps = {
   getConfig(): AuthConfig;
   generateRequestId(): string;
-  /** Privacy-safe auth event logging (whitelisted fields only). */
   logAuthEvent: AuthEventLogger;
 };
 
 /**
- * Builds the OIDC RP-Initiated Logout URL from the validated issuer.
- * The issuer is validated as canonical `https://dns-host/` with trailing slash.
- */
-export function buildUpstreamLogoutUrl(
-  issuer: string,
-  clientId: string,
-  postLogoutRedirectUri: string
-): string {
-  const upstream = new URL("oidc/logout", issuer);
-  upstream.searchParams.set("client_id", clientId);
-  upstream.searchParams.set("post_logout_redirect_uri", postLogoutRedirectUri);
-  return upstream.toString();
-}
-
-/**
- * GET /auth/logout must never mutate session state. The 405 uses the unified error
- * envelope (`{error:{code,message,requestId}}`) with Allow: POST and Cache-Control:
- * no-store, and never touches any cookie.
+ * GET /auth/logout must never mutate session state.
  */
 export function handleLogoutGet(deps: LogoutDeps): NextResponse {
   const requestId = deps.generateRequestId();
@@ -59,15 +34,16 @@ export function handleLogoutGet(deps: LogoutDeps): NextResponse {
   );
 }
 
-export function handleLogoutPost(request: NextRequest, deps: LogoutDeps): NextResponse {
+export async function handleLogoutPost(
+  request: NextRequest,
+  deps: LogoutDeps
+): Promise<NextResponse> {
   const requestId = deps.generateRequestId();
 
   let config: AuthConfig;
   try {
     config = deps.getConfig();
   } catch {
-    // Configuration resolution failure: stable 500, no cookie touched, privacy-safe
-    // dependency event.
     deps.logAuthEvent("auth.dependency_failed", {
       category: "dependency",
       requestId,
@@ -93,21 +69,22 @@ export function handleLogoutPost(request: NextRequest, deps: LogoutDeps): NextRe
     );
   }
 
-  // 2. Immediately clear session + transaction cookies that actually exist on the
-  //    request. Repeated POSTs remain idempotent: already-cleared cookies are absent
-  //    from the request and simply produce no additional Set-Cookie entries.
+  // 2. Immediately clear session + transaction cookies.
   const response = new NextResponse(null, { status: 303 });
-  for (const cookie of buildClearCookieHeaders(request, config, true)) {
+  for (const cookie of clearAllAuthCookies(request, config)) {
     response.headers.append("Set-Cookie", cookie);
   }
 
-  // 3. Server-constructed upstream logout URL and 303 See Other.
-  const upstreamLogoutUrl = buildUpstreamLogoutUrl(
-    config.authIssuer,
-    config.authClientId,
-    config.authLogoutUrl
-  );
-  response.headers.set("Location", upstreamLogoutUrl);
+  // 3. Server-constructed upstream logout URL (discovery end_session_endpoint).
+  let location: string;
+  try {
+    location = await buildLogoutRedirect(config);
+  } catch {
+    // Local logout already completed. Prefer the configured same-origin URL so an
+    // Authing outage cannot leave the user stranded on a failed 303 target.
+    location = config.authLogoutUrl;
+  }
+  response.headers.set("Location", location);
   response.headers.set("Cache-Control", "no-store");
   response.headers.set("Pragma", "no-cache");
   deps.logAuthEvent("auth.logout", { category: "authentication", requestId, outcome: "success" });

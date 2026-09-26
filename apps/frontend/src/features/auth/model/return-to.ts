@@ -4,7 +4,7 @@
  * Contract: only same-origin relative paths starting with exactly one `/` are accepted.
  * Rejects: absolute URLs, protocol-relative `//`, backslashes, control characters,
  * encoded authority/scheme bypasses, and malformed/repeated-encoded redirects.
- * Invalid values fall back to `/`; they are never reflected to Auth0.
+ * Invalid values fall back to `/`; they are never reflected to Authing.
  */
 
 const CONTROL_CHAR_PATTERN = /[\x00-\x1f\x7f]/;

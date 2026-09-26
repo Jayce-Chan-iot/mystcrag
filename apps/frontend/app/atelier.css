@@ -70,7 +70,7 @@ body {
   font-weight: 500;
 }
 
-/* Home: screenshot-led vertical composition contained inside one desktop viewport. */
+/* Home: framed atelier composition with separated creation cards. */
 [data-atelier-surface="home"] {
   min-height: calc(100dvh - 3.8125rem);
   background: #f7f4ee;
@@ -78,42 +78,28 @@ body {
 
 .home-reference-shell {
   display: grid;
-  grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: clamp(1rem, 1.65vw, 1.5rem);
   width: min(100%, 92rem);
-  height: calc(100dvh - 3.8125rem);
-  min-height: 34rem;
   margin-inline: auto;
-  border-right: 1px solid var(--atelier-line);
-  border-left: 1px solid var(--atelier-line);
-  background: var(--atelier-paper);
+  padding: clamp(1rem, 2.25vw, 2rem);
 }
 
 .home-reference-hero {
   position: relative;
-  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(20rem, 2fr) minmax(0, 3fr);
+  min-height: clamp(25rem, 48vw, 39rem);
   overflow: hidden;
-  border-bottom: 1px solid var(--atelier-line);
-}
-
-.home-reference-hero > img {
-  object-fit: cover;
-  object-position: 58% 54%;
-}
-
-.home-reference-hero::after {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, rgb(250 248 244 / 0.98) 0%, rgb(250 248 244 / 0.9) 28%, rgb(250 248 244 / 0.18) 57%, transparent 76%);
-  content: "";
+  border: 1px solid var(--atelier-line);
+  border-radius: 1.5rem;
+  background: var(--atelier-paper);
+  box-shadow: var(--atelier-shadow);
 }
 
 .home-reference-hero-copy {
-  position: absolute;
-  top: 50%;
-  left: clamp(1.75rem, 4vw, 4.75rem);
-  z-index: 1;
-  width: min(43%, 35rem);
-  transform: translateY(-50%);
+  display: grid;
+  align-content: center;
+  padding: clamp(1.5rem, 3vw, 3rem) clamp(1.25rem, 2.5vw, 2.75rem);
 }
 
 .home-reference-hero-copy h1 {
@@ -140,32 +126,52 @@ body {
   line-height: 1.6;
 }
 
+.home-reference-hero-media {
+  position: relative;
+  min-height: 25rem;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 70% 30%, rgb(255 255 255 / 0.9), transparent 55%),
+    linear-gradient(160deg, #f4f0e8 0%, #ebe4d8 100%);
+}
+
+.home-reference-hero-media img {
+  object-fit: contain;
+  object-position: center;
+}
+
 .home-reference-paths {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  min-height: 0;
-  overflow: hidden;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: clamp(1.25rem, 1.65vw, 1.5rem);
 }
 
 .home-reference-paths article {
   min-width: 0;
-  min-height: 0;
-  border-right: 1px solid var(--atelier-line);
-  background: rgb(255 253 248 / 0.96);
 }
 
 .home-reference-card-link {
   display: grid;
-  grid-template-rows: minmax(0, 1.75fr) minmax(6.2rem, 1fr);
+  grid-template-rows: minmax(14rem, 1.55fr) minmax(8rem, auto);
   height: 100%;
-  min-width: 0;
-  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--atelier-line);
+  border-radius: 1.5rem;
+  background: rgb(255 253 248 / 0.96);
+  box-shadow: 0 14px 40px rgb(49 38 54 / 0.055);
   color: inherit;
   text-decoration: none;
+  transform: translateY(0) scale(1);
+  transform-origin: center;
+  transition: transform 250ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 250ms ease;
 }
 
-.home-reference-paths article:last-child {
-  border-right: 0;
+.home-reference-card-link:is(:hover, :focus-visible) {
+  transform: translateY(-4px) scale(1.025);
+}
+
+.home-reference-card-link:active {
+  transform: translateY(-1px) scale(0.99);
 }
 
 .home-reference-entry-image {
@@ -178,11 +184,7 @@ body {
 .home-reference-entry-image img {
   object-fit: cover;
   object-position: center 48%;
-  transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.home-reference-paths article:hover .home-reference-entry-image img {
-  transform: scale(1.018);
+  transition: transform 250ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .home-reference-entry-copy {
@@ -239,7 +241,7 @@ body {
 
 .home-reference-card-link:focus-visible {
   outline: 2px solid var(--atelier-violet);
-  outline-offset: -3px;
+  outline-offset: 3px;
 }
 
 /* AI questionnaire: one calm focused question, first-concept composition. */
@@ -464,16 +466,6 @@ body:has([data-diy-editor-page="true"]) > [data-atelier-footer="true"] {
 
   [data-atelier-surface="home"] {
     min-height: calc(100dvh - 3.0625rem);
-  }
-
-  .home-reference-shell {
-    grid-template-rows: minmax(0, 1.05fr) minmax(0, 1fr);
-    height: calc(100dvh - 3.0625rem);
-    min-height: 0;
-  }
-
-  .home-reference-card-link {
-    grid-template-rows: minmax(0, 1.35fr) minmax(5rem, 1fr);
   }
 
   .home-reference-hero-copy h1 {
@@ -748,10 +740,6 @@ body:has([data-diy-editor-page="true"]) > [data-atelier-footer="true"] {
 }
 
 @media (min-width: 1024px) {
-  [data-atelier-surface="home"] [data-creation-path-group="true"] {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   [data-atelier-surface="questionnaire"] > section {
     padding-right: 4rem;
     padding-left: 4rem;
@@ -784,31 +772,16 @@ body:has([data-diy-editor-page="true"]) > [data-atelier-footer="true"] {
   }
 
   .home-reference-shell {
-    display: block;
-    height: auto;
-    min-height: auto;
-    border: 0;
+    padding: 1rem;
   }
 
   .home-reference-hero {
-    min-height: min(12.75rem, 34dvh);
-  }
-
-  .home-reference-hero > img {
-    object-position: 64% 51%;
-  }
-
-  .home-reference-hero::after {
-    background: linear-gradient(90deg, rgb(250 248 244 / 0.98) 0%, rgb(250 248 244 / 0.86) 46%, rgb(250 248 244 / 0.12) 76%, transparent 100%);
+    grid-template-columns: 1fr;
+    min-height: auto;
   }
 
   .home-reference-hero-copy {
-    top: 50%;
-    right: auto;
-    bottom: auto;
-    left: 1.25rem;
-    width: min(58%, 18rem);
-    transform: translateY(-50%);
+    padding: 1.5rem 1.25rem 1rem;
   }
 
   .home-reference-hero-copy h1 {
@@ -829,28 +802,22 @@ body:has([data-diy-editor-page="true"]) > [data-atelier-footer="true"] {
     line-height: 1.45;
   }
 
+  .home-reference-hero-media {
+    min-height: min(19rem, 76vw);
+  }
+
   .home-reference-paths {
-    display: grid;
     grid-template-columns: 1fr;
-    grid-template-rows: repeat(3, minmax(7.35rem, auto));
-    overflow: visible;
+    gap: 1rem;
   }
 
   .home-reference-card-link {
-    grid-template-rows: none;
-    grid-template-columns: 38% minmax(0, 62%);
-    min-height: 7.35rem;
-  }
-
-  .home-reference-paths article {
-    border-right: 0;
-    border-bottom: 1px solid var(--atelier-line);
+    grid-template-rows: minmax(13rem, 44vw) auto;
   }
 
   .home-reference-entry-copy {
-    align-content: center;
     gap: 0.2rem;
-    padding: 0.65rem 3.25rem 0.65rem 0.9rem;
+    padding: 0.85rem 3.25rem 0.85rem 1rem;
   }
 
   .home-reference-entry-copy h2 {
@@ -965,6 +932,15 @@ body:has([data-diy-editor-page="true"]) > [data-atelier-footer="true"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .home-reference-card-link,
+  .home-reference-entry-image img {
+    transition: none;
+  }
+
+  .home-reference-card-link:is(:hover, :focus-visible, :active) {
+    transform: none;
+  }
+
   [data-atelier-surface] *,
   [data-atelier-header="true"] * {
     transition-duration: 0.01ms !important;

@@ -12,11 +12,11 @@
   },
   "dependencies": {
     "@antv/g6": "^5.1.1",
-    "@auth0/nextjs-auth0": "4.27.0",
     "@mystcrag/bracelet-engine": "workspace:*",
     "@mystcrag/design-contract": "workspace:*",
     "@mystcrag/three-engine": "workspace:*",
     "@mystcrag/ui": "workspace:*",
+    "jose": "6.2.10",
     "next": "^16.2.12",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

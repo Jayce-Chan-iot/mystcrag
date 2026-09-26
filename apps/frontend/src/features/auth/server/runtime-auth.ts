@@ -1,16 +1,16 @@
 /**
- * Server-only runtime selector between the Auth0 browser session and the explicit
+ * Server-only runtime selector between the Authing OIDC browser session and the explicit
  * desktop development identity.
  *
  * Contract:
- * - Auth0 remains the sole production browser session. Desktop mode is a short-lived,
+ * - Authing OIDC remains the sole production browser session. Desktop mode is a short-lived,
  *   development-only convenience identity that is never a production fallback and is
  *   reachable only when the full fail-closed matrix in auth-config.ts resolves.
  * - The desktop Access Token lives exclusively in server memory (AuthConfig) and is
  *   forwarded server-to-server as `Authorization: Bearer`; it never enters a browser
  *   cookie, React state, HTML/RSC payload, URL, log or error message.
- * - Desktop shims must never instantiate or invoke the Auth0 SDK; this module has no
- *   Auth0 dependency.
+ * - Desktop shims must never instantiate or invoke the production OIDC client; this module has no
+ *   provider-SDK dependency.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -18,10 +18,10 @@ import type { AuthConfig } from "../model/auth-config";
 import { isReturnToRejected, validateReturnTo } from "../model/return-to";
 import type { AuthEventLogger } from "./auth-events";
 
-export type AuthRuntimeMode = "auth0" | "desktop";
+export type AuthRuntimeMode = "oidc" | "desktop";
 
 export function detectAuthMode(config: AuthConfig): AuthRuntimeMode {
-  return config.desktopAutoAuth ? "desktop" : "auth0";
+  return config.desktopAutoAuth ? "desktop" : "oidc";
 }
 
 export const DESKTOP_DISPLAY_NAME = "本地演示用户";
@@ -62,7 +62,7 @@ export type DesktopLoginDeps = {
 };
 
 /**
- * Desktop-mode /auth/login: never touches Auth0 or creates a cookie; it validates the
+ * Desktop-mode /auth/login: never touches Authing/OIDC or creates a cookie; it validates the
  * caller's returnTo through the same validateReturnTo boundary and 303s back to the
  * same-origin application.
  */
@@ -98,10 +98,10 @@ export type DesktopLogoutDeps = {
 };
 
 /**
- * Desktop-mode POST /auth/logout: never touches Auth0 or builds an upstream logout URL,
+ * Desktop-mode POST /auth/logout: never touches Authing/OIDC or builds an upstream logout URL,
  * and never claims to revoke the process-scoped desktop identity. It still performs the
  * exact Origin equality check, then returns a controlled, no-store, same-origin
- * informational result. Auth0 mode logout behavior is untouched (handled upstream).
+ * informational result. Authing mode logout behavior is untouched (handled upstream).
  */
 export function handleDesktopLogoutRequest(
   request: NextRequest,
@@ -110,7 +110,7 @@ export function handleDesktopLogoutRequest(
 ): NextResponse {
   const requestId = deps.generateRequestId();
 
-  // Exact Origin equality — fail closed before anything else, mirroring the Auth0 path.
+  // Exact Origin equality — fail closed before anything else, mirroring the OIDC path.
   const origin = request.headers.get("origin");
   if (!origin || origin !== config.appOrigin) {
     deps.logAuthEvent("auth.origin_rejected", {
@@ -141,30 +141,30 @@ export type TouchSessionFn = (request: NextRequest) => Promise<string[]>;
 
 /**
  * Selects the BFF access-token source by runtime mode. In desktop mode the server Token
- * is returned without ever invoking the injected Auth0 SDK resolver.
+ * is returned without ever invoking the injected OIDC access-token resolver.
  */
 export function makeAccessTokenResolver(
   getConfig: () => AuthConfig,
-  auth0Resolver: AccessTokenResolver
+  oidcResolver: AccessTokenResolver
 ): AccessTokenResolver {
   return async (request, sink) => {
     const config = getConfig();
     return detectAuthMode(config) === "desktop"
       ? { token: config.desktopAccessToken }
-      : auth0Resolver(request, sink);
+      : oidcResolver(request, sink);
   };
 }
 
 /**
  * Selects the BFF passive-session-rolling source. Desktop mode performs no rolling and
- * never invokes the injected Auth0 SDK rolling primitive.
+ * never invokes the injected OIDC rolling primitive.
  */
 export function makeTouchSession(
   getConfig: () => AuthConfig,
-  auth0TouchSession: TouchSessionFn
+  oidcTouchSession: TouchSessionFn
 ): TouchSessionFn {
   return async (request) => {
     const config = getConfig();
-    return detectAuthMode(config) === "desktop" ? [] : auth0TouchSession(request);
+    return detectAuthMode(config) === "desktop" ? [] : oidcTouchSession(request);
   };
 }
