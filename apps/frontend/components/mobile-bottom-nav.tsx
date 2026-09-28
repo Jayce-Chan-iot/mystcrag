@@ -7,7 +7,7 @@ import * as React from "react";
 type MobileNavItem = {
   href: string;
   label: string;
-  match: (pathname: string, hash: string) => boolean;
+  match: (pathname: string) => boolean;
   icon: React.ReactNode;
 };
 
@@ -16,15 +16,6 @@ function HomeIcon() {
     <svg aria-hidden="true" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="24">
       <path d="M3.5 10.5 12 3.75l8.5 6.75" />
       <path d="M5.5 9.5V20a.5.5 0 0 0 .5.5h4v-5.5a2 2 0 0 1 4 0V20.5h4a.5.5 0 0 0 .5-.5V9.5" />
-    </svg>
-  );
-}
-
-function InspirationIcon() {
-  return (
-    <svg aria-hidden="true" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="24">
-      <path d="M9.5 17.5h5M10.5 20.5h3" />
-      <path d="M12 3.5a6 6 0 0 0-3.4 10.9c.6.5.9 1.1.9 1.8h5c0-.7.3-1.3.9-1.8A6 6 0 0 0 12 3.5Z" />
     </svg>
   );
 }
@@ -60,27 +51,14 @@ function ProfileIcon() {
 }
 
 const MOBILE_NAV_ITEMS: MobileNavItem[] = [
-  { href: "/", label: "首页", match: (pathname, hash) => pathname === "/" && hash !== "#inspiration", icon: <HomeIcon /> },
-  { href: "/#inspiration", label: "灵感", match: (pathname, hash) => pathname === "/" && hash === "#inspiration", icon: <InspirationIcon /> },
+  { href: "/", label: "首页", match: (pathname) => pathname === "/", icon: <HomeIcon /> },
   { href: "/diy", label: "DIY", match: (pathname) => pathname === "/diy" || pathname.startsWith("/diy/"), icon: <DiyIcon /> },
   { href: "/gallery", label: "作品画廊", match: (pathname) => pathname === "/gallery", icon: <GalleryIcon /> },
   { href: "/profile", label: "我的", match: (pathname) => pathname === "/profile", icon: <ProfileIcon /> }
 ];
 
-function useLocationHash(): string {
-  const [hash, setHash] = React.useState("");
-  React.useEffect(() => {
-    const sync = () => setHash(window.location.hash);
-    sync();
-    window.addEventListener("hashchange", sync);
-    return () => window.removeEventListener("hashchange", sync);
-  }, []);
-  return hash;
-}
-
 export function MobileBottomNav() {
   const pathname = usePathname() ?? "/";
-  const hash = useLocationHash();
 
   return (
     <nav
@@ -89,9 +67,9 @@ export function MobileBottomNav() {
       data-mobile-bottom-nav="true"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
-      <ul className="grid grid-cols-5">
+      <ul className="grid grid-cols-4">
         {MOBILE_NAV_ITEMS.map((item) => {
-          const active = item.match(pathname, hash);
+          const active = item.match(pathname);
           return (
             <li key={item.href}>
               <Link

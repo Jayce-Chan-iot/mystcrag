@@ -23,7 +23,7 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
-  const navigation = getMainNavigation(isTarotFeatureEnabled());
+  const navigation = getMainNavigation({ tarotEnabled: isTarotFeatureEnabled(), oracleEnabled: false });
 
   return (
     <html data-scroll-behavior="smooth" lang="zh-CN">
