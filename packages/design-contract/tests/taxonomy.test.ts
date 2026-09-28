@@ -16,6 +16,7 @@ import {
 const domainPrefix = (domain: string): string => domain.toLowerCase().replace(/_/g, "-");
 
 test("taxonomy version is stable-formatted and the vocabulary is non-trivial", () => {
+  assert.equal(TAXONOMY_VERSION, "taxonomy-2026-09-v1");
   assert.match(TAXONOMY_VERSION, /^taxonomy-\d{4}-\d{2}-v\d+$/);
   assert.ok(TAXONOMY_TERMS.length >= 50, `expected >= 50 terms, got ${TAXONOMY_TERMS.length}`);
 });

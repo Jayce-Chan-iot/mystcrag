@@ -1,6 +1,6 @@
 import { TaxonomyTermSchema, type TaxonomyTerm, type TaxonomyTermInput } from "../schemas/taxonomy.schema";
 
-export const TAXONOMY_VERSION = "taxonomy-2026-08-v3";
+export const TAXONOMY_VERSION = "taxonomy-2026-09-v1";
 
 const RAW_TERMS: readonly TaxonomyTermInput[] = [
   // COLOR
