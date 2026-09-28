@@ -6,10 +6,21 @@ import {
   assertValidHexagramCatalog,
   lookupHexagramByYangLines
 } from "../src/hexagrams";
-import { TRIGRAMS } from "../src/trigrams";
+import { lookupTrigramByYangLines } from "../src/trigrams";
+
+const FIXTURE_TRIGRAMS = [
+  "HEAVEN",
+  "LAKE",
+  "FIRE",
+  "THUNDER",
+  "WIND",
+  "WATER",
+  "MOUNTAIN",
+  "EARTH"
+] as const;
 
 // Independent regression fixture: rows are upper trigrams and columns are lower
-// trigrams, both in TRIGRAMS order. It intentionally does not reuse engine data.
+// trigrams, both in the fixed local order above. It intentionally does not reuse engine data.
 const EXPECTED_KING_WEN_BY_UPPER_LOWER = [
   ["1:乾", "10:履", "13:同人", "25:无妄", "44:姤", "6:讼", "33:遁", "12:否"],
   ["43:夬", "58:兑", "49:革", "17:随", "28:大过", "47:困", "31:咸", "45:萃"],
@@ -50,9 +61,26 @@ test("all 64 bottom-to-top binary patterns resolve uniquely", () => {
   assert.equal(resolvedNumbers.size, 64);
 });
 
+test("all eight bottom-to-top trigram patterns resolve against an independent fixture", () => {
+  const expected = [
+    [[true, true, true], "HEAVEN"],
+    [[true, true, false], "LAKE"],
+    [[true, false, true], "FIRE"],
+    [[true, false, false], "THUNDER"],
+    [[false, true, true], "WIND"],
+    [[false, true, false], "WATER"],
+    [[false, false, true], "MOUNTAIN"],
+    [[false, false, false], "EARTH"]
+  ] as const;
+
+  for (const [lines, trigram] of expected) {
+    assert.equal(lookupTrigramByYangLines(lines), trigram);
+  }
+});
+
 test("every upper-lower pair matches the independent King Wen number and name fixture", () => {
-  for (const [upperIndex, upperTrigram] of TRIGRAMS.entries()) {
-    for (const [lowerIndex, lowerTrigram] of TRIGRAMS.entries()) {
+  for (const [upperIndex, upperTrigram] of FIXTURE_TRIGRAMS.entries()) {
+    for (const [lowerIndex, lowerTrigram] of FIXTURE_TRIGRAMS.entries()) {
       const actual = HEXAGRAM_CATALOG.find(
         (item) => item.upperTrigram === upperTrigram && item.lowerTrigram === lowerTrigram
       );
