@@ -19,6 +19,10 @@ erDiagram
   MaterialProduct }o..o{ InventorySnapshot : "productId/type"
   AccessoryProduct }o..o{ InventorySnapshot : "productId/type"
   PricingRule }o..o{ OrderDesignSnapshot : "version/currency"
+  User ||--o{ OracleSession : owns
+  OracleSession ||--o{ OracleSession : redraws
+  OracleSession ||--|{ OracleDesignRecommendation : ranks
+  Design ||--o{ OracleDesignRecommendation : selected_by
 ```
 
 `InventorySnapshot` uses an intentional `(productType, productId)` polymorphic reference because it captures inputs from multiple catalog tables. Repository validation supplies referential checks.
@@ -39,6 +43,8 @@ erDiagram
 | `InventorySnapshot` | Append-only availability observation: product type/ID, available/reserved quantity, capture time and source version. |
 | `PricingRule` | Versioned currency-specific rule JSON and active flag. |
 | `DesignTemplate` | Existing design-DNA authoring data; it is not transaction history. |
+| `OracleSession` | Owner-scoped three-coin aggregate: create operation identity, `CAST -> RECOMMENDED -> SAVED` revision, locale/currency/wrist, strict cast/signal/interpretation JSON, algorithm/rule versions, transition operation IDs, optional redraw parent and selected Design. No question field exists. |
+| `OracleDesignRecommendation` | Restrictive link from one Oracle session to exactly three distinct owner Designs, with ranks 1–3 and creation time. |
 
 ## Indexes and uniqueness
 
@@ -49,6 +55,8 @@ erDiagram
 - Product SKU is unique; products are indexed by currency/active, and materials by crystal/active.
 - `InventorySnapshot`: unique `(productType, productId, sourceVersion)` plus latest-capture lookup index.
 - `PricingRule`: unique `(version, currency)` plus active currency lookup.
+- `OracleSession`: unique `(ownerId, operationId)` plus owner/update lookup.
+- `OracleDesignRecommendation`: unique `(sessionId, rank)` and `(sessionId, designId)`.
 
 ## Deletion and immutability
 
@@ -61,6 +69,15 @@ PostgreSQL stores `unitPriceMinor`, `unitCostMinor`, and `totalAmountMinor` as c
 ## JSON snapshot rules
 
 `Design.currentSnapshot` and `DesignRevision.snapshot` store complete `DesignV1`. `OrderDesignSnapshot` separately stores the complete priced design plus its `PricingV1`, `ProductionV1`, and `OrderFulfillmentSnapshotV1` children so transaction evidence is directly auditable. A Tarot shortage sets the order to `AWAITING_RESTOCK` and uses a five-day advisory; other design modes remain inventory-blocking. Every write and read uses the corresponding Zod schema. The structured `schemaVersion` must agree with the snapshot. Unknown major versions are rejected; supported old versions must pass an explicit Design Contract migration before storage. Prisma `JsonValue` does not leave repositories.
+
+Oracle persistence stores the exact strict `OracleCastDto`, `OracleDesignSignal`, and original `OracleInterpretation` snapshots. Their duplicated algorithm/rule columns must equal the embedded versions; accent positions must equal moving lines. Reads fail closed on any divergence. The create-only question is discarded before this layer and has no text, ciphertext, hash, keyed identity, analytics, or timestamp representation. Create idempotency therefore compares only locale, currency, wrist, and parent session under `(ownerId, operationId)`.
+
+## Star Oracle lifecycle
+
+1. `createOrGet` validates all snapshots, checks same-owner redraw lineage, and creates revision 1 `CAST`; an exact durable-field retry returns the original cast without consuming or replacing entropy.
+2. `saveRecommendations` requires revision 1 `CAST`, three unique owner Designs at ranks 1–3, and transactionally writes the links plus revision 2 `RECOMMENDED`. The accepted operation ID replays the same result; changed content or stale revisions conflict.
+3. `markSaved` requires revision 2 `RECOMMENDED` and a selected linked Design, then records revision 3 `SAVED`. Its accepted operation ID and Design replay without another increment.
+4. Owner-scoped reads return generic absence for another owner. Every relation uses restrictive deletion, so parent, session, and Design evidence cannot be erased through cascades.
 
 ## Revision lifecycle
 

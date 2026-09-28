@@ -18,6 +18,7 @@ enum DesignMode {
   AI_ASSISTED
   TEMPLATE_REMIX
   TAROT_GUIDED
+  ORACLE_GUIDED
 }
 
 enum TarotSpreadType {
@@ -31,6 +32,12 @@ enum TarotSessionStatus {
   RECOMMENDED
   SAVED
   ABANDONED
+}
+
+enum OracleSessionStatus {
+  CAST
+  RECOMMENDED
+  SAVED
 }
 
 enum DesignStatus {
@@ -208,6 +215,7 @@ model User {
   publications       DesignPublication[]
   orders             Order[]
   tarotSessions      TarotSession[]
+  oracleSessions     OracleSession[]
   externalIdentities ExternalIdentity[]
 
   @@map("users")
@@ -276,30 +284,31 @@ model DesignTemplate {
 }
 
 model Design {
-  id                   String                      @id
-  ownerId              String                      @map("owner_id")
-  name                 String
-  mode                 DesignMode
-  status               DesignStatus                @default(DRAFT)
-  schemaVersion        String                      @map("schema_version")
-  currentRevision      Int                         @default(1) @map("current_revision")
-  locale               String
-  currency             Currency
-  currentSnapshot      Json                        @map("current_snapshot")
-  complianceStatus     ComplianceStatus            @map("compliance_status")
-  visibility           Visibility                  @default(PRIVATE)
-  publishConsent       Boolean                     @default(false) @map("publish_consent")
-  allowRemix           Boolean                     @default(false) @map("allow_remix")
-  creatorDisplayMode   CreatorDisplayMode          @default(ANONYMOUS) @map("creator_display_mode")
-  createdAt            DateTime                    @default(now()) @map("created_at")
-  updatedAt            DateTime                    @updatedAt @map("updated_at")
-  deletedAt            DateTime?                   @map("deleted_at")
-  owner                User                        @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  revisions            DesignRevision[]
-  publications         DesignPublication[]
-  decisionTraces       DesignDecisionTrace[]
-  tarotRecommendations TarotDesignRecommendation[]
-  usageEvents          KnowledgeUsageEvent[]
+  id                    String                       @id
+  ownerId               String                       @map("owner_id")
+  name                  String
+  mode                  DesignMode
+  status                DesignStatus                 @default(DRAFT)
+  schemaVersion         String                       @map("schema_version")
+  currentRevision       Int                          @default(1) @map("current_revision")
+  locale                String
+  currency              Currency
+  currentSnapshot       Json                         @map("current_snapshot")
+  complianceStatus      ComplianceStatus             @map("compliance_status")
+  visibility            Visibility                   @default(PRIVATE)
+  publishConsent        Boolean                      @default(false) @map("publish_consent")
+  allowRemix            Boolean                      @default(false) @map("allow_remix")
+  creatorDisplayMode    CreatorDisplayMode           @default(ANONYMOUS) @map("creator_display_mode")
+  createdAt             DateTime                     @default(now()) @map("created_at")
+  updatedAt             DateTime                     @updatedAt @map("updated_at")
+  deletedAt             DateTime?                    @map("deleted_at")
+  owner                 User                         @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  revisions             DesignRevision[]
+  publications          DesignPublication[]
+  decisionTraces        DesignDecisionTrace[]
+  tarotRecommendations  TarotDesignRecommendation[]
+  oracleRecommendations OracleDesignRecommendation[]
+  usageEvents           KnowledgeUsageEvent[]
 
   @@index([ownerId, updatedAt])
   @@index([status, deletedAt])
@@ -648,6 +657,50 @@ model TarotDesignRecommendation {
   @@unique([sessionId, rank])
   @@unique([sessionId, designId])
   @@map("tarot_design_recommendations")
+}
+
+model OracleSession {
+  id                        String                       @id @default(cuid())
+  ownerId                   String                       @map("owner_id")
+  operationId               String                       @map("operation_id")
+  status                    OracleSessionStatus          @default(CAST)
+  stateRevision             Int                          @default(1) @map("state_revision")
+  locale                    String
+  currency                  Currency
+  wristCircumferenceMm      Int?                         @map("wrist_circumference_mm")
+  castSnapshot              Json                         @map("cast_snapshot")
+  signalSnapshot            Json                         @map("signal_snapshot")
+  interpretationSnapshot    Json                         @map("interpretation_snapshot")
+  algorithmVersion          String                       @map("algorithm_version")
+  ruleVersion               String                       @map("rule_version")
+  recommendationOperationId String?                      @map("recommendation_operation_id")
+  saveOperationId           String?                      @map("save_operation_id")
+  selectedDesignId          String?                      @map("selected_design_id")
+  parentSessionId           String?                      @map("parent_session_id")
+  createdAt                 DateTime                     @default(now()) @map("created_at")
+  updatedAt                 DateTime                     @updatedAt @map("updated_at")
+  owner                     User                         @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  parentSession             OracleSession?               @relation("OracleRedraw", fields: [parentSessionId], references: [id], onDelete: Restrict)
+  redraws                   OracleSession[]              @relation("OracleRedraw")
+  recommendations           OracleDesignRecommendation[]
+
+  @@unique([ownerId, operationId])
+  @@index([ownerId, updatedAt])
+  @@map("oracle_sessions")
+}
+
+model OracleDesignRecommendation {
+  id        String        @id @default(cuid())
+  sessionId String        @map("session_id")
+  designId  String        @map("design_id")
+  rank      Int
+  createdAt DateTime      @default(now()) @map("created_at")
+  session   OracleSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  design    Design        @relation(fields: [designId], references: [id], onDelete: Restrict)
+
+  @@unique([sessionId, rank])
+  @@unique([sessionId, designId])
+  @@map("oracle_design_recommendations")
 }
 
 /// One admin import run. `idempotencyKey` deduplicates session creation; the

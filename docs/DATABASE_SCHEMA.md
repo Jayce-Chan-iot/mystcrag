@@ -151,6 +151,15 @@ Rollback procedure for `20260831_add_bead_asset_import`:
 - Saving a session may record a selected design only when it belongs to the session's recommendation links. A nullable restrictive self-relation records redraw lineage through `parentSessionId`.
 - User, parent-session, session-recommendation, and design-recommendation foreign keys use `RESTRICT`. Deleting a referenced design or a parent/recommended session cannot erase Tarot lifecycle evidence.
 
+## Star Oracle lifecycle persistence
+
+- Migration `20260926090000_add_oracle_sessions` adds `DesignMode.ORACLE_GUIDED`, `OracleSessionStatus { CAST, RECOMMENDED, SAVED }`, `OracleSession`, and `OracleDesignRecommendation` without dropping or rewriting existing data.
+- `OracleSession` is owner-scoped and starts at revision 1 in `CAST`. It stores strict cast, design-signal, and original-interpretation JSON snapshots plus duplicated algorithm/rule versions for integrity checks, optional wrist and redraw parent, lifecycle operation IDs, and the selected Design ID. It has no question text, ciphertext, hash, identity, or timestamp column.
+- `(ownerId, operationId)` is unique. Create retry comparison uses only durable locale, currency, wrist, and parent-session fields; the request trace ID and request-scoped question never reach this repository. Recommendation and save operation IDs make accepted state transitions replayable without a second revision.
+- Recommendations are committed with the session compare-and-set in one transaction and require exactly three distinct, owner-scoped Designs at ranks 1–3. Unique `(sessionId, rank)` and `(sessionId, designId)` constraints are the database backstop.
+- Every JSON value is contract-validated before write and after read. Snapshot corruption, version disagreement, cross-owner parent/Design relations, or status/link disagreement fails as `DATA_INTEGRITY_ERROR`.
+- Owner, redraw-parent, session-recommendation, and Design-recommendation foreign keys use `RESTRICT`; deleting a referenced owner, parent, session, or Design cannot erase Oracle evidence.
+
 ## Demo catalog baseline
 
 The local seed synchronizes 20 compliant crystal knowledge entries into 96 active material products (6/8/10 mm variants per crystal, one independent CNY and one TWD SKU per size) plus CNY/TWD silver spacer and pendant accessories. Every material carries Product V2 backfill: string length (round beads equal diameter, faceted beads 1.05x), hole diameter, grade, and a taxonomy-derived visual profile. Inventory snapshots are append-only by `sourceVersion`; the current `seed-2026-08-v2` set deliberately marks six SKUs out of stock and two low stock so decision-engine tests exercise real availability constraints. The public material catalog reads bilingual names and color tags from `Crystal`, while price, render keys, sellable status, and currency remain product-specific. Cultural references remain design inspiration only and do not introduce medical or guaranteed-effect claims.
