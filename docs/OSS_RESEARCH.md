@@ -70,3 +70,11 @@ The mapping is a Mystcrag design convention, not a claim that one historical sch
 | Earth | yellow, brown | eastern contemporary, natural | Soil and receptivity become warm, supportive neutrals. |
 
 Yin/yang ratio controls the base rhythm: visually homogeneous casts stay steady, balanced casts alternate, and intermediate ratios graduate. Three or more moving lines switch to punctuated contrast. A transformed hexagram contributes only alternative support colors: one new color for low movement and the full distinct alternative palette for high movement. Moving positions alone become accent candidates. These rules are visual metaphors, not predictions or claims about a user's life.
+
+### Original Oracle copy boundary
+
+`mystcrag-oracle-copy-v1` was authored specifically for Mystcrag from the approved product specification and the versioned structural/design signals above. Runtime headlines, summaries, three-keyword sets, design rationales, and localized disclaimers do not reproduce text from any repository or modern I Ching commentary listed here. No CC BY-SA modern interpretation was consulted while drafting or entered into runtime fixtures.
+
+The copy layer receives no focus question and uses no Oracle Engine domain type. It names only the public hexagram structure already carried by `OracleCastDto`, then describes palette, bead rhythm, and accent placement as optional composition cues. It never interprets a user's life, chooses a product, or changes fit, inventory, price, revision, and order authority. Static casts omit transformed-language entirely. Moving casts describe a visual transition rather than a future prediction.
+
+`oracle-copy-policy-v1` permits only an exact canonical echo of server-authored templates at the provider boundary. A deterministic localized fallback is the current production-safe source. Tests reject registered fortune/efficacy, medical/psychological, deterministic-future, relationship, authority, and copied-modern-commentary phrases without exposing the rejected text.

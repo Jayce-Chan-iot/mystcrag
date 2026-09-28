@@ -10,6 +10,7 @@
     "./providers": "./src/providers/index.ts",
     "./recommendation": "./src/recommendation/index.ts",
     "./tarot": "./src/tarot/index.ts",
+    "./oracle": "./src/oracle/index.ts",
     "./fixtures": "./src/fixtures/index.ts",
     "./legacy": "./src/contracts/legacy-design.ts",
     "./emotion-agent": "./emotion-agent/index.ts",
