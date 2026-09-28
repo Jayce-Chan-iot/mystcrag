@@ -188,8 +188,34 @@ function mapOracleSession(row: OracleSessionRow): OracleSessionRecord {
   if (!status.success || !locale.success || !currency.success) {
     throw new PersistenceError("DATA_INTEGRITY_ERROR", "Oracle session metadata is invalid");
   }
-  if (!Number.isSafeInteger(row.stateRevision) || row.stateRevision < 1) {
-    throw new PersistenceError("DATA_INTEGRITY_ERROR", "Oracle state revision is invalid");
+  const expectedRevision = { CAST: 1, RECOMMENDED: 2, SAVED: 3 }[status.data];
+  if (row.stateRevision !== expectedRevision) {
+    throw new PersistenceError("DATA_INTEGRITY_ERROR", "Oracle status and state revision disagree");
+  }
+  if (
+    row.wristCircumferenceMm !== null &&
+    (!Number.isInteger(row.wristCircumferenceMm) ||
+      row.wristCircumferenceMm < 130 ||
+      row.wristCircumferenceMm > 200)
+  ) {
+    throw new PersistenceError("DATA_INTEGRITY_ERROR", "Oracle persisted wrist is invalid");
+  }
+  if (
+    [row.id, row.ownerId, row.operationId, row.algorithmVersion, row.ruleVersion].some(
+      (value) => value.trim().length === 0
+    ) ||
+    [row.recommendationOperationId, row.saveOperationId, row.selectedDesignId].some(
+      (value) => value !== null && value.trim().length === 0
+    )
+  ) {
+    throw new PersistenceError("DATA_INTEGRITY_ERROR", "Oracle persisted identifiers are invalid");
+  }
+  if (
+    Number.isNaN(row.createdAt.getTime()) ||
+    Number.isNaN(row.updatedAt.getTime()) ||
+    row.updatedAt.getTime() < row.createdAt.getTime()
+  ) {
+    throw new PersistenceError("DATA_INTEGRITY_ERROR", "Oracle persisted timestamps are invalid");
   }
   const cast = parseOracleCastSnapshot(row.castSnapshot);
   const signal = parseOracleSignalSnapshot(row.signalSnapshot);
@@ -271,6 +297,21 @@ async function getOwnedRow(
   });
   if (!row) throw new PersistenceError("NOT_FOUND", "Oracle session not found");
   return row as OracleSessionRow;
+}
+
+async function lockOwnedSession(
+  client: Prisma.TransactionClient,
+  ownerId: string,
+  sessionId: string
+): Promise<void> {
+  const rows = await client.$queryRawUnsafe<Array<{ id: string }>>(
+    'SELECT "id" FROM "oracle_sessions" WHERE "id" = $1 AND "owner_id" = $2 FOR UPDATE',
+    sessionId,
+    ownerId
+  );
+  if (rows.length !== 1) {
+    throw new PersistenceError("NOT_FOUND", "Oracle session not found");
+  }
 }
 
 function sameCreateFingerprint(
@@ -372,6 +413,7 @@ export class OracleSessionRepositoryImpl implements OracleSessionRepository {
     const recommendations = normalizeRecommendationLinks(input.recommendations, "VALIDATION_ERROR");
 
     return this.prisma.$transaction(async (tx) => {
+      await lockOwnedSession(tx, input.ownerId, input.sessionId);
       const current = mapOracleSession(await getOwnedRow(tx, input.ownerId, input.sessionId));
       if (current.status === "RECOMMENDED" || current.status === "SAVED") {
         if (current.recommendationOperationId === input.operationId) {
@@ -442,6 +484,7 @@ export class OracleSessionRepositoryImpl implements OracleSessionRepository {
     assertRevision(input.expectedRevision);
 
     return this.prisma.$transaction(async (tx) => {
+      await lockOwnedSession(tx, input.ownerId, input.sessionId);
       const current = mapOracleSession(await getOwnedRow(tx, input.ownerId, input.sessionId));
       if (current.status === "SAVED") {
         if (

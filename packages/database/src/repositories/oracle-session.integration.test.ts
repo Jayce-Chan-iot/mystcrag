@@ -122,6 +122,27 @@ test("Oracle repository persists an owner-scoped idempotent lifecycle without qu
       );
     });
 
+    await t.test("PostgreSQL rejects invalid Oracle lifecycle, wrist, and rank state", async () => {
+      const created = await repository.createOrGet(createInput(ownerId, "oracle-db-checks"));
+      await assert.rejects(() => prisma.$executeRawUnsafe(
+        'UPDATE "oracle_sessions" SET "state_revision" = 2 WHERE "id" = $1',
+        created.id
+      ));
+      await assert.rejects(() => prisma.$executeRawUnsafe(
+        'UPDATE "oracle_sessions" SET "wrist_circumference_mm" = 129 WHERE "id" = $1',
+        created.id
+      ));
+      await assert.rejects(() => prisma.$executeRawUnsafe(
+        'UPDATE "oracle_sessions" SET "recommendation_operation_id" = $1 WHERE "id" = $2',
+        "illegal-before-recommend",
+        created.id
+      ));
+      const raw = await prisma.oracleSession.findUniqueOrThrow({ where: { id: created.id } });
+      assert.equal(raw.status, "CAST");
+      assert.equal(raw.stateRevision, 1);
+      assert.equal(raw.recommendationOperationId, null);
+    });
+
     await t.test("recommend and save use revision guards, unique links, and restrictive FKs", async () => {
       const designIds = [1, 2, 3].map((rank) => `oracle-recommendation-design-${rank}`);
       for (const [index, designId] of designIds.entries()) {
@@ -185,22 +206,101 @@ test("Oracle repository persists an owner-scoped idempotent lifecycle without qu
       ]);
       assert.equal(retry.stateRevision, recommended.stateRevision);
 
-      const saveCommand = {
+      await assert.rejects(
+        () => repository.saveRecommendations({
+          ...recommendCommand,
+          ownerId: otherOwnerId,
+          operationId: "oracle-cross-owner-recommend"
+        }),
+        (error: unknown) => error instanceof PersistenceError && error.code === "NOT_FOUND"
+      );
+      await assert.rejects(
+        () => repository.markSaved({
+          ownerId,
+          sessionId: created.id,
+          operationId: "oracle-save-stale",
+          expectedRevision: 1,
+          selectedDesignId: designIds[0]!
+        }),
+        (error: unknown) => error instanceof PersistenceError && error.code === "CONFLICT"
+      );
+
+      await assert.rejects(() => prisma.$executeRawUnsafe(
+        'UPDATE "oracle_design_recommendations" SET "rank" = 4 WHERE "session_id" = $1 AND "rank" = 1',
+        created.id
+      ));
+
+      const firstSaveCommand = {
         ownerId,
         sessionId: created.id,
         operationId: "oracle-save-once",
         expectedRevision: recommended.stateRevision,
+        selectedDesignId: designIds[0]!
+      };
+      const secondSaveCommand = {
+        ...firstSaveCommand,
         selectedDesignId: designIds[1]!
       };
-      const [saved, savedRetry] = await Promise.all([
-        repository.markSaved(saveCommand),
-        repository.markSaved(saveCommand)
+      const saveRace = await Promise.allSettled([
+        repository.markSaved(firstSaveCommand),
+        repository.markSaved(secondSaveCommand)
       ]);
+      assert.equal(saveRace.filter(({ status }) => status === "fulfilled").length, 1);
+      assert.equal(saveRace.filter(({ status }) => status === "rejected").length, 1);
+      const rejectedSave = saveRace.find(({ status }) => status === "rejected");
+      assert.ok(rejectedSave?.status === "rejected");
+      assert.ok(rejectedSave.reason instanceof PersistenceError);
+      assert.equal(rejectedSave.reason.code, "CONFLICT");
+      const saved = await repository.getOwned(ownerId, created.id);
       assert.equal(saved.status, "SAVED");
-      assert.equal(saved.selectedDesignId, designIds[1]);
+      assert.equal(saved.stateRevision, 3);
+      assert.ok(saved.selectedDesignId === designIds[0] || saved.selectedDesignId === designIds[1]);
+      const savedRetry = await repository.markSaved({
+        ...(saved.selectedDesignId === designIds[0] ? firstSaveCommand : secondSaveCommand)
+      });
       assert.equal(savedRetry.stateRevision, saved.stateRevision);
       await assert.rejects(() => prisma.design.delete({ where: { id: designIds[0] } }));
       await assert.rejects(() => prisma.oracleSession.delete({ where: { id: created.id } }));
+
+      for (const [suffix, sameOperation] of [["different-operation", false], ["same-operation", true]] as const) {
+        const raceSession = await repository.createOrGet(
+          createInput(ownerId, `oracle-recommend-race-${suffix}`)
+        );
+        const firstCommand = {
+          ownerId,
+          sessionId: raceSession.id,
+          operationId: `recommend-race-${suffix}-a`,
+          expectedRevision: 1,
+          recommendations
+        };
+        const secondCommand = {
+          ...firstCommand,
+          operationId: sameOperation ? firstCommand.operationId : `recommend-race-${suffix}-b`,
+          recommendations: [
+            { rank: 1, designId: designIds[1]! },
+            { rank: 2, designId: designIds[0]! },
+            { rank: 3, designId: designIds[2]! }
+          ]
+        };
+        const race = await Promise.allSettled([
+          repository.saveRecommendations(firstCommand),
+          repository.saveRecommendations(secondCommand)
+        ]);
+        assert.equal(race.filter(({ status }) => status === "fulfilled").length, 1);
+        assert.equal(race.filter(({ status }) => status === "rejected").length, 1);
+        const rejection = race.find(({ status }) => status === "rejected");
+        assert.ok(rejection?.status === "rejected");
+        assert.ok(rejection.reason instanceof PersistenceError);
+        assert.equal(rejection.reason.code, "CONFLICT");
+        const final = await repository.getOwned(ownerId, raceSession.id);
+        assert.equal(final.stateRevision, 2);
+        assert.equal(final.recommendations.length, 3);
+        const finalLinks = final.recommendations.map(({ rank, designId }) => ({ rank, designId }));
+        assert.ok(
+          JSON.stringify(finalLinks) === JSON.stringify(firstCommand.recommendations) ||
+          JSON.stringify(finalLinks) === JSON.stringify(secondCommand.recommendations)
+        );
+      }
     });
 
     await t.test("redraw lineage requires the same owner", async () => {

@@ -21,8 +21,8 @@ erDiagram
   PricingRule }o..o{ OrderDesignSnapshot : "version/currency"
   User ||--o{ OracleSession : owns
   OracleSession ||--o{ OracleSession : redraws
-  OracleSession ||--|{ OracleDesignRecommendation : ranks
-  Design ||--o{ OracleDesignRecommendation : selected_by
+  OracleSession ||--o{ OracleDesignRecommendation : recommends
+  Design ||--o{ OracleDesignRecommendation : recommended_as
 ```
 
 `InventorySnapshot` uses an intentional `(productType, productId)` polymorphic reference because it captures inputs from multiple catalog tables. Repository validation supplies referential checks.

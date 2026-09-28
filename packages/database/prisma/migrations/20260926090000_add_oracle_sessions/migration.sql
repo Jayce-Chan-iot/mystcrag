@@ -23,7 +23,21 @@ CREATE TABLE "oracle_sessions" (
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
 
-    CONSTRAINT "oracle_sessions_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "oracle_sessions_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "oracle_sessions_state_revision_check" CHECK (
+        ("status" = 'CAST' AND "state_revision" = 1 AND "recommendation_operation_id" IS NULL AND "save_operation_id" IS NULL AND "selected_design_id" IS NULL)
+        OR ("status" = 'RECOMMENDED' AND "state_revision" = 2 AND "recommendation_operation_id" IS NOT NULL AND "save_operation_id" IS NULL AND "selected_design_id" IS NULL)
+        OR ("status" = 'SAVED' AND "state_revision" = 3 AND "recommendation_operation_id" IS NOT NULL AND "save_operation_id" IS NOT NULL AND "selected_design_id" IS NOT NULL)
+    ),
+    CONSTRAINT "oracle_sessions_wrist_check" CHECK ("wrist_circumference_mm" IS NULL OR "wrist_circumference_mm" BETWEEN 130 AND 200),
+    CONSTRAINT "oracle_sessions_identifiers_check" CHECK (
+        length(btrim("operation_id")) > 0
+        AND length(btrim("algorithm_version")) > 0
+        AND length(btrim("rule_version")) > 0
+        AND ("recommendation_operation_id" IS NULL OR length(btrim("recommendation_operation_id")) > 0)
+        AND ("save_operation_id" IS NULL OR length(btrim("save_operation_id")) > 0)
+        AND ("selected_design_id" IS NULL OR length(btrim("selected_design_id")) > 0)
+    )
 );
 
 CREATE TABLE "oracle_design_recommendations" (
@@ -33,7 +47,8 @@ CREATE TABLE "oracle_design_recommendations" (
     "rank" INTEGER NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "oracle_design_recommendations_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "oracle_design_recommendations_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "oracle_design_recommendations_rank_check" CHECK ("rank" BETWEEN 1 AND 3)
 );
 
 CREATE UNIQUE INDEX "oracle_sessions_owner_id_operation_id_key" ON "oracle_sessions"("owner_id", "operation_id");

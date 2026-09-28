@@ -85,6 +85,9 @@ class ExistingSessionClient {
   };
   readonly design = { count: async () => 3 };
   readonly oracleDesignRecommendation = { createMany: async () => ({ count: 3 }) };
+  async $queryRawUnsafe(): Promise<Array<{ id: string }>> {
+    return this.ownedRow === null ? [] : [{ id: this.ownedRow.id }];
+  }
   async $transaction<T>(callback: (client: ExistingSessionClient) => Promise<T>): Promise<T> {
     return callback(this);
   }
@@ -111,6 +114,22 @@ test("owner-scoped reads do not reveal another owner's session", async () => {
     () => repository.getOwned("owner-2", row.id),
     (error: unknown) => error instanceof PersistenceError && error.code === "NOT_FOUND"
   );
+});
+
+test("persisted lifecycle and wrist corruption fail closed", async () => {
+  for (const corrupted of [
+    { ...row, stateRevision: 2 },
+    { ...row, wristCircumferenceMm: 129 }
+  ]) {
+    const repository = new OracleSessionRepositoryImpl(
+      new ExistingSessionClient(corrupted) as unknown as PrismaClient
+    );
+    await assert.rejects(
+      () => repository.getOwned(row.ownerId, row.id),
+      (error: unknown) =>
+        error instanceof PersistenceError && error.code === "DATA_INTEGRITY_ERROR"
+    );
+  }
 });
 
 test("recommendations require three unique ranks and the current revision", async () => {
