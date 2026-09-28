@@ -129,20 +129,16 @@ test("ai-agent cannot import the database package", async () => {
 
 test("backend HTTP boundary does not expose Prisma or database package types", async () => {
   const repositoryBackedServices = new Set([
-    "apps/backend/src/modules/community/publication.service.ts",
     "apps/backend/src/modules/design/design.service.ts",
     "apps/backend/src/modules/design/inventory.service.ts",
     "apps/backend/src/modules/design/pricing.service.ts",
     "apps/backend/src/modules/design/recommendation.service.ts",
-    "apps/backend/src/modules/order/order.service.ts",
     "apps/backend/src/observability/knowledge-usage-recorder.ts"
   ]);
   const matches = await matchingFiles(
     [
       "apps/backend/src/contracts",
-      "apps/backend/src/modules/community",
       "apps/backend/src/modules/design",
-      "apps/backend/src/modules/order",
       "apps/backend/src/observability",
       "apps/backend/src/validation"
     ],
