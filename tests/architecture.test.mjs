@@ -15,6 +15,7 @@ const requiredPaths = [
   "packages/knowledge-core/src",
   "packages/context-resolver/src",
   "packages/design-engine/src",
+  "packages/oracle-engine/src",
   "apps/backend/src/modules/design",
   "apps/frontend/src/features/design",
   "apps/mcp-server/src",
@@ -88,6 +89,27 @@ test("design-engine stays a pure deterministic engine over the contract", async 
     /from\s+["'](?:@mystcrag\/database|@mystcrag\/knowledge-core|@mystcrag\/knowledge-ingestion|@mystcrag\/bracelet-engine|@mystcrag\/ai-agent|@mystcrag\/tarot-engine|@mystcrag\/context-resolver)["']/
   );
   assertNoMatches(matches);
+});
+
+test("oracle-engine stays a pure structural engine", async () => {
+  const matches = await matchingFiles(
+    ["packages/oracle-engine/src"],
+    /(?:from\s+["'](?:@mystcrag\/|(?:\.\.\/)+\.\.\/apps\/|react|next|fastify|@prisma\/client|openai|@anthropic-ai\/|@google\/)|\b(?:window|document|localStorage|sessionStorage)\b)/
+  );
+  assertNoMatches(matches);
+});
+
+test("only backend production code may compose NodeCryptoCoinSource", async () => {
+  const uses = await matchingFiles(
+    ["apps", "packages"],
+    /\bNodeCryptoCoinSource\b/,
+    new Set([
+      "packages/oracle-engine/src/index.ts",
+      "packages/oracle-engine/src/random.ts"
+    ])
+  );
+  const productionUses = uses.filter((file) => !/(?:^|\/)(?:tests?|__tests__)(?:\/|$)|\.test\.[^.]+$/.test(file));
+  assertNoMatches(productionUses.filter((file) => !file.startsWith("apps/backend/")));
 });
 
 test("context-resolver only depends on the contract and tarot-engine", async () => {
