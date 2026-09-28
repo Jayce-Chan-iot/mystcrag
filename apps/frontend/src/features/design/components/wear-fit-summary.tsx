@@ -57,7 +57,7 @@ export function WearFitSummary({ compact = false, fit }: WearFitSummaryProps) {
       <details className={compact ? "shrink-0 whitespace-normal text-xs text-[var(--muted)]" : "text-xs text-[var(--muted)]"}>
         <summary className="cursor-pointer">尺寸与测量说明</summary>
         <p className="mt-1 leading-5">
-          腕围为实测手腕周长；目标内周长是设计目标；当前材料路径是珠子与直通配饰沿绳长度之和；结构余量为弹性余量；距目标为目标内周长与当前材料路径之差。
+          腕围为实测手腕周长；目标内周长是设计目标；当前材料路径是珠子与直通配饰沿绳长度之和；结构余量为弹性余量；距目标以当前材料路径减去目标内周长计算；负值表示偏短，正值表示偏长。
         </p>
       </details>
     </section>

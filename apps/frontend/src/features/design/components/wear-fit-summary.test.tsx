@@ -43,6 +43,8 @@ test("wear fit summary labels every measurement distinctly and never calls the m
   assert.match(markup, /15\.8 cm/);
   assert.match(markup, /0\.5 cm/);
   assert.match(markup, /-0\.2 cm/);
+  assert.match(markup, /距目标以当前材料路径减去目标内周长计算；负值表示偏短，正值表示偏长/);
+  assert.doesNotMatch(markup, /距目标为目标内周长与当前材料路径之差/);
   assert.match(markup, /data-wear-fit-summary="true"/);
   assert.doesNotMatch(markup, /推荐成品内径/);
   assert.doesNotMatch(markup, /5\.0–5\.2 cm/);
