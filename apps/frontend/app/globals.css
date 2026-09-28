@@ -59,6 +59,18 @@ a {
   -webkit-tap-highlight-color: transparent;
 }
 
+[data-mobile-bottom-nav="true"] a {
+  min-height: 2.75rem;
+  font-size: 0.75rem;
+}
+
+[data-profile-page="ready"] [class~="text-[0.68rem]"],
+[data-gallery-page="ready"] [class~="text-[0.65rem]"],
+[data-gallery-page="ready"] [class~="text-[0.68rem]"],
+[data-library-page="ready"] [class~="text-[0.68rem]"] {
+  font-size: 0.75rem;
+}
+
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
