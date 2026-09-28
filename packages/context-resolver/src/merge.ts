@@ -8,12 +8,14 @@ import type { ContextSource, RecommendationContext } from "@mystcrag/design-cont
  * - sources keep their declaration order, deduplicated by sourceType (the
  *   first occurrence and its weight win);
  * - preferences union in declaration order without duplicates;
- * - scalar hard constraints come from the first non-Oracle source; an
- *   Oracle-only merge may carry its user-supplied wrist, but never budget or
- *   target circumference;
+ * - scalar hard constraints come from the highest-trust source
+ *   (Manual/Questionnaire > Tarot > Oracle), preserving declaration order
+ *   within one trust level; an Oracle-only merge may carry its user-supplied
+ *   wrist, but never budget or target circumference;
  * - array constraints union across non-Oracle sources so previously resolved
  *   constraints remain intact; Oracle never injects product/component constraints;
- * - avoidances union (a user refusal from any source stands);
+ * - avoidances union across non-Oracle sources (a user refusal stands while
+ *   Oracle-derived guidance cannot manufacture a refusal);
  * - contextWeights merge keys; later sources must not overwrite existing
  *   keys, so earlier (higher-trust) provenance is preserved.
  */
