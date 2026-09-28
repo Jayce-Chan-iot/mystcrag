@@ -427,7 +427,7 @@ body {
 }
 
 [data-atelier-surface="diy-workbench"] aside nav[aria-label="桌面珠子分类"] button {
-  min-width: max-content;
+  min-width: 2.75rem;
   min-height: 2.75rem;
   padding-inline: 0.55rem;
   border-radius: 0;
@@ -460,6 +460,7 @@ body {
 
 [data-atelier-surface="diy-workbench"] :is(button, a, input, select, summary) {
   min-height: 2.75rem;
+  min-width: 2.75rem;
 }
 
 [data-atelier-surface="diy-workbench"] [data-compliance-status] small {

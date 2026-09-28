@@ -76,6 +76,17 @@ a {
   min-height: 2.75rem;
 }
 
+[data-gallery-page="ready"] :is(button, a, select, summary),
+[data-profile-page="ready"] :is(button, a, select, summary) {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+}
+
+[data-profile-page="ready"] p > a {
+  display: inline-flex;
+  align-items: center;
+}
+
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;

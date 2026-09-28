@@ -17,7 +17,7 @@ test("primary navigation and notice actions retain at least 44px targets", () =>
   assert.match(flowNotice, /ACTION_CLASS\s*=\s*"[^"]*min-h-11/);
 });
 
-test("catalog, tray and completion controls have a route-local 44px floor", () => {
+test("catalog, tray, collection and completion controls have a route-local 44px floor", () => {
   const globals = source("../../../app/globals.css");
   const css = source("../../../app/atelier.css");
 
@@ -25,13 +25,16 @@ test("catalog, tray and completion controls have a route-local 44px floor", () =
   assert.match(css, /data-desktop-catalog-grid="true"/);
   assert.match(css, /data-tray-picker-overlay="true"/);
   assert.match(css, /data-desktop-inspector-footer="true"/);
-  assert.match(css, /data-atelier-surface="diy-workbench"[^\n]*:is\(button, a, input, select, summary\)[^{]*\{[^}]*min-height:\s*2\.75rem/s);
-  assert.match(css, /aria-label="桌面珠子分类"[^\n]*button[^{]*\{[^}]*min-height:\s*2\.75rem/s);
+  assert.match(css, /data-atelier-surface="diy-workbench"[^\n]*:is\(button, a, input, select, summary\)[^{]*\{[^}]*min-height:\s*2\.75rem[^}]*min-width:\s*2\.75rem/s);
+  assert.match(css, /aria-label="桌面珠子分类"[^\n]*button[^{]*\{[^}]*min-width:\s*2\.75rem[^}]*min-height:\s*2\.75rem/s);
   assert.match(css, /data-atelier-surface="tarot-setup"[^\n]*input\[type="number"\][\s\S]*?min-height:\s*2\.75rem/);
   assert.match(css, /data-atelier-surface="tarot-setup"[^\n]*details\s*>\s*summary[\s\S]*?min-height:\s*2\.75rem/);
   assert.match(css, /data-atelier-surface="tarot-setup"[^\n]*select[^{]*\{[^}]*min-height:\s*2\.75rem/s);
   assert.match(globals, /data-library-page="ready"[^\n]*:is\(button, a, select, summary\)[^{]*\{[^}]*min-height:\s*2\.75rem/s);
   assert.match(globals, /data-library-filters[^\n]*label[^{]*\{[^}]*min-height:\s*2\.75rem/s);
+  assert.match(globals, /data-gallery-page="ready"[^\n]*:is\(button, a, select, summary\)[^{]*\{[^}]*min-height:\s*2\.75rem[^}]*min-width:\s*2\.75rem/s);
+  assert.match(globals, /data-profile-page="ready"[^\n]*:is\(button, a, select, summary\)[^{]*\{[^}]*min-height:\s*2\.75rem[^}]*min-width:\s*2\.75rem/s);
+  assert.match(globals, /data-profile-page="ready"[^\n]*p\s*>\s*a[^{]*\{[^}]*display:\s*inline-flex[^}]*align-items:\s*center/s);
 });
 
 test("critical mobile and workbench labels use at least a 12px readable floor", () => {
