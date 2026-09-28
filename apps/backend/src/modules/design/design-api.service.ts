@@ -242,6 +242,12 @@ const CatalogDesignGenerationDraftSchema = z.strictObject({
       ruleVersion: z.string().trim().min(1).max(160),
       rank: z.number().int().min(1).max(3),
       direction: z.enum(["BALANCED", "CONTRAST", "NEUTRAL_LED"])
+    }).optional(),
+    oracleCandidate: z.strictObject({
+      sessionId: z.string().trim().min(1).max(160),
+      ruleVersion: z.string().trim().min(1).max(160),
+      rank: z.number().int().min(1).max(3),
+      direction: z.enum(["BALANCED", "CONTRAST", "NEUTRAL_LED"])
     }).optional()
   })
 });
@@ -449,7 +455,7 @@ function deterministicComponentIdFactory(seed: string): (prefix: string) => stri
   };
 }
 
-function normalizedTarotCandidateAuthority(design: DesignV1, designIdSeed: string): DesignV1 {
+function normalizedCandidateAuthority(design: DesignV1, designIdSeed: string): DesignV1 {
   return DesignV1Schema.parse({
     ...design,
     designId: designIdSeed,
@@ -467,10 +473,21 @@ export function deriveTarotDesignAuthorityId(
   design: DesignV1
 ): string {
   const digest = createHash("sha256")
-    .update(JSON.stringify(normalizedTarotCandidateAuthority(design, designIdSeed)))
+    .update(JSON.stringify(normalizedCandidateAuthority(design, designIdSeed)))
     .digest("hex")
     .slice(0, 32);
   return `tarot-design-${digest}`;
+}
+
+export function deriveOracleDesignAuthorityId(
+  designIdSeed: string,
+  design: DesignV1
+): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify(normalizedCandidateAuthority(design, designIdSeed)))
+    .digest("hex")
+    .slice(0, 32);
+  return `oracle-design-${digest}`;
 }
 
 export function hasSameCandidateAuthority(
@@ -479,8 +496,8 @@ export function hasSameCandidateAuthority(
   designIdSeed: string
 ): boolean {
   return isDeepStrictEqual(
-    normalizedTarotCandidateAuthority(existing, designIdSeed),
-    normalizedTarotCandidateAuthority(intended, designIdSeed)
+    normalizedCandidateAuthority(existing, designIdSeed),
+    normalizedCandidateAuthority(intended, designIdSeed)
   );
 }
 
@@ -491,7 +508,7 @@ function buildGeneratedDesign(
   timestamp: string,
   designId: string,
   createComponentId: (prefix: string) => string,
-  designMode: "AI_GENERATED" | "TAROT_GUIDED"
+  designMode: "AI_GENERATED" | "TAROT_GUIDED" | "ORACLE_GUIDED"
 ): DesignV1 {
   const candidate: CatalogDesignGenerationDraft = CatalogDesignGenerationDraftSchema.parse(candidateInput);
   if (
@@ -501,6 +518,16 @@ function buildGeneratedDesign(
     throw new DomainApiError(
       "VALIDATION_ERROR",
       "Tarot candidate provenance must be present only for TAROT_GUIDED generation."
+    );
+  }
+  if (
+    (designMode === "ORACLE_GUIDED") !==
+    (candidate.providerMetadata.oracleCandidate !== undefined) ||
+    (designMode === "ORACLE_GUIDED" && candidate.providerMetadata.tarotCandidate !== undefined)
+  ) {
+    throw new DomainApiError(
+      "VALIDATION_ERROR",
+      "Oracle candidate provenance must be present only for ORACLE_GUIDED generation."
     );
   }
   const byId = new Map(catalog.map((product) => [product.id, product]));
@@ -648,7 +675,10 @@ function buildGeneratedDesign(
       sourceDesignId: null,
       ...(candidate.providerMetadata.tarotCandidate === undefined
         ? {}
-        : { tarotCandidate: candidate.providerMetadata.tarotCandidate })
+        : { tarotCandidate: candidate.providerMetadata.tarotCandidate }),
+      ...(candidate.providerMetadata.oracleCandidate === undefined
+        ? {}
+        : { oracleCandidate: candidate.providerMetadata.oracleCandidate })
     },
     community: {
       visibility: "PRIVATE" as const,
@@ -847,7 +877,7 @@ export class DesignApplicationService implements DesignApiService {
       readonly actorId: string;
       readonly request: GenerateDesignRequest;
       readonly candidate: unknown;
-      readonly designMode: "AI_GENERATED" | "TAROT_GUIDED";
+      readonly designMode: "AI_GENERATED" | "TAROT_GUIDED" | "ORACLE_GUIDED";
       readonly designId?: string;
     },
     catalogInput?: readonly CatalogProduct[]
@@ -876,7 +906,9 @@ export class DesignApplicationService implements DesignApiService {
       ? calculated
       : DesignV1Schema.parse({
           ...calculated,
-          designId: deriveTarotDesignAuthorityId(designIdSeed, calculated)
+          designId: input.designMode === "ORACLE_GUIDED"
+            ? deriveOracleDesignAuthorityId(designIdSeed, calculated)
+            : deriveTarotDesignAuthorityId(designIdSeed, calculated)
         });
     const warnings: ContractWarning[] = [];
     try {
@@ -891,7 +923,11 @@ export class DesignApplicationService implements DesignApiService {
         this.designCreatedUsageEvent({
           actorId: input.actorId,
           design: persisted.snapshot,
-          source: input.designMode === "TAROT_GUIDED" ? "tarot" : "generate",
+          source: input.designMode === "TAROT_GUIDED"
+            ? "tarot"
+            : input.designMode === "ORACLE_GUIDED"
+              ? "oracle"
+              : "generate",
           productCatalogVersion: catalogVersionOfRows(catalog)
         })
       ]);
@@ -920,7 +956,7 @@ export class DesignApplicationService implements DesignApiService {
   private designCreatedUsageEvent(input: {
     actorId: string;
     design: DesignV1;
-    source: "generate" | "tarot";
+    source: "generate" | "tarot" | "oracle";
     productCatalogVersion?: string;
   }): KnowledgeUsageEvent {
     return {

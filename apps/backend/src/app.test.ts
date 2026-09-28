@@ -107,6 +107,13 @@ test("/api/modules lists tarot when a tarot service is composed", async () => {
   );
 });
 
+test("/api/modules lists oracle when an Oracle service is composed", async () => {
+  assert.deepEqual(
+    await moduleNames({ oracleService: {} as never, authProvider: moduleBoundaryAuthProvider }),
+    ["oracle"]
+  );
+});
+
 test("/api/modules lists design then tarot once each when both are composed", async () => {
   assert.deepEqual(
     await moduleNames({

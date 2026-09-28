@@ -5,10 +5,12 @@ import {
   KnowledgeRepository,
   KnowledgeUsageEventRepository,
   ProductRepository,
+  OracleSessionRepositoryImpl,
   TarotSessionRepositoryImpl,
   createPrismaClient
 } from "@mystcrag/database";
 import { NodeCryptoRandomSource } from "@mystcrag/tarot-engine";
+import { NodeCryptoCoinSource } from "@mystcrag/oracle-engine";
 import {
   KnowledgeConsoleService,
   KnowledgeReviewService,
@@ -17,6 +19,8 @@ import {
 import { KnowledgeAdminApplicationService } from "./modules/knowledge-admin/knowledge-admin.service.js";
 import { TarotAiRecommendationCopyPort, TarotService } from "./modules/tarot/tarot.service.js";
 import { TarotCopyService } from "@mystcrag/ai-agent/tarot";
+import { OracleCopyService } from "@mystcrag/ai-agent/oracle";
+import { OracleService } from "./modules/oracle/oracle.service.js";
 import { createAccessTokenVerifierFromEnvironment } from "./auth/auth-provider.factory.js";
 import { AuthenticatedActorProvider } from "./auth/authenticated-actor-provider.js";
 import { knowledgeUsageRecorderFromRepository } from "./observability/knowledge-usage-recorder.js";
@@ -99,6 +103,22 @@ const app = createApp({
         return undefined;
       }
     }
+  }),
+  oracleService: new OracleService({
+    repository: new OracleSessionRepositoryImpl(database),
+    coins: new NodeCryptoCoinSource(),
+    copy: new OracleCopyService(),
+    designReader: {
+      async getOwnedDesign(actorId, designId) {
+        return (await designRepository.getDesign(actorId, designId)).snapshot;
+      }
+    },
+    catalog: {
+      async listActiveCatalogProducts(currency) {
+        return productRepository.listAvailableCatalogMaterialProducts(currency);
+      }
+    },
+    designGenerator: designApplicationService
   }),
   knowledgeAdminService,
   ...(knowledgeAdminApiKey === undefined ? {} : { knowledgeAdminApiKey }),

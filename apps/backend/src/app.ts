@@ -2,7 +2,8 @@ import Fastify from "fastify";
 
 import type { AuthProvider } from "./auth/auth-provider.js";
 import { resolveTarotFeatureEnabled } from "./config/tarot-feature.js";
-import { designModule, tarotModule } from "./modules/index.js";
+import { resolveOracleFeatureEnabled } from "./config/oracle-feature.js";
+import { designModule, oracleModule, tarotModule } from "./modules/index.js";
 import type { BackendModule } from "./modules/module.js";
 import {
   registerDesignContractRoutes,
@@ -23,13 +24,17 @@ import { registerProductAssetRoutes } from "./modules/product-assets/product-ass
 import type { ProductAssetService } from "./modules/product-assets/product-asset.service.js";
 import { registerTarotRoutes } from "./modules/tarot/tarot.routes.js";
 import type { TarotApiService } from "./modules/tarot/tarot.types.js";
+import { registerOracleRoutes } from "./modules/oracle/oracle.routes.js";
+import type { OracleApiService } from "./modules/oracle/oracle.types.js";
 
 export type CreateAppOptions = {
   readonly designService?: DesignApiService;
   readonly recommendationService?: RecommendationApiService;
   readonly tarotService?: TarotApiService;
+  readonly oracleService?: OracleApiService;
   readonly authProvider?: AuthProvider;
   readonly tarotEnabled?: boolean;
+  readonly oracleEnabled?: boolean;
   readonly knowledgeAdminService?: KnowledgeAdminApplicationService;
   readonly knowledgeAdminApiKey?: string;
   readonly assetImportEnabled?: boolean;
@@ -69,10 +74,13 @@ export function createApp(options: CreateAppOptions = {}) {
   if (options.tarotService) {
     modules.push(tarotModule);
   }
+  if (options.oracleService) {
+    modules.push(oracleModule);
+  }
 
   app.get("/health", async () => ({ status: "ok" }));
   app.get("/api/modules", async () => ({ modules }));
-  if ((options.designService || options.tarotService || options.recommendationService) && !options.authProvider) {
+  if ((options.designService || options.tarotService || options.oracleService || options.recommendationService) && !options.authProvider) {
     throw new Error("An authentication provider is required for protected API routes.");
   }
   if (options.designService && options.authProvider) {
@@ -87,6 +95,14 @@ export function createApp(options: CreateAppOptions = {}) {
       options.tarotService,
       options.authProvider,
       options.tarotEnabled ?? resolveTarotFeatureEnabled(process.env.MYSTCRAG_TAROT_ENABLED)
+    );
+  }
+  if (options.oracleService && options.authProvider) {
+    registerOracleRoutes(
+      app,
+      options.oracleService,
+      options.authProvider,
+      options.oracleEnabled ?? resolveOracleFeatureEnabled(process.env.MYSTCRAG_ORACLE_ENABLED)
     );
   }
   if (options.knowledgeAdminService) {

@@ -21,6 +21,7 @@
     "@mystcrag/design-contract": "workspace:*",
     "@mystcrag/design-engine": "workspace:*",
     "@mystcrag/knowledge-core": "workspace:*",
+    "@mystcrag/oracle-engine": "workspace:*",
     "@mystcrag/tarot-engine": "workspace:*",
     "fastify": "^5.10.0",
     "jose": "6.2.10",

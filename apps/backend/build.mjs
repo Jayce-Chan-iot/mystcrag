@@ -52,13 +52,22 @@ const result = await build({
   banner,
   external: ["fastify", "zod"],
   alias: {
+    "@mystcrag/ai-agent/oracle": resolveFromBackend(
+      "../../packages/ai-agent/src/oracle/index.ts"
+    ),
     "@mystcrag/ai-agent/tarot": resolveFromBackend(
       "../../packages/ai-agent/src/tarot/index.ts"
     ),
     "@mystcrag/ai-agent": resolveFromBackend("../../packages/ai-agent/index.ts"),
     "@mystcrag/database": resolveFromBackend("../../packages/database/src/index.ts"),
+    "@mystcrag/context-resolver": resolveFromBackend(
+      "../../packages/context-resolver/src/index.ts"
+    ),
     "@mystcrag/design-contract": resolveFromBackend(
       "../../packages/design-contract/src/index.ts"
+    ),
+    "@mystcrag/oracle-engine": resolveFromBackend(
+      "../../packages/oracle-engine/src/index.ts"
     )
   },
   sourcemap: true,

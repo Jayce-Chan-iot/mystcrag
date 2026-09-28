@@ -72,6 +72,9 @@ importers:
       '@mystcrag/knowledge-core':
         specifier: workspace:*
         version: link:../../packages/knowledge-core
+      '@mystcrag/oracle-engine':
+        specifier: workspace:*
+        version: link:../../packages/oracle-engine
       '@mystcrag/tarot-engine':
         specifier: workspace:*
         version: link:../../packages/tarot-engine
