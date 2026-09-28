@@ -178,8 +178,9 @@ test("DIY editor keeps the focused mobile column and adds the desktop workbench"
   assert.match(source, /收缩成串/);
   assert.match(source, /散开到托盘/);
   assert.doesNotMatch(source, /散开查看/);
-  assert.match(source, /h-\[calc\(100dvh-3\.25rem\)\]/);
-  assert.match(source, /grid-rows-\[minmax\(0,1fr\)_11\.25rem\]/);
+  assert.doesNotMatch(source, /grid-rows-\[minmax\(0,1fr\)_11\.25rem\]/);
+  assert.match(source, /data-desktop-diy-workspace="true"/);
+  assert.match(source, /min-h-0 flex-1 grid-cols-/);
   assert.match(source, /fitDesktopViewport/);
 });
 
@@ -201,12 +202,25 @@ test("DIY workbench exposes tray choice, current beads, diameter controls and ex
   assert.match(source, /launchQueue/);
   assert.match(source, /setLaunchQueue/);
   assert.match(source, /onLaunchConsumed/);
-  assert.match(source, /已选用的珠子/);
+  assert.doesNotMatch(source, /已选用的珠子/);
   assert.match(source, /成品手围与尺寸/);
   assert.match(source, /WearFitSummary/);
   assert.doesNotMatch(source, /预计适配手围|当前组合长度/);
   assert.doesNotMatch(source, /常用水晶/);
   assert.doesNotMatch(source, />已选水晶</);
+  assert.doesNotMatch(source, /\["历史方案", false\]/);
+  assert.doesNotMatch(source, /\["我的收藏", false\]/);
+  assert.match(source, /href="\/profile\?tab=designs"/);
+  assert.match(source, /href="\/profile\?tab=favorites"/);
+  assert.match(source, /data-workbench-toolrail="true"[\s\S]*?void loadSuggestions\(\)/);
+  assert.match(source, /data-workbench-toolrail="true"[\s\S]*?href="\/profile\?tab=designs"/);
+  assert.match(source, /data-workbench-status-region="true"/);
+  const inspectorTag = source.match(/<aside\b[^>]*data-desktop-inspector="true"[^>]*>/)?.[0]
+    ?? source.match(/<aside\b[^>]*data-desktop-inspector="true"/)?.[0];
+  assert.ok(inspectorTag, "desktop inspector aside must be present");
+  assert.match(inspectorTag, /overflow-y-auto/);
+  assert.match(source, /data-desktop-inspector-footer="true"/);
+  assert.match(source, /sticky bottom-0/);
 });
 
 test("flat bracelet editor exposes the touch-first 2D ring in connected mode", () => {
@@ -532,7 +546,12 @@ test("the mobile workbench keeps one persistent server-authoritative info strip 
   assert.match(navSource, /env\(safe-area-inset-bottom\)/);
   assert.match(source, /pb-\[calc\(3\.4rem_\+_env\(safe-area-inset-bottom\)_\+_1px\)\] lg:hidden/);
   // The catalog sheet must never pin itself to the viewport bottom underneath the nav.
-  assert.doesNotMatch(source, /sticky bottom-0/);
+  const catalogSheetTag = source.match(/<section\b[^>]*data-catalog-sheet-state=\{catalogSheetState\}[^>]*>/)?.[0]
+    ?? source.match(/<section\b[^>]*data-catalog-sheet-state=/)?.[0];
+  assert.ok(catalogSheetTag, "mobile catalog sheet must remain present");
+  assert.doesNotMatch(catalogSheetTag, /sticky bottom-0/);
+  // Desktop completion footer may use sticky bottom-0; the catalog sheet may not.
+  assert.match(source, /data-desktop-inspector-footer="true"/);
   assert.match(source, /data-catalog-sheet-state=\{catalogSheetState\}/);
   // The half/full material grid is a bounded flex-scroll box so its last item can
   // scroll fully above the nav instead of being clipped by the sheet.

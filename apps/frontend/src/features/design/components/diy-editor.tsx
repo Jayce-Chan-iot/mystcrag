@@ -817,8 +817,8 @@ export function DiyEditor({ designId }: { designId: string }) {
       event.preventDefault();
       runHistory(event.shiftKey ? "redo" : "undo");
     }}>
-      <div className="hidden h-screen overflow-hidden bg-[var(--surface)] lg:block" data-desktop-diy-workspace="true">
-        <header className="grid h-[3.25rem] grid-cols-[22.5rem_minmax(0,1fr)_14.5rem] items-center border-b border-[var(--border)]/70 bg-white/85">
+      <div className="hidden h-screen flex-col overflow-hidden bg-[var(--surface)] lg:flex" data-desktop-diy-workspace="true">
+        <header className="grid h-[3.25rem] shrink-0 grid-cols-[22.5rem_minmax(0,1fr)_14.5rem] items-center border-b border-[var(--border)]/70 bg-white/85">
           <div className="flex h-full items-center gap-3 border-r border-[var(--border)]/70 px-5 xl:gap-5 xl:px-7">
             <Link className="font-serif text-lg tracking-[0.08em] text-[var(--accent-deep)]" href="/">玄矶 <span className="text-[0.55rem] tracking-[0.24em] text-[var(--muted)]">MYSTCRAG</span></Link>
             <span className="h-6 w-px bg-[var(--border)]" aria-hidden="true" />
@@ -845,24 +845,42 @@ export function DiyEditor({ designId }: { designId: string }) {
           </div>
         </header>
 
-        <div className="grid h-[calc(100dvh-3.25rem)] min-h-0 grid-cols-[22.5rem_minmax(0,1fr)_14.5rem] grid-rows-[minmax(0,1fr)_11.25rem]">
-          <aside className="relative row-span-2 min-h-0 overflow-y-auto border-r border-[var(--border)]/70 bg-[#fbfaf7] py-4 pl-[5.25rem] pr-3" aria-labelledby="desktop-library-title">
+        <div className="shrink-0 border-b border-[var(--border)]/70 bg-white/90 px-8 py-2 empty:hidden" data-workbench-status-region="true" aria-live="polite">
+          {notice ? <FlowNotice code={notice} compact action={noticeAction} onDismissAuthRequired={() => setNotice(null)} /> : null}
+          {requiresRestock ? <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">本方案含需补货材料，下单后预计等待约 5 天，具体以实际补货时间为准。</p> : null}
+          {editMessage ? <p className="rounded-full bg-[var(--accent-soft)] px-4 py-2 text-sm text-[var(--success)]">{editMessage}</p> : null}
+        </div>
+
+        <div className="grid min-h-0 flex-1 grid-cols-[22.5rem_minmax(0,1fr)_14.5rem] grid-rows-[minmax(0,1fr)]">
+          <aside className="relative min-h-0 overflow-y-auto border-r border-[var(--border)]/70 bg-[#fbfaf7] py-4 pl-[5.25rem] pr-3" aria-labelledby="desktop-library-title">
             <nav className="absolute inset-y-0 left-0 flex w-[4.4rem] flex-col border-r border-[var(--border)]/70 bg-white/82 pt-4" aria-label="工作台工具" data-workbench-toolrail="true">
-              {[
-                ["水晶库", true],
-                ["搭配推荐", false],
-                ["历史方案", false],
-                ["我的收藏", false]
-              ].map(([label, active]) => (
-                <button
-                  aria-current={active ? "page" : undefined}
-                  className={`min-h-[4.7rem] border-l-2 px-1 text-[0.66rem] leading-5 ${active ? "border-[var(--accent-deep)] bg-[var(--accent-soft)] text-[var(--accent-deep)]" : "border-transparent text-[var(--muted)]"}`}
-                  key={String(label)}
-                  type="button"
-                >
-                  {label}
-                </button>
-              ))}
+              <button
+                aria-current="page"
+                className="min-h-[4.7rem] border-l-2 border-[var(--accent-deep)] bg-[var(--accent-soft)] px-1 text-[0.66rem] leading-5 text-[var(--accent-deep)]"
+                type="button"
+              >
+                水晶库
+              </button>
+              <button
+                className="min-h-[4.7rem] border-l-2 border-transparent px-1 text-[0.66rem] leading-5 text-[var(--muted)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--accent-deep)] disabled:opacity-55"
+                disabled={!selectedBead || isSuggesting}
+                onClick={() => void loadSuggestions()}
+                type="button"
+              >
+                搭配推荐
+              </button>
+              <Link
+                className="flex min-h-[4.7rem] items-center border-l-2 border-transparent px-1 text-[0.66rem] leading-5 text-[var(--muted)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--accent-deep)]"
+                href="/profile?tab=designs"
+              >
+                历史方案
+              </Link>
+              <Link
+                className="flex min-h-[4.7rem] items-center border-l-2 border-transparent px-1 text-[0.66rem] leading-5 text-[var(--muted)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--accent-deep)]"
+                href="/profile?tab=favorites"
+              >
+                我的收藏
+              </Link>
             </nav>
             <h2 className="font-serif text-xl" id="desktop-library-title">全部水晶</h2>
             <p className="mt-1 text-xs text-[var(--muted)]">{materialOptions.length}/{catalogMaterials.length} 款可选</p>
@@ -949,10 +967,8 @@ export function DiyEditor({ designId }: { designId: string }) {
             </div>
           </aside>
 
-          <section className="relative overflow-hidden border-b border-[var(--border)]/70 bg-[var(--surface)] px-8" aria-labelledby="desktop-preview-title">
+          <section className="relative min-h-0 overflow-hidden bg-[var(--surface)] px-8" aria-labelledby="desktop-preview-title">
             <h1 className="sr-only" id="desktop-preview-title">DIY 手串编辑预览</h1>
-            {notice ? <div className="absolute left-8 right-8 top-4 z-40"><FlowNotice code={notice} compact action={noticeAction} onDismissAuthRequired={() => setNotice(null)} /></div> : null}
-            {requiresRestock ? <p className="absolute left-8 right-8 top-4 z-30 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900" role="status">本方案含需补货材料，下单后预计等待约 5 天，具体以实际补货时间为准。</p> : null}
             <button
               aria-pressed={braceletConnected}
               className="absolute right-8 top-4 z-30 min-h-11 rounded-full border border-[var(--accent)] bg-white/90 px-5 text-sm text-[var(--accent-deep)] shadow-sm transition hover:bg-[var(--accent-soft)]"
@@ -961,11 +977,6 @@ export function DiyEditor({ designId }: { designId: string }) {
             >
               {braceletConnected ? "散开到托盘" : "收缩成串"}
             </button>
-            {editMessage ? (
-              <p className="absolute left-8 top-4 z-30 rounded-full bg-[var(--accent-soft)] px-5 py-2 text-sm text-[var(--success)] shadow-sm" role="status">
-                {editMessage}
-              </p>
-            ) : null}
             <div className="flex h-full min-h-0 flex-col items-center justify-center pb-4 pt-3">
               <FlatBraceletEditor
                 busy={isConflict}
@@ -1013,7 +1024,7 @@ export function DiyEditor({ designId }: { designId: string }) {
             </div>
           </section>
 
-          <aside className="row-span-2 flex min-h-0 flex-col border-l border-[var(--border)]/70 bg-white px-5 py-6" aria-labelledby="selected-material-title">
+          <aside className="flex min-h-0 flex-col overflow-y-auto border-l border-[var(--border)]/70 bg-white px-5 py-6" aria-labelledby="selected-material-title" data-desktop-inspector="true">
             <section className="border-b border-[var(--border)] pb-4" data-wrist-inspector="true">
               <h2 className="text-sm font-medium">成品手围与尺寸</h2>
               <WearFitSummary fit={braceletFit} />
@@ -1117,7 +1128,7 @@ export function DiyEditor({ designId }: { designId: string }) {
               </div>
             </section>
 
-            <div className="shrink-0 border-t border-[var(--border)]/70 bg-white pt-4">
+            <div className="sticky bottom-0 mt-auto shrink-0 border-t border-[var(--border)]/70 bg-white pt-4" data-desktop-inspector-footer="true">
               {order ? (
                 <div className="mb-4 rounded-2xl border border-[var(--success)]/30 bg-[var(--surface)] p-4" data-order-id={order.orderId} role="status">
                   <p className="text-sm font-medium text-[var(--success)]">设计已确认，订单快照已生成（未接支付）</p>
@@ -1154,40 +1165,6 @@ export function DiyEditor({ designId }: { designId: string }) {
               </button>
             </div>
           </aside>
-
-          <section className="min-w-0 overflow-hidden bg-[#fbf8f2] px-5 py-3" aria-labelledby="desktop-material-shelf-title" data-material-preview-strip="true">
-            <div className="flex items-center justify-between">
-              <h2 className="font-serif text-lg" id="desktop-material-shelf-title">已选用的珠子</h2>
-              <span className="text-xs text-[var(--muted)]">点击即加入</span>
-            </div>
-            <div className="mt-2 flex gap-3 overflow-x-auto pb-2" aria-label="桌面已选用的珠子">
-              {designSummary.map((item, index) => (
-                <button
-                  aria-label={`再加一颗 ${item.name}`}
-                  className="group h-[8.75rem] w-[7.5rem] shrink-0 rounded-2xl border border-[var(--border)] bg-white/72 px-3 py-2 text-center transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:bg-white motion-reduce:transition-none disabled:cursor-wait disabled:opacity-55"
-                  disabled={isConflict}
-                  key={item.beadProductId}
-                  onClick={(event) => {
-                    const material = catalogMaterials.find((candidate) => candidate.beadProductId === item.beadProductId);
-                    if (material) addMaterial(material, event.currentTarget);
-                  }}
-                  type="button"
-                >
-                  <span className="mx-auto block h-14 w-14 transition-transform group-hover:scale-105">
-                    <CrystalBeadImage alt="" materialKey={item.materialKey} textureAssetKey={item.textureAssetKey} priority={index < 6} sizes="56px" />
-                  </span>
-                  <span className="mt-1 block truncate text-sm font-medium">{item.name}</span>
-                  <span className="mt-1 block text-xs text-[var(--muted)]">{item.diameterMm}mm · × {item.count}</span>
-                  <span className="mt-1 block text-sm">
-                    {formatMinorAmount({ amountMinor: item.unitPriceMinor * item.count, currency: design.currency, locale: design.locale })}
-                  </span>
-                </button>
-              ))}
-              {designSummary.length === 0 ? (
-                <p className="grid min-h-40 w-full place-items-center text-sm text-[var(--muted)]">从左侧珠子库开始添加第一颗珠子。</p>
-              ) : null}
-            </div>
-          </section>
         </div>
       </div>
 
@@ -1210,9 +1187,11 @@ export function DiyEditor({ designId }: { designId: string }) {
             </dl>
           </div>
 
-          {notice ? <div className="m-4"><FlowNotice code={notice} compact action={noticeAction} onDismissAuthRequired={() => setNotice(null)} /></div> : null}
-          {requiresRestock ? <p className="mx-4 mt-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900" role="status">本方案含需补货材料，下单后预计等待约 5 天，具体以实际补货时间为准。</p> : null}
-          {editMessage ? <p className="mx-4 mt-3 rounded-xl bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--success)]" role="status">{editMessage}</p> : null}
+          <div className="empty:hidden" data-workbench-status-region="true" aria-live="polite">
+            {notice ? <div className="m-4"><FlowNotice code={notice} compact action={noticeAction} onDismissAuthRequired={() => setNotice(null)} /></div> : null}
+            {requiresRestock ? <p className="mx-4 mt-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">本方案含需补货材料，下单后预计等待约 5 天，具体以实际补货时间为准。</p> : null}
+            {editMessage ? <p className="mx-4 mt-3 rounded-xl bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--success)]">{editMessage}</p> : null}
+          </div>
 
           <div className="px-2 pb-2 pt-1 sm:px-8" data-preview-region="large">
             <div className="flex items-center justify-between gap-2 px-2 pt-2">

@@ -378,8 +378,7 @@ body {
   background: rgb(255 253 248 / 0.94);
 }
 
-[data-atelier-surface="diy-workbench"] aside,
-[data-atelier-surface="diy-workbench"] [aria-labelledby="desktop-material-shelf-title"] {
+[data-atelier-surface="diy-workbench"] aside {
   scrollbar-color: #c7c0b7 transparent;
 }
 
@@ -434,10 +433,13 @@ body {
   padding: 0.25rem 1.25rem 1rem;
 }
 
-[data-atelier-surface="diy-workbench"] [data-material-preview-strip="true"] button {
-  height: 7.5rem;
-  width: 6.4rem;
-  border-radius: 0.35rem;
+[data-atelier-surface="diy-workbench"] [data-desktop-inspector-footer="true"] {
+  background: rgb(255 253 248 / 0.96);
+  box-shadow: 0 -10px 24px rgb(57 45 67 / 0.06);
+}
+
+[data-atelier-surface="diy-workbench"] [data-workbench-status-region="true"] > * + * {
+  margin-top: 0.5rem;
 }
 
 [data-atelier-surface="content-shell"] > div {
@@ -729,13 +731,36 @@ body:has([data-diy-editor-page="true"]) > [data-atelier-footer="true"] {
   }
 
   [data-atelier-surface="diy-workbench"] [data-desktop-diy-workspace="true"] > div {
-    grid-template-rows: minmax(0, 1fr) 8rem;
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
+
+/* Compact desktop workbench density for short 1024px-class windows—route-local only. */
+@media (min-width: 1024px) and (max-height: 640px) {
+  [data-atelier-surface="diy-workbench"] [data-desktop-diy-workspace="true"] > header {
+    height: 2.75rem;
   }
 
-  [data-atelier-surface="diy-workbench"] [data-material-preview-strip="true"] button {
-    width: 5.5rem;
-    height: 5.9rem;
-    padding: 0.35rem;
+  [data-atelier-surface="diy-workbench"] [data-workbench-toolrail="true"] button,
+  [data-atelier-surface="diy-workbench"] [data-workbench-toolrail="true"] a {
+    min-height: 3.6rem;
+  }
+
+  [data-atelier-surface="diy-workbench"] [data-wrist-inspector="true"] {
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+
+  [data-atelier-surface="diy-workbench"] [data-desktop-inspector-footer="true"] {
+    padding-top: 0.65rem;
+  }
+
+  [data-atelier-surface="diy-workbench"] [data-desktop-inspector-footer="true"] button {
+    min-height: 2.75rem;
+  }
+
+  [data-atelier-surface="diy-workbench"] [data-tray-picker-overlay="true"] button {
+    min-height: 3.25rem;
   }
 }
 

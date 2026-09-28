@@ -55,12 +55,22 @@ test("short desktop viewports use route-specific density instead of scaling the 
   const tarotCss = source("../tarot/tarot.module.css");
 
   assert.match(css, /@media \(min-width: 768px\) and \(max-height: 800px\)/);
+  assert.match(css, /@media \(min-width: 1024px\) and \(max-height: 640px\)/);
   assert.match(tarotCss, /@media \(min-width: 768px\) and \(max-height: 800px\)/);
   for (const surface of ["home", "questionnaire", "design-results", "tarot-setup", "tarot-draw", "tarot-result", "diy-workbench"]) {
     assert.match(css, new RegExp(`data-atelier-surface="${surface}"`));
   }
   assert.doesNotMatch(css, /(?:^|[;{]\s*)zoom\s*:/m);
   assert.doesNotMatch(css, /(?:html|body)[^{]*\{[^}]*transform:\s*scale\(/s);
+
+  const shortWorkbenchRule = css.match(
+    /@media \(min-width: 1024px\) and \(max-height: 640px\)\s*\{[\s\S]*?\n\}/
+  )?.[0];
+  assert.ok(shortWorkbenchRule, "diy workbench must declare a 1024x640 density rule");
+  assert.match(shortWorkbenchRule, /data-atelier-surface="diy-workbench"/);
+  assert.doesNotMatch(shortWorkbenchRule, /zoom\s*:/);
+  assert.doesNotMatch(shortWorkbenchRule, /transform:\s*scale\(/);
+  assert.doesNotMatch(shortWorkbenchRule, /data-atelier-surface="(home|questionnaire|design-results|tarot-setup|tarot-draw|tarot-result)"/);
 });
 
 test("the reference-accurate home and questionnaire expose the photographed composition and six-step rail", () => {
@@ -107,9 +117,7 @@ test("the desktop workbench mirrors the reference catalog, tray, wrist and mater
   assert.match(editor, /getTrayVisual\(option\.id\)\.src/);
   assert.doesNotMatch(css, /data-tray-picker-overlay[^}]+radial-gradient/s);
   assert.match(editor, /data-wrist-inspector="true"/);
-  assert.match(editor, /data-material-preview-strip="true"/);
   assert.match(editor, /\u6210\u54c1\u624b\u56f4\u4e0e\u5c3a\u5bf8/);
-  assert.match(editor, /\u5df2\u9009\u7528\u7684\u73e0\u5b50/);
   assert.match(editor, /<WearFitSummary/);
   assert.doesNotMatch(editor, /\u9884\u8ba1\u9002\u914d\u624b\u56f4|\u5f53\u524d\u7ec4\u5408\u957f\u5ea6/);
   assert.match(editor, /\u6536\u7f29\u6210\u4e32/);
@@ -117,4 +125,56 @@ test("the desktop workbench mirrors the reference catalog, tray, wrist and mater
   assert.doesNotMatch(editor, /\u5e38\u7528\u6c34\u6676/);
   assert.doesNotMatch(editor, /\u5df2\u9009\u6c34\u6676/);
   assert.doesNotMatch(editor, /\u270e/);
+});
+
+test("desktop keeps one catalog product collection and drops the duplicate bead shelf", () => {
+  const editor = source("./components/diy-editor.tsx");
+
+  assert.equal((editor.match(/data-desktop-catalog-grid="true"/g) ?? []).length, 1);
+  assert.doesNotMatch(editor, /data-material-preview-strip/);
+  assert.doesNotMatch(editor, /\u5df2\u9009\u7528\u7684\u73e0\u5b50/);
+  assert.doesNotMatch(editor, /desktop-material-shelf-title/);
+  assert.doesNotMatch(editor, /grid-rows-\[minmax\(0,1fr\)_11\.25rem\]/);
+  assert.match(editor, /grid-cols-\[22\.5rem_minmax\(0,1fr\)_14\.5rem\]/);
+});
+
+test("toolrail destinations are real actions or profile links, never dead buttons", () => {
+  const editor = source("./components/diy-editor.tsx");
+
+  assert.doesNotMatch(editor, /\["\u5386\u53f2\u65b9\u6848", false\]/);
+  assert.doesNotMatch(editor, /\["\u6211\u7684\u6536\u85cf", false\]/);
+  assert.match(editor, /href="\/profile\?tab=designs"/);
+  assert.match(editor, /href="\/profile\?tab=favorites"/);
+  assert.match(editor, /\u642d\u914d\u63a8\u8350/);
+  assert.match(editor, /data-workbench-toolrail="true"[\s\S]*?void loadSuggestions\(\)/);
+  assert.match(editor, /data-workbench-toolrail="true"[\s\S]*?href="\/profile\?tab=designs"/);
+  assert.match(editor, /data-workbench-toolrail="true"[\s\S]*?href="\/profile\?tab=favorites"/);
+});
+
+test("desktop inspector scrolls internally and keeps price/clear/complete sticky at the bottom", () => {
+  const editor = source("./components/diy-editor.tsx");
+
+  assert.match(editor, /data-desktop-inspector="true"/);
+  assert.match(editor, /data-desktop-inspector-footer="true"/);
+  assert.match(editor, /sticky bottom-0/);
+  const inspectorTag = editor.match(/<aside\b[^>]*data-desktop-inspector="true"[^>]*>/)?.[0]
+    ?? editor.match(/<aside\b[^>]*data-desktop-inspector="true"/)?.[0];
+  assert.ok(inspectorTag, "desktop inspector aside must be present");
+  assert.match(inspectorTag, /overflow-y-auto/);
+  const footerTag = editor.match(/<div\b[^>]*data-desktop-inspector-footer="true"[^>]*>/)?.[0]
+    ?? editor.match(/<div\b[^>]*data-desktop-inspector-footer="true"/)?.[0];
+  assert.ok(footerTag, "desktop inspector footer must be present");
+  assert.match(footerTag, /sticky bottom-0/);
+  assert.match(editor, /\u6e05\u7a7a\u8bbe\u8ba1/);
+  assert.match(editor, /\u5b8c\u6210\u8bbe\u8ba1/);
+});
+
+test("workbench notices live in a dedicated status region outside stage control collision", () => {
+  const editor = source("./components/diy-editor.tsx");
+
+  assert.match(editor, /data-workbench-status-region="true"/);
+  assert.match(editor, /data-workbench-status-region="true"[^>]*aria-live="polite"|aria-live="polite"[^>]*data-workbench-status-region="true"/);
+  assert.doesNotMatch(editor, /absolute left-8 right-8 top-4 z-40/);
+  assert.doesNotMatch(editor, /absolute left-8 right-8 top-4 z-30/);
+  assert.doesNotMatch(editor, /absolute left-8 top-4 z-30 rounded-full/);
 });
