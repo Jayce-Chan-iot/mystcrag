@@ -8,8 +8,11 @@ import type { ContextSource, RecommendationContext } from "@mystcrag/design-cont
  * - sources keep their declaration order, deduplicated by sourceType (the
  *   first occurrence and its weight win);
  * - preferences union in declaration order without duplicates;
- * - hard constraints come from the first non-soft source — Tarot and Oracle
- *   never override or inject physical, budget, product, or component constraints;
+ * - scalar hard constraints come from the first non-Oracle source; an
+ *   Oracle-only merge may carry its user-supplied wrist, but never budget or
+ *   target circumference;
+ * - array constraints union across non-Oracle sources so previously resolved
+ *   constraints remain intact; Oracle never injects product/component constraints;
  * - avoidances union (a user refusal from any source stands);
  * - contextWeights merge keys; later sources must not overwrite existing
  *   keys, so earlier (higher-trust) provenance is preserved.
@@ -38,8 +41,14 @@ export function mergeContexts(
     context.sources.every((source) => softSourceTypes.has(source.sourceType));
   const isOracleOnly = (context: RecommendationContext) =>
     context.sources.every((source) => source.sourceType === "context-source:oracle");
+  const scalarTrustRank = (context: RecommendationContext) => {
+    if (!isSoftOnly(context)) return 2;
+    if (!isOracleOnly(context)) return 1;
+    return 0;
+  };
 
   let primary = contexts[0]!;
+  let scalarHardPrimary = contexts[0]!;
   for (const context of contexts) {
     for (const source of context.sources) {
       if (!sources.some((existing) => existing.sourceType === source.sourceType)) {
@@ -48,6 +57,9 @@ export function mergeContexts(
     }
     if (isSoftOnly(primary) && !isSoftOnly(context)) {
       primary = context;
+    }
+    if (scalarTrustRank(context) > scalarTrustRank(scalarHardPrimary)) {
+      scalarHardPrimary = context;
     }
     for (const tag of context.preferences.emotionTags) {
       if (!emotionTags.includes(tag)) emotionTags.push(tag);
@@ -83,7 +95,8 @@ export function mergeContexts(
     }
   }
 
-  const hard = primary.hardConstraints;
+  const hard = scalarHardPrimary.hardConstraints;
+  const mayCarryExtendedScalarConstraints = scalarTrustRank(scalarHardPrimary) > 0;
   return {
     contextId: primary.contextId,
     locale: primary.locale,
@@ -91,10 +104,12 @@ export function mergeContexts(
     sources,
     hardConstraints: {
       wristCircumferenceMm: hard.wristCircumferenceMm,
-      ...(hard.targetInnerCircumferenceMm === undefined
+      ...(!mayCarryExtendedScalarConstraints || hard.targetInnerCircumferenceMm === undefined
         ? {}
         : { targetInnerCircumferenceMm: hard.targetInnerCircumferenceMm }),
-      ...(hard.maxBudgetMinor === undefined ? {} : { maxBudgetMinor: hard.maxBudgetMinor }),
+      ...(!mayCarryExtendedScalarConstraints || hard.maxBudgetMinor === undefined
+        ? {}
+        : { maxBudgetMinor: hard.maxBudgetMinor }),
       requiredProductIds,
       excludedProductIds,
       mustKeepComponentIds

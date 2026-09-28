@@ -65,6 +65,12 @@ const HIGH_MOTION_CAST: OracleCastDto = {
   algorithm: { name: "THREE_COIN", version: "three-coin-v1" }
 };
 
+const LOW_MOTION_CAST: OracleCastDto = {
+  ...HIGH_MOTION_CAST,
+  lines: [7, 7, 7, 7, 7, 9],
+  movingLineIndices: [6]
+};
+
 test("known casts map deterministically to controlled design signals", () => {
   const moving = deriveOracleDesignSignal(MOVING_CAST);
   assert.deepEqual(moving, {
@@ -91,10 +97,12 @@ test("yin-yang ratio controls rhythm while moving count and transformed trigrams
     ...STATIC_HEAVEN_CAST,
     lines: [7, 7, 7, 7, 8, 8]
   });
+  const lowMotion = deriveOracleDesignSignal(LOW_MOTION_CAST);
   const highMotion = deriveOracleDesignSignal(HIGH_MOTION_CAST);
 
   assert.deepEqual(balancedStatic.rhythmTags, ["rhythm:alternating"]);
   assert.deepEqual(gradualStatic.rhythmTags, ["rhythm:gradual"]);
+  assert.deepEqual(lowMotion.supportColorTags, ["color:blue", "color:black", "color:yellow"]);
   assert.deepEqual(highMotion.rhythmTags, ["rhythm:punctuated"]);
   assert.deepEqual(highMotion.primaryColorTags, ["color:green", "color:teal"]);
   assert.deepEqual(highMotion.supportColorTags, [
@@ -214,6 +222,7 @@ test("Oracle never overrides or injects non-Oracle hard constraints during merge
     ...oracle,
     hardConstraints: {
       ...oracle.hardConstraints,
+      targetInnerCircumferenceMm: 999,
       maxBudgetMinor: 1,
       requiredProductIds: ["oracle-must-not-require"],
       excludedProductIds: ["oracle-must-not-exclude"],
@@ -230,6 +239,48 @@ test("Oracle never overrides or injects non-Oracle hard constraints during merge
     assert.deepEqual(merged.hardConstraints.excludedProductIds, ["product-excluded"]);
     assert.deepEqual(merged.hardConstraints.mustKeepComponentIds, ["component-locked"]);
   }
+});
+
+test("Oracle-first and Oracle-only merges cannot inject scalar hard constraints", () => {
+  const oracle = resolveOracleContext({
+    cast: MOVING_CAST,
+    signal: deriveOracleDesignSignal(MOVING_CAST),
+    wristCircumferenceMm: 140,
+    locale: "zh-CN",
+    currency: "CNY"
+  });
+  const hostileOracle = {
+    ...oracle,
+    hardConstraints: {
+      ...oracle.hardConstraints,
+      targetInnerCircumferenceMm: 999,
+      maxBudgetMinor: 1
+    }
+  };
+  const tarot = {
+    ...structuredClone(oracle),
+    contextId: "ctx-tarot-scalar-regression",
+    sources: [{ sourceType: "context-source:tarot" as const, weight: 0.5 }],
+    hardConstraints: {
+      ...oracle.hardConstraints,
+      wristCircumferenceMm: 160,
+      targetInnerCircumferenceMm: 168,
+      maxBudgetMinor: 24000
+    }
+  };
+
+  const oracleFirst = mergeContexts([hostileOracle, tarot]);
+  assert.equal(oracleFirst.hardConstraints.wristCircumferenceMm, 160);
+  assert.equal(oracleFirst.hardConstraints.targetInnerCircumferenceMm, 168);
+  assert.equal(oracleFirst.hardConstraints.maxBudgetMinor, 24000);
+
+  const oracleOnly = mergeContexts([hostileOracle]);
+  assert.deepEqual(oracleOnly.hardConstraints, {
+    wristCircumferenceMm: 140,
+    requiredProductIds: [],
+    excludedProductIds: [],
+    mustKeepComponentIds: []
+  });
 });
 
 test("Oracle filtering preserves pre-existing Tarot arrays in a three-way merge", () => {
