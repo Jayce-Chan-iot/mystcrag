@@ -132,6 +132,21 @@ test("mock material library satisfies the complete catalog schema without a netw
   }
 });
 
+test("mock collection APIs expose honest empty states without fabricating user data or calling fetch", async () => {
+  let fetchCalls = 0;
+  const client = createDesignApiClient({
+    useMock: true,
+    fetcher: (async () => {
+      fetchCalls += 1;
+      throw new Error("mock mode must not call fetch");
+    }) as typeof fetch
+  });
+
+  assert.deepEqual(await client.listDesigns(), { designs: [] });
+  assert.deepEqual(await client.listOrders(), { orders: [] });
+  assert.equal(fetchCalls, 0);
+});
+
 test("REPLACE_COMPONENT sends expectedRevision and accepts only server revision and price", async () => {
   const serverDesign = structuredClone(design);
   serverDesign.revision = design.revision + 4;

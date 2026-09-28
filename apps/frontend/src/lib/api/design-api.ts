@@ -198,14 +198,14 @@ export function createDesignApiClient({
 
     async listDesigns(): Promise<ListMyDesignsResponse> {
       if (useMock) {
-        throw new FrontendApiError("VALIDATION_ERROR", "Mock mode does not fabricate design lists.");
+        return ListMyDesignsResponseSchema.parse({ designs: [] });
       }
       return callApi("/api/designs", ListMyDesignsResponseSchema, { method: "GET" }, fetcher);
     },
 
     async listOrders(): Promise<ListMyOrdersResponse> {
       if (useMock) {
-        throw new FrontendApiError("VALIDATION_ERROR", "Mock mode does not fabricate order lists.");
+        return ListMyOrdersResponseSchema.parse({ orders: [] });
       }
       return callApi("/api/orders", ListMyOrdersResponseSchema, { method: "GET" }, fetcher);
     },
