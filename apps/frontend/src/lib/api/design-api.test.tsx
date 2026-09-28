@@ -110,6 +110,28 @@ test("material library loads the complete currency catalog through the protected
   assert.equal(calls[0]?.init?.method, "GET");
 });
 
+test("mock material library satisfies the complete catalog schema without a network call", async () => {
+  let fetchCalls = 0;
+  const client = createDesignApiClient({
+    useMock: true,
+    fetcher: (async () => {
+      fetchCalls += 1;
+      throw new Error("mock mode must not call fetch");
+    }) as typeof fetch
+  });
+
+  const response = await client.materials("CNY");
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(response.materials.length, 4);
+  for (const material of response.materials) {
+    assert.ok(Array.isArray(material.visualTags));
+    assert.ok(Array.isArray(material.styleTags));
+    assert.ok(Array.isArray(material.emotionTags));
+    assert.ok(Array.isArray(material.cultureTags));
+  }
+});
+
 test("REPLACE_COMPONENT sends expectedRevision and accepts only server revision and price", async () => {
   const serverDesign = structuredClone(design);
   serverDesign.revision = design.revision + 4;
