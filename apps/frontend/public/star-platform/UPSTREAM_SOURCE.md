@@ -1,7 +1,8 @@
 # Star Platform Visual Kit — Upstream Source and Provenance
 
-Owner: `TASK-ASSET-STAR-001` (Xiaomi MiMo V2.6 Pro under Codex supervision)
+Owner: `TASK-ASSET-STAR-001` (Xiaomi MiMo V2.6 Pro generation and Codex-supervised repair)
 Generation date: 2026-09-28
+Repair date: 2026-09-29
 Branch: `task/asset-star-001-visual-kit`
 License / ownership: Project-owned original generation. No competitor image, stock photo, user photo, planning screenshot, or third-party site asset was used as input or output. Runtime rights remain with the Mystcrag project.
 
@@ -9,11 +10,11 @@ License / ownership: Project-owned original generation. No competitor image, sto
 
 | Field | Value |
 | --- | --- |
-| Tool | Xiaomi MiMo `image_gen` (MiMo Desktop built-in image generation) |
-| Model | Xiaomi MiMo image generation service (session default) |
+| Tool | Xiaomi MiMo `image_gen` for the original seven-image kit; OpenAI image generation for seam-free repair of hero / AI / Oracle / DIY scenes |
+| Model | Xiaomi MiMo image generation service (session default); OpenAI image generation service (session default) |
 | Quality | `high` for hero and four entry scenes; `medium` for two seamless textures |
-| Native source format | PNG (RGBA) |
-| Delivery format | WebP (RGB, quality 95, method 6) via Pillow (`MIMO_PYTHON`) |
+| Native source format | PNG (RGB/RGBA) |
+| Delivery format | WebP (RGB, quality 95, method 6) via `cwebp` for repaired scenes; original MiMo pipeline for unchanged assets |
 | Prompt language | English structured prompts (imagegen skill template) |
 | Visual direction authority | `docs/superpowers/specs/2026-09-26-star-oracle-crystal-design.md` §9 and Full UI Redesign plan Task 1 / Global Constraints |
 
@@ -33,22 +34,22 @@ Shared palette: obsidian / ink-indigo night, warm xuan paper, aged brass (matte 
 | `xuan-paper-grain.webp` | Flat even warm xuan paper fiber grain; tileable surface; no subject | Content panel texture (decorative) | xuan-paper |
 | `engraved-star-map.webp` | Flat Song-style engraved star-map linework (arcs, star points, concentric scale rings) on obsidian ground; no glyphs | Dark instrument surface texture (decorative) | obsidian-night |
 
-## Local transformations
+## Local transformations and repair history
 
 1. Sources saved as PNG in session working directory by `image_gen`, then copied to ignored evidence `output/playwright/task-asset-star-001/sources/` under `TASK-ASSET-STAR-001`.
-2. Dimensions verified with Pillow: hero 2048×1152; entries 1280×960; textures 1024×1024 (all multiples of 16 at generation; hero ≥ 1920×1080; entries ≥ 1200×900).
-3. Platform disclosure overlay (「AI生成」 + Xiaomi MiMo wordmark) that the generator stamps in the bottom-right corner is **not** artistic content and must not ship as product branding. Deterministic numpy clone-repair replaced only that corner plate (flush to right/bottom edges; source pixels cloned from the adjacent same-material region — above for brass/paper, left for dark lacquer/paper). No other pixels were recolored, tinted, or restyled.
-4. RGB composite (sources were opaque), then WebP encode at quality 95 / method 6. No chroma subsample tricks, no sharpening, no color LUT, no product recolor.
-5. SHA-256 computed on delivered WebP bytes.
+2. The first deterministic corner clone-repair left visible rectangular seams in `hero-observatory`, `entry-ai`, `entry-oracle`, and `entry-diy`; Codex's independent original-resolution review rejected those four files.
+3. On 2026-09-29 each rejected scene was repaired with image-to-image generation using only its project-owned original as visual input. Prompts required preservation of composition, palette, primary subject and route purpose, while reconstructing the lower-right region without a seam, repeated texture, text, logo or watermark.
+4. Repaired PNGs were resized mechanically and encoded with `cwebp` at quality 95 / method 6 to the contract dimensions: hero 2048×1152 and entries 1280×960. Unchanged Tarot and texture assets retain the original MiMo delivery bytes.
+5. Every delivered WebP was re-inspected at original resolution, then SHA-256 was computed on the final runtime bytes.
 
 ## Delivered assets
 
 | Runtime file | Size | Bytes | SHA-256 |
 | --- | --- | ---: | --- |
-| `hero-observatory.webp` | 2048×1152 | 256208 | `ef00472355aac84966e7f99ecf29be13f6ba004d7f17943a8cede40ec76f9317` |
-| `entry-ai.webp` | 1280×960 | 128200 | `089c5a4d04b76f07c84b06b88cbedf93ccde4a0b8d6cbe0ff3ef0279032cbf6b` |
-| `entry-oracle.webp` | 1280×960 | 168748 | `0af10ea795e8cd7d9b3f2c84058657a305c06293e3aa1e9b2d72bcc80382dbac` |
-| `entry-diy.webp` | 1280×960 | 274166 | `8b9479bc53f1706dbaad87a93b2e91df751c535671097e287c328a998ded57c8` |
+| `hero-observatory.webp` | 2048×1152 | 247220 | `62af77f942da445a0519b057d5d1ae26ec171da52bc4a2a6f7abc662c6189600` |
+| `entry-ai.webp` | 1280×960 | 154526 | `80634260beb5c2ff39bd55a84763b7ab42db5c30871b4685e0c5f05b89fd5b43` |
+| `entry-oracle.webp` | 1280×960 | 174568 | `ff0d395092870861ad0ccb655224cceab84c32ddc9439b0d717e2f8b4e3a6f58` |
+| `entry-diy.webp` | 1280×960 | 248872 | `dbe24c5ec21221bbbd0a381f63139e066bb208f06c11844cc42cd104fc72cdec` |
 | `entry-tarot.webp` | 1280×960 | 136648 | `d53e825660f42300bfafe365d27878c1467a0df166696ab57c27063a2ceb9039` |
 | `xuan-paper-grain.webp` | 1024×1024 | 128778 | `130ea95eba83c8940f06ed1baa33ea1a7b8cf68c7e5f4f468ad501e19910d7ef` |
 | `engraved-star-map.webp` | 1024×1024 | 349504 | `b38d47380281095dbfa34bcfcb4de3e28c70d3d2378f31ceadf3187cd7c9a724` |

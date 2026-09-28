@@ -2,20 +2,20 @@
 
 **Task:** `TASK-ASSET-STAR-001`
 **Branch:** `task/asset-star-001-visual-kit`
-**Reviewer:** Xiaomi MiMo V2.6 Pro (generation + original-resolution inspection), under Codex supervision
-**Date:** 2026-09-28
+**Reviewer:** Codex (independent original-resolution inspection; Xiaomi MiMo V2.6 Pro original generation)
+**Date:** 2026-09-29
 **Evidence root (ignored):** `output/playwright/task-asset-star-001/`
 
 ## Outcome
 
-The seven licensed Star Platform rasters and the provenance document are delivered. Original-resolution human inspection was performed on every source PNG and on the delivered WebP corner regions. Automated `star-assets.test.tsx` asserts file presence, WebP magic, minimum dimensions, typed intrinsic sizes, Chinese alt intent, SHA-256 agreement with provenance, and this report / manifest coverage. Automated tests do **not** claim to detect text or symbol content inside pixels; that gate is this manual review.
+The seven licensed Star Platform rasters and the provenance document are delivered. Codex rejected the first submission because four deterministic disclosure-overlay repairs left visible rectangular seams. Those four scenes were regenerated from the project-owned originals and re-inspected at original resolution; the final WebPs have no visible patch boundary. Automated `star-assets.test.tsx` asserts file presence, WebP magic, minimum dimensions, typed intrinsic sizes, Chinese alt intent, SHA-256 agreement with provenance, and this report / manifest coverage. Automated tests do **not** claim to detect text or symbol content inside pixels; that gate is this manual review.
 
 ## Canonical contact sheet
 
 Exactly one canonical contact sheet is recorded:
 
 - Path: `output/playwright/task-asset-star-001/sources/canonical-contact-sheet.png`
-- Layout: 2×4 grid of delivered WebP thumbnails with role and intrinsic size labels
+- Layout: 2×4 grid of the seven delivered WebP thumbnails plus one empty reserved cell; file names and intrinsic sizes are mapped in the table below
 - Purpose: single review artifact for Codex / QA citation; not a runtime asset and not committed
 
 ## Original-resolution inspection
@@ -44,22 +44,20 @@ Exactly one canonical contact sheet is recorded:
 
 ## Transformations
 
-1. `image_gen` PNG sources → evidence `sources/*.png` (ignored).
-2. Pillow dimension verify.
-3. Deterministic numpy clone-repair of the generator's bottom-right **platform disclosure overlay** only (「AI生成」 + Xiaomi MiMo wordmark). Adjacent same-material pixels; flush to right/bottom edges; no recolor of product materials.
-4. WebP RGB encode, quality 95, method 6.
-5. SHA-256 on delivered bytes (see `UPSTREAM_SOURCE.md` and `asset-hashes.json`).
-
-Note: some image viewers re-stamp an AI disclosure mark when previewing local files. Reviewer conclusions were based on raw WebP pixel grids and high-pass energy in the former overlay band (smooth-texture entries show `br_hp_p99` ≈ 3–10, consistent with no text).
+1. Xiaomi MiMo generated the original PNG kit; sources are retained only as ignored task evidence.
+2. Codex inspected the delivered WebPs at original resolution and rejected visible rectangular clone-repair seams in hero / AI / Oracle / DIY.
+3. OpenAI image-to-image generation reconstructed the affected lower-right regions from the project-owned originals, with explicit no-text / no-logo / no-watermark / no-seam constraints.
+4. `cwebp` performed only contract-size resize and WebP RGB encode (quality 95, method 6); no LUT, recolor or synthetic sharpening was added.
+5. Codex re-inspected the final files at original resolution and SHA-256 was recomputed on delivered bytes.
 
 ## Provenance fields (also in `UPSTREAM_SOURCE.md`)
 
 | Field | Value |
 | --- | --- |
 | Generation date | 2026-09-28 |
-| Tool / model | Xiaomi MiMo `image_gen` (MiMo Desktop) |
+| Tool / model | Xiaomi MiMo `image_gen` original kit; OpenAI image generation repair for hero / AI / Oracle / DIY |
 | Prompt summary | Obsidian/ink-indigo + xuan paper + aged brass + amethyst + moon silver; Song star-map / armillary / jade bi / scales; quiet precision; explicit rejects (see checklist) |
-| Transform | Disclosure-overlay clone repair + WebP encode (above) |
+| Transform | Image-to-image seam repair for four rejected scenes + contract-size WebP encode (above) |
 | Use | Home hero / four entry cards / two decorative textures |
 | License | Project-owned generation; no third-party input media |
 | Digests | Per-file SHA-256 in `UPSTREAM_SOURCE.md` |
