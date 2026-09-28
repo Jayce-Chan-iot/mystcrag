@@ -7,9 +7,13 @@ export const MAX_BRACELET_CIRCUMFERENCE_MM = 200;
 export type BraceletFitStatus = "TOO_SMALL" | "VALID" | "TOO_LARGE";
 
 export type BraceletFit = {
+  assembledMaterialPathMm: number;
   canComplete: boolean;
-  circumferenceMm: number;
   circumferenceCmLabel: string;
+  circumferenceMm: number;
+  deltaFromTargetMm: number;
+  elasticAllowanceMm: number;
+  estimatedBraceletFitMm: number;
   message: string | null;
   status: BraceletFitStatus;
   targetInnerCircumferenceMm: number;
@@ -43,48 +47,34 @@ export function formatEstimatedFitCm(circumferenceMm: number): string {
   return (roundedMillimetres / 10).toFixed(1);
 }
 
+function fitMessage(status: BraceletFitStatus): string | null {
+  if (status === "VALID") return null;
+  return `常见建议范围 ${formatEstimatedFitCm(MIN_BRACELET_CIRCUMFERENCE_MM)}–${formatEstimatedFitCm(MAX_BRACELET_CIRCUMFERENCE_MM)}cm，不影响完成设计`;
+}
+
 export function evaluateBraceletFit(design: PublicDesignV1): BraceletFit {
-  const circumferenceMm = calculateBraceletCircumferenceMm(design);
-  const circumferenceCmLabel = formatEstimatedFitCm(circumferenceMm);
+  const assembledMaterialPathMm = calculateBraceletCircumferenceMm(design);
+  const circumferenceCmLabel = formatEstimatedFitCm(assembledMaterialPathMm);
   const engineFit = evaluateEngineFit({
-    assembledMaterialPathMm: circumferenceMm,
+    assembledMaterialPathMm,
     elasticAllowanceMm: design.bracelet.elasticAllowanceMm,
+    maxCircumferenceMm: MAX_BRACELET_CIRCUMFERENCE_MM,
+    minCircumferenceMm: MIN_BRACELET_CIRCUMFERENCE_MM,
     targetInnerCircumferenceMm: design.bracelet.targetInnerCircumferenceMm,
     userWristCircumferenceMm: design.bracelet.wristCircumferenceMm
   });
-  const shared = {
-    targetInnerCircumferenceMm: engineFit.targetInnerCircumferenceMm,
-    userWristCircumferenceMm: engineFit.userWristCircumferenceMm
-  };
-
-  if (circumferenceMm < MIN_BRACELET_CIRCUMFERENCE_MM) {
-    return {
-      canComplete: true,
-      circumferenceMm,
-      circumferenceCmLabel,
-      message: `当前 ${circumferenceCmLabel}cm，低于常见建议范围，可继续完成设计`,
-      status: "TOO_SMALL",
-      ...shared
-    };
-  }
-
-  if (circumferenceMm > MAX_BRACELET_CIRCUMFERENCE_MM) {
-    return {
-      canComplete: true,
-      circumferenceMm,
-      circumferenceCmLabel,
-      message: `当前 ${circumferenceCmLabel}cm，高于常见建议范围，可继续完成设计`,
-      status: "TOO_LARGE",
-      ...shared
-    };
-  }
 
   return {
+    assembledMaterialPathMm: engineFit.assembledMaterialPathMm,
     canComplete: true,
-    circumferenceMm,
     circumferenceCmLabel,
-    message: null,
-    status: "VALID",
-    ...shared
+    circumferenceMm: engineFit.assembledMaterialPathMm,
+    deltaFromTargetMm: engineFit.deltaFromTargetMm,
+    elasticAllowanceMm: engineFit.elasticAllowanceMm,
+    estimatedBraceletFitMm: engineFit.estimatedBraceletFitMm,
+    message: fitMessage(engineFit.status),
+    status: engineFit.status,
+    targetInnerCircumferenceMm: engineFit.targetInnerCircumferenceMm,
+    userWristCircumferenceMm: engineFit.userWristCircumferenceMm
   };
 }

@@ -203,8 +203,8 @@ test("DIY workbench exposes tray choice, current beads, diameter controls and ex
   assert.match(source, /onLaunchConsumed/);
   assert.match(source, /已选用的珠子/);
   assert.match(source, /成品手围与尺寸/);
-  assert.match(source, /预计适配手围/);
-  assert.match(source, /当前组合长度/);
+  assert.match(source, /WearFitSummary/);
+  assert.doesNotMatch(source, /预计适配手围|当前组合长度/);
   assert.doesNotMatch(source, /常用水晶/);
   assert.doesNotMatch(source, />已选水晶</);
 });
@@ -344,7 +344,9 @@ test("bracelet circumference keeps size advisories without blocking completion",
 
   const editorSource = readFileSync(new URL("./components/diy-editor.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(editorSource, /!braceletFit\.canComplete/);
-  assert.match(editorSource, /建议范围 13\.0–20\.0cm，不影响完成设计/);
+  // The size advisory is owned once by the shared WearFitSummary component.
+  assert.doesNotMatch(editorSource, /建议范围 13\.0–20\.0cm/);
+  assert.match(editorSource, /WearFitSummary/);
 });
 
 test("DIY entry bypasses the AI questionnaire and the mobile questionnaire uses direct touch buttons", () => {
@@ -507,8 +509,9 @@ test("editor motion stays within the 150–350ms band and honors reduced motion"
 test("the mobile workbench keeps one persistent server-authoritative info strip and clears the fixed bottom nav", () => {
   const source = readFileSync(new URL("./components/diy-editor.tsx", import.meta.url), "utf8");
   assert.match(source, /data-mobile-design-info-strip="true"/);
-  assert.match(source, /<dt>手围<\/dt>/);
-  assert.match(source, /<dt>合身<\/dt>/);
+  assert.match(source, /<WearFitSummary/);
+  assert.doesNotMatch(source, /<dt>手围<\/dt>/);
+  assert.doesNotMatch(source, /<dt>合身<\/dt>/);
   assert.match(source, /<dt>珠数<\/dt>/);
   assert.match(source, /<dt>合计<\/dt>/);
   assert.match(source, /data-server-authoritative-price="true">\{formatMinorAmount\(\{ amountMinor: design\.pricing\.totalPriceMinor/);

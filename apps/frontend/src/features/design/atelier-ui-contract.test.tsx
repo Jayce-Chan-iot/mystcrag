@@ -110,8 +110,8 @@ test("the desktop workbench mirrors the reference catalog, tray, wrist and mater
   assert.match(editor, /data-material-preview-strip="true"/);
   assert.match(editor, /\u6210\u54c1\u624b\u56f4\u4e0e\u5c3a\u5bf8/);
   assert.match(editor, /\u5df2\u9009\u7528\u7684\u73e0\u5b50/);
-  assert.match(editor, /\u9884\u8ba1\u9002\u914d\u624b\u56f4/);
-  assert.match(editor, /\u5f53\u524d\u7ec4\u5408\u957f\u5ea6/);
+  assert.match(editor, /<WearFitSummary/);
+  assert.doesNotMatch(editor, /\u9884\u8ba1\u9002\u914d\u624b\u56f4|\u5f53\u524d\u7ec4\u5408\u957f\u5ea6/);
   assert.match(editor, /\u6536\u7f29\u6210\u4e32/);
   assert.match(editor, /\u6563\u5f00\u5230\u6258\u76d8/);
   assert.doesNotMatch(editor, /\u5e38\u7528\u6c34\u6676/);

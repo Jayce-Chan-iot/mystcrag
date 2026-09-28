@@ -5,7 +5,7 @@ import type { PublicDesignV1 } from "@mystcrag/design-contract";
 import Image from "next/image";
 import * as React from "react";
 
-import { evaluateBraceletFit, inlineAccessoryLengthMm, type BraceletFit } from "../model/bracelet-fit";
+import { inlineAccessoryLengthMm } from "../model/bracelet-fit";
 import { isPointOutsideTray, type DisplayTrayMaterial } from "../model/display-tray";
 import {
   MODE_TRANSITION_MS,
@@ -148,7 +148,6 @@ export function FlatBraceletEditor({
   busy,
   connected = false,
   trayMaterial = "BONE_CHINA",
-  fit: providedFit,
   fitDesktopViewport = false,
   launchQueue,
   onLaunchConsumed,
@@ -161,7 +160,6 @@ export function FlatBraceletEditor({
   busy: boolean;
   connected?: boolean;
   trayMaterial?: DisplayTrayMaterial;
-  fit?: BraceletFit;
   fitDesktopViewport?: boolean;
   launchQueue?: readonly BeadLaunchIntent[];
   onLaunchConsumed?: (requestId: string) => void;
@@ -169,7 +167,6 @@ export function FlatBraceletEditor({
   onMove: (componentId: string, targetPositionIndex: number) => void;
   onRemove: (componentId: string) => void;
 }) {
-  const fit = providedFit ?? evaluateBraceletFit(design);
   const components = ringComponents(design);
   const stageRef = React.useRef<HTMLDivElement>(null);
   const dragRef = React.useRef<DragState | null>(null);
@@ -331,19 +328,6 @@ export function FlatBraceletEditor({
             <CrystalBeadImage alt="" materialKey={design.beads.find((bead) => bead.componentId === ghost.componentId)?.materialKey ?? "clear-quartz-v1"} sizes="64px" />
           </span>
         ))}
-        {fit.message ? (
-          <div
-            aria-live="polite"
-            className={`pointer-events-none absolute left-1/2 top-1/2 z-30 w-[min(70%,17rem)] -translate-x-1/2 -translate-y-1/2 px-3 py-2 text-center ${
-              fit.status === "TOO_LARGE" ? "text-amber-800" : "text-[var(--accent-deep)]"
-            }`}
-            data-bracelet-fit-status={fit.status}
-            role="status"
-          >
-            <strong className="block text-sm font-semibold">{fit.message}</strong>
-            <span className="mt-1 block text-xs opacity-75">常见建议范围：13.0–20.0cm，不影响完成设计</span>
-          </div>
-        ) : null}
       </div>
     );
   }
@@ -480,22 +464,6 @@ export function FlatBraceletEditor({
               ? (drag?.outsideTray || nativeOutsideTray) ? "松手移出当前手串" : "拖出托盘即可删除"
               : "这颗珠子暂时不能删除"}
           </div>
-        </div>
-      ) : null}
-
-      {!drag?.moved && !nativeDraggedComponentId && fit.message ? (
-        <div
-          aria-live="polite"
-          className={`pointer-events-none absolute left-1/2 top-1/2 z-20 w-[min(70%,17rem)] -translate-x-1/2 -translate-y-1/2 px-3 py-2 text-center ${
-            fit.status === "TOO_LARGE"
-              ? "text-amber-800"
-              : "text-[var(--accent-deep)]"
-          }`}
-          data-bracelet-fit-status={fit.status}
-          role="status"
-        >
-          <strong className="block text-sm font-semibold">{fit.message}</strong>
-          <span className="mt-1 block text-xs opacity-75">常见建议范围：13.0–20.0cm，不影响完成设计</span>
         </div>
       ) : null}
 

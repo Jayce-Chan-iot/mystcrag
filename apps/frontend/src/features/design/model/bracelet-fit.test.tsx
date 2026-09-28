@@ -14,6 +14,27 @@ function copiedFixture(): PublicDesignV1 {
   return structuredClone(mockDesignOptions[0]!);
 }
 
+function wearFitFixture(): PublicDesignV1 {
+  const design = copiedFixture();
+  design.accessories = [];
+  design.bracelet = {
+    ...design.bracelet,
+    elasticAllowanceMm: 5,
+    targetInnerCircumferenceMm: 160,
+    wristCircumferenceMm: 155
+  };
+  design.beads = [
+    {
+      ...design.beads[0]!,
+      componentId: "bead-wear-fit",
+      diameterMm: 158,
+      lengthAlongStringMm: undefined,
+      positionIndex: 0
+    }
+  ];
+  return design;
+}
+
 test("bead lengthAlongStringMm precedes diameter and inline accessory length precedence holds", () => {
   const design = copiedFixture();
   design.accessories = [];
@@ -105,4 +126,30 @@ test("evaluateBraceletFit uses the shared one-decimal formatter", () => {
   const fit = evaluateBraceletFit(design);
   assert.equal(fit.circumferenceCmLabel, "14.5");
   assert.equal(fit.circumferenceMm, 144.5);
+});
+
+test("wear fit preserves the engine material path, allowance, estimate and delta without renaming them", () => {
+  const fit = evaluateBraceletFit(wearFitFixture());
+  assert.equal(fit.userWristCircumferenceMm, 155);
+  assert.equal(fit.targetInnerCircumferenceMm, 160);
+  assert.equal(fit.assembledMaterialPathMm, 158);
+  assert.equal(fit.elasticAllowanceMm, 5);
+  assert.equal(fit.estimatedBraceletFitMm, 158);
+  assert.equal(fit.deltaFromTargetMm, -2);
+  assert.equal(fit.status, "VALID");
+  assert.equal(fit.canComplete, true);
+  // Compatibility fields stay until every tracked consumer is migrated.
+  assert.equal(fit.circumferenceMm, 158);
+  assert.equal(fit.circumferenceCmLabel, "15.8");
+});
+
+test("wear fit delegates delta and status to the bracelet engine instead of recomputing them", () => {
+  const design = wearFitFixture();
+  design.beads = [{ ...design.beads[0]!, diameterMm: 120 }];
+  const fit = evaluateBraceletFit(design);
+  assert.equal(fit.assembledMaterialPathMm, 120);
+  assert.equal(fit.estimatedBraceletFitMm, 120);
+  assert.equal(fit.deltaFromTargetMm, -40);
+  assert.equal(fit.status, "TOO_SMALL");
+  assert.equal(fit.canComplete, true);
 });

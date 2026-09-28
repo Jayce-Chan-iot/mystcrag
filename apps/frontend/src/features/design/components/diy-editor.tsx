@@ -57,6 +57,7 @@ import { ComplianceNotice } from "./compliance-notice";
 import { CrystalBeadImage } from "./crystal-bead-image";
 import { calculateSizeAwareRingLayout, FlatBraceletEditor } from "./flat-bracelet-editor";
 import type { BeadLaunchIntent } from "./loose-bead-stage";
+import { WearFitSummary } from "./wear-fit-summary";
 
 export const DIY_LAYOUT_CLASS = "mx-auto w-full max-w-[70rem]";
 
@@ -640,7 +641,7 @@ export function DiyEditor({ designId }: { designId: string }) {
       context.fillStyle = "#746d78";
       context.font = '28px "Noto Sans SC", "PingFang SC", sans-serif';
       context.fillText(
-        `当前手围 ${braceletFit.circumferenceCmLabel}cm · ${formatMinorAmount({ amountMinor: design.pricing.totalPriceMinor, currency: design.currency, locale: design.locale })}`,
+        `当前材料路径 ${braceletFit.circumferenceCmLabel}cm · ${formatMinorAmount({ amountMinor: design.pricing.totalPriceMinor, currency: design.currency, locale: design.locale })}`,
         600,
         128
       );
@@ -970,7 +971,6 @@ export function DiyEditor({ designId }: { designId: string }) {
                 busy={isConflict}
                 connected={braceletConnected}
                 design={design}
-                fit={braceletFit}
                 fitDesktopViewport
                 launchQueue={launchQueue}
                 onLaunchConsumed={consumeLaunch}
@@ -1016,11 +1016,7 @@ export function DiyEditor({ designId }: { designId: string }) {
           <aside className="row-span-2 flex min-h-0 flex-col border-l border-[var(--border)]/70 bg-white px-5 py-6" aria-labelledby="selected-material-title">
             <section className="border-b border-[var(--border)] pb-4" data-wrist-inspector="true">
               <h2 className="text-sm font-medium">成品手围与尺寸</h2>
-              <p className="mt-3 text-xs text-[var(--muted)]">预计适配手围</p>
-              <p className="mt-1 font-serif text-2xl text-[var(--foreground)]" data-estimated-fit-label="true">{braceletFit.circumferenceCmLabel}<span className="ml-1 text-sm text-[var(--muted)]">cm</span></p>
-              <p className="mt-2 text-[0.65rem] text-[var(--muted)]">根据当前珠子与直通配饰尺寸自动计算</p>
-              <p className="mt-3 text-xs text-[var(--muted)]">当前组合长度</p>
-              <p className="mt-1 text-sm text-[var(--foreground)]" data-assembled-length-label="true">{braceletFit.circumferenceCmLabel} cm</p>
+              <WearFitSummary fit={braceletFit} />
             </section>
             <section>
               <div className="flex items-end justify-between gap-3">
@@ -1150,18 +1146,12 @@ export function DiyEditor({ designId }: { designId: string }) {
               </button>
               <button
                 className="mt-3 min-h-16 w-full rounded-xl bg-[var(--accent-deep)] px-5 text-base font-semibold tracking-[0.08em] text-white shadow-[0_12px_30px_rgb(73_53_95/0.28)] transition hover:-translate-y-0.5 hover:bg-[var(--accent)] hover:shadow-[0_16px_34px_rgb(73_53_95/0.32)] motion-reduce:transition-none disabled:translate-y-0 disabled:opacity-55"
-                aria-describedby={braceletFit.message ? "desktop-bracelet-fit-help" : undefined}
                 disabled={isOrdering || Boolean(order) || !editsSettled}
                 onClick={() => void createOrder()}
                 type="button"
               >
                 {isOrdering ? "生成中…" : order ? "设计已完成" : "完成设计"}
               </button>
-              {braceletFit.message ? (
-                <p className="mt-2 text-center text-xs text-[var(--muted)]" id="desktop-bracelet-fit-help">
-                  建议范围 13.0–20.0cm，不影响完成设计
-                </p>
-              ) : null}
             </div>
           </aside>
 
@@ -1212,14 +1202,13 @@ export function DiyEditor({ designId }: { designId: string }) {
             </div>
           </header>
 
-          <dl className="flex items-center gap-x-4 overflow-x-auto whitespace-nowrap border-b border-[var(--border)]/60 bg-white/55 px-4 py-2 text-xs text-[var(--muted)]" data-mobile-design-info-strip="true">
-            <div className="flex shrink-0 items-center gap-1"><dt>手围</dt><dd className="font-medium text-[var(--foreground)]">{(braceletFit.targetInnerCircumferenceMm / 10).toFixed(1)}cm</dd></div>
-            <div className="flex shrink-0 items-center gap-1"><dt>预计适配手围</dt><dd className="font-medium text-[var(--foreground)]" data-estimated-fit-label="true">{braceletFit.circumferenceCmLabel}cm</dd></div>
-            <div className="flex shrink-0 items-center gap-1"><dt>当前组合长度</dt><dd className="font-medium text-[var(--foreground)]">{braceletFit.circumferenceCmLabel}cm</dd></div>
-            <div className="flex shrink-0 items-center gap-1"><dt>合身</dt><dd className="font-medium text-[var(--foreground)]">{braceletFit.status === "VALID" ? "常见范围内" : braceletFit.status === "TOO_SMALL" ? "偏小" : "偏大"}</dd></div>
-            <div className="flex shrink-0 items-center gap-1"><dt>珠数</dt><dd className="font-medium text-[var(--foreground)]">{design.beads.length} 颗</dd></div>
-            <div className="flex shrink-0 items-center gap-1"><dt>合计</dt><dd className="font-medium text-[var(--accent-deep)]" data-server-authoritative-price="true">{formatMinorAmount({ amountMinor: design.pricing.totalPriceMinor, currency: design.currency, locale: design.locale })}</dd></div>
-          </dl>
+          <div className="flex items-center gap-x-4 overflow-x-auto whitespace-nowrap border-b border-[var(--border)]/60 bg-white/55 px-4 py-2 text-xs text-[var(--muted)]" data-mobile-design-info-strip="true">
+            <WearFitSummary compact fit={braceletFit} />
+            <dl className="flex shrink-0 items-center gap-x-4">
+              <div className="flex shrink-0 items-center gap-1"><dt>珠数</dt><dd className="font-medium text-[var(--foreground)]">{design.beads.length} 颗</dd></div>
+              <div className="flex shrink-0 items-center gap-1"><dt>合计</dt><dd className="font-medium text-[var(--accent-deep)]" data-server-authoritative-price="true">{formatMinorAmount({ amountMinor: design.pricing.totalPriceMinor, currency: design.currency, locale: design.locale })}</dd></div>
+            </dl>
+          </div>
 
           {notice ? <div className="m-4"><FlowNotice code={notice} compact action={noticeAction} onDismissAuthRequired={() => setNotice(null)} /></div> : null}
           {requiresRestock ? <p className="mx-4 mt-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900" role="status">本方案含需补货材料，下单后预计等待约 5 天，具体以实际补货时间为准。</p> : null}
@@ -1249,7 +1238,6 @@ export function DiyEditor({ designId }: { designId: string }) {
               busy={isConflict}
               connected={braceletConnected}
               design={design}
-              fit={braceletFit}
               launchQueue={launchQueue}
               onLaunchConsumed={consumeLaunch}
               onMove={(componentId, targetPositionIndex) => { moveBead(componentId, targetPositionIndex); }}
@@ -1274,9 +1262,8 @@ export function DiyEditor({ designId }: { designId: string }) {
             <button className="min-h-11 justify-self-start whitespace-nowrap px-1.5 text-[var(--muted)] disabled:opacity-35" disabled={isConflict || optimistic.undoStack.length === 0} onClick={() => runHistory("undo")} type="button">↶ 撤销</button>
             <button className="min-h-11 justify-self-center whitespace-nowrap px-1.5 text-[var(--muted)] disabled:opacity-35" disabled={isConflict || optimistic.redoStack.length === 0} onClick={() => runHistory("redo")} type="button">↷ 重做</button>
             <button className="min-h-11 justify-self-center whitespace-nowrap px-1.5 text-[var(--muted)] disabled:opacity-55" disabled={isSaving || !editsSettled} onClick={() => void save()} type="button">{isSaving ? "保存中…" : !editsSettled ? "同步中…" : savedAt ? "✓ 已保存" : "保存"}</button>
-            <button aria-describedby={braceletFit.message ? "mobile-bracelet-fit-help" : undefined} className="min-h-11 justify-self-end whitespace-nowrap rounded-full bg-[var(--accent-deep)] px-3 text-white disabled:opacity-40 sm:px-6" disabled={isOrdering || Boolean(order) || !editsSettled} onClick={() => void createOrder()} type="button">{isOrdering ? "生成中…" : order ? "设计已完成" : "完成设计"}</button>
+            <button className="min-h-11 justify-self-end whitespace-nowrap rounded-full bg-[var(--accent-deep)] px-3 text-white disabled:opacity-40 sm:px-6" disabled={isOrdering || Boolean(order) || !editsSettled} onClick={() => void createOrder()} type="button">{isOrdering ? "生成中…" : order ? "设计已完成" : "完成设计"}</button>
           </div>
-          {braceletFit.message ? <p className="border-b border-[var(--border)]/70 bg-white/55 px-4 pb-3 text-right text-xs text-[var(--muted)]" id="mobile-bracelet-fit-help">建议范围 13.0–20.0cm，不影响完成设计</p> : null}
 
           <section className={`z-40 flex flex-col overflow-hidden border-t border-[var(--border)] bg-[var(--surface)] px-3 pb-4 pt-3 shadow-[0_-18px_50px_rgb(57_45_67/0.12)] transition-[max-height] duration-300 motion-reduce:transition-none sm:px-6 ${catalogSheetState === "collapsed" ? "max-h-[12rem]" : catalogSheetState === "half" ? "max-h-[48dvh]" : "max-h-[82dvh]"}`} aria-labelledby="material-library-title" data-catalog-sheet-state={catalogSheetState}>
             <div className="flex items-end justify-between gap-3">
