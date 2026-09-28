@@ -438,7 +438,8 @@ body {
   box-shadow: 0 -10px 24px rgb(57 45 67 / 0.06);
 }
 
-[data-atelier-surface="diy-workbench"] [data-workbench-status-region="true"] > * + * {
+[data-atelier-surface="diy-workbench"] [data-workbench-status-region="true"] > * + *,
+[data-atelier-surface="diy-workbench"] [data-workbench-announcer="true"] > * + * {
   margin-top: 0.5rem;
 }
 
@@ -742,7 +743,8 @@ body:has([data-diy-editor-page="true"]) > [data-atelier-footer="true"] {
   }
 
   [data-atelier-surface="diy-workbench"] [data-workbench-toolrail="true"] button,
-  [data-atelier-surface="diy-workbench"] [data-workbench-toolrail="true"] a {
+  [data-atelier-surface="diy-workbench"] [data-workbench-toolrail="true"] a,
+  [data-atelier-surface="diy-workbench"] [data-workbench-toolrail="true"] span[aria-current="page"] {
     min-height: 3.6rem;
   }
 

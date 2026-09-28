@@ -141,6 +141,8 @@ test("desktop keeps one catalog product collection and drops the duplicate bead 
 test("toolrail destinations are real actions or profile links, never dead buttons", () => {
   const editor = source("./components/diy-editor.tsx");
 
+  assert.match(editor, /aria-current="page"[\s\S]*?\u6c34\u6676\u5e93[\s\S]*?<\/span>/);
+  assert.doesNotMatch(editor, /<button[^>]*aria-current="page"/);
   assert.doesNotMatch(editor, /\["\u5386\u53f2\u65b9\u6848", false\]/);
   assert.doesNotMatch(editor, /\["\u6211\u7684\u6536\u85cf", false\]/);
   assert.match(editor, /href="\/profile\?tab=designs"/);
@@ -173,7 +175,11 @@ test("workbench notices live in a dedicated status region outside stage control 
   const editor = source("./components/diy-editor.tsx");
 
   assert.match(editor, /data-workbench-status-region="true"/);
-  assert.match(editor, /data-workbench-status-region="true"[^>]*aria-live="polite"|aria-live="polite"[^>]*data-workbench-status-region="true"/);
+  assert.match(editor, /data-workbench-status-region="true"[\s\S]*?data-workbench-announcer="true"/);
+  assert.match(editor, /data-workbench-announcer="true"[^>]*aria-live="polite"|aria-live="polite"[^>]*data-workbench-announcer="true"/);
+  const statusRegionTag = editor.match(/<div\b[^>]*data-workbench-status-region="true"[^>]*>/)?.[0];
+  assert.ok(statusRegionTag, "dedicated workbench status region must be present");
+  assert.doesNotMatch(statusRegionTag, /aria-live=/);
   assert.doesNotMatch(editor, /absolute left-8 right-8 top-4 z-40/);
   assert.doesNotMatch(editor, /absolute left-8 right-8 top-4 z-30/);
   assert.doesNotMatch(editor, /absolute left-8 top-4 z-30 rounded-full/);

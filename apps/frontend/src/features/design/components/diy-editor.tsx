@@ -845,22 +845,25 @@ export function DiyEditor({ designId }: { designId: string }) {
           </div>
         </header>
 
-        <div className="shrink-0 border-b border-[var(--border)]/70 bg-white/90 px-8 py-2 empty:hidden" data-workbench-status-region="true" aria-live="polite">
+        <div className="shrink-0 border-b border-[var(--border)]/70 bg-white/90 px-8 py-2 empty:hidden" data-workbench-status-region="true">
           {notice ? <FlowNotice code={notice} compact action={noticeAction} onDismissAuthRequired={() => setNotice(null)} /> : null}
-          {requiresRestock ? <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">本方案含需补货材料，下单后预计等待约 5 天，具体以实际补货时间为准。</p> : null}
-          {editMessage ? <p className="rounded-full bg-[var(--accent-soft)] px-4 py-2 text-sm text-[var(--success)]">{editMessage}</p> : null}
+          {requiresRestock || editMessage ? (
+            <div aria-live="polite" data-workbench-announcer="true">
+              {requiresRestock ? <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">本方案含需补货材料，下单后预计等待约 5 天，具体以实际补货时间为准。</p> : null}
+              {editMessage ? <p className="rounded-full bg-[var(--accent-soft)] px-4 py-2 text-sm text-[var(--success)]">{editMessage}</p> : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="grid min-h-0 flex-1 grid-cols-[22.5rem_minmax(0,1fr)_14.5rem] grid-rows-[minmax(0,1fr)]">
           <aside className="relative min-h-0 overflow-y-auto border-r border-[var(--border)]/70 bg-[#fbfaf7] py-4 pl-[5.25rem] pr-3" aria-labelledby="desktop-library-title">
             <nav className="absolute inset-y-0 left-0 flex w-[4.4rem] flex-col border-r border-[var(--border)]/70 bg-white/82 pt-4" aria-label="工作台工具" data-workbench-toolrail="true">
-              <button
+              <span
                 aria-current="page"
-                className="min-h-[4.7rem] border-l-2 border-[var(--accent-deep)] bg-[var(--accent-soft)] px-1 text-[0.66rem] leading-5 text-[var(--accent-deep)]"
-                type="button"
+                className="flex min-h-[4.7rem] items-center justify-center border-l-2 border-[var(--accent-deep)] bg-[var(--accent-soft)] px-1 text-center text-[0.66rem] leading-5 text-[var(--accent-deep)]"
               >
                 水晶库
-              </button>
+              </span>
               <button
                 className="min-h-[4.7rem] border-l-2 border-transparent px-1 text-[0.66rem] leading-5 text-[var(--muted)] transition hover:bg-[var(--accent-soft)] hover:text-[var(--accent-deep)] disabled:opacity-55"
                 disabled={!selectedBead || isSuggesting}
