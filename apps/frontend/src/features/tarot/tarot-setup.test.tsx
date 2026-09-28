@@ -83,11 +83,12 @@ test("mobile navigation uses the fixed bottom tab bar and keeps the desktop head
   assert.doesNotMatch(layoutSource, /data-mobile-scroll-navigation/);
 
   assert.match(bottomNavSource, /data-mobile-bottom-nav="true"/);
-  assert.match(bottomNavSource, /grid-cols-5/);
+  assert.match(bottomNavSource, /grid-cols-4/);
   assert.match(bottomNavSource, /lg:hidden/);
-  for (const label of ["首页", "灵感", "DIY", "作品画廊", "我的"]) {
+  for (const label of ["首页", "DIY", "作品画廊", "我的"]) {
     assert.match(bottomNavSource, new RegExp(label));
   }
+  assert.doesNotMatch(bottomNavSource, /#inspiration/);
 });
 
 test("server-only Tarot flag consumers opt out of static prerendering", () => {
@@ -103,19 +104,18 @@ test("server-only Tarot flag consumers opt out of static prerendering", () => {
 test("main navigation places Tarot beside AI and DIY only when enabled", async () => {
   const navigationModulePath = "../../../app/navigation";
   const navigationModule = await import(navigationModulePath) as {
-    getMainNavigation: (tarotEnabled: boolean) => Array<{ href: string; label: string }>;
+    getMainNavigation: (capabilities: { tarotEnabled: boolean; oracleEnabled: boolean }) => Array<{ href: string; label: string }>;
   };
 
-  assert.deepEqual(navigationModule.getMainNavigation(true).slice(0, 3), [
+  assert.deepEqual(navigationModule.getMainNavigation({ tarotEnabled: true, oracleEnabled: false }).slice(0, 3), [
     { href: "/ai-design", label: "AI 设计" },
     { href: "/tarot/setup", label: "塔罗引导" },
     { href: "/diy", label: "DIY 创作" }
   ]);
-  assert.deepEqual(navigationModule.getMainNavigation(false), [
+  assert.deepEqual(navigationModule.getMainNavigation({ tarotEnabled: false, oracleEnabled: false }), [
     { href: "/ai-design", label: "AI 设计" },
     { href: "/diy", label: "DIY 创作" },
-    { href: "/gallery", label: "作品画廊" },
-    { href: "/#inspiration", label: "设计灵感" }
+    { href: "/gallery", label: "作品画廊" }
   ]);
 });
 
