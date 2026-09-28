@@ -15,6 +15,7 @@ import type { AvailableCatalogMaterialProduct } from "@mystcrag/database";
 import type { CoinSource } from "@mystcrag/oracle-engine";
 
 import { DomainApiError } from "../../contracts/api-error.js";
+import { deriveOracleDesignAuthorityId } from "../design/design-api.service.js";
 import { OracleService } from "./oracle.service.js";
 import { InMemoryOracleRepository } from "./oracle.test-utils.js";
 import type { OracleDesignGenerator } from "./oracle.types.js";
@@ -175,7 +176,9 @@ function generatedOracleDesign(input: {
   sessionId: string;
   wrist: number;
   catalog: readonly AvailableCatalogMaterialProduct[];
+  designIdSeed: string;
   tamperPrice?: boolean;
+  tamperIdentity?: boolean;
 }): DesignV1 {
   const byId = new Map(input.catalog.map((product) => [product.id, product]));
   const beads = input.sequence.map((productId, positionIndex) => {
@@ -196,7 +199,7 @@ function generatedOracleDesign(input: {
     };
   });
   const subtotal = beads.reduce((sum, bead) => sum + bead.unitPriceMinor, 0);
-  return DesignV1Schema.parse({
+  const draft = DesignV1Schema.parse({
     ...structuredClone(standardAiDesignFixture),
     designId: `oracle-output-${input.rank}`,
     designName: `Oracle ${input.direction}`,
@@ -253,6 +256,12 @@ function generatedOracleDesign(input: {
       }
     }
   });
+  return DesignV1Schema.parse({
+    ...draft,
+    designId: input.tamperIdentity
+      ? `tampered-oracle-design-${input.rank}`
+      : deriveOracleDesignAuthorityId(input.designIdSeed, draft)
+  });
 }
 
 test("recommendations create three catalog-backed Oracle designs and save idempotently", async () => {
@@ -260,6 +269,7 @@ test("recommendations create three catalog-backed Oracle designs and save idempo
   const catalog = recommendationCatalog();
   const designs = new Map<string, DesignV1>();
   let tamperPrice = false;
+  let tamperIdentity = false;
   const designGenerator: OracleDesignGenerator = {
     async generateFromCandidate(generation) {
       const candidate = generation.candidate as {
@@ -274,7 +284,9 @@ test("recommendations create three catalog-backed Oracle designs and save idempo
         sessionId: authority.sessionId,
         wrist: generation.request.wristCircumferenceMm,
         catalog,
-        tamperPrice
+        designIdSeed: generation.designId,
+        tamperPrice,
+        tamperIdentity
       });
       designs.set(design.designId, design);
       return { requestId: generation.request.requestId, design: toPublicDesign(design), warnings: [] };
@@ -354,6 +366,31 @@ test("recommendations create three catalog-backed Oracle designs and save idempo
       expectedRevision: 1
     }),
     (error: unknown) => error instanceof DomainApiError && error.code === "PRICE_CHANGED"
+  );
+
+  tamperPrice = false;
+  tamperIdentity = true;
+  const thirdRepository = new InMemoryOracleRepository();
+  const changedIdentityService = new OracleService({
+    repository: thirdRepository,
+    coins: new CountingCoinSource(Array(18).fill(2)),
+    catalog: { async listActiveCatalogProducts() { return structuredClone(catalog); } },
+    designGenerator,
+    designReader
+  });
+  const third = await changedIdentityService.create("oracle-owner", {
+    requestId: "identity-create",
+    operationId: "identity-create-operation",
+    locale: "zh-CN",
+    currency: "CNY"
+  });
+  await assert.rejects(
+    () => changedIdentityService.recommendations("oracle-owner", third.session.sessionId, {
+      requestId: "identity-recommend",
+      operationId: "identity-recommend-operation",
+      expectedRevision: 1
+    }),
+    (error: unknown) => error instanceof DomainApiError && error.code === "INTERNAL_ERROR"
   );
 });
 

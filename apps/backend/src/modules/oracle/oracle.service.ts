@@ -16,6 +16,7 @@ import { PersistenceError, type OracleSessionRepository } from "@mystcrag/databa
 import { castThreeCoinHexagram, type CoinSource } from "@mystcrag/oracle-engine";
 
 import { DomainApiError } from "../../contracts/api-error.js";
+import { deriveOracleDesignAuthorityId } from "../design/design-api.service.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
@@ -235,6 +236,7 @@ export class OracleService implements OracleApiService {
       for (const [index, direction] of DIRECTIONS.entries()) {
         const rank = index + 1;
         const sequence = sequences[index]!;
+        const designIdSeed = deterministicDesignId(current.id, current.ruleVersion, rank);
         const request = GenerateDesignRequestSchema.parse({
           requestId: `${current.id}:${rank}`,
           locale: current.locale,
@@ -258,15 +260,24 @@ export class OracleService implements OracleApiService {
               sequence
             }),
             designMode: "ORACLE_GUIDED",
-            designId: deterministicDesignId(current.id, current.ruleVersion, rank)
+            designId: designIdSeed
           })
         );
         const design = response.design;
         if (
+          response.requestId !== request.requestId ||
+          design.designId !== deriveOracleDesignAuthorityId(designIdSeed, design) ||
           design.designMode !== "ORACLE_GUIDED" ||
           design.locale !== current.locale ||
           design.currency !== current.currency ||
           design.bracelet.wristCircumferenceMm !== wrist ||
+          design.provenance.modelProvider !== "deterministic" ||
+          design.provenance.modelName !== "mystcrag-oracle-candidate-builder" ||
+          design.provenance.promptVersion !== "oracle-copy-policy-v1" ||
+          design.provenance.knowledgeBaseVersion !== current.ruleVersion ||
+          design.provenance.designTemplateVersion !==
+            `oracle-${direction.toLowerCase().replaceAll("_", "-")}-rank-${rank}` ||
+          design.provenance.sourceDesignId !== null ||
           !isDeepStrictEqual(design.beads.map(({ beadProductId }) => beadProductId), sequence) ||
           !isDeepStrictEqual(design.provenance.oracleCandidate, {
             sessionId: current.id,
@@ -296,6 +307,9 @@ export class OracleService implements OracleApiService {
           }
         }
         generated.push({ rank, designId: design.designId });
+      }
+      if (new Set(generated.map(({ designId }) => designId)).size !== DIRECTIONS.length) {
+        throw new DomainApiError("INTERNAL_ERROR", "Oracle recommendations must contain three distinct designs.");
       }
       const saved = await this.dependencies.repository.saveRecommendations({
         ownerId: actorId,
