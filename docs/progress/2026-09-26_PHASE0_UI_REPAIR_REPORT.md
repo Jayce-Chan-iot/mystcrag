@@ -1,7 +1,9 @@
 # Phase 0 UI Repair Report
 
-Date: 2026-09-29  
-Task: `TASK-QA-P0-001`  
+Date: 2026-09-29
+
+Task: `TASK-QA-P0-001`
+
 Scope: high-priority usability repair before the "Xuangui Star Platform" redesign
 
 ## Outcome
