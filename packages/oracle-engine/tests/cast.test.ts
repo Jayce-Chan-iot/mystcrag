@@ -48,8 +48,23 @@ test("all eight three-coin combinations prove the 1:3:3:1 line distribution", ()
 test("line calculation rejects any non-coin value even when the sum looks valid", () => {
   assert.throws(
     () => lineValueFromCoins([2, 2, 4] as unknown as readonly [2, 2, 2]),
-    /each coin must be 2 or 3/
+    /exactly three coins with values 2 or 3/
   );
+});
+
+test("line calculation rejects short, long, and sparse runtime arrays", () => {
+  const malformed = [
+    [2, 3],
+    [2, 2, 2, 3],
+    Array(3)
+  ];
+
+  for (const coins of malformed) {
+    assert.throws(
+      () => lineValueFromCoins(coins as unknown as readonly [2, 2, 2]),
+      /exactly three coins with values 2 or 3/
+    );
+  }
 });
 
 test("casting fails closed when an untyped source returns an invalid coin", () => {

@@ -94,19 +94,15 @@ test("design-engine stays a pure deterministic engine over the contract", async 
 test("oracle-engine stays a pure structural engine", async () => {
   const matches = await matchingFiles(
     ["packages/oracle-engine/src"],
-    /(?:from\s+["'](?:@mystcrag\/|(?:\.\.\/)+\.\.\/apps\/|react|next|fastify|@prisma\/client|openai|@anthropic-ai\/|@google\/)|\b(?:window|document|localStorage|sessionStorage)\b)/
+    /(?:from\s+["'](?:@mystcrag\/|(?:\.\.\/)+\.\.\/apps\/|react|next|fastify|@prisma\/client|openai|@anthropic-ai\/|@google\/|node:fs|fs\/promises)|import\s*\(\s*["'](?:@mystcrag\/|(?:\.\.\/)+\.\.\/apps\/|react|next|fastify|@prisma\/client|openai|@anthropic-ai\/|@google\/|node:fs|fs\/promises)|\b(?:window|document|navigator|localStorage|sessionStorage|indexedDB|fetch|Date\.now|performance\.now)\b|new\s+Date\s*\()/
   );
   assertNoMatches(matches);
 });
 
-test("only backend production code may compose NodeCryptoCoinSource", async () => {
+test("only backend production code may import the Oracle engine", async () => {
   const uses = await matchingFiles(
     ["apps", "packages"],
-    /\bNodeCryptoCoinSource\b/,
-    new Set([
-      "packages/oracle-engine/src/index.ts",
-      "packages/oracle-engine/src/random.ts"
-    ])
+    /(?:from\s+|import\s*\(\s*)["']@mystcrag\/oracle-engine(?:\/[^"']*)?["']/
   );
   const productionUses = uses.filter((file) => !/(?:^|\/)(?:tests?|__tests__)(?:\/|$)|\.test\.[^.]+$/.test(file));
   assertNoMatches(productionUses.filter((file) => !file.startsWith("apps/backend/")));

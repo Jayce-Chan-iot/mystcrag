@@ -6,6 +6,20 @@ import {
   assertValidHexagramCatalog,
   lookupHexagramByYangLines
 } from "../src/hexagrams";
+import { TRIGRAMS } from "../src/trigrams";
+
+// Independent regression fixture: rows are upper trigrams and columns are lower
+// trigrams, both in TRIGRAMS order. It intentionally does not reuse engine data.
+const EXPECTED_KING_WEN_BY_UPPER_LOWER = [
+  ["1:乾", "10:履", "13:同人", "25:无妄", "44:姤", "6:讼", "33:遁", "12:否"],
+  ["43:夬", "58:兑", "49:革", "17:随", "28:大过", "47:困", "31:咸", "45:萃"],
+  ["14:大有", "38:睽", "30:离", "21:噬嗑", "50:鼎", "64:未济", "56:旅", "35:晋"],
+  ["34:大壮", "54:归妹", "55:丰", "51:震", "32:恒", "40:解", "62:小过", "16:豫"],
+  ["9:小畜", "61:中孚", "37:家人", "42:益", "57:巽", "59:涣", "53:渐", "20:观"],
+  ["5:需", "60:节", "63:既济", "3:屯", "48:井", "29:坎", "39:蹇", "8:比"],
+  ["26:大畜", "41:损", "22:贲", "27:颐", "18:蛊", "4:蒙", "52:艮", "23:剥"],
+  ["11:泰", "19:临", "36:明夷", "24:复", "46:升", "7:师", "15:谦", "2:坤"]
+] as const;
 
 test("the structural catalog contains every King Wen number exactly once", () => {
   assert.equal(HEXAGRAM_CATALOG.length, 64);
@@ -34,6 +48,18 @@ test("all 64 bottom-to-top binary patterns resolve uniquely", () => {
   }
 
   assert.equal(resolvedNumbers.size, 64);
+});
+
+test("every upper-lower pair matches the independent King Wen number and name fixture", () => {
+  for (const [upperIndex, upperTrigram] of TRIGRAMS.entries()) {
+    for (const [lowerIndex, lowerTrigram] of TRIGRAMS.entries()) {
+      const actual = HEXAGRAM_CATALOG.find(
+        (item) => item.upperTrigram === upperTrigram && item.lowerTrigram === lowerTrigram
+      );
+      assert.notEqual(actual, undefined);
+      assert.equal(`${actual!.number}:${actual!.nameZh}`, EXPECTED_KING_WEN_BY_UPPER_LOWER[upperIndex]![lowerIndex]);
+    }
+  }
 });
 
 test("known lower and upper trigram ordering matches the structural catalog", () => {

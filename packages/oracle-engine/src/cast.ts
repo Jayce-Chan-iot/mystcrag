@@ -15,8 +15,13 @@ export const ORACLE_CAST_ALGORITHM_VERSION = "three-coin-v1" as const;
 const isCoinValue = (value: unknown): value is CoinValue => value === 2 || value === 3;
 
 export function lineValueFromCoins(coins: CoinTriplet): OracleLineValue {
-  if (!coins.every(isCoinValue)) {
-    throw new Error("each coin must be 2 or 3");
+  if (
+    coins.length !== 3 ||
+    !isCoinValue(coins[0]) ||
+    !isCoinValue(coins[1]) ||
+    !isCoinValue(coins[2])
+  ) {
+    throw new Error("exactly three coins with values 2 or 3 are required");
   }
   const value = coins[0] + coins[1] + coins[2];
   if (value < 6 || value > 9) {
