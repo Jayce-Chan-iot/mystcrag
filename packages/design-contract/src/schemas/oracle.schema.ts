@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { TaxonomyRefSchema } from "../taxonomy";
 import {
   IdentifierSchema,
   PositiveSafeIntegerSchema
@@ -95,25 +96,35 @@ export const OracleCastDtoSchema = z
     }
   });
 
-const uniqueIdentifierPreferences = (minimum: number) =>
-  z.array(IdentifierSchema).min(minimum).max(12).superRefine((values, context) => {
+const uniquePreferences = (itemSchema: z.ZodType<string>, minimum: number) =>
+  z.array(itemSchema).min(minimum).max(12).superRefine((values, context) => {
     if (new Set(values).size !== values.length) {
       context.addIssue({ code: "custom", message: "preference identifiers must be unique" });
     }
   });
 
+export const OracleRhythmTagSchema = z.enum([
+  "rhythm:steady",
+  "rhythm:alternating",
+  "rhythm:gradual",
+  "rhythm:punctuated"
+]);
+
 export const OracleDesignSignalSchema = z.strictObject({
   ruleVersion: IdentifierSchema,
-  primaryColorTags: uniqueIdentifierPreferences(1),
-  supportColorTags: uniqueIdentifierPreferences(0),
-  styleTags: uniqueIdentifierPreferences(1),
-  rhythmTags: uniqueIdentifierPreferences(1),
+  primaryColorTags: uniquePreferences(TaxonomyRefSchema("COLOR"), 1),
+  supportColorTags: uniquePreferences(TaxonomyRefSchema("COLOR"), 0),
+  styleTags: uniquePreferences(TaxonomyRefSchema("STYLE"), 1),
+  rhythmTags: uniquePreferences(OracleRhythmTagSchema, 1),
   accentLinePositions: z
     .array(z.number().int().min(1).max(6))
     .max(6)
     .superRefine((values, context) => {
       if (new Set(values).size !== values.length) {
         context.addIssue({ code: "custom", message: "accent line positions must be unique" });
+      }
+      if (values.some((value, index) => index > 0 && value <= values[index - 1]!)) {
+        context.addIssue({ code: "custom", message: "accent line positions must be bottom-to-top" });
       }
     })
 });
@@ -179,6 +190,17 @@ const validateOraclePublicSession = (session: OraclePublicSessionBase, context: 
   if (Date.parse(session.updatedAt) < Date.parse(session.createdAt)) {
     addIssue(["updatedAt"], "updatedAt cannot be earlier than createdAt");
   }
+  if (
+    session.signal.accentLinePositions.length !== session.cast.movingLineIndices.length ||
+    session.signal.accentLinePositions.some(
+      (position, index) => session.cast.movingLineIndices[index] !== position
+    )
+  ) {
+    addIssue(
+      ["signal", "accentLinePositions"],
+      "accent line positions must exactly match the cast moving lines"
+    );
+  }
 
   if (session.status === "CAST") {
     if (session.recommendations !== undefined) {
@@ -217,6 +239,27 @@ const validateOraclePublicSession = (session: OraclePublicSessionBase, context: 
     const candidate = recommendation.design.provenance.oracleCandidate;
     if (recommendation.design.designMode !== "ORACLE_GUIDED") {
       addIssue(["recommendations", index, "design", "designMode"], "Oracle recommendations require ORACLE_GUIDED designs");
+    }
+    if (recommendation.design.locale !== session.locale) {
+      addIssue(["recommendations", index, "design", "locale"], "Oracle recommendation locale must match its session");
+    }
+    if (recommendation.design.currency !== session.currency) {
+      addIssue(["recommendations", index, "design", "currency"], "Oracle recommendation currency must match its session");
+    }
+    if (
+      session.wristCircumferenceMm !== undefined &&
+      recommendation.design.bracelet.wristCircumferenceMm !== session.wristCircumferenceMm
+    ) {
+      addIssue(
+        ["recommendations", index, "design", "bracelet", "wristCircumferenceMm"],
+        "Oracle recommendation wrist circumference must match its session"
+      );
+    }
+    if (recommendation.design.provenance.tarotCandidate !== undefined) {
+      addIssue(
+        ["recommendations", index, "design", "provenance", "tarotCandidate"],
+        "Oracle recommendations cannot also carry Tarot candidate provenance"
+      );
     }
     if (
       candidate === undefined ||
@@ -301,6 +344,7 @@ export type OracleLineValue = z.infer<typeof OracleLineValueSchema>;
 export type OracleTrigram = z.infer<typeof OracleTrigramSchema>;
 export type OracleHexagramDto = z.infer<typeof OracleHexagramDtoSchema>;
 export type OracleCastDto = z.infer<typeof OracleCastDtoSchema>;
+export type OracleRhythmTag = z.infer<typeof OracleRhythmTagSchema>;
 export type OracleDesignSignal = z.infer<typeof OracleDesignSignalSchema>;
 export type OracleInterpretation = z.infer<typeof OracleInterpretationSchema>;
 export type OracleSessionStatus = z.infer<typeof OracleSessionStatusSchema>;

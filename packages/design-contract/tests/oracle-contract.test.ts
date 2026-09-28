@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+// @ts-expect-error OracleCast is intentionally not a public package export; consumers use OracleCastDto.
+import type { OracleCast } from "../src/index";
 import {
   CreateOracleSessionRequestSchema,
   CreateOracleSessionResponseSchema,
@@ -15,6 +17,9 @@ import {
   SaveOracleSessionResponseSchema
 } from "../src/index";
 import { standardAiDesignFixture } from "../src/fixtures/index";
+
+type NoAmbiguousOracleCastExport = OracleCast;
+void (undefined as unknown as NoAmbiguousOracleCastExport);
 
 const createdAt = "2026-09-29T08:00:00.000Z";
 const updatedAt = "2026-09-29T08:00:01.000Z";
@@ -39,10 +44,10 @@ const cast = {
 
 const signal = {
   ruleVersion: "oracle-design-rules-v1",
-  primaryColorTags: ["color:ink", "color:blue"],
-  supportColorTags: ["color:ivory"],
+  primaryColorTags: ["color:black", "color:blue"],
+  supportColorTags: ["color:white"],
   styleTags: ["style:eastern-contemporary"],
-  rhythmTags: ["rhythm:measured"],
+  rhythmTags: ["rhythm:steady"],
   accentLinePositions: [3, 4]
 } as const;
 
@@ -74,7 +79,7 @@ const castSession = {
   revision: 1,
   locale: "zh-CN",
   currency: "CNY",
-  wristCircumferenceMm: 165,
+  wristCircumferenceMm: 155,
   parentSessionId: "oracle-session-parent-1",
   cast,
   signal,
@@ -124,6 +129,18 @@ test("Oracle design signals are strict versioned preferences only", () => {
   );
   assert.equal(
     OracleDesignSignalSchema.safeParse({ ...signal, guaranteedOutcome: "wealth" }).success,
+    false
+  );
+  assert.equal(
+    OracleDesignSignalSchema.safeParse({ ...signal, primaryColorTags: ["color:not-registered"] }).success,
+    false
+  );
+  assert.equal(
+    OracleDesignSignalSchema.safeParse({ ...signal, styleTags: ["emotion:calm"] }).success,
+    false
+  );
+  assert.equal(
+    OracleDesignSignalSchema.safeParse({ ...signal, rhythmTags: ["rhythm:invented"] }).success,
     false
   );
 });
@@ -216,6 +233,47 @@ test("Oracle recommendations require exact ranks, directions and distinct Design
   const duplicateDesign = structuredClone(recommendedSession);
   duplicateDesign.recommendations[1]!.design.designId = duplicateDesign.recommendations[0]!.design.designId;
   assert.equal(OraclePublicSessionSchema.safeParse(duplicateDesign).success, false);
+
+  const wrongLocale = structuredClone(recommendedSession);
+  wrongLocale.recommendations[0]!.design.locale = "en-US";
+  assert.equal(OraclePublicSessionSchema.safeParse(wrongLocale).success, false);
+
+  assert.equal(
+    OraclePublicSessionSchema.safeParse({ ...recommendedSession, currency: "TWD" }).success,
+    false
+  );
+
+  const wrongWrist = structuredClone(recommendedSession);
+  wrongWrist.recommendations[0]!.design.bracelet.wristCircumferenceMm = 160;
+  wrongWrist.recommendations[0]!.design.production.wristCircumferenceMm = 160;
+  assert.equal(OraclePublicSessionSchema.safeParse(wrongWrist).success, false);
+
+  const mixedGuidance = structuredClone(recommendedSession);
+  mixedGuidance.recommendations[0]!.design.provenance.tarotCandidate = {
+    sessionId: "tarot-session-1",
+    ruleVersion: "tarot-rules-v1",
+    rank: 1,
+    direction: "BALANCED"
+  };
+  assert.equal(OraclePublicSessionSchema.safeParse(mixedGuidance).success, false);
+});
+
+test("Oracle session accent positions exactly follow the immutable moving lines", () => {
+  assert.equal(OraclePublicSessionSchema.safeParse(castSession).success, true);
+  assert.equal(
+    OraclePublicSessionSchema.safeParse({
+      ...castSession,
+      signal: { ...signal, accentLinePositions: [3] }
+    }).success,
+    false
+  );
+  assert.equal(
+    OraclePublicSessionSchema.safeParse({
+      ...castSession,
+      signal: { ...signal, accentLinePositions: [3, 4, 5] }
+    }).success,
+    false
+  );
 });
 
 test("Oracle save requires a selected recommendation and is strict", () => {
@@ -249,4 +307,5 @@ test("the public contract exports OracleCastDto but no ambiguous OracleCast type
   assert.match(indexSource, /export \* from "\.\/schemas\/oracle\.schema"/);
   assert.match(oracleSource, /export type OracleCastDto\s*=/);
   assert.doesNotMatch(oracleSource, /export type OracleCast\s*=/);
+  assert.doesNotMatch(indexSource, /export\s+(?:type\s+)?\{[^}]*\bOracleCast\b[^}]*\}/s);
 });
