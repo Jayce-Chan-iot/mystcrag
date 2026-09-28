@@ -553,6 +553,25 @@ Recommendation generation uses active catalog SKUs including zero-stock material
 
 Questions are optional and `saveQuestion` defaults to `false`. That default request keeps the raw question in memory for the current request only: it is absent from request logs, provider input, persistence, public DTOs, and browser storage. `saveQuestion: true` requires a non-empty question and a configured exact 32-byte base64 `MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY`. Missing configuration returns the stable inline-compatible `VALIDATION_ERROR` before catalog access, Design generation, or persistence; no plaintext or ad-hoc reversible encoding is written. Valid opt-in writes only a randomized AES-256-GCM v2 envelope and `questionSavedAt`, atomically with the recommendation snapshot and three links. Ciphertext, the keyed identity, private deck order, prompts, costs, and inventory quantities never appear in public responses. Recommendation results are immutable: adding or changing saved-question intent afterward requires a new session.
 
+## Star Oracle API
+
+All four endpoints require verified bearer authentication and owner-scoped access. Missing and differently owned sessions both use the generic `FORBIDDEN` response. Executable request/response DTOs live in [the strict Oracle contract source](../packages/design-contract/src/schemas/oracle.schema.ts); requests reject unknown fields and Backend must parse every successful response before sending it.
+
+| Route | Request DTO | Response DTO | Behavior |
+| --- | --- | --- | --- |
+| `POST /api/oracle/sessions` | `CreateOracleSessionRequestSchema` | `CreateOracleSessionResponseSchema` | One idempotent `operationId` atomically creates all six bottom-to-top three-coin lines and revision 1 `CAST`. It accepts optional wrist, optional in-memory question, and optional parent session. Only this operation is gated by `MYSTCRAG_ORACLE_ENABLED === "true"`; disabled creation returns `501 NOT_IMPLEMENTED`. |
+| `POST /api/oracle/sessions/:id/recommendations` | `GenerateOracleRecommendationsRequestSchema` | `GenerateOracleRecommendationsResponseSchema` | Requires the current revision and an idempotent operation ID. It generates exactly three active, in-stock, catalog-backed, authoritatively priced `ORACLE_GUIDED` designs and changes `CAST` to `RECOMMENDED`; an exact retry may return the later authoritative `SAVED` state. |
+| `GET /api/oracle/sessions/:id` | no body | `GetOracleSessionResponseSchema` | Restores the owner-scoped public `CAST`, `RECOMMENDED`, or `SAVED` projection. It consumes no entropy and never creates or regenerates a cast. |
+| `POST /api/oracle/sessions/:id/save` | `SaveOracleSessionRequestSchema` | `SaveOracleSessionResponseSchema` | Requires `RECOMMENDED`, current revision, operation ID, and one linked recommendation Design ID; it records the selection and changes to `SAVED`. Existing Design Save APIs retain Design revision authority. |
+
+Create retry identity is `(actorId, operationId)`: an exact input replay returns the same immutable cast without consuming entropy, while changed input conflicts. Recommendation and save use their operation IDs plus expected revision for bounded idempotency; ambiguous clients reconcile with `GET` rather than creating or casting again. A redraw is a new create operation with `parentSessionId` and never mutates its parent.
+
+The optional create question is dropped after request-scoped use. It is forbidden from persistence, logs, public/private response DTOs, Oracle provenance, browser storage, copy/provider input, analytics, and Design stories. Oracle V1 has no `saveQuestion` option. `OracleCopyService` receives only the validated cast, design signal, and locale.
+
+Oracle design signals are soft preferences only. Recommendation must revalidate the active catalog, current stock, currency, authoritative prices, wrist/fit, compliance, and Design revision rules. Unlike Tarot, Oracle V1 has no restock/backorder exception: insufficient current stock returns `INVENTORY_CHANGED`, price drift returns `PRICE_CHANGED`, and the readable cast remains available for retry. Oracle does not alter `POST /api/orders/from-design` shortage policy.
+
+Stable failures reuse the existing envelope: disabled create `NOT_IMPLEMENTED`, missing/cross-owner session `FORBIDDEN`, stale revision/idempotency/transition reuse `CONFLICT`, and authority failures `PRICE_CHANGED`, `INVENTORY_CHANGED`, or `COMPLIANCE_BLOCKED`.
+
 ## Community API
 
 GET /api/community/designs

@@ -20,18 +20,47 @@ test("DesignV1 accepts the standard fixture", () => {
   assert.equal(DesignV1Schema.safeParse(cloneDesign()).success, true);
 });
 
-test("Design metadata keeps existing modes and accepts TAROT_GUIDED", () => {
+test("Design metadata keeps existing modes and accepts guided modes", () => {
   for (const designMode of [
     "AI_GENERATED",
     "DIY_CREATED",
     "AI_ASSISTED",
     "TEMPLATE_REMIX",
-    "TAROT_GUIDED"
+    "TAROT_GUIDED",
+    "ORACLE_GUIDED"
   ]) {
     const candidate = cloneDesign() as unknown as { designMode: string };
     candidate.designMode = designMode;
     assert.equal(DesignV1Schema.safeParse(candidate).success, true);
   }
+});
+
+test("Oracle provenance carries strict public-safe candidate identity without misusing Design lineage", () => {
+  const candidate = cloneDesign() as DesignV1 & {
+    provenance: DesignV1["provenance"] & {
+      oracleCandidate: {
+        sessionId: string;
+        ruleVersion: string;
+        rank: number;
+        direction: string;
+      };
+    };
+  };
+  candidate.designMode = "ORACLE_GUIDED" as DesignV1["designMode"];
+  candidate.provenance.sourceDesignId = null;
+  candidate.provenance.oracleCandidate = {
+    sessionId: "oracle-session-1",
+    ruleVersion: "oracle-design-rules-v1",
+    rank: 1,
+    direction: "BALANCED"
+  };
+
+  const parsed = DesignV1Schema.parse(candidate);
+  assert.deepEqual(parsed.provenance.oracleCandidate, candidate.provenance.oracleCandidate);
+
+  const invalid = structuredClone(candidate);
+  invalid.provenance.oracleCandidate.rank = 4;
+  assert.equal(DesignV1Schema.safeParse(invalid).success, false);
 });
 
 test("Tarot provenance carries strict public-safe candidate identity without misusing Design lineage", () => {

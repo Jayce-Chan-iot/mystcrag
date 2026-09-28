@@ -9,7 +9,8 @@ export const DesignModeSchema = z.enum([
   "DIY_CREATED",
   "AI_ASSISTED",
   "TEMPLATE_REMIX",
-  "TAROT_GUIDED"
+  "TAROT_GUIDED",
+  "ORACLE_GUIDED"
 ]);
 
 export const CurrencySchema = z.enum(SUPPORTED_CURRENCIES);

@@ -8,7 +8,7 @@ The executable source is `packages/design-contract/src`. This document describes
 
 ## Knowledge system schemas (additive)
 
-The knowledge-driven design system (see `docs/KNOWLEDGE_SYSTEM_SPEC.md`, approved as `DEC-KNOWLEDGE-SYSTEM-001`) extends this package with five additive schema families: versioned taxonomy vocabulary, `RecommendationContext`, `KnowledgeSource`/`KnowledgeDocument`/`KnowledgeRule`, machine-executable `DecisionRule`, and the sidecar `DesignDecisionTrace`. These families do not alter `DesignV1`: the design schema version remains `1.0.0`, decision traces live in their own persistence record, and the only DesignV1-facing additions are the optional `lengthAlongStringMm` bead/accessory field (falling back to `diameterMm`) and the `TAROT_GUIDED` design mode.
+The knowledge-driven design system (see `docs/KNOWLEDGE_SYSTEM_SPEC.md`, approved as `DEC-KNOWLEDGE-SYSTEM-001`) extends this package with five additive schema families: versioned taxonomy vocabulary, `RecommendationContext`, `KnowledgeSource`/`KnowledgeDocument`/`KnowledgeRule`, machine-executable `DecisionRule`, and the sidecar `DesignDecisionTrace`. These families do not alter `DesignV1`: the design schema version remains `1.0.0`, decision traces live in their own persistence record, and the DesignV1-facing additions are the optional `lengthAlongStringMm` bead/accessory field (falling back to `diameterMm`) plus the `TAROT_GUIDED` and `ORACLE_GUIDED` design modes.
 
 ## Top-level DesignV1
 
@@ -18,7 +18,7 @@ Wire JSON uses camelCase. Zod schemas infer TypeScript types.
 | --- | --- |
 | `schemaVersion` | Literal `1.0.0` |
 | `designId` / `designName` | Stable non-empty identity and display name |
-| `designMode` | `AI_GENERATED`, `DIY_CREATED`, `AI_ASSISTED`, `TEMPLATE_REMIX`, or `TAROT_GUIDED` |
+| `designMode` | `AI_GENERATED`, `DIY_CREATED`, `AI_ASSISTED`, `TEMPLATE_REMIX`, `TAROT_GUIDED`, or `ORACLE_GUIDED` |
 | `revision` | Positive safe integer starting at 1 |
 | `createdAt` / `updatedAt` | ISO 8601 datetimes with offsets; update cannot precede creation |
 | `locale` | BCP 47-style locale |
@@ -132,6 +132,8 @@ Each BOM item includes `productId`, `specification`, positive `quantity`, and on
 
 Designs created through the internal `TAROT_GUIDED` generation boundary must include a strict public-safe `provenance.tarotCandidate` object containing only `sessionId`, `ruleVersion`, rank 1–3, and `BALANCED`, `CONTRAST`, or `NEUTRAL_LED` direction. This identity binds the candidate to its Tarot origin, while the persisted Tarot Design ID fingerprints the complete normalized, priced candidate authority. An unchanged retry therefore resolves to the same Design; changed catalog attributes, price, pricing version, or generated content resolve to a different validated Design and cannot reuse an unlinked stale partial. `sourceDesignId` remains reserved for actual Design lineage and is not used for a Tarot session.
 
+Designs created through the internal `ORACLE_GUIDED` boundary use the parallel strict `provenance.oracleCandidate` object: `sessionId`, `ruleVersion`, rank 1–3, and one of `BALANCED`, `CONTRAST`, or `NEUTRAL_LED`. The Oracle session is cultural/design provenance, not Design lineage, so `sourceDesignId` remains null unless the Design itself was cloned or derived from another Design. Public Oracle recommendations validate that the provenance session, rule version, rank, and direction match the enclosing Oracle session and design signal.
+
 ## Material catalog projection
 
 `CatalogMaterialProduct` exposes sellable product identity, bilingual Crystal names, color tags, Crystal-authored `visualTags`, `styleTags`, `emotionTags`, and compliance-safe `cultureTags`, bead geometry, render assets, currency, authoritative unit price, and a non-negative integer `availableQuantity` that backs first-party sellable and zero-stock UI states. `CatalogAccessoryProduct` exposes the same public-safe shape for accessories: identity, type, material, finish, currency, unit price, and `availableQuantity`. Neither projection exposes unit cost, supplier data, or raw inventory ledgers. The four additive Crystal tag arrays are public-safe design metadata and are the authoritative inputs for deterministic recommendation scoring.
@@ -179,6 +181,16 @@ The package also exports these Tarot session DTO families:
 Tarot responses use a request ID and strict public session projection. The contract duplicates its stable Tarot wire literals locally; it does not depend on the Tarot engine package. `GET` is the broad restore projection, enforces state-specific invariants, and includes the canonical card-back metadata used by first-party draw UI. Create returns only a `DRAWING` session plus the same card-back metadata. Select accepts a strict `DRAWING`, `DRAWN`, `RECOMMENDED`, or `SAVED` public projection: new selections return `DRAWING`, while an exact accepted retry returns the authoritative current lifecycle state. Reveal returns a revealed `DRAWN`, `RECOMMENDED`, or `SAVED` projection so exact retries remain representable after later lifecycle advances. Recommendation responses require `RECOMMENDED` or `SAVED` state with exactly three distinct ranked `PublicDesignV1` values. Save responses require `SAVED` state.
 
 Tarot public projections never contain deck or orientation order, private deck state, raw or encrypted questions, encryption material, hidden prompts, commercial costs, or inventory quantities. Ranked recommendations may expose only a fulfillment advisory containing `requiresRestock`, the five-day estimate, and affected product IDs. Card identity and orientation are absent from create and new-selection projections; an exact selection retry may include them only when the authoritative session has already been revealed. Tarot routes reuse the established API error envelope; the Design Contract does not define a separate Tarot error shape.
+
+The package also exports strict Star Oracle DTOs from `schemas/oracle.schema.ts`:
+
+- `OracleCastDto` carries exactly six bottom-to-top `6 | 7 | 8 | 9` lines, the matching ordered moving-line positions, primary and optional transformed hexagram structure, upper/lower trigram identifiers, and the three-coin algorithm name/version. A moving cast requires a transformed hexagram; a static cast forbids one.
+- `OracleDesignSignal` contains only versioned color, style, rhythm, and accent-line preferences. It contains no SKU, price, stock, fit override, prediction, efficacy claim, or raw question.
+- The public lifecycle is `CAST -> RECOMMENDED -> SAVED`. Create returns only `CAST`; recommendation returns `RECOMMENDED` or the authoritative `SAVED` retry state; save returns only `SAVED`; get restores any valid public state.
+- Recommended and saved sessions contain exactly three distinct `ORACLE_GUIDED` `PublicDesignV1` values with ranks 1–3 and exactly one each of `BALANCED`, `CONTRAST`, and `NEUTRAL_LED`. A saved selection must reference one of those three designs.
+- Create accepts `requestId`, idempotent `operationId`, locale, currency, optional 130–200 mm wrist, optional 1–120 character question, and optional parent session. Recommendation and save carry their own operation IDs and expected revisions. No response schema contains a question field.
+
+Oracle routes reuse the established strict error envelope. Stable Backend mappings remain `NOT_IMPLEMENTED` for disabled creation, generic `FORBIDDEN` for missing/cross-owner sessions, `CONFLICT` for revision/idempotency/transition conflicts, and the existing `PRICE_CHANGED`, `INVENTORY_CHANGED`, and `COMPLIANCE_BLOCKED` authority codes. Contract schemas define wire shape; they do not create entropy, persist sessions, choose inventory, or interpret cultural meaning.
 
 These DTOs define data shape only. Authentication, authorization, catalog lookup, inventory checks, pricing execution, persistence, HTTP status, and application error mapping remain Backend responsibilities.
 
