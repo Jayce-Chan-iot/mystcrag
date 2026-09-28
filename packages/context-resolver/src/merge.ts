@@ -8,8 +8,8 @@ import type { ContextSource, RecommendationContext } from "@mystcrag/design-cont
  * - sources keep their declaration order, deduplicated by sourceType (the
  *   first occurrence and its weight win);
  * - preferences union in declaration order without duplicates;
- * - hard constraints come from the first non-tarot source — tarot never
- *   overrides physical or budget constraints;
+ * - hard constraints come from the first non-soft source — Tarot and Oracle
+ *   never override or inject physical, budget, product, or component constraints;
  * - avoidances union (a user refusal from any source stands);
  * - contextWeights merge keys; later sources must not overwrite existing
  *   keys, so earlier (higher-trust) provenance is preserved.
@@ -33,6 +33,10 @@ export function mergeContexts(
   const mustKeepComponentIds: string[] = [];
   const contextWeights: Record<string, number> = {};
 
+  const softSourceTypes = new Set(["context-source:tarot", "context-source:oracle"]);
+  const isSoftOnly = (context: RecommendationContext) =>
+    context.sources.every((source) => softSourceTypes.has(source.sourceType));
+
   let primary = contexts[0]!;
   for (const context of contexts) {
     for (const source of context.sources) {
@@ -40,10 +44,7 @@ export function mergeContexts(
         sources.push(source);
       }
     }
-    if (
-      primary.sources.some((source) => source.sourceType === "context-source:tarot") &&
-      !context.sources.some((source) => source.sourceType === "context-source:tarot")
-    ) {
+    if (isSoftOnly(primary) && !isSoftOnly(context)) {
       primary = context;
     }
     for (const tag of context.preferences.emotionTags) {
@@ -58,20 +59,22 @@ export function mergeContexts(
     for (const tag of context.preferences.visualPreferences) {
       if (!visualPreferences.includes(tag)) visualPreferences.push(tag);
     }
-    for (const id of context.avoidances.materialIds) {
-      if (!materialIds.includes(id)) materialIds.push(id);
-    }
-    for (const id of context.avoidances.colorFamilyIds) {
-      if (!colorFamilyIds.includes(id)) colorFamilyIds.push(id);
-    }
-    for (const id of context.hardConstraints.requiredProductIds) {
-      if (!requiredProductIds.includes(id)) requiredProductIds.push(id);
-    }
-    for (const id of context.hardConstraints.excludedProductIds) {
-      if (!excludedProductIds.includes(id)) excludedProductIds.push(id);
-    }
-    for (const id of context.hardConstraints.mustKeepComponentIds) {
-      if (!mustKeepComponentIds.includes(id)) mustKeepComponentIds.push(id);
+    if (!isSoftOnly(context)) {
+      for (const id of context.avoidances.materialIds) {
+        if (!materialIds.includes(id)) materialIds.push(id);
+      }
+      for (const id of context.avoidances.colorFamilyIds) {
+        if (!colorFamilyIds.includes(id)) colorFamilyIds.push(id);
+      }
+      for (const id of context.hardConstraints.requiredProductIds) {
+        if (!requiredProductIds.includes(id)) requiredProductIds.push(id);
+      }
+      for (const id of context.hardConstraints.excludedProductIds) {
+        if (!excludedProductIds.includes(id)) excludedProductIds.push(id);
+      }
+      for (const id of context.hardConstraints.mustKeepComponentIds) {
+        if (!mustKeepComponentIds.includes(id)) mustKeepComponentIds.push(id);
+      }
     }
     for (const [key, value] of Object.entries(context.contextWeights)) {
       if (contextWeights[key] === undefined) contextWeights[key] = value;

@@ -41,3 +41,17 @@ Public or commercial release remains blocked until evidence is archived and revi
 - every upstream or newly introduced background, bracelet render, icon, photograph, or other third-party image.
 
 Do not mark this checklist cleared solely because the owner authorized local work or because an upstream README contains a license/public-domain statement.
+
+## Star Oracle structural and design-context references
+
+Reviewed on 2026-09-29. The Oracle implementation uses public structural facts and an original, versioned Mystcrag visual mapping. No modern interpretation, prediction, crystal-effect claim, source code, or prose was copied into runtime content.
+
+| Project | License/status | Exact concept consulted | Adoption boundary |
+| --- | --- | --- | --- |
+| [limjiechao/ts-hexagram-generator](https://github.com/limjiechao/ts-hexagram-generator) | MIT | Pure domain separation and explicit cast records | Reference only; no dependency or copied implementation |
+| [Brianfit/I-Ching](https://github.com/Brianfit/I-Ching) | MIT, older | Independent comparison for the three-coin `1:3:3:1` distribution | Test concept only; no runtime dependency |
+| [pro-vi/iching](https://github.com/pro-vi/iching) | MIT | Observation-oriented, non-deterministic product framing | Principle only; no text or code copied |
+| [DaviRain-Su/classic_system](https://github.com/DaviRain-Su/classic_system) | MIT code; some modern content CC BY-SA 4.0 | Matrix and visualization information structure | No modern text, ShareAlike content, or code copied |
+| [6tail/lunar-javascript](https://github.com/6tail/lunar-javascript) | MIT | Evaluated as a possible future seasonal-atmosphere adapter | Deferred; not installed or used by the Oracle path |
+
+`oracle-design-rules-v1` belongs to Context Resolver rather than the mathematical engine. Its trigram-to-color/style and rhythm-to-texture choices are original soft design preferences constrained to registered taxonomy IDs. They never choose a SKU, set price or inventory, override wrist/fit/budget/product constraints, or make fortune and efficacy claims.

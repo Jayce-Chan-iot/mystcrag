@@ -12,3 +12,9 @@ export {
   type TarotKnowledgeRule
 } from "./tarot.js";
 export { mergeContexts } from "./merge.js";
+export {
+  ORACLE_DESIGN_RULE_VERSION,
+  ORACLE_SOURCE_WEIGHT,
+  deriveOracleDesignSignal,
+  resolveOracleContext
+} from "./oracle.js";
