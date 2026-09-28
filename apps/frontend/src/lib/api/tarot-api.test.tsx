@@ -237,7 +237,6 @@ test("disabled Tarot creation preserves the 501 NOT_IMPLEMENTED state with actio
   assert.deepEqual(ERROR_PRESENTATION.NOT_IMPLEMENTED, {
     title: "塔罗灵感尚未开放",
     message: "当前环境暂未开启塔罗灵感设计，请稍后再试或选择其他设计入口。",
-    action: "返回设计入口",
     tone: "neutral"
   });
 });

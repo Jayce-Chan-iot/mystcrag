@@ -104,7 +104,7 @@ export function DesignResults({ designId }: { designId: string }) {
 
       {errorCode ? (
         <div className="mt-8 max-w-xl">
-          <FlowNotice code={errorCode} onAction={errorCode === "NETWORK_ERROR" || errorCode === "INTERNAL_ERROR" ? () => setAttempt((value) => value + 1) : undefined} onDismissAuthRequired={() => setErrorCode(null)} />
+          <FlowNotice code={errorCode} action={{ kind: "button", label: "重新加载", onAction: () => setAttempt((value) => value + 1) }} onDismissAuthRequired={() => setErrorCode(null)} />
         </div>
       ) : null}
 

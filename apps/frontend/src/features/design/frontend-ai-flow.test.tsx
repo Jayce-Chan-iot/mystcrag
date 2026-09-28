@@ -151,8 +151,8 @@ test("all required exceptional states have explicit accessible UI", () => {
   assert.match(markup, /价格已更新/);
   assert.match(markup, /库存有变化/);
   const forbiddenMarkup = renderToStaticMarkup(<FlowNotice code="FORBIDDEN" />);
-  assert.match(forbiddenMarkup, /href="\/ai-design"/);
-  assert.match(forbiddenMarkup, /重新生成/);
+  assert.doesNotMatch(forbiddenMarkup, /href=/);
+  assert.doesNotMatch(forbiddenMarkup, /重新生成/);
   const unauthorizedMarkup = renderToStaticMarkup(<FlowNotice code="UNAUTHORIZED" />);
   assert.match(unauthorizedMarkup, /role="dialog"/);
   assert.match(unauthorizedMarkup, /aria-modal="true"/);

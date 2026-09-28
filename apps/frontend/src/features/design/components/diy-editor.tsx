@@ -11,7 +11,7 @@ import NextImage from "next/image";
 import Link from "next/link";
 import * as React from "react";
 
-import { FlowNotice } from "../../../components/flow-notice";
+import { FlowNotice, type NoticeButtonAction } from "../../../components/flow-notice";
 import {
   createAddRequest,
   createOperationsRequest,
@@ -69,6 +69,22 @@ const SYNC_FAILURE_MESSAGES: Partial<Record<FrontendErrorCode, string>> = {
   NETWORK_ERROR: "网络连接中断，未同步的编辑已回滚。",
   INTERNAL_ERROR: "服务暂时无法完成同步，未同步的编辑已回滚。"
 };
+
+export type DiyNoticeHandlers = {
+  loadDesign(): void;
+  synchronize(): void;
+  dismiss(): void;
+};
+
+export function diyNoticeAction(code: FrontendErrorCode, handlers: DiyNoticeHandlers): NoticeButtonAction {
+  if (code === "NETWORK_ERROR" || code === "INTERNAL_ERROR") {
+    return { kind: "button", label: "重新加载", onAction: handlers.loadDesign };
+  }
+  if (code === "CONFLICT") {
+    return { kind: "button", label: "同步最新设计", onAction: handlers.synchronize };
+  }
+  return { kind: "button", label: "知道了", onAction: handlers.dismiss };
+}
 
 export function SyncStatusBanner({
   optimistic,
@@ -294,7 +310,7 @@ export function DiyEditor({ designId }: { designId: string }) {
     return <main className="mx-auto min-h-[70vh] max-w-7xl px-5 py-16" aria-live="polite" data-diy-editor-page="true">正在从 Backend 加载设计…</main>;
   }
   if (!design || !optimistic) {
-    return <main className="mx-auto min-h-[70vh] max-w-7xl px-5 py-16" data-diy-editor-page="true"><FlowNotice code={notice ?? "EMPTY_STATE"} onAction={() => { setIsLoading(true); void loadDesign(); }} onDismissAuthRequired={() => setNotice(null)} /></main>;
+    return <main className="mx-auto min-h-[70vh] max-w-7xl px-5 py-16" data-diy-editor-page="true"><FlowNotice code={notice ?? "EMPTY_STATE"} action={notice && notice !== "EMPTY_STATE" ? { kind: "button", label: "重新加载", onAction: () => { setIsLoading(true); void loadDesign(); } } : { kind: "link", label: "开始 AI 设计", href: "/ai-design" }} onDismissAuthRequired={() => setNotice(null)} /></main>;
   }
 
   const selectedComponentId = design.beads.some((bead) => bead.componentId === rawSelectedComponentId)
@@ -785,7 +801,13 @@ export function DiyEditor({ designId }: { designId: string }) {
     }
   };
 
-  const noticeAction = notice === "CONFLICT" ? () => { void synchronizeWithServer(); } : () => setNotice(null);
+  const noticeAction = notice
+    ? diyNoticeAction(notice, {
+        loadDesign: () => { setIsLoading(true); void loadDesign(); },
+        synchronize: () => { void synchronizeWithServer(); },
+        dismiss: () => setNotice(null)
+      })
+    : undefined;
   const requiresRestock = design.production.productionNotes.some((note) => note.includes("预计等待约 5 天"));
 
   return (
@@ -928,7 +950,7 @@ export function DiyEditor({ designId }: { designId: string }) {
 
           <section className="relative overflow-hidden border-b border-[var(--border)]/70 bg-[var(--surface)] px-8" aria-labelledby="desktop-preview-title">
             <h1 className="sr-only" id="desktop-preview-title">DIY 手串编辑预览</h1>
-            {notice ? <div className="absolute left-8 right-8 top-4 z-40"><FlowNotice code={notice} compact onAction={noticeAction} onDismissAuthRequired={() => setNotice(null)} /></div> : null}
+            {notice ? <div className="absolute left-8 right-8 top-4 z-40"><FlowNotice code={notice} compact action={noticeAction} onDismissAuthRequired={() => setNotice(null)} /></div> : null}
             {requiresRestock ? <p className="absolute left-8 right-8 top-4 z-30 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900" role="status">本方案含需补货材料，下单后预计等待约 5 天，具体以实际补货时间为准。</p> : null}
             <button
               aria-pressed={braceletConnected}
@@ -1199,7 +1221,7 @@ export function DiyEditor({ designId }: { designId: string }) {
             <div className="flex shrink-0 items-center gap-1"><dt>合计</dt><dd className="font-medium text-[var(--accent-deep)]" data-server-authoritative-price="true">{formatMinorAmount({ amountMinor: design.pricing.totalPriceMinor, currency: design.currency, locale: design.locale })}</dd></div>
           </dl>
 
-          {notice ? <div className="m-4"><FlowNotice code={notice} compact onAction={noticeAction} onDismissAuthRequired={() => setNotice(null)} /></div> : null}
+          {notice ? <div className="m-4"><FlowNotice code={notice} compact action={noticeAction} onDismissAuthRequired={() => setNotice(null)} /></div> : null}
           {requiresRestock ? <p className="mx-4 mt-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900" role="status">本方案含需补货材料，下单后预计等待约 5 天，具体以实际补货时间为准。</p> : null}
           {editMessage ? <p className="mx-4 mt-3 rounded-xl bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--success)]" role="status">{editMessage}</p> : null}
 

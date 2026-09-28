@@ -814,7 +814,7 @@ export function CrystalLibraryPage() {
         {state.catalogNotice ? (
           <FlowNotice
             code={state.catalogNotice}
-            onAction={retryLoad}
+            action={{ kind: "button", label: "重新加载", onAction: retryLoad }}
             onDismissAuthRequired={() => dispatcher.dispatch({ type: "catalog-notice-dismissed" })}
           />
         ) : (
@@ -951,7 +951,7 @@ export function CrystalLibraryPage() {
               </div>
             ) : null}
 
-            {state.operationNotice ? <div className="mt-4"><FlowNotice code={state.operationNotice} compact onAction={() => dispatcher.dispatch({ type: "operation-notice-dismissed" })} onDismissAuthRequired={() => dispatcher.dispatch({ type: "operation-notice-dismissed" })} /></div> : null}
+            {state.operationNotice ? <div className="mt-4"><FlowNotice code={state.operationNotice} compact action={{ kind: "button", label: "知道了", onAction: () => dispatcher.dispatch({ type: "operation-notice-dismissed" }) }} onDismissAuthRequired={() => dispatcher.dispatch({ type: "operation-notice-dismissed" })} /></div> : null}
             {message ? (
               <p className="mt-4 rounded-full bg-[var(--accent-soft)] px-5 py-2 text-sm text-[var(--success)]" role="status" data-library-toast="true">{message}</p>
             ) : null}

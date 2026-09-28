@@ -34,10 +34,10 @@ function renderFlowNoticeTree(
   return tree;
 }
 
-test("UNAUTHORIZED renders the auth-required dialog and not an onAction retry button", () => {
-  let onActionCalls = 0;
+test("UNAUTHORIZED renders the auth-required dialog and never the business action", () => {
+  let actionCalls = 0;
   const markup = renderToStaticMarkup(
-    <FlowNotice code="UNAUTHORIZED" onAction={() => { onActionCalls += 1; }} />
+    <FlowNotice code="UNAUTHORIZED" action={{ kind: "button", label: "不应出现的操作", onAction: () => { actionCalls += 1; } }} />
   );
 
   assert.match(markup, /data-auth-required-dialog="true"/);
@@ -47,17 +47,18 @@ test("UNAUTHORIZED renders the auth-required dialog and not an onAction retry bu
   assert.match(markup, /aria-disabled="true"/);
 
   assert.doesNotMatch(markup, /data-error-code="UNAUTHORIZED"/);
+  assert.doesNotMatch(markup, /不应出现的操作/);
   assert.doesNotMatch(markup, /onClick/);
-  assert.equal(onActionCalls, 0);
+  assert.equal(actionCalls, 0);
 });
 
-test("FlowNotice UNAUTHORIZED passes onDismissAuthRequired — never onAction — as the dialog onDismiss", () => {
-  const onAction = () => { /* business retry spy */ };
+test("FlowNotice UNAUTHORIZED passes onDismissAuthRequired — never the business action — as the dialog onDismiss", () => {
+  const businessAction = { kind: "button" as const, label: "不应出现的操作", onAction: () => { /* business retry spy */ } };
   const onDismissAuthRequired = () => { /* auth-only cleanup spy */ };
 
   const tree = renderFlowNoticeTree({
     code: "UNAUTHORIZED",
-    onAction,
+    action: businessAction,
     onDismissAuthRequired
   });
 
@@ -67,7 +68,7 @@ test("FlowNotice UNAUTHORIZED passes onDismissAuthRequired — never onAction �
     onDismissAuthRequired,
     "dialog onDismiss must be the auth cleanup spy, not a new wrapper"
   );
-  assert.notEqual(tree.props.onDismiss, onAction, "dialog onDismiss must never be the business onAction spy");
+  assert.notEqual(tree.props.onDismiss, businessAction.onAction, "dialog onDismiss must never be the business retry spy");
 
   // If dismiss is invoked the way the dialog does, only the auth spy fires.
   let businessCalls = 0;
@@ -76,12 +77,12 @@ test("FlowNotice UNAUTHORIZED passes onDismissAuthRequired — never onAction �
   const wiredDismiss = () => { dismissAuthCalls += 1; };
   const wired = renderFlowNoticeTree({
     code: "UNAUTHORIZED",
-    onAction: wiredAction,
+    action: { kind: "button", label: "不应出现的操作", onAction: wiredAction },
     onDismissAuthRequired: wiredDismiss
   });
   wired.props.onDismiss?.();
   assert.equal(dismissAuthCalls, 1, "onDismissAuthRequired exactly once");
-  assert.equal(businessCalls, 0, "onAction must stay 0 when FlowNotice dismiss wiring is correct");
+  assert.equal(businessCalls, 0, "the business action must stay 0 when FlowNotice dismiss wiring is correct");
 });
 
 test("FlowNotice source still forbids wiring onAction as AuthRequiredDialog onDismiss", () => {
@@ -101,7 +102,7 @@ test("parent clears only the auth code on dismiss, then a later UNAUTHORIZED rem
 
   const first = renderFlowNoticeTree({
     code: parentCode,
-    onAction: () => { businessCalls += 1; },
+    action: { kind: "button", label: "不应出现的操作", onAction: () => { businessCalls += 1; } },
     onDismissAuthRequired: () => {
       dismissAuthCalls += 1;
       parentCode = null;
@@ -126,7 +127,7 @@ test("parent clears only the auth code on dismiss, then a later UNAUTHORIZED rem
   parentCode = "UNAUTHORIZED";
   const second = renderFlowNoticeTree({
     code: parentCode,
-    onAction: () => { businessCalls += 1; },
+    action: { kind: "button", label: "不应出现的操作", onAction: () => { businessCalls += 1; } },
     onDismissAuthRequired: () => { dismissAuthCalls += 1; parentCode = null; }
   });
   assert.equal(second.type, AuthRequiredDialog);
@@ -170,14 +171,15 @@ test("returnTo, focus trap, Escape and approved copy remain intact on the dialog
   assert.match(markup, /min-h-11/);
 });
 
-test("non-auth FlowNotice codes still render inline notices with onAction", () => {
+test("non-auth FlowNotice codes still render inline notices with a caller action", () => {
   let actionCalls = 0;
   const markup = renderToStaticMarkup(
-    <FlowNotice code="NETWORK_ERROR" onAction={() => { actionCalls += 1; }} />
+    <FlowNotice code="NETWORK_ERROR" action={{ kind: "button", label: "重新加载", onAction: () => { actionCalls += 1; } }} />
   );
   assert.match(markup, /data-error-code="NETWORK_ERROR"/);
   assert.doesNotMatch(markup, /data-auth-required-dialog/);
-  assert.equal(actionCalls, 0, "rendering must not invoke onAction");
+  assert.match(markup, /重新加载/);
+  assert.equal(actionCalls, 0, "rendering must not invoke the caller action");
 });
 
 test("neither FlowNotice nor the dialog navigates back or reloads on dismiss", () => {

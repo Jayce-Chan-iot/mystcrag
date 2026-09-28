@@ -385,5 +385,5 @@ test("page never awaits the optional design together with the catalog and gates 
   assert.match(source, /lg:hidden"[^>]*data-library-design-notice="mobile"/);
   // Only the catalog error may trigger a full reload; degraded design notices retry the design alone.
   assert.match(source, /onRetry=\{retryDesign\}/);
-  assert.match(source, /onAction=\{retryLoad\}/);
+  assert.match(source, /onAction: retryLoad/);
 });
