@@ -2,7 +2,8 @@ import {
   IdentifierSchema,
   LocaleSchema,
   OracleCastDtoSchema,
-  OracleDesignSignalSchema
+  OracleDesignSignalSchema,
+  OracleInterpretationSchema as ContractOracleInterpretationSchema
 } from "@mystcrag/design-contract";
 import { z } from "zod";
 
@@ -27,14 +28,6 @@ export const OracleCopyInputSchema = z
     }
   });
 
-export const OracleInterpretationSchema = z.strictObject({
-  headline: z.string().trim().min(1).max(48),
-  summary: z.string().trim().min(1).max(240),
-  keywords: z.array(z.string().trim().min(1).max(24)).length(3),
-  designRationale: z.string().trim().min(1).max(240),
-  disclaimer: z.string().trim().min(1).max(160)
-});
-
 export const OracleCopySourceSchema = z.strictObject({
   mode: z.enum(["PROVIDER", "DETERMINISTIC_FALLBACK"]),
   providerId: IdentifierSchema,
@@ -46,11 +39,13 @@ export const OracleCopySourceSchema = z.strictObject({
 });
 
 export const OracleCopyResultSchema = z.strictObject({
-  interpretation: OracleInterpretationSchema,
+  interpretation: ContractOracleInterpretationSchema,
   source: OracleCopySourceSchema
 });
 
 export type OracleCopyInput = z.infer<typeof OracleCopyInputSchema>;
-export type OracleInterpretation = z.infer<typeof OracleInterpretationSchema>;
 export type OracleCopySource = z.infer<typeof OracleCopySourceSchema>;
 export type OracleCopyResult = z.infer<typeof OracleCopyResultSchema>;
+
+export { OracleInterpretationSchema } from "@mystcrag/design-contract";
+export type { OracleInterpretation } from "@mystcrag/design-contract";

@@ -98,7 +98,8 @@ function deterministicInterpretation(input: OracleCopyInput): OracleInterpretati
         `以${primary}为主色${support ? `，以${support}为辅色` : ""}，用${rhythm}${moving ? `呼应第${input.cast.movingLineIndices.join("、")}爻的点睛位置` : "保持整体秩序"}。`,
         240
       ),
-      disclaimer: ZH_DISCLAIMER
+      disclaimer: ZH_DISCLAIMER,
+      source: { kind: "MYSTCRAG_ORIGINAL", version: ORACLE_COPY_CONTENT_VERSION }
     });
   }
 
@@ -112,7 +113,8 @@ function deterministicInterpretation(input: OracleCopyInput): OracleInterpretati
       `Use ${primary} as the lead${support ? ` with ${support} in support` : ""}; ${rhythm} shapes the bead sequence${moving ? `, with accents at line positions ${input.cast.movingLineIndices.join(", ")}` : ""}.`,
       240
     ),
-    disclaimer: EN_DISCLAIMER
+    disclaimer: EN_DISCLAIMER,
+    source: { kind: "MYSTCRAG_ORIGINAL", version: ORACLE_COPY_CONTENT_VERSION }
   });
 }
 

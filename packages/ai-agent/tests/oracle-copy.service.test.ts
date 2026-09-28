@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { OracleCastDto, OracleDesignSignal } from "@mystcrag/design-contract";
+import {
+  OracleInterpretationSchema as ContractOracleInterpretationSchema,
+  type OracleCastDto,
+  type OracleDesignSignal
+} from "@mystcrag/design-contract";
 
 import {
   ORACLE_COPY_POLICY_VERSION,
@@ -83,13 +87,19 @@ test("deterministic localized copy is short, original, and structurally complete
 
   for (const result of [zh, en]) {
     assert.equal(OracleCopyResultSchema.safeParse(result).success, true);
+    assert.equal(ContractOracleInterpretationSchema.safeParse(result.interpretation).success, true);
     assert.equal(result.interpretation.keywords.length, 3);
+    assert.equal(new Set(result.interpretation.keywords).size, 3);
     assert.ok(result.interpretation.headline.length <= 48);
     assert.ok(result.interpretation.summary.length <= 240);
     assert.equal(result.source.mode, "DETERMINISTIC_FALLBACK");
     assert.equal(result.source.policyVersion, ORACLE_COPY_POLICY_VERSION);
     assert.equal(result.source.algorithmVersion, "three-coin-v1");
     assert.equal(result.source.ruleVersion, "oracle-design-rules-v1");
+    assert.deepEqual(result.interpretation.source, {
+      kind: "MYSTCRAG_ORIGINAL",
+      version: "mystcrag-oracle-copy-v1"
+    });
   }
   assert.match(zh.interpretation.headline, /困/u);
   assert.match(zh.interpretation.summary, /变卦|转折/u);
@@ -197,4 +207,57 @@ test("provider failure, malformed output, and hostile metadata fail closed", asy
     assert.equal(JSON.stringify(result).includes("secret provider error"), false);
     assert.equal(JSON.stringify(result).includes("private"), false);
   }
+});
+
+test("provider input mutation cannot poison approved copy or fallback", async () => {
+  const approved = await new OracleCopyService().createInterpretation(input);
+  const mutate = (request: OracleCopyInput): void => {
+    const hostile = request as {
+      locale: string;
+      cast: { lines: number[]; primaryHexagram: { nameZh: string } };
+      signal: { primaryColorTags: string[]; accentLinePositions: number[] };
+    };
+    const attempts = [
+      () => { hostile.locale = "en-US"; },
+      () => { hostile.cast.primaryHexagram.nameZh = "恶意卦名"; },
+      () => { hostile.cast.lines.reverse(); },
+      () => { hostile.signal.primaryColorTags.push("color:red"); },
+      () => { hostile.signal.accentLinePositions.splice(0, 2, 2, 5); }
+    ];
+    for (const attempt of attempts) {
+      try {
+        attempt();
+      } catch {
+        // A hostile provider may swallow mutation failures before returning.
+      }
+    }
+  };
+
+  const echoProvider: OracleCopyProvider = {
+    providerId: "mutating-echo-provider",
+    providerVersion: "1",
+    async generate(request) {
+      mutate(request);
+      return structuredClone(approved.interpretation);
+    }
+  };
+  const echoed = await new OracleCopyService({ provider: echoProvider }).createInterpretation(input);
+  assert.equal(echoed.source.mode, "PROVIDER");
+  assert.match(echoed.interpretation.headline, /困/u);
+  assert.equal(JSON.stringify(echoed).includes("恶意"), false);
+
+  const throwingProvider: OracleCopyProvider = {
+    providerId: "mutating-throwing-provider",
+    providerVersion: "1",
+    async generate(request) {
+      mutate(request);
+      throw new Error("provider failure after mutation");
+    }
+  };
+  const fallback = await new OracleCopyService({ provider: throwingProvider })
+    .createInterpretation(input);
+  assert.equal(fallback.source.mode, "DETERMINISTIC_FALLBACK");
+  assert.match(fallback.interpretation.headline, /困/u);
+  assert.equal(JSON.stringify(fallback).includes("provider failure after mutation"), false);
+  assert.equal(JSON.stringify(fallback).includes("恶意"), false);
 });
