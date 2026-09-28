@@ -71,6 +71,11 @@ a {
   font-size: 0.75rem;
 }
 
+[data-library-page="ready"] :is(button, a, select, summary),
+[data-library-filters] label {
+  min-height: 2.75rem;
+}
+
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;

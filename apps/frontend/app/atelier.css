@@ -362,6 +362,7 @@ body {
 }
 
 [data-atelier-surface="tarot-setup"] input[type="number"],
+[data-atelier-surface="tarot-setup"] select,
 [data-atelier-surface="tarot-setup"] details > summary {
   min-height: 2.75rem;
 }
@@ -427,10 +428,10 @@ body {
 
 [data-atelier-surface="diy-workbench"] aside nav[aria-label="桌面珠子分类"] button {
   min-width: max-content;
-  min-height: 2rem;
+  min-height: 2.75rem;
   padding-inline: 0.55rem;
   border-radius: 0;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
 }
 
 [data-atelier-surface="diy-workbench"] aside nav[aria-label="桌面珠子分类"] button span:last-child {
@@ -457,8 +458,12 @@ body {
   margin-top: 0.5rem;
 }
 
-[data-atelier-surface="diy-workbench"] :is(button, a, input, select) {
+[data-atelier-surface="diy-workbench"] :is(button, a, input, select, summary) {
   min-height: 2.75rem;
+}
+
+[data-atelier-surface="diy-workbench"] [data-compliance-status] small {
+  font-size: 0.75rem;
 }
 
 [data-atelier-surface="diy-workbench"] [data-workbench-toolrail="true"] :is(button, a, span[aria-current="page"]),
@@ -544,7 +549,7 @@ body:has([data-diy-editor-page="true"]) > [data-atelier-footer="true"] {
   [data-questionnaire-stepper="true"] li span:first-child {
     width: 1.35rem;
     height: 1.35rem;
-    font-size: 0.58rem;
+    font-size: 0.75rem;
   }
 
   [data-questionnaire-stepper="true"] li span:last-child {
@@ -556,7 +561,7 @@ body:has([data-diy-editor-page="true"]) > [data-atelier-footer="true"] {
   }
 
   [data-atelier-surface="questionnaire"] > section > p:first-child {
-    font-size: 0.62rem;
+    font-size: 0.75rem;
   }
 
   [data-atelier-surface="questionnaire"] > section > h1 {
@@ -696,7 +701,7 @@ body:has([data-diy-editor-page="true"]) > [data-atelier-footer="true"] {
   }
 
   [data-atelier-surface="tarot-setup"] [data-tarot-setup-panel="theme"] > select {
-    min-height: 2.5rem;
+    min-height: 2.75rem;
     margin-top: 0.25rem;
   }
 
@@ -710,7 +715,7 @@ body:has([data-diy-editor-page="true"]) > [data-atelier-footer="true"] {
     min-height: 2.75rem;
     margin-top: 0.35rem;
     padding: 0.45rem 0.65rem;
-    font-size: 0.68rem;
+    font-size: 0.75rem;
     line-height: 1.35;
   }
 
@@ -732,7 +737,7 @@ body:has([data-diy-editor-page="true"]) > [data-atelier-footer="true"] {
   [data-atelier-surface="tarot-setup"] [data-tarot-safety-note="true"] {
     margin-top: 0.35rem;
     padding: 0.4rem 0.55rem;
-    font-size: 0.6rem;
+    font-size: 0.75rem;
     line-height: 1.35;
   }
 
