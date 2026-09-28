@@ -63,9 +63,27 @@ All bracelet projections consume the same Design JSON and Bracelet Engine layout
 - Use responsive layout constraints, `clamp()`, container queries/media queries, and intrinsic image ratios.
 - No horizontal overflow at any acceptance viewport.
 
+## Star Platform runtime assets (`TASK-ASSET-STAR-001`)
+
+All paths below are relative to `apps/frontend/public`. Consumers must use `STAR_PLATFORM_ASSETS` from `apps/frontend/src/features/design/model/star-assets.ts` rather than hard-coding paths.
+
+| Asset key | Runtime path | Size | Role | Intended use | Rendering rule |
+| --- | --- | --- | --- | --- | --- |
+| `heroObservatory` | `/star-platform/hero-observatory.webp` | 2048×1152 | hero | Home hero background | `object-fit: cover`; keep the left third quiet for headline; do not tint. |
+| `entryAi` | `/star-platform/entry-ai.webp` | 1280×960 | entry | Home AI card | Full-bleed card image; entire card is one semantic link. |
+| `entryOracle` | `/star-platform/entry-oracle.webp` | 1280×960 | entry | Home Oracle card | Full-bleed card image; blank brass discs only (no coin inscriptions). |
+| `entryDiy` | `/star-platform/entry-diy.webp` | 1280×960 | entry | Home DIY card | Overhead tray with loose unthreaded beads; never a finished bracelet. |
+| `entryTarot` | `/star-platform/entry-tarot.webp` | 1280×960 | entry | Home Tarot card | Blank card backs and instruments only; no occult or traditional tarot imagery. |
+| `xuanPaperGrain` | `/star-platform/xuan-paper-grain.webp` | 1024×1024 | texture | Content panel surface | Decorative (empty alt); even grain; no vignette crop that shows a paper edge. |
+| `engravedStarMap` | `/star-platform/engraved-star-map.webp` | 1024×1024 | texture | Dark instrument surface | Decorative (empty alt); linework only; no glyph-like scribbles. |
+
+`STAR_PLATFORM_ASSETS` also publishes intrinsic width/height/aspectRatio, dominant surface (`obsidian-night` / `xuan-paper` / `aged-brass` / `amethyst` / `moon-silver`), and Chinese alt intent (empty only when `decorative`).
+
 ## Asset provenance
 
 - Existing Tarot card provenance is recorded in `apps/frontend/public/tarot/cards/UPSTREAM_SOURCE.md`.
 - Home scenes, trays, wrist guide, state scenes and demo avatar are project-owned generated assets.
 - `/home/entry-diy-loose-tray.webp` was generated with Codex built-in image_gen on 2026-09-14 and integrated under `TASK-ASSET-004` (SHA-256: `9b8cc2febf2d523ef87e489d3271bcd6b62819b54cbf03f1f267245fff921281`). No competitor image, user data, or planning screenshot was used as runtime media.
+- Star Platform kit (`/star-platform/*`) was generated on 2026-09-28 with Xiaomi MiMo `image_gen` under `TASK-ASSET-STAR-001`, then deterministically cleaned of the generator's corner disclosure overlay and encoded to WebP. Full tool/model, prompt summary, transforms, purpose, license, SHA-256 and rejection checklist are in `apps/frontend/public/star-platform/UPSTREAM_SOURCE.md`. Reviewer record: `docs/progress/2026-09-26_STAR_ASSET_REVIEW.md`.
+- Star Platform SHA-256: `hero-observatory.webp` `ef00472355aac84966e7f99ecf29be13f6ba004d7f17943a8cede40ec76f9317`; `entry-ai.webp` `089c5a4d04b76f07c84b06b88cbedf93ccde4a0b8d6cbe0ff3ef0279032cbf6b`; `entry-oracle.webp` `0af10ea795e8cd7d9b3f2c84058657a305c06293e3aa1e9b2d72bcc80382dbac`; `entry-diy.webp` `8b9479bc53f1706dbaad87a93b2e91df751c535671097e287c328a998ded57c8`; `entry-tarot.webp` `d53e825660f42300bfafe365d27878c1467a0df166696ab57c27063a2ceb9039`; `xuan-paper-grain.webp` `130ea95eba83c8940f06ed1baa33ea1a7b8cf68c7e5f4f468ad501e19910d7ef`; `engraved-star-map.webp` `b38d47380281095dbfa34bcfcb4de3e28c70d3d2378f31ceadf3187cd7c9a724`.
 - Reference screenshots are internal implementation/QA evidence, not runtime assets.
