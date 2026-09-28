@@ -426,7 +426,7 @@ export function GalleryPage() {
           entries.length === 0 ? (
             <div className="mt-8 rounded-2xl border border-[var(--border)] bg-white p-10 text-center" data-gallery-empty="true">
               <p className="font-serif text-xl">还没有作品</p>
-              <p className="mt-2 text-sm text-[var(--muted)]">从 AI 设计、塔罗引导或 DIY 创作开始，保存后的设计都会出现在这里。</p>
+              <p className="mt-2 text-sm text-[var(--muted)]">从 AI 设计或 DIY 创作开始，保存后的设计都会出现在这里。</p>
               <Link className="mt-5 inline-flex min-h-11 items-center rounded-full bg-[var(--accent-deep)] px-6 text-sm text-white" href="/diy">去创作第一件作品</Link>
             </div>
           ) : (

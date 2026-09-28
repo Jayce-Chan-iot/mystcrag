@@ -425,7 +425,7 @@ export function ProfilePage() {
           <button className="text-xs text-[var(--muted)] transition hover:text-[var(--accent)]" data-profile-action="designs-tab" onClick={() => setActiveTab("designs")} type="button">查看全部 →</button>
         </div>
         {continueDesigns.length === 0 ? (
-          <p className="mt-3 rounded-2xl bg-[var(--surface-soft)] p-5 text-center text-sm text-[var(--muted)]">还没有设计，从<Link className="text-[var(--accent)]" href="/ai-design">AI 设计</Link>或<Link className="text-[var(--accent)]" href="/tarot/setup">塔罗引导</Link>开始吧。</p>
+          <p className="mt-3 rounded-2xl bg-[var(--surface-soft)] p-5 text-center text-sm text-[var(--muted)]">还没有设计，从<Link className="text-[var(--accent)]" href="/ai-design">AI 设计</Link>或<Link className="text-[var(--accent)]" href="/diy">DIY 创作</Link>开始吧。</p>
         ) : (
           <div className="mt-3 flex gap-3 overflow-x-auto pb-1 sm:grid sm:grid-cols-3 sm:overflow-visible">{continueDesigns.map(renderContinueCard)}</div>
         )}
