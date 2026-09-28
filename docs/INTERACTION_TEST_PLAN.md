@@ -114,6 +114,31 @@ Every P0 browser case records:
 - screenshot only when it materially explains a state or failure;
 - trace/video for failures, race conditions, or drag/touch defects.
 
+## Phase 0 frontend browser gate
+
+`TASK-QA-P0-001` adds a fast accessibility and responsive gate before the
+"Xuangui Star Platform" redesign changes the visual system. Run the seven
+principal entry routes (`/`, `/ai-design`, `/diy/rain-after-blue`,
+`/crystal-library`, `/gallery`, `/profile`, and `/tarot`) at 390x844,
+768x1024, 1024x768, 1440x560, and 1440x900 CSS pixels. The resulting 35 cases
+must all return HTTP 200, avoid horizontal overflow, preserve the expected
+mobile navigation breakpoint, expose no visible critical text below 12 px,
+and expose no visible interactive target below 44x44 px. Native radio and
+checkbox inputs are measured by their associated label target.
+
+The DIY route must keep a visible completion control at every matrix size. At
+390x844, keyboard traversal must reach that control with a visible focus ring,
+and Enter must activate either completion or its explicit validation notice.
+When Tarot is disabled, navigation remains hidden and Gallery/Profile copy
+must not promise Tarot; the legacy `/tarot` route may remain directly
+accessible and resolve to `/tarot/setup` for compatibility.
+
+Retain only the canonical screenshots that explain coverage under
+`output/playwright/task-qa-p0-001/`: `home-390x844.png`,
+`questionnaire-768x1024.png`, `diy-1024x768.png`, `diy-1440x560.png`, and
+`profile-1440x900.png`. The machine-checkable source contract is
+`apps/frontend/src/features/design/accessibility-contract.test.tsx`.
+
 ## Execution order
 
 1. Run focused unit and component tests for order, circumference and request
