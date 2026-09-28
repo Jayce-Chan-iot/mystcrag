@@ -47,6 +47,24 @@ const STATIC_HEAVEN_CAST: OracleCastDto = {
   algorithm: { name: "THREE_COIN", version: "three-coin-v1" }
 };
 
+const HIGH_MOTION_CAST: OracleCastDto = {
+  lines: [6, 9, 6, 8, 9, 9],
+  movingLineIndices: [1, 2, 3, 5, 6],
+  primaryHexagram: {
+    number: 59,
+    nameZh: "涣",
+    lowerTrigram: "WATER",
+    upperTrigram: "WIND"
+  },
+  transformedHexagram: {
+    number: 36,
+    nameZh: "明夷",
+    lowerTrigram: "FIRE",
+    upperTrigram: "EARTH"
+  },
+  algorithm: { name: "THREE_COIN", version: "three-coin-v1" }
+};
+
 test("known casts map deterministically to controlled design signals", () => {
   const moving = deriveOracleDesignSignal(MOVING_CAST);
   assert.deepEqual(moving, {
@@ -62,6 +80,31 @@ test("known casts map deterministically to controlled design signals", () => {
   const staticHeaven = deriveOracleDesignSignal(STATIC_HEAVEN_CAST);
   assert.deepEqual(staticHeaven.rhythmTags, ["rhythm:steady"]);
   assert.deepEqual(staticHeaven.accentLinePositions, []);
+});
+
+test("yin-yang ratio controls rhythm while moving count and transformed trigrams control contrast", () => {
+  const balancedStatic = deriveOracleDesignSignal({
+    ...STATIC_HEAVEN_CAST,
+    lines: [7, 8, 7, 8, 7, 8]
+  });
+  const gradualStatic = deriveOracleDesignSignal({
+    ...STATIC_HEAVEN_CAST,
+    lines: [7, 7, 7, 7, 8, 8]
+  });
+  const highMotion = deriveOracleDesignSignal(HIGH_MOTION_CAST);
+
+  assert.deepEqual(balancedStatic.rhythmTags, ["rhythm:alternating"]);
+  assert.deepEqual(gradualStatic.rhythmTags, ["rhythm:gradual"]);
+  assert.deepEqual(highMotion.rhythmTags, ["rhythm:punctuated"]);
+  assert.deepEqual(highMotion.primaryColorTags, ["color:green", "color:teal"]);
+  assert.deepEqual(highMotion.supportColorTags, [
+    "color:blue",
+    "color:black",
+    "color:yellow",
+    "color:brown",
+    "color:red",
+    "color:orange"
+  ]);
 });
 
 test("every trigram mapping emits registered color and style taxonomy ids", () => {
@@ -187,6 +230,45 @@ test("Oracle never overrides or injects non-Oracle hard constraints during merge
     assert.deepEqual(merged.hardConstraints.excludedProductIds, ["product-excluded"]);
     assert.deepEqual(merged.hardConstraints.mustKeepComponentIds, ["component-locked"]);
   }
+});
+
+test("Oracle filtering preserves pre-existing Tarot arrays in a three-way merge", () => {
+  const manual = resolveManualContext({
+    wristCircumferenceMm: 164,
+    emotionTags: [],
+    styleTags: [],
+    colorTags: []
+  });
+  const oracle = resolveOracleContext({
+    cast: MOVING_CAST,
+    signal: deriveOracleDesignSignal(MOVING_CAST),
+    wristCircumferenceMm: 140,
+    locale: "zh-CN",
+    currency: "CNY"
+  });
+  const tarot = {
+    ...structuredClone(oracle),
+    contextId: "ctx-tarot-regression",
+    sources: [{ sourceType: "context-source:tarot" as const, weight: 0.5 }],
+    hardConstraints: {
+      ...oracle.hardConstraints,
+      requiredProductIds: ["tarot-required"],
+      excludedProductIds: ["tarot-excluded"],
+      mustKeepComponentIds: ["tarot-component"]
+    },
+    avoidances: {
+      materialIds: ["material:quartz"],
+      colorFamilyIds: ["color:red"]
+    }
+  };
+
+  const merged = mergeContexts([oracle, tarot, manual]);
+  assert.deepEqual(merged.hardConstraints.requiredProductIds, ["tarot-required"]);
+  assert.deepEqual(merged.hardConstraints.excludedProductIds, ["tarot-excluded"]);
+  assert.deepEqual(merged.hardConstraints.mustKeepComponentIds, ["tarot-component"]);
+  assert.deepEqual(merged.avoidances.materialIds, ["material:quartz"]);
+  assert.deepEqual(merged.avoidances.colorFamilyIds, ["color:red"]);
+  assert.equal(merged.hardConstraints.wristCircumferenceMm, 164);
 });
 
 test("context resolver does not depend on the Oracle engine domain package", async () => {

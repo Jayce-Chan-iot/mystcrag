@@ -55,3 +55,18 @@ Reviewed on 2026-09-29. The Oracle implementation uses public structural facts a
 | [6tail/lunar-javascript](https://github.com/6tail/lunar-javascript) | MIT | Evaluated as a possible future seasonal-atmosphere adapter | Deferred; not installed or used by the Oracle path |
 
 `oracle-design-rules-v1` belongs to Context Resolver rather than the mathematical engine. Its trigram-to-color/style and rhythm-to-texture choices are original soft design preferences constrained to registered taxonomy IDs. They never choose a SKU, set price or inventory, override wrist/fit/budget/product constraints, or make fortune and efficacy claims.
+
+The mapping is a Mystcrag design convention, not a claim that one historical school is uniquely correct. It uses broad natural-image associations as an art-direction vocabulary:
+
+| Trigram | v1 color direction | v1 style direction | Cultural/design note |
+| --- | --- | --- | --- |
+| Heaven | white, gray | minimal, modern | Open sky and clarity become restrained light neutrals. |
+| Lake | white, blue | delicate, romantic | Reflective water becomes bright, polished softness. |
+| Fire | red, orange | modern, eastern contemporary | Flame and illumination become warm visual focus. |
+| Thunder | green, black | natural, eastern contemporary | Sudden growth against depth becomes grounded contrast. |
+| Wind | green, teal | natural, delicate | Air moving through plants becomes layered, light rhythm. |
+| Water | blue, black | ethereal, minimal | Depth and flow become cool, sparse tonal movement. |
+| Mountain | brown, gray | minimal, natural | Stone and stillness become earthy, stable restraint. |
+| Earth | yellow, brown | eastern contemporary, natural | Soil and receptivity become warm, supportive neutrals. |
+
+Yin/yang ratio controls the base rhythm: visually homogeneous casts stay steady, balanced casts alternate, and intermediate ratios graduate. Three or more moving lines switch to punctuated contrast. A transformed hexagram contributes only alternative support colors: one new color for low movement and the full distinct alternative palette for high movement. Moving positions alone become accent candidates. These rules are visual metaphors, not predictions or claims about a user's life.

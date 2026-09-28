@@ -58,11 +58,11 @@ function unique(values: readonly string[]): string[] {
 
 function rhythmForCast(cast: OracleCastDto): OracleRhythmTag {
   if (cast.movingLineIndices.length >= 3) return "rhythm:punctuated";
-  if (cast.movingLineIndices.length > 0) return "rhythm:alternating";
-
-  const polarities = cast.lines.map((line) => line === 7 || line === 9);
-  const transitions = polarities.slice(1).filter((value, index) => value !== polarities[index]).length;
-  return transitions >= 3 ? "rhythm:gradual" : "rhythm:steady";
+  const yangCount = cast.lines.filter((line) => line === 7 || line === 9).length;
+  const yangRatio = yangCount / cast.lines.length;
+  if (yangRatio <= 1 / 6 || yangRatio >= 5 / 6) return "rhythm:steady";
+  if (yangRatio === 0.5) return "rhythm:alternating";
+  return "rhythm:gradual";
 }
 
 export function deriveOracleDesignSignal(input: OracleCastDto): OracleDesignSignal {
@@ -70,7 +70,19 @@ export function deriveOracleDesignSignal(input: OracleCastDto): OracleDesignSign
   const upper = TRIGRAM_DESIGN_RULES[cast.primaryHexagram.upperTrigram];
   const lower = TRIGRAM_DESIGN_RULES[cast.primaryHexagram.lowerTrigram];
   const primaryColorTags = unique(upper.colors);
-  const supportColorTags = unique(lower.colors).filter((color) => !primaryColorTags.includes(color));
+  const baseSupportColors = unique(lower.colors).filter((color) => !primaryColorTags.includes(color));
+  const transformedColors =
+    cast.transformedHexagram === undefined
+      ? []
+      : unique([
+          ...TRIGRAM_DESIGN_RULES[cast.transformedHexagram.upperTrigram].colors,
+          ...TRIGRAM_DESIGN_RULES[cast.transformedHexagram.lowerTrigram].colors
+        ]).filter(
+          (color) => !primaryColorTags.includes(color) && !baseSupportColors.includes(color)
+        );
+  const contrastColors =
+    cast.movingLineIndices.length >= 3 ? transformedColors : transformedColors.slice(0, 1);
+  const supportColorTags = unique([...baseSupportColors, ...contrastColors]);
 
   return OracleDesignSignalSchema.parse({
     ruleVersion: ORACLE_DESIGN_RULE_VERSION,

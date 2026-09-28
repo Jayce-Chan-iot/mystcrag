@@ -36,6 +36,8 @@ export function mergeContexts(
   const softSourceTypes = new Set(["context-source:tarot", "context-source:oracle"]);
   const isSoftOnly = (context: RecommendationContext) =>
     context.sources.every((source) => softSourceTypes.has(source.sourceType));
+  const isOracleOnly = (context: RecommendationContext) =>
+    context.sources.every((source) => source.sourceType === "context-source:oracle");
 
   let primary = contexts[0]!;
   for (const context of contexts) {
@@ -59,7 +61,7 @@ export function mergeContexts(
     for (const tag of context.preferences.visualPreferences) {
       if (!visualPreferences.includes(tag)) visualPreferences.push(tag);
     }
-    if (!isSoftOnly(context)) {
+    if (!isOracleOnly(context)) {
       for (const id of context.avoidances.materialIds) {
         if (!materialIds.includes(id)) materialIds.push(id);
       }
