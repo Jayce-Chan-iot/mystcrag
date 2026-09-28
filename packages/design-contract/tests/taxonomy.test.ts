@@ -116,6 +116,13 @@ test("taxonomy ref schemas accept canonical in-domain ids and reject unknown or 
   assert.equal(emotionRef.safeParse("calm").success, false, "refs must be canonical ids, not aliases");
 });
 
+test("Oracle is a canonical context source with English and Chinese aliases", () => {
+  const contextSourceRef = TaxonomyRefSchema("CONTEXT_SOURCE");
+  assert.equal(contextSourceRef.safeParse("context-source:oracle").success, true);
+  assert.equal(resolveTaxonomyId("oracle", "CONTEXT_SOURCE"), "context-source:oracle");
+  assert.equal(resolveTaxonomyId("问卦", "CONTEXT_SOURCE"), "context-source:oracle");
+});
+
 test("domain schema, lookups, and per-domain listing behave correctly", () => {
   assert.equal(TaxonomyDomainSchema.safeParse("COLOR").success, true);
   assert.equal(TaxonomyDomainSchema.safeParse("NOT_A_DOMAIN").success, false);

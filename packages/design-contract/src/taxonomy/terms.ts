@@ -201,6 +201,7 @@ const RAW_TERMS: readonly TaxonomyTermInput[] = [
   { id: "context-source:questionnaire", domain: "CONTEXT_SOURCE", displayName: { zh: "问卷", en: "Questionnaire" }, aliases: ["questionnaire", "问卷"] },
   { id: "context-source:manual", domain: "CONTEXT_SOURCE", displayName: { zh: "手动", en: "Manual" }, aliases: ["manual", "手动"] },
   { id: "context-source:tarot", domain: "CONTEXT_SOURCE", displayName: { zh: "塔罗", en: "Tarot" }, aliases: ["tarot", "塔罗", "塔罗牌"] },
+  { id: "context-source:oracle", domain: "CONTEXT_SOURCE", displayName: { zh: "问卦", en: "Oracle" }, aliases: ["oracle", "问卦", "三钱问卦"] },
   { id: "context-source:astrology", domain: "CONTEXT_SOURCE", displayName: { zh: "星座", en: "Astrology" }, aliases: ["astrology", "星座"] },
   { id: "context-source:five-elements", domain: "CONTEXT_SOURCE", displayName: { zh: "五行", en: "Five elements" }, aliases: ["five-elements", "五行"] },
   { id: "context-source:style-test", domain: "CONTEXT_SOURCE", displayName: { zh: "风格测试", en: "Style test" }, aliases: ["style-test", "风格测试"] },

@@ -61,6 +61,16 @@ test("a tarot source with weight and refId parses", () => {
   assert.equal(result.success, true);
 });
 
+test("an Oracle source parses as controlled soft context", () => {
+  const oracleContext = structuredClone(baseContext) as unknown as {
+    sources: { sourceType: string; weight: number; refId?: string }[];
+  };
+  oracleContext.sources = [
+    { sourceType: "context-source:oracle", weight: 0.5, refId: "oracle-session-1" }
+  ];
+  assert.equal(RecommendationContextSchema.safeParse(oracleContext).success, true);
+});
+
 test("source weights and context weights stay within [0, 1]", () => {
   const heavySource = structuredClone(baseContext) as unknown as {
     sources: { sourceType: string; weight: number }[];
