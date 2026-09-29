@@ -5,13 +5,15 @@
 - **Branch:** `task/oracle-qa-001-release-gate`
 - **Base:** integrated `main` `9ff93ad` (`docs(tasks): accept one tap star oracle`)
 - **Worktree:** `.worktrees/oracle-qa-001-release-gate`
-- **Status:** `REVIEW` (awaiting independent Codex review)
+- **Status:** `BLOCKED` — Codex rejected candidate `ef00017` on 2026-09-29; blocked on two Frontend dependencies (the out-of-scope runtime file is restored and the architecture suite is honestly RED; ORACLE-005 is a stable FAIL)
 - **Feature:** FEAT-027 Star Oracle cast and guided design
 
-This report registers the integrated Star Oracle feature, records the RED→GREEN
-evidence for the new cross-workspace architecture assertions, and captures the
-full acceptance matrix, database gate, and repository gate results. Counts below
-are the actual observed values; the one failing acceptance row and the
+This report registers the integrated Star Oracle feature, records the evidence
+for the new cross-workspace architecture assertions, and captures the full
+acceptance matrix, database gate, and repository gate results. Counts below are
+the actual observed values. **This QA is not a pass and is not a release gate.**
+Codex rejected candidate `ef00017`; the branch is `BLOCKED` on two Frontend
+dependencies (see §2 and §4), and the failing acceptance row and the
 environment-limited rows are reported as such and are not restated as passes.
 
 ## 1. Scope and method
@@ -20,12 +22,17 @@ environment-limited rows are reported as such and are not restated as passes.
   `docs/progress/2026-09-26_STAR_ORACLE_QA_REPORT.md`, `tests/architecture.test.mjs`,
   the ignored evidence directory `output/playwright/task-oracle-qa-001/`, and this
   task's `docs/tasks/TASK_REGISTRY.md` row.
-- One authorised exception: `apps/frontend/src/features/oracle/components/oracle-lines.tsx`
-  had to stop redeclaring the public `OracleLineValue` type for the new assertion to
-  reach GREEN. The change replaces a local `export type OracleLineValue = 6 | 7 | 8 | 9;`
-  with an import/re-export from `@mystcrag/design-contract`; it changes no behaviour.
+- Candidate `ef00017` (rejected) had edited
+  `apps/frontend/src/features/oracle/components/oracle-lines.tsx`, a runtime source file
+  that is **not** in this task's writable paths and is explicitly listed as forbidden.
+  That edit was out of scope and has been reverted byte-for-byte to `main@9ff93ad`; the
+  correction commit restores the file so this branch carries no runtime source change.
+  The architecture assertion was **not** weakened to hide the duplicate type.
+- The architecture suite is therefore honestly **RED at 22/23** on this branch: the real
+  duplicate `OracleLineValue` declaration remains until a separate Frontend task fixes it
+  inside its own approved paths.
 - No runtime behaviour, schema, migration, data, manifest, lockfile, or Auth contract
-  was changed.
+  change is retained by this task.
 - The main integration worktree was read-only throughout; its user-owned
   `apps/frontend/next-env.d.ts` dev-path modification was never touched.
 - The dedicated worktree's build-regenerated `apps/frontend/next-env.d.ts` was
@@ -60,8 +67,9 @@ node --test tests/architecture.test.mjs
 
 Log: `output/playwright/task-oracle-qa-001/oracle-architecture-RED.log`
 
-**GREEN** — after deleting the probe (the real duplicate in `oracle-lines.tsx` had already
-been removed by the import/re-export fix):
+**Transient GREEN (superseded, not a pass)** — candidate `ef00017` reached 23/23 only by
+also editing `oracle-lines.tsx`, which was out of scope and has been reverted. This GREEN
+is no longer the branch state:
 
 ```
 node --test tests/architecture.test.mjs
@@ -71,6 +79,22 @@ node --test tests/architecture.test.mjs
 ```
 
 Log: `output/playwright/task-oracle-qa-001/oracle-architecture-GREEN.log`
+
+**Current branch state (honest RED)** — after restoring `oracle-lines.tsx` to
+`main@9ff93ad`, the real duplicate `OracleLineValue` is present again and the suite fails
+on the single-authority assertion:
+
+```
+node --test tests/architecture.test.mjs
+ℹ tests 23
+ℹ pass 22
+ℹ fail 1
+✖ the Oracle line enum and trigram enum have one authority and one engine mirror
+```
+
+This RED is the correct gate result for the QA branch and is the first Frontend
+dependency below. The fix must land in a separate Frontend task inside its own approved
+paths and must not weaken the assertion.
 
 ## 3. Governance documents updated
 
@@ -135,10 +159,12 @@ A dedicated timing probe shows the race is window-dependent:
 `createOracleSetupSubmitter` inside every `submit()` call, so the submitter's
 `inFlight` guard is per-call and cannot span two activations; React's `isSubmitting`
 state (and the button `disabled`) has not flushed inside the ~30ms window, so a second
-click reaches the network. This is a genuine frontend defect. Fixing it means editing
-runtime source, which is outside this task's writable scope, so it is recorded as a
-known limitation and a follow-up Frontend task is recommended (single shared submitter
-instance, or a synchronous ref-based in-flight guard).
+click reaches the network. This is a genuine frontend defect and is the second blocking
+dependency. Because the fix is runtime source outside this task's writable scope, this QA
+cannot pass the Completion Gate: a separate Frontend task must fix it inside its own
+approved paths (single shared submitter instance, or a synchronous ref-based in-flight
+guard) with strict RED/GREEN coverage proving 30 ms and `Promise.all` double activation
+each issue exactly one POST.
 
 ### ORACLE-002 detail (environment limitation)
 
@@ -190,8 +216,8 @@ No development or user database was created, dropped, or modified by this gate.
 
 | Gate | Command | Result |
 | --- | --- | --- |
-| Architecture | `node --test tests/architecture.test.mjs` | 23 tests, 23 pass, 0 fail |
-| Full validation | `pnpm validate` | exit 0; turbo 18/18 tasks (lint, typecheck, test, build); aggregated 1276 tests, 1264 pass, 12 skipped, 0 fail |
+| Architecture | `node --test tests/architecture.test.mjs` | **22 pass, 1 fail** on the corrected branch (the transient 23/23 of `ef00017` is superseded; see §2) |
+| Full validation | `pnpm validate` | exit 0 on the rejected candidate `ef00017`; turbo 18/18 tasks (lint, typecheck, test, build); aggregated 1276 tests, 1264 pass, 12 skipped, 0 fail. Superseded: not re-run on the corrected branch, which is now architecture-RED. |
 | Frontend full suite | `tsx --test` over all 86 `src/**/*.test.tsx` | 1156 tests, 1155 pass, 1 fail (see below) |
 | Diff hygiene | `git diff --check` | clean |
 
@@ -206,14 +232,19 @@ concurrently with a live dev server.
 
 ## 8. Known limitations and non-goals
 
-1. **ORACLE-005** (above) is a real, reproducible frontend race; the fix is out of this
-   task's writable scope and needs a follow-up Frontend task.
-2. **ORACLE-002** and **ORACLE-011** are verified deterministically rather than through a
+1. **ORACLE-005** (above) is a real, stable frontend race and a **blocking** Completion
+   Gate failure; the fix is out of this task's writable scope and must be done by a
+   follow-up Frontend task. This QA stays `BLOCKED` until it is fixed.
+2. Candidate `ef00017` was rejected by Codex because it edited out-of-scope runtime source
+   (`oracle-lines.tsx`); that edit is reverted and this branch now contains only
+   governance, test, and evidence changes. The architecture suite is consequently RED at
+   22/23 until the separate Frontend task lands the import-from-Design-Contract fix.
+3. **ORACLE-002** and **ORACLE-011** are verified deterministically rather than through a
    live disabled-server / two-owner browser run, for the environment reasons above.
-3. The `pnpm validate` frontend `test` task expands only 6 of the 86 frontend test files
+4. The `pnpm validate` frontend `test` task expands only 6 of the 86 frontend test files
    under turbo (pre-existing repository wiring); the full 1156-test frontend suite was run
    explicitly to close that gap.
-4. Oracle non-goals are unchanged and documented: no deterministic-fortune, medical, or
+5. Oracle non-goals are unchanged and documented: no deterministic-fortune, medical, or
    guaranteed-effect claims; recommendations are deterministic catalog-grounded designs,
    not a network LLM; Tarot and 3D are not dependencies.
 
