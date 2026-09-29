@@ -4,6 +4,24 @@ No new registry runtime dependency was added in Phase 0–1. `@mystcrag/bracelet
 
 The circle interaction remains on Pointer Events because dnd-kit would still require a custom physical-slot solver and circular collision layer. Zustand/zundo, TanStack Query, Motion, Radix, and Vaul remain reviewed candidates and will be installed only if their vertical slice replaces meaningful infrastructure.
 
+## DEC-ORACLE-001 — Star Oracle cast engine source and dependency baseline
+
+**Task:** TASK-ORACLE-ENGINE-001, registered by TASK-ORACLE-QA-001<br>
+**Verified:** 2026-09-29<br>
+**State:** `DONE`; no new registry runtime dependency was added
+
+`@mystcrag/oracle-engine` is a local workspace package (`packages/oracle-engine`) using the existing TypeScript/tsx tooling, matching `@mystcrag/bracelet-engine`. It declares no third-party runtime dependency.
+
+The cast logic is an independent implementation of the **public-domain** three-coin I Ching method and the traditional King Wen hexagram ordering. The design phase consulted the following MIT/CC-BY-SA open-source projects as behavioral references only; no runtime dependency was added and no modern interpretation text was copied:
+
+| Reference | License | Used for |
+| --- | --- | --- |
+| `limjiechao/ts-hexagram-generator` | MIT | Pure domain modeling and cast-record structure |
+| `Brianfit/I-Ching` | MIT | Independent comparison for three-coin probabilities |
+| `DaviRain-Su/classic_system` | MIT code; some content CC BY-SA 4.0 | Matrix and visualization structure only; no modern text copied |
+
+The package stores only structural facts: coin outcomes, line values, trigram pairs, traditional Chinese hexagram names and King Wen numbers. It contains no fortune claim, modern commentary, crystal-effect claim, product identifier, pricing rule or user data. The source note lives in `packages/oracle-engine/UPSTREAM_SOURCE.md`.
+
 ## DEC-AUTH-002 — identity dependency and configuration baseline
 
 **Task:** TASK-AUTH-002<br>

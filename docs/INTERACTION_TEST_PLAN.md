@@ -167,6 +167,30 @@ Retain only the canonical screenshots that explain coverage under
 - A non-Tarot design with the same shortage remains blocked by `INVENTORY_CHANGED`.
 - Desktop and mobile layouts keep the advisory readable without hiding the primary action.
 
+## Star Oracle acceptance
+
+Feature `FEAT-027`. Task `TASK-ORACLE-QA-001`; evidence under the ignored `output/playwright/task-oracle-qa-001/` directory.
+
+| ID | Scenario | Required behavior |
+| --- | --- | --- |
+| ORACLE-001 | Flag enabled | With `MYSTCRAG_ORACLE_ENABLED="true"` the `/oracle` entry appears in navigation and `/oracle` offers the one-tap “启卦” action. |
+| ORACLE-002 | Flag disabled | With the flag absent, `false`, `TRUE`, `1`, or spaced, navigation hides the Oracle entry, `/oracle` shows the inline “尚未开放” notice, and AI design and DIY remain fully usable. |
+| ORACLE-003 | Optional question | A cast succeeds with no question; a question is used for that request only and never reaches Backend logs, persisted rows, `OracleCopy`, or any design model. |
+| ORACLE-004 | One-tap cast | A single activation of “启卦” produces exactly one session and one six-line reveal. |
+| ORACLE-005 | Double activation | Two rapid activations create exactly one session (idempotent `operationId`). |
+| ORACLE-006 | Moving lines | A cast with moving lines (6/9) exposes a transformed hexagram and matching accent line positions; a static cast exposes neither. |
+| ORACLE-007 | Refresh restore | Reloading `/oracle/result/[sessionId]` restores the persisted session via GET and draws no new entropy. |
+| ORACLE-008 | Recommendation retry | A failed recommendation request retries only the recommendation and never re-casts the session. |
+| ORACLE-009 | Price/inventory conflict | A `PRICE_CHANGED` or `INVENTORY_CHANGED` result surfaces an explicit notice and claims no success. |
+| ORACLE-010 | Save retry | A failed save keeps the user on the Oracle result with a retry and does not navigate to DIY; a successful save continues into DIY. |
+| ORACLE-011 | Owner isolation | A different authenticated user cannot read, recommend for, or save another user's Oracle session (`FORBIDDEN`). |
+| ORACLE-012 | Desktop / mobile / 320 px | `/oracle` and the result route render without horizontal overflow at 320 px, 390×844, and 1440×900. |
+| ORACLE-013 | Keyboard and 200% zoom | “启卦”, the optional question, direction selection, and the save action are keyboard-reachable with visible focus, and remain usable at 200% zoom. |
+| ORACLE-014 | Reduced motion | `prefers-reduced-motion: reduce` shortens the reveal without removing the result or blocking completion. |
+| ORACLE-015 | Tarot/3D independence | Disabling Tarot or the unmounted 3D preview changes no Oracle behavior, and the Oracle feature declares no Tarot or 3D dependency. |
+
+Known non-goals for this feature: no network or paid LLM provider; no fortune, guaranteed-effect, medical, or deterministic-fate claim; no new payment/shipping path; no 3D mount; no second cast implementation outside `packages/oracle-engine`.
+
 ## AUTH-005 Authentication interaction matrix
 
 Status: `FINAL_DELTA_VERIFIED` (2026-08-27, SOL final delta + evidence closure repair).

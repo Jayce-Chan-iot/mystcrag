@@ -258,6 +258,151 @@ test("Design Contract is the only public Tarot schema authority", async () => {
   );
 });
 
+const oracleContractSchemaFile = "packages/design-contract/src/schemas/oracle.schema.ts";
+const oracleEngineTypesFile = "packages/oracle-engine/src/types.ts";
+const generatedOutput = /(?:^|\/)generated\//;
+const testOrFixtureFile = /(?:^|\/)(?:tests?|__tests__)(?:\/|$)|\.test\.[^.]+$/;
+
+test("Design Contract is the only public Oracle schema authority", async () => {
+  const schemaNames = [
+    "OracleLineValueSchema",
+    "OracleTrigramSchema",
+    "OracleHexagramDtoSchema",
+    "OracleCastDtoSchema",
+    "OracleRhythmTagSchema",
+    "OracleDesignSignalSchema",
+    "OracleInterpretationSchema",
+    "OracleSessionStatusSchema",
+    "OracleRankedRecommendationSchema",
+    "OraclePublicSessionSchema",
+    "OracleCastSessionSchema",
+    "OracleRecommendedSessionSchema",
+    "OracleSavedSessionSchema",
+    "CreateOracleSessionRequestSchema",
+    "GenerateOracleRecommendationsRequestSchema",
+    "SaveOracleSessionRequestSchema",
+    "CreateOracleSessionResponseSchema",
+    "GenerateOracleRecommendationsResponseSchema",
+    "GetOracleSessionResponseSchema",
+    "SaveOracleSessionResponseSchema"
+  ];
+
+  for (const schemaName of schemaNames) {
+    const definitions = (
+      await matchingFiles(
+        ["apps", "packages"],
+        new RegExp(`(?:export\\s+)?const\\s+${schemaName}\\s*=`)
+      )
+    ).filter((file) => !generatedOutput.test(file));
+
+    assert.deepEqual(
+      definitions,
+      [oracleContractSchemaFile],
+      `${schemaName} must have exactly one definition in Design Contract`
+    );
+  }
+});
+
+test("the Oracle line enum and trigram enum have one authority and one engine mirror", async () => {
+  const mirroredNames = ["OracleLineValue", "OracleTrigram"];
+
+  for (const mirroredName of mirroredNames) {
+    const declarations = (
+      await matchingDeclarations(
+        ["apps", "packages"],
+        new RegExp(`(?:export\\s+)?(?:type|interface|const|enum)\\s+${mirroredName}\\b`)
+      )
+    ).filter((file) => !generatedOutput.test(file) && !testOrFixtureFile.test(file));
+
+    assert.deepEqual(
+      [...declarations].sort(),
+      [oracleContractSchemaFile, oracleEngineTypesFile].sort(),
+      `${mirroredName} must be declared only by Design Contract and mirrored only by the Oracle engine`
+    );
+  }
+});
+
+test("the Oracle session and cast DTO family is single-sourced in Design Contract", async () => {
+  const dtoNames = [
+    "OraclePublicSession",
+    "OracleCastSession",
+    "OracleRecommendedSession",
+    "OracleSavedSession",
+    "OracleCastDto",
+    "OracleDesignSignal",
+    "OracleInterpretation",
+    "OracleHexagramDto",
+    "OracleSessionStatus",
+    "OracleRankedRecommendation",
+    "OracleRhythmTag",
+    "CreateOracleSessionRequest",
+    "CreateOracleSessionResponse",
+    "GenerateOracleRecommendationsRequest",
+    "GenerateOracleRecommendationsResponse",
+    "GetOracleSessionResponse",
+    "SaveOracleSessionRequest",
+    "SaveOracleSessionResponse"
+  ];
+
+  for (const dtoName of dtoNames) {
+    const declarations = (
+      await matchingDeclarations(
+        ["apps", "packages"],
+        new RegExp(`(?:export\\s+)?(?:type|interface|class)\\s+${dtoName}\\b`)
+      )
+    ).filter((file) => !generatedOutput.test(file) && !testOrFixtureFile.test(file));
+
+    assert.deepEqual(
+      declarations,
+      [oracleContractSchemaFile],
+      `${dtoName} must be declared only in Design Contract`
+    );
+  }
+});
+
+test("database, context and AI production code cannot import the Oracle engine", async () => {
+  const matches = await matchingFiles(
+    ["packages/database", "packages/context-resolver", "packages/ai-agent"],
+    /(?:from\s+|import\s*\(\s*)["']@mystcrag\/oracle-engine(?:\/[^"']*)?["']/
+  );
+
+  assertNoMatches(matches.filter((file) => !testOrFixtureFile.test(file)));
+});
+
+test("frontend cannot import Oracle private persistence or the engine", async () => {
+  const matches = await matchingFiles(
+    ["apps/frontend"],
+    /(?:from\s+|import\s*\(\s*)["'](?:@mystcrag\/database|@mystcrag\/design-contract\/internal|@mystcrag\/oracle-engine)(?:\/[^"']*)?["']|oracle-session\.repository/
+  );
+
+  assertNoMatches(matches.filter((file) => !testOrFixtureFile.test(file)));
+});
+
+test("the three-coin cast algorithm is implemented only in the Oracle engine", async () => {
+  const castSymbols = [
+    "castThreeCoinHexagram",
+    "lineValueFromCoins",
+    "ORACLE_CAST_ALGORITHM_VERSION",
+    "HEXAGRAM_CATALOG",
+    "TRIGRAMS",
+    "lookupHexagramByYangLines",
+    "lookupTrigramByYangLines"
+  ];
+  const offenders = [];
+
+  for (const symbol of castSymbols) {
+    const declarations = (
+      await matchingDeclarations(
+        ["apps", "packages"],
+        new RegExp(`(?:export\\s+)?(?:const|function|type|interface|class)\\s+${symbol}\\b`)
+      )
+    ).filter((file) => !generatedOutput.test(file));
+    offenders.push(...declarations.filter((file) => !file.startsWith("packages/oracle-engine/")));
+  }
+
+  assertNoMatches([...new Set(offenders)]);
+});
+
 test("AI bead layouts and backend catalog drafts have distinct names", async () => {
   const ambiguousNames = await matchingFiles(
     ["apps", "packages"],

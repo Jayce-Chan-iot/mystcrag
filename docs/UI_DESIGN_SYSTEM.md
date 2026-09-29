@@ -48,3 +48,13 @@ Desktop pages follow the approved reference-board proportions at the actual brow
 Each homepage creation card is a single semantic link. Clicking its photograph, title, description, note, or circular arrow opens the corresponding path, and keyboard focus outlines the entire card.
 
 Tarot setup includes a 13.0–20.0 cm design-wrist input and a collapsible photographic measurement guide. The value remains route-scoped and is sent with the recommendation request so all three generated designs use the chosen wrist size. The range describes supported recommendation sizing; subsequent DIY completion retains its separate non-blocking fit advisory.
+
+## Star Oracle (玄圭星台) interaction contract
+
+The Oracle entry is `/oracle`; the persisted result and recovery route is `/oracle/result/[sessionId]`. Both render only when the server-owned `MYSTCRAG_ORACLE_ENABLED` value is exactly `"true"`; otherwise the navigation entry is hidden and `/oracle` renders an explicit inline “尚未开放” notice that still offers AI design and DIY, never a dead control or a fabricated cast. The feature never blocks AI design or DIY.
+
+The setup surface presents one primary “一键启卦” action. An optional question field is clearly optional, is bounded to 120 characters, and lives only in request memory: it must never appear in URL, browser storage, analytics, logs, persisted rows, `OracleCopy`, or any design model. Only the user's full-motion boolean preference is stored locally (`mystcrag:oracle:full-motion:v1`).
+
+After a cast the six lines reveal bottom-to-top, honoring `prefers-reduced-motion` (a shortened reveal rather than a removed result), and the result route renders the cast, the original interpretation, and exactly three ranked design directions (`BALANCED`, `CONTRAST`, `NEUTRAL_LED`) with authoritative price and stock state. Selecting a direction saves the session and continues into the existing DIY workspace; a save failure keeps the user on the Oracle result with a retry and never silently navigates to DIY. Double-activating “启卦” creates at most one session, and a page refresh restores the existing session through a GET without drawing new entropy.
+
+Oracle surfaces follow the same viewport-density and accessibility rules as the rest of the product: mobile-first composition, visible keyboard focus, controls with accurate labels, at least 44x44 px targets, no horizontal overflow at 320 px width, usable at 200% zoom, and state never communicated by color alone.

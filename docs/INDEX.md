@@ -38,6 +38,7 @@ Repository governance entry points:
 | Dependencies / OSS | `DEPENDENCY_DECISIONS.md`, `OSS_RESEARCH.md` |
 | Tarot-guided design | `superpowers/specs/2026-08-19-tarot-guided-bracelet-design.md`, `superpowers/plans/2026-08-20-tarot-guided-bracelet-integration.md`, `API_SPECIFICATION.md`, `SECURITY_AND_PRIVACY.md` |
 | Star Oracle / customer UI redesign | `superpowers/specs/2026-09-26-star-oracle-crystal-design.md`, `superpowers/plans/2026-09-26-phase0-priority-ui-repairs.md`, `superpowers/plans/2026-09-26-star-oracle-integration.md`, `superpowers/plans/2026-09-26-star-platform-full-ui-redesign.md` |
+| Star Oracle release QA | `progress/2026-09-26_STAR_ORACLE_QA_REPORT.md`, `governance/FEATURE_REGISTRY.md`, `governance/CANONICAL_COMPONENTS.md`, `INTERACTION_TEST_PLAN.md` |
 
 Files ending in `_REPORT.md` or `_PLAN.md` describe earlier implementation phases. Consult them when tracing a decision, regression, or prior verification result. `DECISION_LOG.md` remains the cross-module decision record.
 

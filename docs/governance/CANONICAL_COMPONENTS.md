@@ -26,6 +26,12 @@ Consult this registry before introducing another schema, renderer, service, stor
 | Recommendation context | `packages/context-resolver` plus Design Contract context schemas | Backend/MCP/Tarot | UI form state is input, not canonical context |
 | `CANONICAL_TAROT_SCHEMA` public values/DTOs | `packages/design-contract/src/schemas/tarot.schema.ts` (`FROZEN`) | Backend, DB projections, AI copy, frontend and Tarot Engine | BASE-002 removed Tarot Engine runtime copies; theme/spread/slot/orientation have one definition source |
 | Tarot deck/draw mechanics | `packages/tarot-engine` | Backend Tarot service | Owns cards, private draw state, selection/reveal and signal invariants; it consumes but does not redefine public Tarot values |
+| `CANONICAL_ORACLE_SCHEMA` public values/DTOs | `packages/design-contract/src/schemas/oracle.schema.ts` (`FROZEN`) | Backend Oracle module/routes, Database snapshot mappers, AI copy, frontend client and coordinator, Oracle Engine | One definition of the Oracle line enum, trigram enum and the CAST/RECOMMENDED/SAVED session DTO family; consumers import from Design Contract and never redeclare them |
+| Oracle cast mechanics | `packages/oracle-engine` (`castThreeCoinHexagram`, `CoinSource`) | Backend Oracle service | Sole authority for the public-domain three-coin method and King Wen hexagram ordering; it mirrors the Design Contract line/trigram values as engine-local types but redefines no public schema and no other workspace implements a cast algorithm |
+| Oracle design signal | `packages/context-resolver` (`deriveOracleDesignSignal`, `resolveOracleContext`) | Backend Oracle service | Deterministic cast-to-design-context mapping; the frontend must not re-derive a signal or cast |
+| Oracle session/random/persistence authority | backend `apps/backend/src/modules/oracle` over `OracleSessionRepository` (`packages/database`) | Frontend Oracle client | Backend owns entropy, idempotent create/recommend/save revisions and the owner-scoped persisted snapshot; the frontend never invents a cast, revision or saved state |
+| Oracle interpretation copy | AI Agent `OracleCopyService` (`@mystcrag/ai-agent/oracle`, `MYSTCRAG_ORIGINAL`) | Backend Oracle service | Original compliance-safe copy only; no fortune claim, no modern commentary, no crystal-effect claim |
+| Frontend Oracle state | `apps/frontend/src/features/oracle/oracle-coordinator.ts` plus `apps/frontend/src/lib/api/oracle-api.ts` | `/oracle` and `/oracle/result/[sessionId]` routes | The coordinator owns the `idle/casting/revealing/recommended/saving/error` state machine and GET reconciliation; components do not own request lifecycle |
 | Knowledge ingestion | `packages/knowledge-ingestion` | Worker/Knowledge Core | Backend should orchestrate, not fetch external sources directly |
 | Knowledge retrieval/review/compiler | `packages/knowledge-core` | Backend, worker, MCP, recommendation | Fixtures are seed/evaluation data, not a second production authority |
 | Product visual asset mapping | `apps/frontend/src/features/design/model/visual-assets.ts` | frontend product visuals | `crystal-bead-base.png` remains export-only divergence pending asset task |
@@ -59,6 +65,10 @@ TASK-AUDIT-002 found that Design Contract edit operations and Bracelet Engine la
 ### `CANONICAL_TAROT_SCHEMA`
 
 `TarotThemeSchema`, `TarotSpreadTypeSchema`, `TarotSlotSchema`, `TarotOrientationSchema` and their inferred public types are owned only by Design Contract. Tarot Engine may use these values inside its private validators but may not define or re-export alternative runtime schemas. There is no current external engine import requiring a compatibility re-export.
+
+### `CANONICAL_ORACLE_SCHEMA`
+
+`OracleLineValueSchema`, `OracleTrigramSchema` and the Oracle session DTO family (`OracleCastDtoSchema`, `OraclePublicSessionSchema`, `OracleCastSessionSchema`, `OracleRecommendedSessionSchema`, `OracleSavedSessionSchema`, and the create/recommendations/get/save request and response schemas) are owned only by Design Contract. `packages/oracle-engine` mirrors the line and trigram value unions as engine-local types inside `packages/oracle-engine/src/types.ts` so its pure cast logic can run without a Design Contract runtime import, but it defines no alternative public schema and no other workspace declares these identifiers. The frontend imports the line value type from Design Contract and must not redeclare it.
 
 ### AI candidate concepts
 

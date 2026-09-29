@@ -19,6 +19,7 @@ One task has one accountable owner. Reviewers may advise, but they do not share 
 | `CONTEXT` | Questionnaire/Tarot context normalization | `packages/context-resolver` | AI spec, Tarot spec |
 | `KNOWLEDGE` | Knowledge retrieval, review, compiler, ingestion and worker | `packages/knowledge-core`, `packages/knowledge-ingestion`, `apps/knowledge-worker` | knowledge system spec |
 | `TAROT` | Tarot-private mechanics and backend lifecycle implementation | `packages/tarot-engine`, Tarot-owned backend/frontend paths when assigned | Tarot spec, API spec, security |
+| `ORACLE` | Oracle cast engine: public-domain three-coin method and King Wen hexagram ordering | `packages/oracle-engine` | Star Oracle spec, DesignV1 |
 | `BRACELET` | Fit, geometry, layout, hit-testing | `packages/bracelet-engine` | Bracelet geometry, DesignV1, Three spec |
 | `THREE` | 3D adapter, renderer, runtime quality and resources | `packages/three-engine` | Three spec, Bracelet geometry, DesignV1 |
 | `MCP` | MCP transport and tool composition | `apps/mcp-server` | knowledge spec, API/contract docs |
@@ -35,6 +36,7 @@ One task has one accountable owner. Reviewers may advise, but they do not share 
 | 3D scene contract | `THREE` | Bracelet and Frontend |
 | Knowledge rule/review contract | `KNOWLEDGE` | Backend, Database, AI/Design as affected |
 | Tarot public contract | `CONTRACT` | Tarot, Backend, Frontend, Database |
+| Oracle public contract | `CONTRACT` | Oracle engine, Backend, Frontend, Database, Context, AI |
 | Root scripts/CI/workspace config | the registered `GLM` or `QWEN` execution task | SOL and QA |
 | Production runtime asset change | `ASSET` | Frontend |
 

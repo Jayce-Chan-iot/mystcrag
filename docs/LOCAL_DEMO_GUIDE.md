@@ -55,6 +55,18 @@ export MYSTCRAG_TAROT_QUESTION_ENCRYPTION_KEY="$(openssl rand -base64 32 | tr -d
 
 该变量必须在 Backend 启动前存在；不要写回 `.env.example`、不要提交，也不要用于真实生产数据。非空但格式错误的密钥会让 Backend 启动失败，以防止错误配置静默降级。
 
+## 3b. 开启星台问卦入口与问题隐私
+
+`.env.example` 中星台问卦（Oracle）同样默认关闭。本地演示改为：
+
+```dotenv
+MYSTCRAG_ORACLE_ENABLED="true"
+```
+
+Backend 和服务端渲染的 Frontend 只认精确小写值 `"true"`；缺失、`false`、`TRUE`、`1` 或带空格的值都是关闭。关闭时首页和导航只隐藏星台入口，`/oracle` 显示行内“尚未开放”提示，AI 设计与 DIY 仍可用，新建 Oracle 会话返回 `NOT_IMPLEMENTED`。修改开关后需重启 Backend 和 Frontend。
+
+星台问题（`question`）是可选项，长度上限 120 字符，只在当次请求的内存中使用，不进日志、浏览器存储、数据库、`OracleCopy` 或任何设计模型；浏览器本地只保存“完整动画”布尔偏好（`mystcrag:oracle:full-motion:v1`）。因此关闭星台无需清理任何用户数据。
+
 ## 4. 生成 8 小时本地开发凭证
 
 内置 `signed-test` Provider 在 `NODE_ENV=development` 和 `NODE_ENV=test` 下均可使用，且必须显式启用。桌面自动登录模式（`MYSTCRAG_DESKTOP_AUTO_AUTH=true`）则**只在精确的 `NODE_ENV=development`** 下生效：NODE_ENV 缺失、空字符串、`test`、`staging`、`production` 或其它未知值都会被 Frontend 启动校验拒绝；它额外要求 app/backend 都是 loopback origin。它不是固定用户或跳过登录，Backend 仍会验证签名、issuer、audience 和过期时间。

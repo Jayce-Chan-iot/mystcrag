@@ -35,6 +35,19 @@ Copy `.env.example` to `.env`, then use:
 
 The Compose password is development-only. Production must inject `DATABASE_URL`, run `prisma migrate deploy`, back up PostgreSQL, restrict network access, and use managed secrets. Never run reset or seed commands against production.
 
+## Star Oracle feature flag and rollback
+
+FEAT-027 (Star Oracle / 玄圭星台) is controlled by the server-owned `MYSTCRAG_ORACLE_ENABLED` value. Backend and server-rendered Frontend accept only the exact lowercase string `"true"`; missing, `false`, `TRUE`, `1`, empty, or spaced values are all disabled. Client-visible (`NEXT_PUBLIC_`) aliases are intentionally ignored, so the flag cannot be flipped from the browser. Both Backend and Frontend must be restarted after changing the value.
+
+When disabled, the Oracle navigation entry is hidden, `/oracle` renders an explicit inline notice, and `/api/oracle/sessions` returns `NOT_IMPLEMENTED`; existing AI design, DIY, Tarot, and asset flows are unaffected. The optional user question is request-memory only and is never persisted or logged, so disabling the feature requires no data cleanup.
+
+Rollback steps:
+
+1. Set `MYSTCRAG_ORACLE_ENABLED="false"` (or remove it) and restart the Frontend and Backend together. This is a fail-closed, immediate rollout stop; it needs no code revert.
+2. If a code revert is required, roll the Frontend and Backend back together to the last reviewed FEAT-027-compatible commit; the Oracle routes, packages and Prisma `oracle_sessions` / `oracle_design_recommendations` tables are additive.
+3. The additive `20260926090000_add_oracle_sessions` migration is separately controlled by [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md). Normal application rollback retains the Oracle tables; dropping them is destructive and requires an explicit data-loss approval.
+4. Verify the rollback by confirming the hidden navigation entry, the inline disabled notice, and `NOT_IMPLEMENTED` on session creation while AI design and DIY still pass.
+
 ## Production identity environment contract
 
 The behavioral authority is [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md), state `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`. AUTH-001 froze the contract; AUTH-002 through AUTH-006 and AUTH-008 delivered and verified the integrated runtime.
