@@ -83,6 +83,10 @@ export interface MarkOracleSessionSavedRecord {
 export interface OracleSessionRepository {
   createOrGet(input: CreateOrGetOracleSessionRecord): Promise<OracleSessionRecord>;
   getOwned(ownerId: string, sessionId: string): Promise<OracleSessionRecord>;
+  findOwnedByOperation(
+    ownerId: string,
+    operationId: string
+  ): Promise<OracleSessionRecord | null>;
   saveRecommendations(input: SaveOracleRecommendationsRecord): Promise<OracleSessionRecord>;
   markSaved(input: MarkOracleSessionSavedRecord): Promise<OracleSessionRecord>;
 }
@@ -405,6 +409,18 @@ export class OracleSessionRepositoryImpl implements OracleSessionRepository {
   async getOwned(ownerId: string, sessionId: string): Promise<OracleSessionRecord> {
     const row = await getOwnedRow(this.prisma, ownerId, sessionId).catch(rethrowPersistenceError);
     return mapOracleSession(row);
+  }
+
+  async findOwnedByOperation(
+    ownerId: string,
+    operationId: string
+  ): Promise<OracleSessionRecord | null> {
+    assertIdentifier(ownerId, "Oracle owner ID");
+    assertIdentifier(operationId, "Oracle operation ID");
+    const row = await this.prisma.oracleSession
+      .findFirst({ where: { ownerId, operationId }, include: relationInclude })
+      .catch(rethrowPersistenceError);
+    return row === null ? null : mapOracleSession(row as OracleSessionRow);
   }
 
   async saveRecommendations(input: SaveOracleRecommendationsRecord): Promise<OracleSessionRecord> {

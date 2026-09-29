@@ -74,17 +74,41 @@ const createInput = {
 };
 
 class ExistingSessionClient {
+  writes = 0;
+
   constructor(private readonly ownedRow: typeof row | null = row) {}
 
   readonly oracleSession = {
     findUnique: async () => row,
-    findFirst: async () => this.ownedRow,
+    findFirst: async (args: {
+      where: { id?: string; ownerId?: string; operationId?: string };
+    }) => {
+      if (this.ownedRow === null) return null;
+      const where = args.where;
+      if (where.ownerId !== undefined && where.ownerId !== this.ownedRow.ownerId) return null;
+      if (where.operationId !== undefined && where.operationId !== this.ownedRow.operationId) {
+        return null;
+      }
+      if (where.id !== undefined && where.id !== this.ownedRow.id) return null;
+      return this.ownedRow;
+    },
     count: async () => 0,
-    create: async () => row,
-    updateMany: async () => ({ count: 0 })
+    create: async () => {
+      this.writes += 1;
+      return row;
+    },
+    updateMany: async () => {
+      this.writes += 1;
+      return { count: 0 };
+    }
   };
   readonly design = { count: async () => 3 };
-  readonly oracleDesignRecommendation = { createMany: async () => ({ count: 3 }) };
+  readonly oracleDesignRecommendation = {
+    createMany: async () => {
+      this.writes += 1;
+      return { count: 3 };
+    }
+  };
   async $queryRawUnsafe(): Promise<Array<{ id: string }>> {
     return this.ownedRow === null ? [] : [{ id: this.ownedRow.id }];
   }
@@ -113,6 +137,53 @@ test("owner-scoped reads do not reveal another owner's session", async () => {
   await assert.rejects(
     () => repository.getOwned("owner-2", row.id),
     (error: unknown) => error instanceof PersistenceError && error.code === "NOT_FOUND"
+  );
+});
+
+test("findOwnedByOperation returns the same owner's create without writing", async () => {
+  const client = new ExistingSessionClient();
+  const repository = new OracleSessionRepositoryImpl(client as unknown as PrismaClient);
+  const found = await repository.findOwnedByOperation(row.ownerId, row.operationId);
+  assert.equal(found?.id, row.id);
+  assert.equal(found?.operationId, row.operationId);
+  assert.equal(found?.status, "CAST");
+  assert.equal(client.writes, 0);
+});
+
+test("findOwnedByOperation hides foreign-owner and absent operations", async () => {
+  const repository = new OracleSessionRepositoryImpl(
+    new ExistingSessionClient() as unknown as PrismaClient
+  );
+  assert.equal(await repository.findOwnedByOperation("owner-2", row.operationId), null);
+  assert.equal(await repository.findOwnedByOperation(row.ownerId, "missing-operation"), null);
+  assert.equal(await repository.findOwnedByOperation("owner-2", "missing-operation"), null);
+});
+
+test("findOwnedByOperation rejects empty owner or operation identifiers", async () => {
+  const repository = new OracleSessionRepositoryImpl(
+    new ExistingSessionClient() as unknown as PrismaClient
+  );
+  for (const [ownerId, operationId] of [
+    ["", row.operationId],
+    ["   ", row.operationId],
+    [row.ownerId, ""],
+    [row.ownerId, "  "]
+  ] as const) {
+    await assert.rejects(
+      () => repository.findOwnedByOperation(ownerId, operationId),
+      (error: unknown) => error instanceof PersistenceError && error.code === "VALIDATION_ERROR"
+    );
+  }
+});
+
+test("findOwnedByOperation fails closed on a corrupt persisted snapshot", async () => {
+  const repository = new OracleSessionRepositoryImpl(
+    new ExistingSessionClient({ ...row, stateRevision: 2 }) as unknown as PrismaClient
+  );
+  await assert.rejects(
+    () => repository.findOwnedByOperation(row.ownerId, row.operationId),
+    (error: unknown) =>
+      error instanceof PersistenceError && error.code === "DATA_INTEGRITY_ERROR"
   );
 });
 

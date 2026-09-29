@@ -78,6 +78,7 @@ Oracle persistence stores the exact strict `OracleCastDto`, `OracleDesignSignal`
 2. `saveRecommendations` requires revision 1 `CAST`, three unique owner Designs at ranks 1–3, and transactionally writes the links plus revision 2 `RECOMMENDED`. The accepted operation ID replays the same result; changed content or stale revisions conflict.
 3. `markSaved` requires revision 2 `RECOMMENDED` and a selected linked Design, then records revision 3 `SAVED`. Its accepted operation ID and Design replay without another increment.
 4. Owner-scoped reads return generic absence for another owner. Every relation uses restrictive deletion, so parent, session, and Design evidence cannot be erased through cascades.
+5. `findOwnedByOperation` is a side-effect-free read that resolves an owner's create by `(ownerId, operationId)` so a caller can detect an already-completed create before re-drawing entropy or regenerating copy. It strictly validates both identifiers, returns `null` for an absent or other-owner operation without revealing cross-user existence, applies the same snapshot/ownership integrity validation as other reads, and writes no rows or revisions.
 
 ## Revision lifecycle
 
