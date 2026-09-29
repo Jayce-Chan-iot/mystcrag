@@ -1,4 +1,6 @@
-export type OracleLineValue = 6 | 7 | 8 | 9;
+import type { OracleLineValue } from "@mystcrag/design-contract";
+
+export type { OracleLineValue };
 
 export type OracleLineKind = "solid" | "broken";
 

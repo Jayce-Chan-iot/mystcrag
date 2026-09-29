@@ -3,13 +3,20 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import { CreateOracleSessionRequestSchema } from "@mystcrag/design-contract";
+import {
+  CreateOracleSessionRequestSchema,
+  type CreateOracleSessionRequest
+} from "@mystcrag/design-contract";
 
 import {
   createOracleSetupSubmitter,
-  OracleSetup
+  OracleSetup,
+  type OracleSetupInput
 } from "../../src/features/oracle/components/oracle-setup";
-import { useOracleQuestionStore } from "../../src/features/oracle/oracle-question-provider";
+import {
+  useOracleQuestionStore,
+  type OracleQuestionStore
+} from "../../src/features/oracle/oracle-question-provider";
 import {
   toFrontendApiError,
   type FrontendErrorCode
@@ -20,6 +27,43 @@ function nextOracleOperationId(kind: string): string {
   return `oracle-${kind}-${crypto.randomUUID()}`;
 }
 
+export type OracleSetupClientSubmitter = (input: OracleSetupInput) => Promise<void>;
+
+export type OracleSetupClientDependencies = Readonly<{
+  questionStore: OracleQuestionStore;
+  navigate(path: string): void;
+  createSession(request: CreateOracleSessionRequest): Promise<{ session: { sessionId: string } }>;
+  nextOperationId(kind: string): string;
+}>;
+
+export function createOracleSetupClientSubmitter({
+  questionStore,
+  navigate,
+  createSession,
+  nextOperationId
+}: OracleSetupClientDependencies): OracleSetupClientSubmitter {
+  // The in-flight guard lives inside the returned submitter, so it must be built
+  // once and reused across activations instead of per submit() call.
+  return createOracleSetupSubmitter({
+    questionStore,
+    navigate,
+    create: async (createInput) => {
+      const request = CreateOracleSessionRequestSchema.parse({
+        requestId: nextOperationId("create-request"),
+        operationId: nextOperationId("create-operation"),
+        locale: "zh-CN",
+        currency: "CNY",
+        ...(createInput.wristCircumferenceMm === undefined
+          ? {}
+          : { wristCircumferenceMm: createInput.wristCircumferenceMm }),
+        ...(createInput.question ? { question: createInput.question } : {})
+      });
+      const response = await createSession(request);
+      return { session: response.session };
+    }
+  });
+}
+
 export function OracleSetupClient({ enabled }: Readonly<{ enabled: boolean }>) {
   const router = useRouter();
   const questionStore = useOracleQuestionStore();
@@ -27,28 +71,14 @@ export function OracleSetupClient({ enabled }: Readonly<{ enabled: boolean }>) {
   const [wristCircumferenceMm, setWristCircumferenceMm] = useState<number | undefined>(undefined);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<FrontendErrorCode | null>(null);
-
-  const submit = (input: { question: string; wristCircumferenceMm: number | undefined }) => {
-    const submitter = createOracleSetupSubmitter({
+  const [submitter] = useState<OracleSetupClientSubmitter>(() =>
+    createOracleSetupClientSubmitter({
       questionStore,
       navigate: (path) => router.push(path),
-      create: async (createInput) => {
-        const request = CreateOracleSessionRequestSchema.parse({
-          requestId: nextOracleOperationId("create-request"),
-          operationId: nextOracleOperationId("create-operation"),
-          locale: "zh-CN",
-          currency: "CNY",
-          ...(createInput.wristCircumferenceMm === undefined
-            ? {}
-            : { wristCircumferenceMm: createInput.wristCircumferenceMm }),
-          ...(createInput.question ? { question: createInput.question } : {})
-        });
-        const response = await oracleApi.create(request);
-        return { session: response.session };
-      }
-    });
-    return submitter(input);
-  };
+      createSession: (request) => oracleApi.create(request),
+      nextOperationId: nextOracleOperationId
+    })
+  );
 
   if (!enabled) {
     return (
@@ -76,7 +106,7 @@ export function OracleSetupClient({ enabled }: Readonly<{ enabled: boolean }>) {
       onSubmit={() => {
         setIsSubmitting(true);
         setError(null);
-        void submit({ question, wristCircumferenceMm })
+        void submitter({ question, wristCircumferenceMm })
           .catch((cause) => {
             setError(toFrontendApiError(cause).code);
           })
