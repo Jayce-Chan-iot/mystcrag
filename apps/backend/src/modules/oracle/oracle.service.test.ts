@@ -18,7 +18,7 @@ import { DomainApiError } from "../../contracts/api-error.js";
 import { deriveOracleDesignAuthorityId } from "../design/design-api.service.js";
 import { OracleService } from "./oracle.service.js";
 import { InMemoryOracleRepository } from "./oracle.test-utils.js";
-import type { OracleDesignGenerator } from "./oracle.types.js";
+import type { OracleCopyPort, OracleDesignGenerator } from "./oracle.types.js";
 
 class CountingCoinSource implements CoinSource {
   reads = 0;
@@ -432,7 +432,25 @@ test("recommendations fail with INVENTORY_CHANGED before generation when stock c
   assert.equal(generationCalls, 0);
 });
 
-function oracleRecommendationService(catalog: readonly AvailableCatalogMaterialProduct[]): OracleService {
+function createOracleHarness(catalog: readonly AvailableCatalogMaterialProduct[] = recommendationCatalog()) {
+  const repository = new InMemoryOracleRepository();
+  const coins = new CountingCoinSource(Array(54).fill(2));
+  const copyInputs: unknown[] = [];
+  const copy: OracleCopyPort = {
+    async createInterpretation(input) {
+      copyInputs.push(structuredClone(input));
+      return {
+        interpretation: {
+          headline: "观察当下的设计线索",
+          summary: "以稳定秩序观察色彩与材质。",
+          keywords: ["观察", "秩序", "留白"],
+          designRationale: "以沉静配色保持均衡节奏。",
+          disclaimer: "仅供自我观察、文化体验与设计灵感，不构成确定性建议，也不声称水晶具有任何功效。",
+          source: { kind: "MYSTCRAG_ORIGINAL", version: "test-copy-v1" }
+        }
+      };
+    }
+  };
   const designs = new Map<string, DesignV1>();
   const designGenerator: OracleDesignGenerator = {
     async generateFromCandidate(generation) {
@@ -468,20 +486,22 @@ function oracleRecommendationService(catalog: readonly AvailableCatalogMaterialP
       return structuredClone(design);
     }
   };
-  return new OracleService({
-    repository: new InMemoryOracleRepository(),
-    coins: new CountingCoinSource(Array(18).fill(2)),
+  const service = new OracleService({
+    repository,
+    coins,
+    copy,
     catalog: { async listActiveCatalogProducts() { return structuredClone(catalog); } },
     designGenerator,
     designReader
   });
+  return { service, repository, coins, copyInputs };
 }
 
 const isConflict = (error: unknown): boolean =>
   error instanceof DomainApiError && error.code === "CONFLICT";
 
 test("recommendations replay in RECOMMENDED state rejects a changed expected revision", async () => {
-  const service = oracleRecommendationService(recommendationCatalog());
+  const { service } = createOracleHarness();
   const created = await service.create("oracle-owner", {
     requestId: "revision-recommended-create",
     operationId: "revision-recommended-create-operation",
@@ -513,7 +533,7 @@ test("recommendations replay in RECOMMENDED state rejects a changed expected rev
 });
 
 test("save replay in SAVED state rejects a changed expected revision", async () => {
-  const service = oracleRecommendationService(recommendationCatalog());
+  const { service } = createOracleHarness();
   const created = await service.create("oracle-owner", {
     requestId: "revision-save-create",
     operationId: "revision-save-create-operation",
@@ -554,7 +574,7 @@ test("save replay in SAVED state rejects a changed expected revision", async () 
 });
 
 test("recommendations replay in SAVED state rejects a changed expected revision", async () => {
-  const service = oracleRecommendationService(recommendationCatalog());
+  const { service } = createOracleHarness();
   const created = await service.create("oracle-owner", {
     requestId: "revision-saved-create",
     operationId: "revision-saved-create-operation",
@@ -590,4 +610,184 @@ test("recommendations replay in SAVED state rejects a changed expected revision"
     }),
     isConflict
   );
+});
+
+test("duplicate create replays without new entropy or copy and never forwards the question", async () => {
+  const { service, repository, coins, copyInputs } = createOracleHarness();
+  const first = await service.create("oracle-owner", {
+    requestId: "dedupe-create-1",
+    operationId: "dedupe-operation",
+    locale: "zh-CN",
+    currency: "CNY",
+    wristCircumferenceMm: 160,
+    question: "PRIVATE_QUESTION_MARKER_ONE"
+  });
+  assert.equal(coins.reads, 18);
+  assert.equal(copyInputs.length, 1);
+
+  const omittedQuestion = await service.create("oracle-owner", {
+    requestId: "dedupe-create-2",
+    operationId: "dedupe-operation",
+    locale: "zh-CN",
+    currency: "CNY",
+    wristCircumferenceMm: 160
+  });
+  assert.deepEqual(omittedQuestion.session, first.session);
+
+  const changedQuestion = await service.create("oracle-owner", {
+    requestId: "dedupe-create-3",
+    operationId: "dedupe-operation",
+    locale: "zh-CN",
+    currency: "CNY",
+    wristCircumferenceMm: 160,
+    question: "PRIVATE_QUESTION_MARKER_TWO"
+  });
+  assert.deepEqual(changedQuestion.session, first.session);
+
+  assert.equal(coins.reads, 18);
+  assert.equal(copyInputs.length, 1);
+  assert.equal(JSON.stringify(copyInputs).includes("PRIVATE_QUESTION_MARKER"), false);
+  assert.equal(JSON.stringify(repository.lastCreateInput).includes("question"), false);
+  assert.equal(
+    JSON.stringify([first, omittedQuestion, changedQuestion]).includes("PRIVATE_QUESTION_MARKER"),
+    false
+  );
+});
+
+test("duplicate create with a changed durable input conflicts without new entropy or copy", async () => {
+  const { service, coins, copyInputs } = createOracleHarness();
+  const parent = await service.create("oracle-owner", {
+    requestId: "durable-parent-create",
+    operationId: "durable-parent-operation",
+    locale: "zh-CN",
+    currency: "CNY"
+  });
+  await service.create("oracle-owner", {
+    requestId: "durable-create",
+    operationId: "durable-operation",
+    locale: "zh-CN",
+    currency: "CNY",
+    wristCircumferenceMm: 160
+  });
+  assert.equal(coins.reads, 36);
+  assert.equal(copyInputs.length, 2);
+
+  await assert.rejects(
+    () => service.create("oracle-owner", {
+      requestId: "durable-changed-locale",
+      operationId: "durable-operation",
+      locale: "en-US",
+      currency: "CNY",
+      wristCircumferenceMm: 160
+    }),
+    isConflict
+  );
+  assert.equal(coins.reads, 36);
+  assert.equal(copyInputs.length, 2);
+
+  await assert.rejects(
+    () => service.create("oracle-owner", {
+      requestId: "durable-changed-currency",
+      operationId: "durable-operation",
+      locale: "zh-CN",
+      currency: "TWD",
+      wristCircumferenceMm: 160
+    }),
+    isConflict
+  );
+  assert.equal(coins.reads, 36);
+  assert.equal(copyInputs.length, 2);
+
+  await assert.rejects(
+    () => service.create("oracle-owner", {
+      requestId: "durable-changed-wrist",
+      operationId: "durable-operation",
+      locale: "zh-CN",
+      currency: "CNY",
+      wristCircumferenceMm: 170
+    }),
+    isConflict
+  );
+  assert.equal(coins.reads, 36);
+  assert.equal(copyInputs.length, 2);
+
+  await assert.rejects(
+    () => service.create("oracle-owner", {
+      requestId: "durable-changed-parent",
+      operationId: "durable-operation",
+      locale: "zh-CN",
+      currency: "CNY",
+      wristCircumferenceMm: 160,
+      parentSessionId: parent.session.sessionId
+    }),
+    isConflict
+  );
+  assert.equal(coins.reads, 36);
+  assert.equal(copyInputs.length, 2);
+});
+
+test("duplicate create after the session advances past the cast conflicts without new entropy or copy", async () => {
+  const { service, coins, copyInputs } = createOracleHarness();
+  const created = await service.create("oracle-owner", {
+    requestId: "advanced-create",
+    operationId: "advanced-operation",
+    locale: "zh-CN",
+    currency: "CNY",
+    wristCircumferenceMm: 155
+  });
+  await service.recommendations("oracle-owner", created.session.sessionId, {
+    requestId: "advanced-recommend",
+    operationId: "advanced-recommend-operation",
+    expectedRevision: 1
+  });
+  assert.equal(coins.reads, 18);
+  assert.equal(copyInputs.length, 1);
+
+  await assert.rejects(
+    () => service.create("oracle-owner", {
+      requestId: "advanced-create-replay",
+      operationId: "advanced-operation",
+      locale: "zh-CN",
+      currency: "CNY",
+      wristCircumferenceMm: 155
+    }),
+    isConflict
+  );
+  assert.equal(coins.reads, 18);
+  assert.equal(copyInputs.length, 1);
+});
+
+test("cross-owner duplicate operation id does not leak another owner's cast", async () => {
+  const { service, coins, copyInputs } = createOracleHarness();
+  const first = await service.create("oracle-owner", {
+    requestId: "cross-owner-a",
+    operationId: "shared-operation",
+    locale: "zh-CN",
+    currency: "CNY",
+    wristCircumferenceMm: 160
+  });
+  assert.equal(coins.reads, 18);
+  assert.equal(copyInputs.length, 1);
+
+  const second = await service.create("other-owner", {
+    requestId: "cross-owner-b",
+    operationId: "shared-operation",
+    locale: "zh-CN",
+    currency: "CNY",
+    wristCircumferenceMm: 160
+  });
+  assert.notEqual(second.session.sessionId, first.session.sessionId);
+  assert.equal(coins.reads, 36);
+  assert.equal(copyInputs.length, 2);
+
+  const replay = await service.create("oracle-owner", {
+    requestId: "cross-owner-a-replay",
+    operationId: "shared-operation",
+    locale: "zh-CN",
+    currency: "CNY",
+    wristCircumferenceMm: 160
+  });
+  assert.deepEqual(replay.session, first.session);
+  assert.equal(coins.reads, 36);
+  assert.equal(copyInputs.length, 2);
 });

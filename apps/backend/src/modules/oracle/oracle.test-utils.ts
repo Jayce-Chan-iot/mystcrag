@@ -72,6 +72,14 @@ export class InMemoryOracleRepository implements OracleSessionRepository {
     return clone(this.owned(ownerId, sessionId));
   }
 
+  async findOwnedByOperation(ownerId: string, operationId: string): Promise<OracleSessionRecord | null> {
+    const existingId = this.byOperation.get(`${ownerId}\u0000${operationId}`);
+    if (existingId === undefined) return null;
+    const record = this.records.get(existingId);
+    if (!record || record.ownerId !== ownerId) return null;
+    return clone(record);
+  }
+
   async saveRecommendations(input: SaveOracleRecommendationsRecord): Promise<OracleSessionRecord> {
     const record = this.owned(input.ownerId, input.sessionId);
     if (record.status !== "CAST" || record.stateRevision !== input.expectedRevision) {

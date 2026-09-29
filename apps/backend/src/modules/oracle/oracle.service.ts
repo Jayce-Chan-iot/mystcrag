@@ -150,23 +150,38 @@ export class OracleService implements OracleApiService {
   }) {}
 
   async create(actorId: string, input: CreateOracleSessionRequest): Promise<CreateOracleSessionResponse> {
-    const domain = castThreeCoinHexagram(this.dependencies.coins);
-    const cast = OracleCastDtoSchema.parse({
-      lines: [...domain.lines],
-      movingLineIndices: [...domain.movingLineIndices],
-      primaryHexagram: { ...domain.primaryHexagram },
-      ...(domain.transformedHexagram === undefined
-        ? {}
-        : { transformedHexagram: { ...domain.transformedHexagram } }),
-      algorithm: { ...domain.algorithm }
-    });
-    const signal = deriveOracleDesignSignal(cast);
-    const copy = await (this.dependencies.copy ?? new OracleCopyService()).createInterpretation({
-      cast,
-      signal,
-      locale: input.locale
-    });
     try {
+      const existing = await this.dependencies.repository.findOwnedByOperation(actorId, input.operationId);
+      if (existing !== null) {
+        if (
+          existing.locale !== input.locale ||
+          existing.currency !== input.currency ||
+          existing.wristCircumferenceMm !== (input.wristCircumferenceMm ?? null) ||
+          existing.parentSessionId !== (input.parentSessionId ?? null)
+        ) {
+          throw new DomainApiError("CONFLICT", "Oracle operation ID was reused with different durable input.");
+        }
+        if (existing.status !== "CAST") {
+          throw new DomainApiError("CONFLICT", "Oracle operation ID was already used for an advanced session.");
+        }
+        return await mapCreateOracleResponse(actorId, input.requestId, existing, this.dependencies.designReader);
+      }
+      const domain = castThreeCoinHexagram(this.dependencies.coins);
+      const cast = OracleCastDtoSchema.parse({
+        lines: [...domain.lines],
+        movingLineIndices: [...domain.movingLineIndices],
+        primaryHexagram: { ...domain.primaryHexagram },
+        ...(domain.transformedHexagram === undefined
+          ? {}
+          : { transformedHexagram: { ...domain.transformedHexagram } }),
+        algorithm: { ...domain.algorithm }
+      });
+      const signal = deriveOracleDesignSignal(cast);
+      const copy = await (this.dependencies.copy ?? new OracleCopyService()).createInterpretation({
+        cast,
+        signal,
+        locale: input.locale
+      });
       const record = await this.dependencies.repository.createOrGet({
         ownerId: actorId,
         operationId: input.operationId,
