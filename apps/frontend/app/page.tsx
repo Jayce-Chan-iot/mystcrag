@@ -1,11 +1,11 @@
 import Image from "next/image";
 import Link from "next/link";
 
-import { isTarotFeatureEnabled } from "../src/lib/api/api-runtime";
+import { isOracleFeatureEnabled, isTarotFeatureEnabled } from "../src/lib/api/api-runtime";
 
 export const dynamic = "force-dynamic";
 
-export type CreationPathId = "ai" | "tarot" | "diy";
+export type CreationPathId = "ai" | "oracle" | "tarot" | "diy";
 
 export type CreationCapabilityInput = Readonly<{
   tarotEnabled: boolean;
@@ -34,6 +34,16 @@ const CREATION_PATHS: Readonly<Record<CreationPathId, CreationPath>> = {
     image: "/home/entry-ai.webp",
     imageAlt: "放有设计手稿与水晶手链的透明创作托盘"
   },
+  oracle: {
+    id: "oracle",
+    title: "星台问卦",
+    description: "凝神一问，以六爻生成一组可继续调整的水晶设计线索。",
+    note: "卦象仅作文化观察与设计灵感，不代表确定命运。",
+    href: "/oracle",
+    action: "开始星台问卦",
+    image: "/star-platform/entry-oracle.webp",
+    imageAlt: "深色星台上的三枚铜钱与六爻卦线"
+  },
   tarot: {
     id: "tarot",
     title: "塔罗水晶引导",
@@ -58,13 +68,18 @@ const CREATION_PATHS: Readonly<Record<CreationPathId, CreationPath>> = {
 
 const HERO_CAPABILITY_LABELS: Readonly<Record<CreationPathId, string>> = {
   ai: "AI 设计",
+  oracle: "星台问卦",
   tarot: "塔罗引导",
   diy: "DIY 创作"
 };
 
-export function getCreationPaths({ tarotEnabled }: CreationCapabilityInput): CreationPath[] {
+export function getCreationPaths({
+  tarotEnabled,
+  oracleEnabled
+}: CreationCapabilityInput): CreationPath[] {
   return [
     CREATION_PATHS.ai,
+    ...(oracleEnabled ? [CREATION_PATHS.oracle] : []),
     ...(tarotEnabled ? [CREATION_PATHS.tarot] : []),
     CREATION_PATHS.diy
   ];
@@ -75,10 +90,9 @@ export function getHeroCapabilityLabel(capabilities: CreationCapabilityInput): s
 }
 
 export default function HomePage() {
-  // The Oracle entry ships together with its own route and rollout flag.
   const capabilities: CreationCapabilityInput = {
     tarotEnabled: isTarotFeatureEnabled(),
-    oracleEnabled: false
+    oracleEnabled: isOracleFeatureEnabled()
   };
   const creationPaths = getCreationPaths(capabilities);
   const heroCapabilityLabel = getHeroCapabilityLabel(capabilities);

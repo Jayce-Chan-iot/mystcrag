@@ -1,0 +1,414 @@
+/* Star Oracle local surface. Class names stay global so unit tests and the
+   route layout share one vocabulary without a CSS-module transform. */
+
+:global(.oraclePage) {
+  overflow-x: clip;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--foreground);
+  background:
+    radial-gradient(circle at 50% -10%, rgb(73 53 95 / 12%), transparent 28rem),
+    var(--background);
+}
+
+:global(.oracleShell) {
+  box-sizing: border-box;
+  width: min(100%, 42rem);
+  margin: 0 auto;
+  padding: clamp(1.25rem, 4vw, 2.75rem) clamp(1rem, 4vw, 1.5rem) 3.5rem;
+  min-width: 0;
+}
+
+:global(.oracleHero) {
+  display: grid;
+  gap: 0.85rem;
+  margin-bottom: 1.5rem;
+}
+
+:global(.oracleEyebrow) {
+  margin: 0;
+  color: var(--accent-deep);
+  font-family: var(--atelier-serif, "Songti SC", "Noto Serif SC", Georgia, serif);
+  font-size: 0.95rem;
+  letter-spacing: 0.18em;
+}
+
+:global(.oracleTitle) {
+  margin: 0;
+  font-family: var(--atelier-serif, "Songti SC", "Noto Serif SC", Georgia, serif);
+  font-size: clamp(1.65rem, 4vw, 2.35rem);
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: 0.04em;
+}
+
+:global(.oracleLede) {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.8;
+  max-width: 34rem;
+}
+
+:global(.oracleForm) {
+  display: grid;
+  gap: 1rem;
+  padding: clamp(1rem, 3vw, 1.5rem);
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  background: var(--surface);
+  box-shadow: 0 18px 40px rgb(73 53 95 / 0.08);
+}
+
+:global(.oracleField) {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+:global(.oracleFieldLabel) {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+:global(.oracleFieldHint) {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+:global(.oracleInput) {
+  width: 100%;
+  min-height: 2.75rem;
+  box-sizing: border-box;
+  padding: 0.75rem 0.95rem;
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+  background: #fff;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 1rem;
+}
+
+:global(.oracleInput:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+:global(.oraclePrimaryAction) {
+  min-height: 2.75rem;
+  min-width: 8.5rem;
+  padding: 0.85rem 1.4rem;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent-deep);
+  color: #fff;
+  font-size: 1.02rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+:global(.oraclePrimaryAction:hover:not(:disabled)) {
+  background: var(--accent);
+  transform: translateY(-1px);
+}
+
+:global(.oraclePrimaryAction:disabled) {
+  opacity: 0.62;
+  cursor: not-allowed;
+  transform: none;
+}
+
+:global(.oracleSecondaryAction) {
+  min-height: 2.75rem;
+  padding: 0.7rem 1.15rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent-deep);
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+:global(.oracleDisclosure) {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: rgb(255 253 248 / 0.8);
+  padding: 0.85rem 1rem;
+}
+
+:global(.oracleDisclosure > summary) {
+  cursor: pointer;
+  min-height: 2.75rem;
+  display: flex;
+  align-items: center;
+  font-size: 0.95rem;
+  color: var(--accent-deep);
+}
+
+:global(.oracleDisclosurePanel) {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.75;
+}
+
+:global(.oracleDisclosurePanel p) {
+  margin: 0;
+}
+
+:global(.oracleNotice) {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  border-radius: 0.9rem;
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+
+:global(.oracleRevealStage) {
+  display: grid;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+:global(.oracleLineStack) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin: 0;
+  padding: 1.15rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 1.15rem;
+  background:
+    linear-gradient(180deg, rgb(73 53 95 / 0.05), transparent 55%),
+    var(--surface);
+  list-style: none;
+}
+
+:global(.oracleLineRow) {
+  display: grid;
+  grid-template-columns: 2.4rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 2.4rem;
+}
+
+:global(.oracleLineSolid),
+:global(.oracleLineBroken) {
+  display: block;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: var(--accent-deep);
+}
+
+:global(.oracleLineBroken) {
+  background:
+    linear-gradient(90deg, var(--accent-deep) 0 38%, transparent 38% 62%, var(--accent-deep) 62% 100%);
+}
+
+:global(.oracleLineMoving .oracleLineSolid),
+:global(.oracleLineMoving .oracleLineBroken) {
+  box-shadow: 0 0 0 2px rgb(116 88 143 / 0.28);
+}
+
+:global(.oracleLineLabel) {
+  color: var(--muted);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+:global(.oracleHexagramSummary) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.55rem 0.85rem;
+  margin: 0;
+  min-width: 0;
+}
+
+:global(.oracleHexagramName) {
+  font-family: var(--atelier-serif, "Songti SC", "Noto Serif SC", Georgia, serif);
+  font-size: 1.35rem;
+  font-weight: 500;
+}
+
+:global(.oracleInterpretation) {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1.15rem 1.2rem;
+  border-radius: 1.15rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  min-width: 0;
+}
+
+:global(.oracleInterpretation h2) {
+  margin: 0;
+  font-family: var(--atelier-serif, "Songti SC", "Noto Serif SC", Georgia, serif);
+  font-size: 1.35rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+:global(.oracleInterpretation p) {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.8;
+}
+
+:global(.oracleKeywordRow) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+:global(.oracleKeyword) {
+  min-height: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  font-size: 0.88rem;
+}
+
+:global(.oracleRecommendationGrid) {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+@media (min-width: 860px) {
+  :global(.oracleRecommendationGrid) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+:global(.oracleDesignCard) {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 1.15rem;
+  background: var(--surface);
+}
+
+:global(.oracleDesignCard[data-design-selected="true"]) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+:global(.oracleDesignCardSelect) {
+  min-height: 2.75rem;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--foreground);
+  cursor: pointer;
+  font: inherit;
+}
+
+:global(.oracleDesignPreview) {
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 0.9rem;
+  background: var(--surface-soft);
+}
+
+:global(.oracleDesignBody) {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+:global(.oracleDesignBody p) {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+:global(.oracleDesignPrice) {
+  color: var(--foreground) !important;
+  font-size: 1rem !important;
+  font-weight: 650;
+}
+
+:global(.oracleResultActions) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+:global(.oracleSkeleton) {
+  min-height: 8.5rem;
+  border-radius: 1.15rem;
+  border: 1px dashed var(--border);
+  background:
+    linear-gradient(90deg, rgb(240 236 229 / 0.9), rgb(255 253 248 / 0.9), rgb(240 236 229 / 0.9));
+  background-size: 200% 100%;
+}
+
+:global(.oracleStatus) {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.7;
+}
+
+:global(.oracleInlineError) {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  border-radius: 0.9rem;
+  border: 1px solid rgb(139 75 87 / 0.35);
+  background: rgb(139 75 87 / 0.08);
+  color: var(--danger);
+  font-size: 0.92rem;
+  line-height: 1.7;
+}
+
+:global(.oracleMotionToggle) {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 2.75rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+:global(.oracleMotionToggle input) {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+@media (max-width: 360px) {
+  :global(.oracleShell) {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  :global(.oracleLineRow) {
+    grid-template-columns: 1.6rem minmax(0, 1fr);
+  }
+
+  :global(.oracleLineLabel) {
+    grid-column: 1 / -1;
+  }
+}

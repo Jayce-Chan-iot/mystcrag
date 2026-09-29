@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 
 import { DevelopmentModeBadge } from "../src/components/development-mode-badge";
 import { AuthStatus } from "../src/features/auth/components/auth-status";
-import { isTarotFeatureEnabled } from "../src/lib/api/api-runtime";
+import { isOracleFeatureEnabled, isTarotFeatureEnabled } from "../src/lib/api/api-runtime";
 import { MobileBottomNav } from "../components/mobile-bottom-nav";
 import "./globals.css";
 import { getMainNavigation } from "./navigation";
@@ -23,10 +23,17 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
-  const navigation = getMainNavigation({ tarotEnabled: isTarotFeatureEnabled(), oracleEnabled: false });
+  const navigation = getMainNavigation({
+    tarotEnabled: isTarotFeatureEnabled(),
+    oracleEnabled: isOracleFeatureEnabled()
+  });
 
   return (
-    <html data-scroll-behavior="smooth" lang="zh-CN">
+    <html
+      data-oracle-nav={isOracleFeatureEnabled() ? "on" : "off"}
+      data-scroll-behavior="smooth"
+      lang="zh-CN"
+    >
       <body>
         <header className="sticky top-0 z-50 border-b border-[var(--border)]/70 bg-[var(--surface)]/88 backdrop-blur-xl" data-atelier-header="true">
           <nav className="mx-auto flex h-[3.4rem] max-w-7xl items-center justify-between px-5 sm:h-[3.75rem] sm:px-8" aria-label="主导航">

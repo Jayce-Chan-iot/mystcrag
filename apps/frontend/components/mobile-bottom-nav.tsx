@@ -9,6 +9,7 @@ type MobileNavItem = {
   label: string;
   match: (pathname: string) => boolean;
   icon: React.ReactNode;
+  oracleOnly?: boolean;
 };
 
 function HomeIcon() {
@@ -16,6 +17,18 @@ function HomeIcon() {
     <svg aria-hidden="true" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="24">
       <path d="M3.5 10.5 12 3.75l8.5 6.75" />
       <path d="M5.5 9.5V20a.5.5 0 0 0 .5.5h4v-5.5a2 2 0 0 1 4 0V20.5h4a.5.5 0 0 0 .5-.5V9.5" />
+    </svg>
+  );
+}
+
+function OracleIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="24" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="24">
+      <circle cx="12" cy="12" r="8.25" />
+      <path d="M7.2 9.4h9.6" />
+      <path d="M7.2 12.6h3.2" />
+      <path d="M13.6 12.6h3.2" />
+      <path d="M7.2 15.8h9.6" />
     </svg>
   );
 }
@@ -52,13 +65,41 @@ function ProfileIcon() {
 
 const MOBILE_NAV_ITEMS: MobileNavItem[] = [
   { href: "/", label: "首页", match: (pathname) => pathname === "/", icon: <HomeIcon /> },
+  {
+    href: "/oracle",
+    label: "星台问卦",
+    match: (pathname) => pathname === "/oracle" || pathname.startsWith("/oracle/"),
+    icon: <OracleIcon />,
+    oracleOnly: true
+  },
   { href: "/diy", label: "DIY", match: (pathname) => pathname === "/diy" || pathname.startsWith("/diy/"), icon: <DiyIcon /> },
   { href: "/gallery", label: "作品画廊", match: (pathname) => pathname === "/gallery", icon: <GalleryIcon /> },
   { href: "/profile", label: "我的", match: (pathname) => pathname === "/profile", icon: <ProfileIcon /> }
 ];
 
+function subscribeOracleNav(onChange: () => void): () => void {
+  if (typeof MutationObserver === "undefined" || typeof document === "undefined") {
+    return () => {};
+  }
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-oracle-nav"] });
+  return () => observer.disconnect();
+}
+
+function getOracleNavEnabled(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.documentElement.getAttribute("data-oracle-nav") === "on";
+}
+
 export function MobileBottomNav() {
   const pathname = usePathname() ?? "/";
+  const oracleEnabled = React.useSyncExternalStore(
+    subscribeOracleNav,
+    getOracleNavEnabled,
+    () => false
+  );
+
+  const items = MOBILE_NAV_ITEMS.filter((item) => item.oracleOnly !== true || oracleEnabled);
 
   return (
     <nav
@@ -67,8 +108,11 @@ export function MobileBottomNav() {
       data-mobile-bottom-nav="true"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
-      <ul className="grid grid-cols-4">
-        {MOBILE_NAV_ITEMS.map((item) => {
+      <ul
+        className={items.length === 4 ? "grid grid-cols-4" : "grid"}
+        style={items.length === 4 ? undefined : { gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}
+      >
+        {items.map((item) => {
           const active = item.match(pathname);
           return (
             <li key={item.href}>
