@@ -112,7 +112,7 @@ export function OracleSetupFields({
           rows={2}
           value={question}
         />
-        <p className="oracleFieldHint">问题只保留在当前页面内存中，不会写入本机存储或公开记录。</p>
+        <p className="oracleFieldHint">问题仅用于本次请求；不会写入浏览器存储、服务端持久化/日志，也不会提供给文案或设计模型。</p>
       </div>
 
       <div className="oracleField">
@@ -181,7 +181,7 @@ export function OracleSetup(props: OracleSetupProps) {
           <div className="oracleDisclosurePanel">
             <p>三钱法一次完成六爻，结果用于自我观察与设计灵感，不代表确定命运。</p>
             <p>随机数在服务端生成；页面动画只呈现已有结果，不参与算法。</p>
-            <p>可选问题仅保存在当前页面内存。刷新后问题不会从服务器恢复。</p>
+            <p>可选问题仅用于本次请求；不会写入浏览器存储、服务端持久化/日志，也不会提供给文案或设计模型。刷新后问题不会从服务器恢复。</p>
             <p className="oracleNotice">内容仅作文化观察与设计灵感，不构成预测、医疗建议或水晶功效承诺。</p>
           </div>
         </details>

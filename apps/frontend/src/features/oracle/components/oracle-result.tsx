@@ -10,6 +10,7 @@ import { getOracleRevealPlan, OracleReveal, type OracleRevealPlan } from "./orac
 export { getOracleRevealPlan };
 
 export type OracleRecommendationsState = "loading" | "ready" | "error";
+export type OracleSaveUiState = "idle" | "saving" | "error";
 
 const DIRECTION_LABELS: Record<string, string> = {
   BALANCED: "平衡",
@@ -72,6 +73,7 @@ export type OracleResultBodyProps = Readonly<{
   session: OraclePublicSession;
   selectedDesignId: string | null;
   recommendationsState: OracleRecommendationsState;
+  saveState?: OracleSaveUiState;
   revealProgress: number;
   fullMotion: boolean;
   detailsOpen: boolean;
@@ -85,6 +87,7 @@ export function OracleResultBody({
   session,
   selectedDesignId,
   recommendationsState,
+  saveState = "idle",
   revealProgress,
   fullMotion,
   detailsOpen,
@@ -97,6 +100,7 @@ export function OracleResultBody({
   const cast = session.cast;
   const transformed = cast.transformedHexagram;
   const recommendations = session.recommendations ?? [];
+  const enterDisabled = selectedDesignId === null || saveState === "saving";
 
   return (
     <div className="oracleRevealStage" data-oracle-result-body="true">
@@ -134,10 +138,16 @@ export function OracleResultBody({
           </p>
           <p>算法 {cast.algorithm.name} {cast.algorithm.version}；动爻 {cast.movingLineIndices.length} 处。</p>
           <p>{interpretation.designRationale}</p>
-          <p>文化说明：卦象结构用于设计灵感与自我观察，不作命运判定。问题文本不进入服务器持久化记录。</p>
-          <p>隐私：可选问题仅存于当前页面内存；刷新会从服务端恢复卦象，不会再次生成新的一卦。</p>
+          <p>文化说明：卦象结构用于设计灵感与自我观察，不作命运判定。</p>
+          <p>隐私：问题仅用于本次请求；不会写入浏览器存储、服务端持久化/日志，也不会提供给文案或设计模型。刷新会从服务端恢复卦象，不会再次生成新的一卦。</p>
         </div>
       </details>
+
+      {saveState === "error" ? (
+        <p className="oracleInlineError" data-oracle-save-error="true" role="alert">
+          保存未完成，请重试生成手串
+        </p>
+      ) : null}
 
       {recommendationsState === "error" ? (
         <div>
@@ -173,26 +183,16 @@ export function OracleResultBody({
         </section>
       ) : null}
 
-      <footer className="oracleResultActions">
+      <footer className="oracleResultActions" data-oracle-save-state={saveState}>
         <button
           className="oraclePrimaryAction"
           data-oracle-enter-design="true"
-          disabled={selectedDesignId === null}
+          disabled={enterDisabled}
           onClick={onEnterDesign}
           type="button"
         >
-          生成我的手串
+          {saveState === "saving" ? "正在保存…" : "生成我的手串"}
         </button>
-        {recommendationsState === "error" ? null : (
-          <button
-            className="oracleSecondaryAction"
-            disabled={recommendationsState === "ready"}
-            onClick={onRetryRecommendations}
-            type="button"
-          >
-            重新匹配水晶
-          </button>
-        )}
       </footer>
     </div>
   );
@@ -214,10 +214,26 @@ export type OracleResultProps = Readonly<{
 export function recommendationsStateFromSnapshot(
   snapshot: OracleCoordinatorSnapshot
 ): OracleRecommendationsState {
-  if (snapshot.error && snapshot.state === "error") return "error";
-  if (snapshot.session?.recommendations) return "ready";
-  if (snapshot.state === "error") return "error";
+  // A completed recommendation set stays readable even when a later save fails.
+  if (snapshot.session?.recommendations?.length === 3) return "ready";
+  if (snapshot.state === "error" && !snapshot.session?.recommendations?.length) return "error";
   return "loading";
+}
+
+export function saveUiStateFromSnapshot(snapshot: OracleCoordinatorSnapshot): OracleSaveUiState {
+  if (snapshot.state === "saving") return "saving";
+  if (snapshot.state === "error" && snapshot.session?.recommendations?.length === 3) return "error";
+  return "idle";
+}
+
+export function isOracleSaveConfirmed(
+  snapshot: OracleCoordinatorSnapshot,
+  designId: string
+): boolean {
+  return (
+    snapshot.session?.status === "SAVED" &&
+    snapshot.session.selectedDesignId === designId
+  );
 }
 
 export function OracleResult({
@@ -266,6 +282,7 @@ export function OracleResult({
             onToggleDetails={onToggleDetails}
             recommendationsState={recommendationsStateFromSnapshot(snapshot)}
             revealProgress={reveal.revealProgress}
+            saveState={saveUiStateFromSnapshot(snapshot)}
             selectedDesignId={snapshot.selectedDesignId}
             session={session}
           />

@@ -21,8 +21,12 @@ import {
   OracleResult,
   OracleResultBody,
   OracleDesignCard,
-  getOracleRevealPlan
+  getOracleRevealPlan,
+  isOracleSaveConfirmed,
+  recommendationsStateFromSnapshot,
+  saveUiStateFromSnapshot
 } from "./components/oracle-result";
+import { OracleSetup } from "./components/oracle-setup";
 import { ORACLE_FULL_REVEAL_MS, ORACLE_SHORT_REVEAL_MS } from "./oracle-motion-preference";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -394,4 +398,215 @@ test("oracle result mounts through the coordinator snapshot", () => {
 
   assert.match(markup, /data-oracle-result/);
   assert.match(markup, /生成我的手串|匹配水晶/);
+});
+
+test("save confirmation reads the authoritative coordinator snapshot", () => {
+  const designId = oracleDesigns[0]!.designId;
+
+  assert.equal(
+    isOracleSaveConfirmed(
+      {
+        state: "recommended",
+        session: { ...recommendedSession, status: "SAVED", selectedDesignId: designId },
+        selectedDesignId: designId,
+        error: null
+      },
+      designId
+    ),
+    true
+  );
+
+  assert.equal(
+    isOracleSaveConfirmed(
+      {
+        state: "error",
+        session: recommendedSession,
+        selectedDesignId: designId,
+        error: { code: "NETWORK_ERROR", message: "down" } as never
+      },
+      designId
+    ),
+    false,
+    "failed save must not claim confirmation even when the selection is local"
+  );
+
+  assert.equal(
+    isOracleSaveConfirmed(
+      {
+        state: "recommended",
+        session: { ...recommendedSession, status: "SAVED", selectedDesignId: "other-design" },
+        selectedDesignId: designId,
+        error: null
+      },
+      designId
+    ),
+    false
+  );
+});
+
+test("enter-design source navigates only after a confirmed save", () => {
+  const clientSource = readFileSync(
+    new URL("../../../app/oracle/result/[sessionId]/oracle-result-client.tsx", import.meta.url),
+    "utf8"
+  );
+
+  assert.doesNotMatch(clientSource, /\.finally\(\(\) => \{[\s\S]*router\.push/);
+  assert.match(clientSource, /isOracleSaveConfirmed/);
+  assert.match(clientSource, /await coordinator\.save/);
+
+  const saveIndex = clientSource.indexOf("coordinator.save");
+  const pushIndex = clientSource.indexOf("router.push(`/diy/");
+  assert.ok(saveIndex >= 0 && pushIndex > saveIndex, "diy navigation must follow the save await");
+});
+
+test("save failure stays on the result page with an actionable retry", () => {
+  const designId = oracleDesigns[0]!.designId;
+  const markup = renderToStaticMarkup(
+    <OracleResultBody
+      session={recommendedSession}
+      selectedDesignId={designId}
+      recommendationsState="ready"
+      saveState="error"
+      revealProgress={1}
+      fullMotion={false}
+      detailsOpen={false}
+      onToggleDetails={() => {}}
+      onSelectDesign={() => {}}
+      onEnterDesign={() => {}}
+      onRetryRecommendations={() => {}}
+    />
+  );
+
+  assert.match(markup, /保存未完成，请重试生成手串/);
+  assert.match(markup, /生成我的手串/);
+  assert.match(markup, /data-oracle-save-state="error"/);
+  assert.doesNotMatch(markup, /重新匹配水晶/, "save errors must not surface recommendation retry");
+});
+
+test("saving disables the enter CTA and cannot double-navigate", () => {
+  const designId = oracleDesigns[0]!.designId;
+  const markup = renderToStaticMarkup(
+    <OracleResultBody
+      session={recommendedSession}
+      selectedDesignId={designId}
+      recommendationsState="ready"
+      saveState="saving"
+      revealProgress={1}
+      fullMotion={false}
+      detailsOpen={false}
+      onToggleDetails={() => {}}
+      onSelectDesign={() => {}}
+      onEnterDesign={() => {}}
+      onRetryRecommendations={() => {}}
+    />
+  );
+
+  const cta = markup.match(/<button[^>]*data-oracle-enter-design="true"[^>]*>[\s\S]*?<\/button>/)?.[0] ?? "";
+  assert.match(cta, /正在保存…/);
+  assert.match(cta, /\sdisabled(?:\s|=|>)/);
+});
+
+test("save errors never masquerade as recommendation failures", () => {
+  const saveFailed = {
+    state: "error" as const,
+    session: recommendedSession,
+    selectedDesignId: oracleDesigns[0]!.designId,
+    error: { code: "NETWORK_ERROR", message: "save failed" } as never
+  };
+
+  assert.equal(recommendationsStateFromSnapshot(saveFailed), "ready");
+  assert.equal(saveUiStateFromSnapshot(saveFailed), "error");
+
+  const recFailed = {
+    state: "error" as const,
+    session: movingCast,
+    selectedDesignId: null,
+    error: { code: "INVENTORY_CHANGED", message: "materials" } as never
+  };
+  assert.equal(recommendationsStateFromSnapshot(recFailed), "error");
+  assert.equal(saveUiStateFromSnapshot(recFailed), "idle");
+
+  const markup = renderToStaticMarkup(
+    <OracleResultBody
+      session={recommendedSession}
+      selectedDesignId={oracleDesigns[0]!.designId}
+      recommendationsState={recommendationsStateFromSnapshot(saveFailed)}
+      saveState={saveUiStateFromSnapshot(saveFailed)}
+      revealProgress={1}
+      fullMotion={false}
+      detailsOpen={false}
+      onToggleDetails={() => {}}
+      onSelectDesign={() => {}}
+      onEnterDesign={() => {}}
+      onRetryRecommendations={() => {}}
+    />
+  );
+
+  assert.match(markup, /星台方案1/, "three recommendation cards stay readable");
+  assert.match(markup, /data-oracle-design-card="2"/);
+  assert.match(markup, /data-oracle-design-card="3"/);
+  assert.match(markup, /蹇/, "cast stays readable");
+  assert.match(markup, /保存未完成，请重试生成手串/);
+  assert.doesNotMatch(markup, /重新匹配水晶/);
+  assert.match(markup, /data-oracle-enter-design="true"/);
+});
+
+test("privacy copy is truthful about the request-scoped question", () => {
+  const setupSource = readFileSync(new URL("./components/oracle-setup.tsx", import.meta.url), "utf8");
+  const resultSource = readFileSync(new URL("./components/oracle-result.tsx", import.meta.url), "utf8");
+
+  for (const source of [setupSource, resultSource]) {
+    assert.doesNotMatch(source, /页面内存/);
+    assert.doesNotMatch(source, /加密/);
+    assert.doesNotMatch(source, /只保留在/);
+    assert.match(source, /仅用于本次请求/);
+    assert.match(source, /不会写入浏览器存储/);
+  }
+
+  const setupMarkup = renderToStaticMarkup(
+    <OracleSetup
+      question=""
+      wristCircumferenceMm={undefined}
+      isSubmitting={false}
+      error={null}
+      onQuestionChange={() => {}}
+      onWristChange={() => {}}
+      onSubmit={() => {}}
+    />
+  );
+  assert.match(setupMarkup, /仅用于本次请求/);
+  assert.doesNotMatch(setupMarkup, /页面内存/);
+
+  const resultMarkup = renderToStaticMarkup(
+    <OracleResultBody
+      session={movingCast}
+      selectedDesignId={null}
+      recommendationsState="loading"
+      revealProgress={1}
+      fullMotion={false}
+      detailsOpen
+      onToggleDetails={() => {}}
+      onSelectDesign={() => {}}
+      onEnterDesign={() => {}}
+      onRetryRecommendations={() => {}}
+    />
+  );
+  assert.match(resultMarkup, /仅用于本次请求/);
+  assert.doesNotMatch(resultMarkup, /页面内存/);
+});
+
+test("disabled result route never mounts the oracle client", () => {
+  const pageSource = readFileSync(
+    new URL("../../../app/oracle/result/[sessionId]/page.tsx", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(pageSource, /isOracleFeatureEnabled/);
+  assert.match(pageSource, /notFound\(/);
+
+  const functionBody = pageSource.slice(pageSource.indexOf("export default async function"));
+  const gateIndex = functionBody.indexOf("isOracleFeatureEnabled");
+  const clientIndex = functionBody.indexOf("OracleResultClient");
+  assert.ok(gateIndex >= 0, "result page must gate on the rollout flag");
+  assert.ok(clientIndex > gateIndex, "client mount must come after the flag gate");
 });

@@ -12,6 +12,7 @@ import {
 import { createOracleCoordinator } from "../../../../src/features/oracle/oracle-coordinator";
 import {
   getOracleRevealPlan,
+  isOracleSaveConfirmed,
   OracleResult
 } from "../../../../src/features/oracle/components/oracle-result";
 import {
@@ -147,9 +148,15 @@ export function OracleResultClient({ sessionId }: Readonly<{ sessionId: string }
           fullMotionEnabled={fullMotionEnabled}
           onEnterDesign={() => {
             if (selectedDesignId === null) return;
-            void coordinator.save(selectedDesignId).finally(() => {
-              router.push(`/diy/${encodeURIComponent(selectedDesignId)}`);
-            });
+            if (coordinator.getSnapshot().state === "saving") return;
+            void (async () => {
+              await coordinator.save(selectedDesignId);
+              // coordinator.save swallows API failures into the snapshot; only a
+              // confirmed SAVED + matching selection may leave for DIY.
+              if (isOracleSaveConfirmed(coordinator.getSnapshot(), selectedDesignId)) {
+                router.push(`/diy/${encodeURIComponent(selectedDesignId)}`);
+              }
+            })();
           }}
           onRetryRecommendations={() => {
             void coordinator.retryRecommendations();
