@@ -122,6 +122,43 @@ test("Oracle repository persists an owner-scoped idempotent lifecycle without qu
       );
     });
 
+    await t.test("operation lookup is owner-scoped, side-effect free, and fails closed", async () => {
+      const created = await repository.createOrGet(createInput(ownerId, "oracle-operation-lookup"));
+      const found = await repository.findOwnedByOperation(ownerId, "oracle-operation-lookup");
+      assert.equal(found?.id, created.id);
+      assert.equal(found?.operationId, "oracle-operation-lookup");
+      assert.equal(found?.status, "CAST");
+
+      assert.equal(
+        await repository.findOwnedByOperation(otherOwnerId, "oracle-operation-lookup"),
+        null
+      );
+      assert.equal(await repository.findOwnedByOperation(ownerId, "oracle-operation-lookup-absent"), null);
+
+      assert.equal(
+        await prisma.oracleSession.count({
+          where: { ownerId, operationId: "oracle-operation-lookup" }
+        }),
+        1
+      );
+      const raw = await prisma.oracleSession.findUniqueOrThrow({ where: { id: created.id } });
+      assert.equal(raw.status, "CAST");
+      assert.equal(raw.stateRevision, 1);
+
+      const corrupted = await repository.createOrGet(
+        createInput(ownerId, "oracle-operation-lookup-corrupt")
+      );
+      await prisma.$executeRawUnsafe(
+        'UPDATE "oracle_sessions" SET "cast_snapshot" = $1::jsonb WHERE "id" = $2',
+        JSON.stringify({ ...cast, algorithm: { name: "THREE_COIN", version: "tampered" } }),
+        corrupted.id
+      );
+      await assert.rejects(
+        () => repository.findOwnedByOperation(ownerId, "oracle-operation-lookup-corrupt"),
+        (error: unknown) => error instanceof PersistenceError && error.code === "DATA_INTEGRITY_ERROR"
+      );
+    });
+
     await t.test("PostgreSQL rejects invalid Oracle lifecycle, wrist, and rank state", async () => {
       const created = await repository.createOrGet(createInput(ownerId, "oracle-db-checks"));
       await assert.rejects(() => prisma.$executeRawUnsafe(
