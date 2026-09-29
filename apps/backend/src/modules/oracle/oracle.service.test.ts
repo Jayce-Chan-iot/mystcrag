@@ -431,3 +431,163 @@ test("recommendations fail with INVENTORY_CHANGED before generation when stock c
   );
   assert.equal(generationCalls, 0);
 });
+
+function oracleRecommendationService(catalog: readonly AvailableCatalogMaterialProduct[]): OracleService {
+  const designs = new Map<string, DesignV1>();
+  const designGenerator: OracleDesignGenerator = {
+    async generateFromCandidate(generation) {
+      const candidate = generation.candidate as {
+        materialProductIds: string[];
+        providerMetadata: {
+          oracleCandidate: {
+            rank: number;
+            direction: "BALANCED" | "CONTRAST" | "NEUTRAL_LED";
+            sessionId: string;
+          };
+        };
+      };
+      const authority = candidate.providerMetadata.oracleCandidate;
+      const design = generatedOracleDesign({
+        sequence: candidate.materialProductIds,
+        rank: authority.rank,
+        direction: authority.direction,
+        sessionId: authority.sessionId,
+        wrist: generation.request.wristCircumferenceMm,
+        catalog,
+        designIdSeed: generation.designId
+      });
+      designs.set(design.designId, design);
+      return { requestId: generation.request.requestId, design: toPublicDesign(design), warnings: [] };
+    }
+  };
+  const designReader = {
+    async getOwnedDesign(ownerId: string, designId: string) {
+      assert.equal(ownerId, "oracle-owner");
+      const design = designs.get(designId);
+      if (!design) throw new Error("missing design");
+      return structuredClone(design);
+    }
+  };
+  return new OracleService({
+    repository: new InMemoryOracleRepository(),
+    coins: new CountingCoinSource(Array(18).fill(2)),
+    catalog: { async listActiveCatalogProducts() { return structuredClone(catalog); } },
+    designGenerator,
+    designReader
+  });
+}
+
+const isConflict = (error: unknown): boolean =>
+  error instanceof DomainApiError && error.code === "CONFLICT";
+
+test("recommendations replay in RECOMMENDED state rejects a changed expected revision", async () => {
+  const service = oracleRecommendationService(recommendationCatalog());
+  const created = await service.create("oracle-owner", {
+    requestId: "revision-recommended-create",
+    operationId: "revision-recommended-create-operation",
+    locale: "zh-CN",
+    currency: "CNY",
+    wristCircumferenceMm: 155
+  });
+  const sessionId = created.session.sessionId;
+  const recommended = await service.recommendations("oracle-owner", sessionId, {
+    requestId: "revision-recommended-1",
+    operationId: "revision-recommended-operation",
+    expectedRevision: 1
+  });
+  const exactReplay = await service.recommendations("oracle-owner", sessionId, {
+    requestId: "revision-recommended-2",
+    operationId: "revision-recommended-operation",
+    expectedRevision: 1
+  });
+  assert.deepEqual(exactReplay.session, recommended.session);
+
+  await assert.rejects(
+    () => service.recommendations("oracle-owner", sessionId, {
+      requestId: "revision-recommended-3",
+      operationId: "revision-recommended-operation",
+      expectedRevision: 2
+    }),
+    isConflict
+  );
+});
+
+test("save replay in SAVED state rejects a changed expected revision", async () => {
+  const service = oracleRecommendationService(recommendationCatalog());
+  const created = await service.create("oracle-owner", {
+    requestId: "revision-save-create",
+    operationId: "revision-save-create-operation",
+    locale: "zh-CN",
+    currency: "CNY",
+    wristCircumferenceMm: 155
+  });
+  const sessionId = created.session.sessionId;
+  const recommended = await service.recommendations("oracle-owner", sessionId, {
+    requestId: "revision-save-recommend",
+    operationId: "revision-save-recommend-operation",
+    expectedRevision: 1
+  });
+  const selectedDesignId = recommended.session.recommendations![0]!.design.designId;
+  const saved = await service.save("oracle-owner", sessionId, {
+    requestId: "revision-save-1",
+    operationId: "revision-save-operation",
+    expectedRevision: 2,
+    selectedDesignId
+  });
+  const exactReplay = await service.save("oracle-owner", sessionId, {
+    requestId: "revision-save-2",
+    operationId: "revision-save-operation",
+    expectedRevision: 2,
+    selectedDesignId
+  });
+  assert.deepEqual(exactReplay.session, saved.session);
+
+  await assert.rejects(
+    () => service.save("oracle-owner", sessionId, {
+      requestId: "revision-save-3",
+      operationId: "revision-save-operation",
+      expectedRevision: 3,
+      selectedDesignId
+    }),
+    isConflict
+  );
+});
+
+test("recommendations replay in SAVED state rejects a changed expected revision", async () => {
+  const service = oracleRecommendationService(recommendationCatalog());
+  const created = await service.create("oracle-owner", {
+    requestId: "revision-saved-create",
+    operationId: "revision-saved-create-operation",
+    locale: "zh-CN",
+    currency: "CNY",
+    wristCircumferenceMm: 155
+  });
+  const sessionId = created.session.sessionId;
+  const recommended = await service.recommendations("oracle-owner", sessionId, {
+    requestId: "revision-saved-recommend-1",
+    operationId: "revision-saved-recommend-operation",
+    expectedRevision: 1
+  });
+  const selectedDesignId = recommended.session.recommendations![0]!.design.designId;
+  const saved = await service.save("oracle-owner", sessionId, {
+    requestId: "revision-saved-save",
+    operationId: "revision-saved-save-operation",
+    expectedRevision: 2,
+    selectedDesignId
+  });
+  const exactReplay = await service.recommendations("oracle-owner", sessionId, {
+    requestId: "revision-saved-recommend-2",
+    operationId: "revision-saved-recommend-operation",
+    expectedRevision: 1
+  });
+  assert.deepEqual(exactReplay.session, saved.session);
+
+  await assert.rejects(
+    () => service.recommendations("oracle-owner", sessionId, {
+      requestId: "revision-saved-recommend-3",
+      operationId: "revision-saved-recommend-operation",
+      expectedRevision: 2
+    }),
+    isConflict
+  );
+});

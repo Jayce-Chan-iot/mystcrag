@@ -37,6 +37,9 @@ import type {
 const DEFAULT_WRIST_CIRCUMFERENCE_MM = 155;
 const MAX_WRIST_CIRCUMFERENCE_MM = 200;
 const DIRECTIONS = ["BALANCED", "CONTRAST", "NEUTRAL_LED"] as const;
+// Fixed lifecycle revisions: a recommendation command is first accepted at the CAST revision and a save command at the RECOMMENDED revision.
+const RECOMMENDATION_ACCEPTED_REVISION = 1;
+const SAVE_ACCEPTED_REVISION = 2;
 
 const deterministicDesignId = (sessionId: string, ruleVersion: string, rank: number): string =>
   `oracle-design-${createHash("sha256").update(`${sessionId}\u0000${ruleVersion}\u0000${rank}`).digest("hex").slice(0, 32)}`;
@@ -198,8 +201,11 @@ export class OracleService implements OracleApiService {
     try {
       const current = await this.dependencies.repository.getOwned(actorId, sessionId);
       if (current.status === "RECOMMENDED" || current.status === "SAVED") {
-        if (current.recommendationOperationId !== input.operationId) {
-          throw new DomainApiError("CONFLICT", "Oracle recommendations already used another operation ID.");
+        if (
+          current.recommendationOperationId !== input.operationId ||
+          input.expectedRevision !== RECOMMENDATION_ACCEPTED_REVISION
+        ) {
+          throw new DomainApiError("CONFLICT", "Oracle recommendations already used another operation or revision.");
         }
         return await mapRecommendationsOracleResponse(actorId, input.requestId, current, this.dependencies.designReader);
       }
@@ -334,9 +340,10 @@ export class OracleService implements OracleApiService {
       if (current.status === "SAVED") {
         if (
           current.saveOperationId !== input.operationId ||
-          current.selectedDesignId !== input.selectedDesignId
+          current.selectedDesignId !== input.selectedDesignId ||
+          input.expectedRevision !== SAVE_ACCEPTED_REVISION
         ) {
-          throw new DomainApiError("CONFLICT", "Oracle save already used another operation.");
+          throw new DomainApiError("CONFLICT", "Oracle save already used another operation or revision.");
         }
         return await mapSaveOracleResponse(actorId, input.requestId, current, this.dependencies.designReader);
       }
