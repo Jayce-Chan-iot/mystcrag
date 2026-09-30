@@ -3,18 +3,47 @@
 - **Task:** `TASK-ORACLE-QA-001`
 - **Owner:** DeepSeek-V4.1-Flash under Codex QA supervision
 - **Branch:** `task/oracle-qa-001-release-gate`
-- **Base:** integrated `main` `9ff93ad` (`docs(tasks): accept one tap star oracle`)
+- **Base:** integrated `main` `9ff93ad`, now `main` `eef033f` (`docs(tasks): accept oracle frontend release blockers`) merged in as `79414bd`
 - **Worktree:** `.worktrees/oracle-qa-001-release-gate`
-- **Status:** `BLOCKED` — Codex rejected candidate `ef00017` on 2026-09-29; blocked on two Frontend dependencies (the out-of-scope runtime file is restored and the architecture suite is honestly RED; ORACLE-005 is a stable FAIL)
+- **Status:** `BLOCKED` — resumed 2026-09-30 after `TASK-ORACLE-FE-003` reached `DONE` on `main` `eef033f` and was merged here (`79414bd`). The first blocker is closed: the duplicate `OracleLineValue` declaration is gone and the architecture suite is now honestly **23/23 GREEN** (§2). The second blocker, **ORACLE-005, is still a stable FAIL**: a fresh browser re-run of the original `Promise.all` and ~30 ms double-activation patterns still creates two sessions, because FE-003's in-flight guard is released on the successful settle before the navigation commits (§4).
 - **Feature:** FEAT-027 Star Oracle cast and guided design
 
 This report registers the integrated Star Oracle feature, records the evidence
 for the new cross-workspace architecture assertions, and captures the full
 acceptance matrix, database gate, and repository gate results. Counts below are
 the actual observed values. **This QA is not a pass and is not a release gate.**
-Codex rejected candidate `ef00017`; the branch is `BLOCKED` on two Frontend
-dependencies (see §2 and §4), and the failing acceptance row and the
-environment-limited rows are reported as such and are not restated as passes.
+Codex rejected candidate `ef00017`; `TASK-ORACLE-FE-003` then closed the first
+blocker on `main` and is merged here, so the architecture suite is green, but
+**ORACLE-005 remains a blocking FAIL** (see §4). The failing acceptance row and
+the environment-limited rows are reported as such and are not restated as passes.
+
+## 0. Resumed re-verification (2026-09-30)
+
+A minimal incremental re-verification was run on the existing branch/worktree
+after `TASK-ORACLE-FE-003` `DONE` was merged from `main` `eef033f`. Commands and
+observed values:
+
+| Step | Command | Result |
+| --- | --- | --- |
+| Merge | `git merge main` → `79414bd` | clean merge; only this task's `TASK_REGISTRY.md` row conflicted and both the FE-003 `DONE` row and the QA row were kept |
+| Architecture | `node tests/architecture.test.mjs` | **23 tests / 23 pass / 0 fail** (previously 22/23) |
+| Oracle focused | `tsx --test` over the six Oracle `*.test.tsx` | **64 tests / 64 pass / 0 fail** |
+| `oracle-setup-client` only | `tsx --test src/features/oracle/oracle-setup-client.test.tsx` | **4 tests / 4 pass / 0 fail** |
+| ORACLE-005 postfix | `node output/playwright/task-oracle-qa-001/oracle-005-postfix.mjs` | **FAIL — 6 runs, 4 violated the exactly-one contract** (§4) |
+| ORACLE-005 diagnostic | `node output/playwright/task-oracle-qa-001/oracle-005-diagnose.mjs` | **FAIL — 3/3 runs issued 2 create POSTs** (§4) |
+| Full validation | `pnpm validate` | exit 0; turbo 18/18 tasks |
+| Document paths | `node output/playwright/task-oracle-qa-001/check-doc-paths.mjs` | 10 documents, 6 relative links, **0 broken** |
+| Diff hygiene | `git diff --check` | clean |
+
+The frontend-only dependency means the Backend/Database are unchanged, so the
+previously completed fresh isolated PostgreSQL 16 migrations + Oracle suite
+**7/7** gate (§6) is **retained and was not re-run** this round.
+
+The QA re-run confirms the architecture blocker is resolved but that **ORACLE-005
+is not**: the FE-003 unit test that was supposed to cover the ~30 ms case keeps the
+create promise *pending* across the second activation, whereas the real browser
+settles the create (~15–30 ms) before the second click, releasing the guard. The
+task therefore stays `BLOCKED`.
 
 ## 1. Scope and method
 
@@ -28,11 +57,14 @@ environment-limited rows are reported as such and are not restated as passes.
   That edit was out of scope and has been reverted byte-for-byte to `main@9ff93ad`; the
   correction commit restores the file so this branch carries no runtime source change.
   The architecture assertion was **not** weakened to hide the duplicate type.
-- The architecture suite is therefore honestly **RED at 22/23** on this branch: the real
-  duplicate `OracleLineValue` declaration remains until a separate Frontend task fixes it
-  inside its own approved paths.
+- That out-of-scope edit was later made legitimately by `TASK-ORACLE-FE-003` inside its own
+  approved paths and landed on `main` `eef033f`; this branch merged it (`79414bd`), so the
+  duplicate `OracleLineValue` declaration is gone and the architecture suite is now honestly
+  **GREEN at 23/23** on this branch (§2). The assertion itself was **not** weakened.
 - No runtime behaviour, schema, migration, data, manifest, lockfile, or Auth contract
-  change is retained by this task.
+  change is retained by this task. (The `oracle-lines.tsx` and `oracle-setup-client.tsx`
+  changes now present on this branch arrive only through the reviewed `main` merge and are
+  the accepted `TASK-ORACLE-FE-003` dependency, not QA-authored runtime.)
 - The main integration worktree was read-only throughout; its user-owned
   `apps/frontend/next-env.d.ts` dev-path modification was never touched.
 - The dedicated worktree's build-regenerated `apps/frontend/next-env.d.ts` was
@@ -80,21 +112,22 @@ node --test tests/architecture.test.mjs
 
 Log: `output/playwright/task-oracle-qa-001/oracle-architecture-GREEN.log`
 
-**Current branch state (honest RED)** — after restoring `oracle-lines.tsx` to
-`main@9ff93ad`, the real duplicate `OracleLineValue` is present again and the suite fails
-on the single-authority assertion:
+**Current branch state (honest GREEN, 2026-09-30)** — `TASK-ORACLE-FE-003` fixed the
+duplicate declaration legitimately inside its own approved paths and landed it on `main`
+`eef033f`; this branch merged it as `79414bd`, so the real duplicate `OracleLineValue` is
+gone and the suite passes on the single-authority assertion:
 
 ```
-node --test tests/architecture.test.mjs
+node tests/architecture.test.mjs
 ℹ tests 23
-ℹ pass 22
-ℹ fail 1
-✖ the Oracle line enum and trigram enum have one authority and one engine mirror
+ℹ pass 23
+ℹ fail 0
 ```
 
-This RED is the correct gate result for the QA branch and is the first Frontend
-dependency below. The fix must land in a separate Frontend task inside its own approved
-paths and must not weaken the assertion.
+Log: `output/playwright/task-oracle-qa-001/oracle-architecture-POSTFIX.log`
+
+This GREEN is the correct gate result for the QA branch and closes the first Frontend
+dependency. The assertion was not weakened to reach it.
 
 ## 3. Governance documents updated
 
@@ -138,33 +171,58 @@ Run against the local stack (`http://localhost:3100`, backend `:4100`) with
 | ORACLE-014 | `prefers-reduced-motion: reduce` renders a complete result | PASS | `browser-report.json` |
 | ORACLE-015 | 200% zoom proxy (720×450): usable, no overflow | PASS | `browser-report-extra.json` |
 
-### ORACLE-005 detail (the single failing row)
+### ORACLE-005 detail (the single failing row — re-verified 2026-09-30, still FAIL)
+
+Pre-fix characterisation (2026-09-29, `oracle-doubleclick-timing-result.json`): the race
+was window-dependent (`Promise.all` → 2, mouse +30ms → 2, others → 1) and was root-caused
+to `OracleSetupClient` building a **new** `createOracleSetupSubmitter` inside every
+`submit()` call, so the `inFlight` guard was per-call and could not span two activations.
+
+`TASK-ORACLE-FE-003` replaced that with one submitter held in `useState`, but the re-run on
+the merged branch shows the **same acceptance failure persists**:
 
 ```
-✘ ORACLE-005 — fast 30ms double activation created >1 session:
-  per-attempt create POST counts = [2, 2, 2]
+node output/playwright/task-oracle-qa-001/oracle-005-postfix.mjs
+PASS parallel posts=1 navigations=1
+FAIL parallel posts=2 statuses=[200,200] navigations=1
+PASS parallel posts=1 navigations=1
+FAIL mouse30  posts=2 statuses=[200,200] navigations=1
+FAIL mouse30  posts=2 statuses=[200,200] navigations=1
+FAIL mouse30  posts=2 statuses=[200,200] navigations=1
+RESULT FAIL — 6 runs, 4 runs violated the exactly-one contract
 ```
 
-A dedicated timing probe shows the race is window-dependent:
+Evidence: `oracle-005-postfix-result.json` (`parallel [1,2,1]`, `mouse30 [2,2,2]`; every
+run navigated exactly once, so the duplicate is a silently-created second session, not a
+second navigation). The original pre-fix evidence (`oracle-doubleclick-*.mjs`,
+`oracle-doubleclick-timing-result.json`) is retained untouched.
 
-| Dispatch | create POSTs |
+An instrumented re-run (`oracle-005-diagnose.mjs`, 3/3 iterations) isolates the mechanism:
+
+| Observation (per run) | Value |
 | --- | --- |
-| `locator.dblclick()` | 1 |
-| `Promise.all(two clicks)` | 2 |
-| mouse clicks 0ms apart | 1 |
-| mouse clicks 30ms apart | 2 |
-| mouse clicks 60/100/150/250ms apart | 1 |
+| Button `disabled` ~10 ms after click 1 | `true` (`正在启卦…`) |
+| Button `disabled` ~30 ms after click 1 | **`false`** (`启卦`) |
+| URL at ~30 ms | still `/oracle` (navigation not yet committed) |
+| create POSTs for the two activations | **2**, both `200` |
 
-**Root cause:** `apps/frontend/app/oracle/oracle-setup-client.tsx` builds a **new**
-`createOracleSetupSubmitter` inside every `submit()` call, so the submitter's
-`inFlight` guard is per-call and cannot span two activations; React's `isSubmitting`
-state (and the button `disabled`) has not flushed inside the ~30ms window, so a second
-click reaches the network. This is a genuine frontend defect and is the second blocking
-dependency. Because the fix is runtime source outside this task's writable scope, this QA
-cannot pass the Completion Gate: a separate Frontend task must fix it inside its own
-approved paths (single shared submitter instance, or a synchronous ref-based in-flight
-guard) with strict RED/GREEN coverage proving 30 ms and `Promise.all` double activation
-each issue exactly one POST.
+**Root cause (post-FE-003):** `createOracleSetupSubmitter`
+(`apps/frontend/src/features/oracle/components/oracle-setup.tsx`) releases its `inFlight`
+guard with `.finally(...)`, i.e. on **success as well as failure**. `navigate()` is
+`router.push(path)`, which returns synchronously and does not wait for the route to
+commit, so the guard — and React's `isSubmitting`/`disabled` — are cleared as soon as the
+create request settles (~15–30 ms on localhost) while the page is still the mounted
+`/oracle` screen. A second activation inside that window starts a fresh create and the
+backend persists a second session. The FE-003 unit test does not catch this because its
+harness keeps the create promise **pending** across the second activation (it only resolves
+when `finish()` is called afterwards), which is the opposite of the real ~30 ms timing.
+
+This remains a genuine frontend defect and the **blocking** Completion Gate failure.
+Because the fix is runtime source outside this task's writable scope, this QA cannot pass:
+a follow-up Frontend task must hold the guard until the navigation commits (release
+`inFlight` only on rejection, for the retry path) and must add coverage that lets the
+create settle **before** the second activation — proving `Promise.all` and ~30 ms double
+activation each issue exactly one POST, one session and one navigation.
 
 ### ORACLE-002 detail (environment limitation)
 
@@ -212,16 +270,25 @@ cleanup            DROP DATABASE; remaining matches = 0
 
 No development or user database was created, dropped, or modified by this gate.
 
+**Retained, not re-run this round (2026-09-30).** The only change merged since this gate is
+the frontend `TASK-ORACLE-FE-003` fix; the Backend, database schema and migrations are
+byte-for-byte unchanged, so the fresh isolated PostgreSQL gate above still holds and was
+**not** re-executed. This report does not claim a second database run.
+
 ## 7. Repository gates
 
 | Gate | Command | Result |
 | --- | --- | --- |
-| Architecture | `node --test tests/architecture.test.mjs` | **22 pass, 1 fail** on the corrected branch (the transient 23/23 of `ef00017` is superseded; see §2) |
-| Full validation | `pnpm validate` | exit 0 on the rejected candidate `ef00017`; turbo 18/18 tasks (lint, typecheck, test, build); aggregated 1276 tests, 1264 pass, 12 skipped, 0 fail. Superseded: not re-run on the corrected branch, which is now architecture-RED. |
-| Frontend full suite | `tsx --test` over all 86 `src/**/*.test.tsx` | 1156 tests, 1155 pass, 1 fail (see below) |
-| Diff hygiene | `git diff --check` | clean |
+| Architecture (2026-09-30) | `node tests/architecture.test.mjs` | **23 pass, 0 fail** on the merged branch (first blocker closed; see §2) |
+| Oracle focused (2026-09-30) | `tsx --test` over the six Oracle `*.test.tsx` | 64 tests, 64 pass, 0 fail |
+| Full validation (2026-09-30) | `pnpm validate` | exit 0; turbo 18/18 tasks |
+| Document paths (2026-09-30) | `node output/playwright/task-oracle-qa-001/check-doc-paths.mjs` | 10 documents, 6 relative links, 0 broken |
+| Diff hygiene (2026-09-30) | `git diff --check` | clean |
+| Full validation (2026-09-29, superseded) | `pnpm validate` | exit 0 on the rejected candidate `ef00017`; aggregated 1276 tests, 1264 pass, 12 skipped, 0 fail |
+| Frontend full suite (2026-09-29) | `tsx --test` over all 86 `src/**/*.test.tsx` | 1156 tests, 1155 pass, 1 fail (see below) |
 
-Logs: `oracle-validate.log`, `oracle-frontend-full-tests.log`.
+Logs: `oracle-validate.log`, `oracle-frontend-full-tests.log`,
+`oracle-architecture-POSTFIX.log`, `oracle-doc-path-check-POSTFIX.log`.
 
 The one frontend failure is
 `src/features/admin-bead-import/proxy.test.tsx` → "a 12 MiB upload streams intact through
@@ -233,12 +300,15 @@ concurrently with a live dev server.
 ## 8. Known limitations and non-goals
 
 1. **ORACLE-005** (above) is a real, stable frontend race and a **blocking** Completion
-   Gate failure; the fix is out of this task's writable scope and must be done by a
-   follow-up Frontend task. This QA stays `BLOCKED` until it is fixed.
+   Gate failure that **survived** the `TASK-ORACLE-FE-003` fix. The re-run on the merged
+   branch still creates two sessions for the original `Promise.all` and ~30 ms patterns; the
+   guard is released on the successful settle before navigation commits. The fix is out of
+   this task's writable scope and must be done by a follow-up Frontend task. This QA stays
+   `BLOCKED` until it is fixed.
 2. Candidate `ef00017` was rejected by Codex because it edited out-of-scope runtime source
-   (`oracle-lines.tsx`); that edit is reverted and this branch now contains only
-   governance, test, and evidence changes. The architecture suite is consequently RED at
-   22/23 until the separate Frontend task lands the import-from-Design-Contract fix.
+   (`oracle-lines.tsx`). That same fix later landed legitimately through
+   `TASK-ORACLE-FE-003` on `main` `eef033f` and is merged here (`79414bd`), so the
+   architecture suite is now honestly GREEN at 23/23; the assertion was not weakened.
 3. **ORACLE-002** and **ORACLE-011** are verified deterministically rather than through a
    live disabled-server / two-owner browser run, for the environment reasons above.
 4. The `pnpm validate` frontend `test` task expands only 6 of the 86 frontend test files
@@ -257,7 +327,13 @@ concurrently with a live dev server.
 - `oracle-dbgate.log`, `oracle-dbgate-evidence.json` — database gate
 - `oracle-validate.log`, `oracle-frontend-full-tests.log` — repository gates
 - `oracle-architecture-RED.log`, `oracle-architecture-GREEN.log` — RED→GREEN
-- `oracle-doubleclick-timing-result.json` — ORACLE-005 characterisation
+- `oracle-architecture-POSTFIX.log` — fresh 23/23 on the merged branch
+- `oracle-doubleclick-timing-result.json` — ORACLE-005 pre-fix characterisation (retained)
+- `oracle-005-postfix.mjs`, `oracle-005-postfix.log`, `oracle-005-postfix-result.json` —
+  ORACLE-005 post-fix acceptance (6 runs: `parallel [1,2,1]`, `mouse30 [2,2,2]`)
+- `oracle-005-diagnose.mjs`, `oracle-005-diagnose-result.json` — post-fix mechanism probe
+  (button re-enabled by ~30 ms, 2 create POSTs, both `200`)
+- `oracle-focused-POSTFIX.log`, `oracle-doc-path-check-POSTFIX.log` — focused/gate logs
 - `oracle-*.png` — canonical screenshots (setup, result at 1440/390/320, recommendation
   retry, price conflict, save error)
 
