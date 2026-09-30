@@ -1,0 +1,77 @@
+/* star-tokens.css — semantic token single source for 玄圭星台
+ * Owned by TASK-UI-STAR-001. Do not fork these definitions elsewhere.
+ * Geometry / motion vocabulary: star-map, armillary, jade-disc, instrument.
+ */
+
+:root {
+  /* Color — obsidian night, warm xuan paper, aged brass, restrained amethyst */
+  --star-canvas: #120e16;
+  --star-ink: #1c1622;
+  --star-paper: #f4efe6;
+  --star-paper-muted: #e6ddd0;
+  --star-brass: #b08d57;
+  --star-brass-ink: #7a5c32;
+  --star-amethyst: #6b4c7a;
+  --star-moon: #c4bdb2;
+  --star-line: rgb(176 141 87 / 0.35);
+  --star-danger: #8f3f3f;
+  --star-warning: #8a6428;
+  --star-success: #3f6b50;
+
+  /* Spacing rhythm */
+  --star-space-1: 0.25rem;
+  --star-space-2: 0.5rem;
+  --star-space-3: 0.75rem;
+  --star-space-4: 1rem;
+  --star-space-5: 1.5rem;
+  --star-space-6: 2rem;
+  --star-space-7: 3rem;
+
+  /* Radius — uniform jade-disc rounding */
+  --star-radius-sm: 0.25rem;
+  --star-radius-md: 0.5rem;
+  --star-radius-lg: 1rem;
+
+  /* Shadow — lacquer depth, not ecommerce drop shadows */
+  --star-shadow-1: 0 1px 2px rgb(18 14 22 / 0.12);
+  --star-shadow-2: 0 8px 24px rgb(18 14 22 / 0.16);
+
+  /* Motion — instrument calibration pacing */
+  --star-motion-fast: 160ms;
+  --star-motion-base: 240ms;
+  --star-motion-slow: 360ms;
+  --star-motion-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /* Interaction floor */
+  --star-target-min: 2.75rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Consumers must collapse transitions; nominal token values stay single-source. */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* LEGACY aliases — retained so knowledge admin and intermediate pages stay
+ * readable during the star migration. Owned by TASK-UI-STAR-001; removal
+ * requires a separately registered admin redesign task. */
+:root {
+  --background: var(--star-paper);
+  --foreground: var(--star-ink);
+  --surface: var(--star-paper);
+  --surface-soft: var(--star-paper-muted);
+  --muted: color-mix(in srgb, var(--star-ink) 62%, var(--star-paper));
+  --accent: var(--star-brass);
+  --accent-deep: color-mix(in srgb, var(--star-brass) 72%, var(--star-canvas));
+  --accent-soft: color-mix(in srgb, var(--star-brass) 18%, var(--star-paper));
+  --border: var(--star-line);
+  --success: var(--star-success);
+  --warning: var(--star-warning);
+  --danger: var(--star-danger);
+}

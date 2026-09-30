@@ -1,0 +1,18 @@
+/* star-acquisition.css — acquisition page family (home / questionnaire / results)
+ * Owned by TASK-UI-STAR-001 as the style entry; page composition is TASK-FE-STAR-001.
+ * New route rules are scoped to [data-star-surface].
+ */
+
+[data-star-surface="home"],
+[data-star-surface="questionnaire"],
+[data-star-surface="design-results"] {
+  color: var(--star-ink);
+}
+
+[data-star-surface="home"] [data-star-entry-card],
+[data-star-surface="questionnaire"] [data-star-entry-card] {
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-lg);
+  background: var(--star-paper);
+  min-height: 2.75rem;
+}

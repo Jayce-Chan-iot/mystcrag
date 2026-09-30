@@ -1,0 +1,28 @@
+/* star-content.css — content page family (library / gallery / profile)
+ * Owned by TASK-UI-STAR-001 as the style entry; page composition is TASK-FE-STAR-003.
+ * New route rules are scoped to [data-star-surface].
+ */
+
+[data-star-surface="library"],
+[data-star-surface="gallery"],
+[data-star-surface="profile"],
+[data-star-surface="content"] {
+  color: var(--star-ink);
+}
+
+[data-star-surface="library"] [data-star-content-card],
+[data-star-surface="gallery"] [data-star-content-card],
+[data-star-surface="profile"] [data-star-content-card],
+[data-star-surface="content"] [data-star-content-card] {
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-md);
+  background: var(--star-paper);
+}
+
+[data-star-surface="library"] button,
+[data-star-surface="gallery"] button,
+[data-star-surface="profile"] button,
+[data-star-surface="content"] button {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+}

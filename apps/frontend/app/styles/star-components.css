@@ -1,0 +1,129 @@
+/* star-components.css — shared primitive styles for packages/ui
+ * Owned by TASK-UI-STAR-001. Interactive floors are 44px (2.75rem).
+ * Decoration is pointer-events: none and aria-hidden in the components.
+ */
+
+[data-star-surface-tone="ink"] {
+  background: var(--star-ink);
+  color: var(--star-paper);
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-lg);
+  box-shadow: var(--star-shadow-2);
+}
+
+[data-star-surface-tone="paper"] {
+  background: var(--star-paper);
+  color: var(--star-ink);
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-lg);
+  box-shadow: var(--star-shadow-1);
+}
+
+[data-star-surface-tone="lacquer"] {
+  background: var(--star-canvas);
+  color: var(--star-paper);
+  border: 1px solid color-mix(in srgb, var(--star-brass) 28%, transparent);
+  border-radius: var(--star-radius-lg);
+  box-shadow: var(--star-shadow-2);
+}
+
+[data-star-instrument-button] {
+  display: inline-flex;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  gap: var(--star-space-2);
+  padding: 0 var(--star-space-4);
+  border-radius: var(--star-radius-md);
+  font-size: 0.875rem;
+  line-height: 1.2;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition:
+    background-color var(--star-motion-fast) var(--star-motion-ease),
+    color var(--star-motion-fast) var(--star-motion-ease),
+    border-color var(--star-motion-fast) var(--star-motion-ease);
+}
+
+[data-star-instrument-button="primary"] {
+  border: 1px solid var(--star-brass);
+  background: var(--star-brass);
+  color: var(--star-canvas);
+}
+
+[data-star-instrument-button="secondary"] {
+  border: 1px solid var(--star-brass);
+  background: transparent;
+  color: var(--star-brass-ink);
+}
+
+[data-star-instrument-button="quiet"] {
+  border: 1px solid transparent;
+  background: transparent;
+  color: color-mix(in srgb, var(--star-ink) 86%, var(--star-paper));
+}
+
+[data-star-instrument-button]:focus-visible {
+  outline: 2px solid var(--star-brass-ink);
+  outline-offset: 3px;
+}
+
+[data-star-surface-tone="ink"] :focus-visible,
+[data-star-surface-tone="lacquer"] :focus-visible,
+[data-star-surface-tone="ink"]:focus-visible,
+[data-star-surface-tone="lacquer"]:focus-visible {
+  outline-color: var(--star-brass);
+}
+
+[data-star-constellation-divider="true"] {
+  display: block;
+  width: 100%;
+  pointer-events: none;
+  color: var(--star-line);
+}
+
+[data-star-constellation-divider="true"] svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+[data-star-status-panel] {
+  display: grid;
+  gap: var(--star-space-2);
+  padding: var(--star-space-4);
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-md);
+  background: color-mix(in srgb, var(--star-paper) 88%, var(--star-paper-muted));
+}
+
+[data-star-status-panel="info"] {
+  border-color: color-mix(in srgb, var(--star-amethyst) 45%, var(--star-line));
+}
+
+[data-star-status-panel="success"] {
+  border-color: color-mix(in srgb, var(--star-success) 55%, var(--star-line));
+}
+
+[data-star-status-panel="warning"] {
+  border-color: color-mix(in srgb, var(--star-warning) 55%, var(--star-line));
+}
+
+[data-star-status-panel="danger"] {
+  border-color: color-mix(in srgb, var(--star-danger) 55%, var(--star-line));
+}
+
+[data-star-status-panel] [data-star-status-action],
+[data-star-status-panel] button,
+[data-star-status-panel] a,
+[data-star-status-panel] input {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-star-instrument-button] {
+    transition: none;
+  }
+}

@@ -1,0 +1,21 @@
+/* star-workbench.css — DIY workbench page family
+ * Owned by TASK-UI-STAR-001 as the style entry; workbench composition is TASK-FE-STAR-002.
+ * New route rules are scoped to [data-star-surface].
+ */
+
+[data-star-surface="diy-workbench"] {
+  color: var(--star-ink);
+}
+
+[data-star-surface="diy-workbench"] [data-star-workbench-tool],
+[data-star-surface="diy-workbench"] button,
+[data-star-surface="diy-workbench"] a {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+}
+
+[data-star-surface="diy-workbench"] [data-star-workbench-stage] {
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-lg);
+  background: var(--star-paper-muted);
+}

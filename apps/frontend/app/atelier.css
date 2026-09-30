@@ -1,3 +1,8 @@
+/* LEGACY atelier visual world (TASK-UI-STAR-001 migration).
+ * Retained so admin and intermediate pages stay readable while star-*.css
+ * takes over customer routes. Task 6 proves no customer route depends on
+ * these blocks; removal requires a registered cleanup task. */
+
 :root {
   --atelier-ivory: #f6f2ea;
   --atelier-paper: #fffdf8;
@@ -70,6 +75,7 @@ body {
   font-weight: 500;
 }
 
+/* LEGACY — migration target: star-acquisition.css (TASK-UI-STAR-001) */
 /* Home: framed atelier composition with separated creation cards. */
 [data-atelier-surface="home"] {
   min-height: calc(100dvh - 3.8125rem);
@@ -245,6 +251,7 @@ body {
 }
 
 /* AI questionnaire: one calm focused question, first-concept composition. */
+/* LEGACY — migration target: star-acquisition.css (TASK-UI-STAR-001) */
 [data-atelier-surface="questionnaire"] {
   position: relative;
   max-width: 90rem;
@@ -311,6 +318,7 @@ body {
 }
 
 /* Recommendation pages: a single glance comparison, not stacked forms. */
+/* LEGACY — migration target: star-acquisition.css (TASK-UI-STAR-001) */
 [data-atelier-surface="design-results"] {
   max-width: 96rem;
 }
@@ -344,6 +352,7 @@ body {
 }
 
 /* Tarot: preserve approved first-concept draw structure, unify material language. */
+/* LEGACY — migration target: star-components.css (TASK-UI-STAR-001) */
 [data-atelier-surface="tarot-setup"] > header h1,
 [data-atelier-surface="tarot-draw"] h1,
 [data-atelier-surface="tarot-result"] h1 {
@@ -385,6 +394,7 @@ body {
 }
 
 /* DIY is an instrument: dense, quiet, and material-led. */
+/* LEGACY — migration target: star-workbench.css (TASK-UI-STAR-001) */
 [data-atelier-surface="diy-workbench"] [data-desktop-diy-workspace="true"] {
   background: #f8f6f1;
 }

@@ -1,0 +1,85 @@
+/* star-shell.css — responsive shell, header, footer, navigation
+ * Owned by TASK-UI-STAR-001. Route rules stay scoped to [data-star-surface].
+ * No global zoom, no body transforms, no scroll listeners.
+ */
+
+[data-star-header] {
+  max-height: 80px;
+  border-bottom: 1px solid var(--star-line);
+  background: color-mix(in srgb, var(--star-paper) 92%, transparent);
+}
+
+[data-star-header] nav {
+  max-height: 80px;
+}
+
+[data-star-header] nav > a {
+  color: var(--star-ink);
+  letter-spacing: 0.18em;
+}
+
+[data-star-header] [data-desktop-navigation="true"] a {
+  position: relative;
+  color: color-mix(in srgb, var(--star-ink) 72%, var(--star-paper));
+  transition: color var(--star-motion-fast) var(--star-motion-ease);
+}
+
+[data-star-header] [data-desktop-navigation="true"] a::after {
+  position: absolute;
+  right: 50%;
+  bottom: 0.3rem;
+  left: 50%;
+  height: 1px;
+  background: var(--star-brass);
+  content: "";
+  transition: right var(--star-motion-fast) var(--star-motion-ease), left var(--star-motion-fast) var(--star-motion-ease);
+}
+
+[data-star-header] [data-desktop-navigation="true"] a:hover::after,
+[data-star-header] [data-desktop-navigation="true"] a:focus-visible::after {
+  right: 0;
+  left: 0;
+}
+
+[data-star-footer] {
+  border-top: 1px solid var(--star-line);
+  color: color-mix(in srgb, var(--star-ink) 70%, var(--star-paper));
+}
+
+[data-star-surface="shell"] {
+  min-height: calc(100dvh - 5rem);
+}
+
+[data-mobile-bottom-nav] {
+  border-top: 1px solid var(--star-line);
+  background: color-mix(in srgb, var(--star-paper) 96%, transparent);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+[data-mobile-bottom-nav] a {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  font-size: 0.75rem;
+}
+
+[data-mobile-bottom-nav] [data-nav-active="true"] {
+  color: var(--star-brass-ink);
+}
+
+@media (max-width: 767px) {
+  [data-star-header] nav {
+    min-height: 2.75rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  [data-mobile-bottom-nav] {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-star-header] [data-desktop-navigation="true"] a::after {
+    transition: none;
+  }
+}

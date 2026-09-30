@@ -1,21 +1,28 @@
 @import "tailwindcss";
 @import "../src/features/tarot/tarot.module.css";
 @import "./atelier.css";
+@import "./styles/star-tokens.css";
+@import "./styles/star-shell.css";
+@import "./styles/star-components.css";
+@import "./styles/star-acquisition.css";
+@import "./styles/star-workbench.css";
+@import "./styles/star-content.css";
 
 :root {
   color-scheme: light;
-  --background: #f7f4ee;
-  --foreground: #25202a;
-  --surface: #fffdf8;
-  --surface-soft: #f0ece5;
-  --muted: #746d78;
-  --accent: #74588f;
-  --accent-deep: #49355f;
-  --accent-soft: #ede6f2;
-  --border: #ded8cf;
-  --success: #48675d;
-  --warning: #8a6738;
-  --danger: #8b4b57;
+  /* LEGACY aliases — single source is app/styles/star-tokens.css (TASK-UI-STAR-001) */
+  --background: var(--star-paper);
+  --foreground: var(--star-ink);
+  --surface: var(--star-paper);
+  --surface-soft: var(--star-paper-muted);
+  --muted: color-mix(in srgb, var(--star-ink) 62%, var(--star-paper));
+  --accent: var(--star-brass);
+  --accent-deep: color-mix(in srgb, var(--star-brass) 72%, var(--star-canvas));
+  --accent-soft: color-mix(in srgb, var(--star-brass) 18%, var(--star-paper));
+  --border: var(--star-line);
+  --success: var(--star-success);
+  --warning: var(--star-warning);
+  --danger: var(--star-danger);
 }
 
 * {
@@ -88,7 +95,7 @@ a {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--star-brass-ink);
   outline-offset: 3px;
 }
 
