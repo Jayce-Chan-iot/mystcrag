@@ -26,6 +26,7 @@ import {
   PRODUCT_TYPE_LABELS,
   sortAccessories,
   sortCrystalGroups,
+  stockStatusLabel,
   VISUAL_TAG_LABELS,
   type CrystalGroup,
   type LibraryFilter,
@@ -542,8 +543,8 @@ export function CrystalLibraryPage() {
             const isFavorite = favorites.has(accessory.accessoryProductId);
             const restock = accessory.availableQuantity === 0;
             return (
-              <article className="flex flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-white" data-library-card={accessory.accessoryProductId} key={accessory.accessoryProductId}>
-                <div className="relative grid aspect-square place-items-center bg-[#f5f4f2] p-6">
+              <article className="flex flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-white" data-library-card={accessory.accessoryProductId} data-star-content-card="true" key={accessory.accessoryProductId}>
+                <div className="relative grid aspect-square place-items-center bg-[#f5f4f2] p-6" data-star-photo-field="true">
                   <span className="block h-20 w-20 lg:h-24 lg:w-24"><AccessoryGlyph accessoryType={accessory.accessoryType} /></span>
                 </div>
                 <div className="flex flex-1 flex-col gap-2 p-3 lg:p-4">
@@ -554,7 +555,9 @@ export function CrystalLibraryPage() {
                   <p className="text-sm font-medium text-[var(--accent-deep)]">
                     {formatMinorAmount({ amountMinor: accessory.unitPriceMinor, currency, locale })}<span className="ml-0.5 text-xs font-normal text-[var(--muted)]">/件</span>
                   </p>
-                  <p className={`text-xs ${restock ? "text-amber-700" : "text-[var(--muted)]"}`}>{restock ? "需补货·约5天" : "有库存"}</p>
+                  <p data-stock-mark={restock ? "restock" : "in-stock"}>
+                    <span className="text-xs">{restock ? "需补货 · 约5天" : stockStatusLabel(accessory.availableQuantity)}</span>
+                  </p>
                   <div className="mt-auto flex items-center gap-2">
                     <button
                       aria-label={isFavorite ? `取消收藏${names.nameCn}` : `收藏${names.nameCn}`}
@@ -581,7 +584,17 @@ export function CrystalLibraryPage() {
             );
           })}
           {filteredAccessories.length === 0 ? (
-            <p className="col-span-full rounded-2xl bg-[var(--surface-soft)] p-6 text-center text-sm text-[var(--muted)]" data-library-empty="true">没有符合条件的配饰，请调整筛选。</p>
+            <div className="col-span-full" data-library-empty="true" data-star-empty="true">
+              <p className="text-sm text-[var(--muted)]">没有符合条件的配饰，请调整筛选。</p>
+              <button
+                className="mt-4"
+                data-star-recovery="reset-filters"
+                onClick={resetFilters}
+                type="button"
+              >
+                重置筛选
+              </button>
+            </div>
           ) : null}
         </div>
       );
@@ -594,8 +607,8 @@ export function CrystalLibraryPage() {
           const isFavorite = favorites.has(variant.beadProductId);
           const restock = variant.availableQuantity === 0;
           return (
-            <article className="flex flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-white transition hover:border-[var(--accent)]/60 hover:shadow-[0_10px_28px_rgb(57_45_67/0.08)]" data-library-card={group.crystalId} key={group.crystalId}>
-              <div className="relative grid aspect-square place-items-center bg-[#f5f4f2] p-5 lg:p-6">
+            <article className="flex flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-white transition hover:border-[var(--accent)]/60 hover:shadow-[0_10px_28px_rgb(57_45_67/0.08)]" data-library-card={group.crystalId} data-star-content-card="true" key={group.crystalId}>
+              <div className="relative grid aspect-square place-items-center bg-[#f5f4f2] p-5 lg:p-6" data-star-photo-field="true">
                 <span className="block h-[76%] w-[76%]">
                   <CrystalBeadImage alt={`${group.nameCn}珠子照片`} materialKey={variant.materialKey} textureAssetKey={variant.textureAssetKey} priority={index < 5} sizes="(max-width: 1024px) 45vw, 180px" />
                 </span>
@@ -626,7 +639,9 @@ export function CrystalLibraryPage() {
                 <p className="text-sm font-medium text-[var(--accent-deep)]">
                   {formatMinorAmount({ amountMinor: variant.unitPriceMinor, currency, locale })}<span className="ml-0.5 text-xs font-normal text-[var(--muted)]">/颗</span>
                 </p>
-                <p className={`text-xs ${restock ? "text-amber-700" : "text-[var(--muted)]"}`}>{restock ? "需补货·约5天" : "有库存"}</p>
+                <p data-stock-mark={restock ? "restock" : "in-stock"}>
+                  <span className="text-xs">{restock ? "需补货 · 约5天" : stockStatusLabel(variant.availableQuantity)}</span>
+                </p>
                 <div className="mt-auto flex items-center gap-2">
                   <button
                     aria-label={isFavorite ? `取消收藏${group.nameCn}` : `收藏${group.nameCn}`}
@@ -653,7 +668,17 @@ export function CrystalLibraryPage() {
           );
         })}
         {filteredGroups.length === 0 ? (
-          <p className="col-span-full rounded-2xl bg-[var(--surface-soft)] p-6 text-center text-sm text-[var(--muted)]" data-library-empty="true">没有符合条件的矿石，请调整筛选。</p>
+          <div className="col-span-full" data-library-empty="true" data-star-empty="true">
+            <p className="text-sm text-[var(--muted)]">没有符合条件的矿石，请调整筛选。</p>
+            <button
+              className="mt-4"
+              data-star-recovery="reset-filters"
+              onClick={resetFilters}
+              type="button"
+            >
+              重置筛选
+            </button>
+          </div>
         ) : null}
       </div>
     );
@@ -662,7 +687,7 @@ export function CrystalLibraryPage() {
   const renderFilterSections = (variant: "desktop" | "mobile") => (
     <>
       <section aria-labelledby={`library-material-${variant}-title`}>
-        <h3 className="text-sm font-medium" id={`library-material-${variant}-title`}>材质</h3>
+        <h3 className="text-sm font-medium" data-star-filter-label={`material-${variant}`} id={`library-material-${variant}-title`}>材质</h3>
         <ul className="mt-2 space-y-0.5">
           <li>
             <button
@@ -704,7 +729,7 @@ export function CrystalLibraryPage() {
       </section>
 
       <section aria-labelledby={`library-size-${variant}-title`}>
-        <h3 className="text-sm font-medium" id={`library-size-${variant}-title`}>尺寸</h3>
+        <h3 className="text-sm font-medium" data-star-filter-label={`size-${variant}`} id={`library-size-${variant}-title`}>尺寸</h3>
         <div className="mt-2 flex flex-wrap gap-1.5">
           {availableDiameters.map((diameter) => {
             const active = filter.diameterMm === diameter;
@@ -725,7 +750,7 @@ export function CrystalLibraryPage() {
       </section>
 
       <section aria-labelledby={`library-color-${variant}-title`}>
-        <h3 className="text-sm font-medium" id={`library-color-${variant}-title`}>色彩</h3>
+        <h3 className="text-sm font-medium" data-star-filter-label={`color-${variant}`} id={`library-color-${variant}-title`}>色彩</h3>
         <div className="mt-2 flex flex-wrap gap-2">
           {availableColors.map((color) => {
             const active = filter.colorTag === color;
@@ -747,7 +772,7 @@ export function CrystalLibraryPage() {
       </section>
 
       <section aria-labelledby={`library-style-${variant}-title`}>
-        <h3 className="text-sm font-medium" id={`library-style-${variant}-title`}>视觉风格</h3>
+        <h3 className="text-sm font-medium" data-star-filter-label={`style-${variant}`} id={`library-style-${variant}-title`}>视觉风格</h3>
         <div className="mt-2 flex flex-wrap gap-1.5">
           {availableVisualTags.map((tag) => {
             const active = filter.visualTag === tag;
@@ -768,7 +793,7 @@ export function CrystalLibraryPage() {
       </section>
 
       <section aria-labelledby={`library-stock-${variant}-title`}>
-        <h3 className="text-sm font-medium" id={`library-stock-${variant}-title`}>库存状态</h3>
+        <h3 className="text-sm font-medium" data-star-filter-label={`stock-${variant}`} id={`library-stock-${variant}-title`}>库存状态</h3>
         <div className="mt-2 space-y-1">
           {STOCK_OPTIONS.map((option) => (
             <label className="flex min-h-10 cursor-pointer items-center gap-2.5 text-sm text-[var(--muted)]" key={option.id}>
@@ -802,7 +827,7 @@ export function CrystalLibraryPage() {
 
   if (state.status === "loading") {
     return (
-      <main className="mx-auto grid min-h-[60vh] max-w-7xl place-items-center px-5 py-16" data-library-page="loading" aria-live="polite">
+      <main className="mx-auto grid min-h-[60vh] max-w-7xl place-items-center px-5 py-16" data-library-page="loading" data-star-surface="library" aria-live="polite">
         <p className="text-sm text-[var(--muted)]">正在从 Backend 加载矿石目录…</p>
       </main>
     );
@@ -810,7 +835,7 @@ export function CrystalLibraryPage() {
 
   if (state.status === "catalog-error") {
     return (
-      <main className="mx-auto min-h-[60vh] max-w-3xl px-5 py-16" data-library-page="error">
+      <main className="mx-auto min-h-[60vh] max-w-3xl px-5 py-16" data-library-page="error" data-star-surface="library">
         {state.catalogNotice ? (
           <FlowNotice
             code={state.catalogNotice}
@@ -828,16 +853,17 @@ export function CrystalLibraryPage() {
   const hiddenBeadCount = Math.max(0, sortedBeads.length - PANEL_THUMBNAIL_LIMIT);
 
   return (
-    <main className="min-h-screen bg-[var(--surface)]" data-library-page="ready">
+    <main className="min-h-screen bg-[var(--surface)]" data-library-page="ready" data-star-surface="library">
       <div className="mx-auto max-w-[92.5rem] px-4 pb-16 pt-6 sm:px-6 lg:px-8 lg:pt-8">
-        <header className="lg:hidden">
-          <h1 className="font-serif text-2xl">矿石库</h1>
-          <p className="mt-1 text-xs text-[var(--muted)]">按材质、色彩与尺寸寻找你的下一颗珠子</p>
+        <header className="lg:hidden" data-star-content-header="true">
+          <p className="text-xs tracking-[0.18em] text-[var(--accent)]" data-star-content-kicker="true">Crystal Library</p>
+          <h1 className="mt-1 font-serif text-2xl" data-star-content-title="true">矿石库</h1>
+          <p className="mt-1 text-xs text-[var(--muted)]" data-star-content-lede="true">按材质、色彩与尺寸寻找你的下一颗珠子</p>
         </header>
 
         <div className="mt-5 grid gap-6 lg:mt-0 lg:grid-cols-[14rem_minmax(0,1fr)_14.5rem] lg:gap-7">
           <aside className="hidden lg:block">
-            <div className="sticky top-[4.5rem] space-y-5 rounded-2xl border border-[var(--border)] bg-white/70 p-4" data-library-filters="desktop">
+            <div className="sticky top-[4.5rem] space-y-5 rounded-2xl border border-[var(--border)] bg-white/70 p-4" data-library-filters="desktop" data-star-filter-surface="desktop">
               <div className="grid grid-cols-3 gap-1 rounded-xl border border-[var(--border)] bg-white p-1" aria-label="商品品类">
                 {PRODUCT_TYPES.map((type) => (
                   <button
@@ -856,9 +882,10 @@ export function CrystalLibraryPage() {
           </aside>
 
           <section aria-labelledby="library-main-title" className="min-w-0">
-            <div className="hidden lg:block">
-              <h1 className="font-serif text-3xl" id="library-main-title">矿石库 <span className="text-base tracking-[0.12em] text-[var(--muted)]">Crystal Library</span></h1>
-              <p className="mt-1.5 text-sm text-[var(--muted)]">按材质、色彩与尺寸寻找你的下一颗珠子</p>
+            <div className="hidden lg:block" data-star-content-header="true">
+              <p className="text-xs tracking-[0.18em] text-[var(--accent)]" data-star-content-kicker="true">Crystal Library</p>
+              <h1 className="mt-1 font-serif text-3xl" data-star-content-title="true" id="library-main-title">矿石库</h1>
+              <p className="mt-1.5 text-sm text-[var(--muted)]" data-star-content-lede="true">按材质、色彩与尺寸寻找你的下一颗珠子</p>
             </div>
 
             <div className="mt-4 flex items-center gap-2 lg:mt-5">
@@ -870,6 +897,7 @@ export function CrystalLibraryPage() {
                 </svg>
                 <input
                   className="min-h-11 w-full rounded-full border border-[var(--border)] bg-white pl-10 pr-4 text-sm outline-none transition focus:border-[var(--accent)]"
+                  data-star-filter-field="search"
                   id="library-search"
                   onChange={(event) => setFilter((current) => ({ ...current, query: event.target.value }))}
                   placeholder="搜索矿石名称、矿物、颜色…"
@@ -901,7 +929,7 @@ export function CrystalLibraryPage() {
             </div>
 
             {mobileFiltersOpen ? (
-              <div className="mt-3 space-y-4 rounded-2xl border border-[var(--border)] bg-white p-4 lg:hidden" data-library-filters="mobile">
+              <div className="mt-3 space-y-4 rounded-2xl border border-[var(--border)] bg-white p-4 lg:hidden" data-library-filters="mobile" data-star-filter-surface="mobile">
                 <div className="grid grid-cols-3 gap-1 rounded-xl border border-[var(--border)] bg-white p-1" aria-label="商品品类">
                   {PRODUCT_TYPES.map((type) => (
                     <button

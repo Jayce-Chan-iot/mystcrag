@@ -2,6 +2,7 @@
 
 import type { CatalogMaterialProduct, PublicDesignV1 } from "@mystcrag/design-contract";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import * as React from "react";
 
 import { FlowNotice } from "../../../components/flow-notice";
@@ -16,6 +17,7 @@ import {
   formatGalleryUpdatedAt,
   gallerySourceLabel,
   statusLabelFor,
+  visibilityLabelFor,
   type GalleryEntry
 } from "../../gallery/model/gallery-model";
 import {
@@ -27,6 +29,7 @@ import {
   ORDER_STATUS_PRESENTATION,
   PREFERRED_DIAMETERS,
   resolvePreferences,
+  resolveProfileTab,
   restockEtaDays,
   wristCentimeters,
   type ProfileOrder,
@@ -39,14 +42,6 @@ const ADDRESS_BOOK_STORAGE_KEY = "mystcrag:address-book";
 const FEEDBACK_LOG_STORAGE_KEY = "mystcrag:feedback-log";
 const FAVORITES_STORAGE_KEY = "mystcrag:library-favorites";
 const PRIVACY_STORAGE_KEY = "mystcrag:privacy-prefs";
-
-const TONE_CLASSES: Record<string, string> = {
-  amber: "text-amber-700",
-  blue: "text-[#5b8db8]",
-  green: "text-[#5f9c7a]",
-  gray: "text-[var(--muted)]",
-  red: "text-[var(--danger)]"
-};
 
 type ProfileTab = "overview" | "designs" | "orders" | "favorites" | "addresses" | "settings";
 
@@ -113,7 +108,11 @@ function BeadThumbnails({ design, limit, beadClass }: { design: PublicDesignV1; 
 
 function StatusBadge({ status }: { status: ProfileOrder["status"] }) {
   const presentation = ORDER_STATUS_PRESENTATION[status];
-  return <span className={`text-xs font-medium ${TONE_CLASSES[presentation.tone]}`}>{presentation.label}</span>;
+  return (
+    <span data-status-mark={presentation.tone === "red" ? "cancel" : presentation.tone === "green" ? "shipped" : presentation.tone === "amber" ? "pending" : "progress"}>
+      {presentation.label}
+    </span>
+  );
 }
 
 function OrderRow({ order, onOpen }: { order: ProfileOrder; onOpen: () => void }) {
@@ -159,7 +158,10 @@ export function ProfilePage() {
   const [isLoading, setIsLoading] = React.useState(true);
   const [notice, setNotice] = React.useState<FrontendErrorCode | null>(null);
   const [message, setMessage] = React.useState("");
-  const [activeTab, setActiveTab] = React.useState<ProfileTab>("overview");
+  const searchParams = useSearchParams();
+  const queryTab = resolveProfileTab(searchParams.get("tab"));
+  const [manualTab, setManualTab] = React.useState<ProfileTab | null>(null);
+  const activeTab = manualTab ?? queryTab;
   const [identityDraft, setIdentityDraft] = React.useState<ProfileIdentity | null>(null);
   const [prefDraft, setPrefDraft] = React.useState<ProfilePreferences | null>(null);
   const [addressDraft, setAddressDraft] = React.useState<Partial<AddressEntry> | null>(null);
@@ -375,7 +377,7 @@ export function ProfilePage() {
     <div className="rounded-2xl border border-[var(--border)] bg-white p-4" data-profile-section="favorite-stones">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium">收藏的矿石</h2>
-        <button className="text-xs text-[var(--muted)] transition hover:text-[var(--accent)]" data-profile-action="favorites-tab" onClick={() => setActiveTab("favorites")} type="button">
+        <button className="text-xs text-[var(--muted)] transition hover:text-[var(--accent)]" data-profile-action="favorites-tab" onClick={() => setManualTab("favorites")} type="button">
           {favorites.length > 0 ? `共 ${favorites.length} 颗 →` : "去收藏 →"}
         </button>
       </div>
@@ -399,7 +401,7 @@ export function ProfilePage() {
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium">我的订单</h2>
         {limit < orders.length ? (
-          <button className="text-xs text-[var(--muted)] transition hover:text-[var(--accent)]" data-profile-action="orders-tab" onClick={() => setActiveTab("orders")} type="button">
+          <button className="text-xs text-[var(--muted)] transition hover:text-[var(--accent)]" data-profile-action="orders-tab" onClick={() => setManualTab("orders")} type="button">
             查看全部订单 →
           </button>
         ) : null}
@@ -407,7 +409,7 @@ export function ProfilePage() {
       {orders.length === 0 ? (
         <p className="mt-3 text-xs leading-5 text-[var(--muted)]">还没有订单，完成设计后即可下单制作。</p>
       ) : (
-        <div className="mt-1">{orders.slice(0, limit).map((order) => <OrderRow key={order.orderId} onOpen={() => setActiveTab("orders")} order={order} />)}</div>
+        <div className="mt-1">{orders.slice(0, limit).map((order) => <OrderRow key={order.orderId} onOpen={() => setManualTab("orders")} order={order} />)}</div>
       )}
     </div>
   );
@@ -422,10 +424,16 @@ export function ProfilePage() {
       <section aria-labelledby="profile-continue-title">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-medium" id="profile-continue-title">继续你的设计</h2>
-          <button className="text-xs text-[var(--muted)] transition hover:text-[var(--accent)]" data-profile-action="designs-tab" onClick={() => setActiveTab("designs")} type="button">查看全部 →</button>
+          <button className="text-xs text-[var(--muted)] transition hover:text-[var(--accent)]" data-profile-action="designs-tab" onClick={() => setManualTab("designs")} type="button">查看全部 →</button>
         </div>
         {continueDesigns.length === 0 ? (
-          <p className="mt-3 rounded-2xl bg-[var(--surface-soft)] p-5 text-center text-sm text-[var(--muted)]">还没有设计，从<Link className="text-[var(--accent)]" href="/ai-design">AI 设计</Link>或<Link className="text-[var(--accent)]" href="/diy">DIY 创作</Link>开始吧。</p>
+          <div className="mt-3" data-star-empty="true">
+            <p className="text-sm text-[var(--muted)]">还没有设计，从 AI 设计或 DIY 创作开始吧。</p>
+            <div className="mt-3 flex flex-wrap justify-center gap-2">
+              <Link data-star-recovery="ai-design" href="/ai-design">AI 设计</Link>
+              <Link data-star-recovery="diy" href="/diy">DIY 创作</Link>
+            </div>
+          </div>
         ) : (
           <div className="mt-3 flex gap-3 overflow-x-auto pb-1 sm:grid sm:grid-cols-3 sm:overflow-visible">{continueDesigns.map(renderContinueCard)}</div>
         )}
@@ -445,20 +453,28 @@ export function ProfilePage() {
       <h2 className="font-serif text-2xl">我的设计 <span className="text-sm text-[var(--muted)]">共 {designs.length} 件</span></h2>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         {sortedDesigns.map((entry) => (
-          <article className="flex flex-col gap-2 rounded-2xl border border-[var(--border)] bg-white p-3" data-profile-design={entry.design.designId} key={entry.design.designId}>
-            <div className="grid aspect-square place-items-center rounded-xl bg-[#f5f4f2] p-3">
+          <article className="flex flex-col gap-2 rounded-2xl border border-[var(--border)] bg-white p-3" data-profile-design={entry.design.designId} data-star-content-card="true" key={entry.design.designId}>
+            <div className="grid aspect-square place-items-center rounded-xl bg-[#f5f4f2] p-3" data-star-photo-field="true">
               <BeadThumbnails beadClass="h-8 w-8" design={entry.design} limit={4} />
             </div>
             <div className="flex items-center justify-between gap-2">
               <h3 className="min-w-0 truncate text-sm font-medium">{entry.design.designName}</h3>
-              <span className="shrink-0 text-[0.68rem] text-[var(--muted)]">{statusLabelFor(entry.status)}</span>
+              <span className="flex shrink-0 items-center gap-1">
+                <span data-status-mark={entry.status === "DRAFT" || entry.status === "GENERATED" ? "draft" : "complete"}>{statusLabelFor(entry.status)}</span>
+                <span data-visibility-mark={entry.design.community.visibility === "PUBLIC" ? "public" : entry.design.community.visibility === "UNLISTED" ? "unlisted" : "private"}>{visibilityLabelFor(entry.design.community.visibility)}</span>
+              </span>
             </div>
             <p className="text-xs text-[var(--muted)]">{gallerySourceLabel(entry.design)} · {formatGalleryUpdatedAt(entry.updatedAt)}</p>
             <Link className="mt-auto inline-flex min-h-9 items-center justify-center rounded-xl border border-[var(--border)] text-xs text-[var(--accent-deep)] transition hover:border-[var(--accent)]" href={detailRouteFor(entry.design)}>查看 →</Link>
           </article>
         ))}
       </div>
-      {designs.length === 0 ? <p className="rounded-2xl bg-[var(--surface-soft)] p-5 text-center text-sm text-[var(--muted)]">还没有设计作品。</p> : null}
+      {designs.length === 0 ? (
+        <div data-star-empty="true">
+          <p className="text-sm text-[var(--muted)]">还没有设计作品。</p>
+          <Link className="mt-3" data-star-recovery="create" href="/diy">去创作</Link>
+        </div>
+      ) : null}
     </div>
   );
 
@@ -473,7 +489,10 @@ export function ProfilePage() {
     <div className="space-y-4" data-profile-tab-panel="favorites">
       <h2 className="font-serif text-2xl">我的收藏 <span className="text-sm text-[var(--muted)]">共 {favorites.length} 件</span></h2>
       {favorites.length === 0 ? (
-        <p className="rounded-2xl bg-[var(--surface-soft)] p-5 text-center text-sm text-[var(--muted)]">还没有收藏，<Link className="text-[var(--accent)]" href="/crystal-library">去矿石库逛逛</Link>。</p>
+        <div data-star-empty="true">
+          <p className="text-sm text-[var(--muted)]">还没有收藏。</p>
+          <Link className="mt-3" data-star-recovery="library" href="/crystal-library">去矿石库逛逛</Link>
+        </div>
       ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {favorites.map((material) => (
@@ -551,7 +570,7 @@ export function ProfilePage() {
 
   if (isLoading) {
     return (
-      <main className="mx-auto grid min-h-[60vh] max-w-7xl place-items-center px-5 py-16" aria-live="polite" data-profile-page="loading">
+      <main className="mx-auto grid min-h-[60vh] max-w-7xl place-items-center px-5 py-16" aria-live="polite" data-profile-page="loading" data-star-surface="profile">
         <p className="text-sm text-[var(--muted)]">正在从 Backend 加载账户数据…</p>
       </main>
     );
@@ -559,18 +578,21 @@ export function ProfilePage() {
 
   if (notice && designs.length === 0 && orders.length === 0) {
     return (
-      <main className="mx-auto min-h-[60vh] max-w-3xl px-5 py-16" data-profile-page="error">
+      <main className="mx-auto min-h-[60vh] max-w-3xl px-5 py-16" data-profile-page="error" data-star-surface="profile">
         <FlowNotice code={notice} action={{ kind: "button", label: "重新加载", onAction: () => { setNotice(null); setIsLoading(true); void loadRemote().finally(() => setIsLoading(false)); } }} onDismissAuthRequired={() => setNotice(null)} />
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-[var(--surface)] pb-24 lg:pb-16" data-profile-page="ready">
+    <main className="min-h-screen bg-[var(--surface)] pb-24 lg:pb-16" data-profile-page="ready" data-star-surface="profile">
       <div className="mx-auto max-w-[92.5rem] px-4 pt-6 sm:px-6 lg:px-8 lg:pt-8">
-        <div className="flex items-center justify-between lg:hidden">
-          <h1 className="font-serif text-2xl">我的</h1>
-          <button aria-label="设置与帮助" className="grid h-10 w-10 place-items-center rounded-full border border-[var(--border)] bg-white text-[var(--muted)]" data-profile-action="settings-tab" onClick={() => setActiveTab("settings")} type="button">
+        <div className="flex items-center justify-between lg:hidden" data-star-content-header="true">
+          <div>
+            <p className="text-xs tracking-[0.18em] text-[var(--accent)]" data-star-content-kicker="true">Profile</p>
+            <h1 className="mt-1 font-serif text-2xl" data-star-content-title="true">我的</h1>
+          </div>
+          <button aria-label="设置与帮助" className="grid h-10 w-10 place-items-center rounded-full border border-[var(--border)] bg-white text-[var(--muted)]" data-profile-action="settings-tab" onClick={() => setManualTab("settings")} type="button">
             <svg aria-hidden="true" fill="none" height="17" stroke="currentColor" strokeWidth="1.6" viewBox="0 0 24 24" width="17"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3.05V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.31.6.92.99 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1Z" /></svg>
           </button>
         </div>
@@ -607,7 +629,7 @@ export function ProfilePage() {
                           aria-current={active ? "page" : undefined}
                           className={`flex min-h-10 w-full items-center rounded-lg border-l-2 px-3 text-left text-sm transition ${active ? "border-[var(--accent-deep)] bg-[var(--accent-soft)] font-medium text-[var(--accent-deep)]" : "border-transparent text-[var(--muted)] hover:bg-[var(--surface-soft)]"}`}
                           data-profile-tab={item.id}
-                          onClick={() => setActiveTab(item.id)}
+                          onClick={() => setManualTab(item.id)}
                           type="button"
                         >
                           {item.label}
@@ -646,7 +668,7 @@ export function ProfilePage() {
                   <h2 className="text-sm font-medium" id="profile-services-title">常用服务</h2>
                   <div className="mt-2 grid grid-cols-3 overflow-hidden rounded-2xl border border-[var(--border)] bg-white">
                     {SERVICE_ITEMS.map((item, index) => (
-                      <button className="flex min-h-20 flex-col items-center justify-center gap-1.5 border-b border-r border-[var(--border)] p-2 text-xs text-[var(--muted)] transition hover:text-[var(--accent)] [&:nth-child(3n)]:border-r-0 [&:nth-child(n+4)]:border-b-0" data-profile-service={item.label} key={`${item.id}-${item.label}-${index}`} onClick={() => setActiveTab(item.id)} type="button">
+                      <button className="flex min-h-20 flex-col items-center justify-center gap-1.5 border-b border-r border-[var(--border)] p-2 text-xs text-[var(--muted)] transition hover:text-[var(--accent)] [&:nth-child(3n)]:border-r-0 [&:nth-child(n+4)]:border-b-0" data-profile-service={item.label} key={`${item.id}-${item.label}-${index}`} onClick={() => setManualTab(item.id)} type="button">
                         {item.label}
                       </button>
                     ))}

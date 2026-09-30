@@ -10,6 +10,7 @@ import {
   maskContact,
   ongoingOrderCount,
   resolvePreferences,
+  resolveProfileTab,
   restockEtaDays,
   wristCentimeters,
   ORDER_STATUS_PRESENTATION
@@ -232,4 +233,16 @@ test("wrist formatting and datetime rendering stay display-friendly", () => {
   assert.equal(wristCentimeters(155), "15.5");
   assert.match(formatProfileDateTime("2026-05-20T06:32:00.000Z"), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
   assert.equal(formatProfileDateTime("not-a-date"), "");
+});
+
+test("profile query tabs resolve workbench deep links and fall back safely", () => {
+  assert.equal(resolveProfileTab("designs"), "designs");
+  assert.equal(resolveProfileTab("favorites"), "favorites");
+  assert.equal(resolveProfileTab("orders"), "orders");
+  assert.equal(resolveProfileTab("settings"), "settings");
+  assert.equal(resolveProfileTab("addresses"), "addresses");
+  assert.equal(resolveProfileTab("overview"), "overview");
+  assert.equal(resolveProfileTab("unknown"), "overview");
+  assert.equal(resolveProfileTab(null), "overview");
+  assert.equal(resolveProfileTab(""), "overview");
 });

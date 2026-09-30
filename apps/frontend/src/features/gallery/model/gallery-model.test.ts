@@ -10,7 +10,8 @@ import {
   gallerySourceLabel,
   galleryStats,
   GALLERY_FILTER_OPTIONS,
-  statusLabelFor
+  statusLabelFor,
+  visibilityLabelFor
 } from "./gallery-model";
 
 function design(overrides: Partial<PublicDesignV1>): PublicDesignV1 {
@@ -128,6 +129,12 @@ test("status and source labels follow the approved wording", () => {
   assert.equal(gallerySourceLabel(design({ designMode: "TAROT_GUIDED" })), "塔罗灵感");
   assert.equal(gallerySourceLabel(design({ designMode: "DIY_CREATED" })), "DIY");
   assert.equal(gallerySourceLabel(design({ designMode: "TEMPLATE_REMIX" })), "DIY");
+});
+
+test("visibility labels are text marks for private and public states", () => {
+  assert.equal(visibilityLabelFor("PRIVATE"), "私密");
+  assert.equal(visibilityLabelFor("PUBLIC"), "公开");
+  assert.equal(visibilityLabelFor("UNLISTED"), "未列出");
 });
 
 test("filtering by status tab keeps only matching persistence statuses", () => {

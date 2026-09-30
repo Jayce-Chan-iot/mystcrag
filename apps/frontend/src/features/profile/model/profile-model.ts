@@ -31,6 +31,22 @@ export function restockEtaDays(order: ProfileOrder): number | null {
   return order.fulfillment.estimatedRestockDays > 0 ? order.fulfillment.estimatedRestockDays : null;
 }
 
+export type ProfileTab = "overview" | "designs" | "orders" | "favorites" | "addresses" | "settings";
+
+const PROFILE_TAB_IDS: ReadonlySet<string> = new Set<ProfileTab>([
+  "overview",
+  "designs",
+  "orders",
+  "favorites",
+  "addresses",
+  "settings"
+]);
+
+export function resolveProfileTab(query: string | null | undefined): ProfileTab {
+  if (typeof query === "string" && PROFILE_TAB_IDS.has(query)) return query as ProfileTab;
+  return "overview";
+}
+
 export type ProfileLevel = { level: number; title: string };
 
 const LEVELS: ReadonlyArray<ProfileLevel & { minDesigns: number }> = [
