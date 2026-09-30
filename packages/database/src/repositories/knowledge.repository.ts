@@ -341,37 +341,48 @@ export class KnowledgeRepository {
     }
   ): Promise<StoredKnowledgeSource> {
     try {
+      // Validate every provided field against the authoritative KnowledgeSource
+      // schemas before any write, so a mixed update is all-or-nothing and a
+      // rejected field can never reach the database.
+      const data: Prisma.KnowledgeSourceUpdateInput = {};
+      if (policy.authorityScore !== undefined) {
+        data.authorityScore = KnowledgeSourceSchema.shape.authorityScore.parse(
+          policy.authorityScore
+        );
+      }
+      if (policy.allowedKnowledgeDomains !== undefined) {
+        data.allowedKnowledgeDomains = KnowledgeSourceSchema.shape.allowedKnowledgeDomains.parse(
+          policy.allowedKnowledgeDomains
+        );
+      }
+      if (policy.crawlFrequency !== undefined) {
+        data.crawlFrequency =
+          policy.crawlFrequency === null
+            ? null
+            : KnowledgeSourceSchema.shape.crawlFrequency.parse(policy.crawlFrequency);
+      }
+      if (policy.rateLimit !== undefined) {
+        data.rateLimit =
+          policy.rateLimit === null
+            ? Prisma.DbNull
+            : toPrismaJson(KnowledgeSourceSchema.shape.rateLimit.parse(policy.rateLimit));
+      }
+      if (policy.crawlStrategy !== undefined) {
+        data.crawlStrategy =
+          policy.crawlStrategy === null
+            ? Prisma.DbNull
+            : toPrismaJson(KnowledgeSourceSchema.shape.crawlStrategy.parse(policy.crawlStrategy));
+      }
+      if (policy.enabled !== undefined) {
+        data.enabled = KnowledgeSourceSchema.shape.enabled.parse(policy.enabled);
+      }
+
       const row = await this.prisma.knowledgeSource.update({
         where: { id },
-        data: {
-          ...(policy.authorityScore === undefined
-            ? {}
-            : { authorityScore: KnowledgeSourceSchema.shape.authorityScore.parse(policy.authorityScore) }),
-          ...(policy.allowedKnowledgeDomains === undefined
-            ? {}
-            : {
-                allowedKnowledgeDomains: KnowledgeSourceSchema.shape.allowedKnowledgeDomains.parse(
-                  policy.allowedKnowledgeDomains
-                )
-              }),
-          ...(policy.crawlFrequency === undefined ? {} : { crawlFrequency: policy.crawlFrequency }),
-          ...(policy.rateLimit === undefined
-            ? {}
-            : {
-                rateLimit:
-                  policy.rateLimit === null ? Prisma.DbNull : toPrismaJson(policy.rateLimit)
-              }),
-          ...(policy.crawlStrategy === undefined
-            ? {}
-            : {
-                crawlStrategy:
-                  policy.crawlStrategy === null
-                    ? Prisma.DbNull
-                    : toPrismaJson(policy.crawlStrategy)
-              }),
-          ...(policy.enabled === undefined ? {} : { enabled: policy.enabled })
-        }
+        data
       });
+      // parseSource remains the persistence-integrity check on the returned row,
+      // not the first line of defense for caller input.
       return parseSource(row);
     } catch (error) {
       rethrowPersistenceError(error);
