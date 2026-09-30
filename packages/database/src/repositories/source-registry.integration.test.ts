@@ -312,3 +312,41 @@ test("updateSourcePolicy applies a legal multi-field update and round-trips", {
     await database.$disconnect();
   }
 });
+
+test("updateSourcePolicy rejects invalid crawlFrequency without any write", {
+  skip: !databaseUrl
+}, async () => {
+  const database = createPrismaClient(databaseUrl);
+  const repository = new KnowledgeRepository(database);
+  const id = "source-policy-atomic-crawl-frequency";
+  try {
+    const baseline = await seedDisabledPolicySource(database, repository, id);
+
+    // Minimal local cast simulates a runtime caller that bypasses TypeScript;
+    // production method types stay narrow.
+    const unsafePolicy = {
+      enabled: true,
+      crawlFrequency: ""
+    } as Parameters<KnowledgeRepository["updateSourcePolicy"]>[1];
+
+    await assert.rejects(
+      repository.updateSourcePolicy(id, unsafePolicy),
+      (error: unknown) =>
+        error instanceof PersistenceError && error.code === "DATA_INTEGRITY_ERROR"
+    );
+
+    const row = await database.knowledgeSource.findUniqueOrThrow({ where: { id } });
+    assert.equal(row.enabled, false, "the valid sibling field must not be written");
+    assert.equal(row.crawlFrequency, "monthly", "crawlFrequency must stay at its baseline value");
+    assert.deepEqual(row.rateLimit, baseline.rateLimit);
+    assert.deepEqual(row.crawlStrategy, baseline.crawlStrategy);
+    assert.equal(
+      row.updatedAt.getTime(),
+      baseline.updatedAt.getTime(),
+      "a rejected policy update must not touch updatedAt"
+    );
+  } finally {
+    await database.knowledgeSource.deleteMany({ where: { id } });
+    await database.$disconnect();
+  }
+});
