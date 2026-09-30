@@ -280,7 +280,7 @@ export function TarotSetup({ client = tarotApi }: Readonly<{ client?: Pick<Tarot
   };
 
   return (
-    <main className="min-h-[calc(100vh-5rem)] px-5 pb-20 pt-10 sm:px-8 sm:pb-28 sm:pt-14" data-atelier-surface="tarot-setup">
+    <main className="min-h-[calc(100vh-5rem)] px-5 pb-20 pt-10 sm:px-8 sm:pb-28 sm:pt-14" data-atelier-surface="tarot-setup" data-star-surface="tarot-setup">
       <header className="mx-auto mb-10 max-w-3xl text-center sm:mb-14">
         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-[var(--accent)]">塔罗水晶引导 · Tarot guidance</p>
         <h1 className="mt-5 font-serif text-4xl leading-tight sm:text-6xl">先听见问题，再选择一组牌。</h1>

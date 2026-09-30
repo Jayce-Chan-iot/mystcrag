@@ -251,7 +251,7 @@ export function OracleResult({
   const session = snapshot.session;
 
   return (
-    <main className="oraclePage" data-oracle-result="true" data-oracle-session={sessionId}>
+    <main className="oraclePage" data-oracle-result="true" data-oracle-session={sessionId} data-star-surface="oracle-result">
       <div className="oracleShell">
         <header className="oracleHero">
           <p className="oracleEyebrow">玄圭星台</p>

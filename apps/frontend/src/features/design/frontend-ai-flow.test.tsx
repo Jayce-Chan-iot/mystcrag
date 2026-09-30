@@ -557,3 +557,98 @@ test("the mobile workbench keeps one persistent server-authoritative info strip 
   // scroll fully above the nav instead of being clipped by the sheet.
   assert.match(source, /mt-3 grid min-h-0 flex-1 grid-cols-3 overflow-y-auto/);
 });
+
+function readSource(rel: string): string {
+  return readFileSync(new URL(rel, import.meta.url), "utf8");
+}
+
+test("homepage adopts the star surface and typed star platform assets for decoration", () => {
+  const home = readSource("../../../app/page.tsx");
+  assert.match(home, /data-star-surface="home"/);
+  assert.match(home, /data-atelier-surface="home"/);
+  assert.match(home, /STAR_PLATFORM_ASSETS|getStarPlatformAsset/);
+  assert.match(home, /heroObservatory|engravedStarMap|xuanPaperGrain/);
+  assert.match(home, /data-creation-count=\{creationPaths\.length\}/);
+  assert.match(home, /data-star-entry-card/);
+  // Frozen atelier photography remains present for the non-writable contract.
+  assert.match(home, /\/home\/hero-bracelet\.webp/);
+  assert.match(home, /data-reference-entry-image="true"/);
+});
+
+test("homepage capability grid is balanced at two, three and four cards with no orphan column", () => {
+  const css = readSource("../../../app/styles/star-acquisition.css");
+  assert.match(css, /\[data-creation-count="2"\]/);
+  assert.match(css, /\[data-creation-count="3"\]/);
+  assert.match(css, /\[data-creation-count="4"\]/);
+  assert.match(css, /\[data-creation-count="2"\][\s\S]*?grid-template-columns:\s*repeat\(2/);
+  assert.match(css, /\[data-creation-count="3"\][\s\S]*?grid-template-columns:\s*repeat\(3/);
+  assert.match(css, /\[data-creation-count="4"\][\s\S]*?grid-template-columns:\s*repeat\(4/);
+  // Cards must never rely on auto-fit alone, which leaves a hole at 2 or 3 items.
+  assert.doesNotMatch(css, /\[data-creation-path-group\][^{]*\{[^}]*repeat\(auto-fit/);
+});
+
+test("questionnaire keeps one question per view under the star surface with sticky navigation", () => {
+  const source = readSource("../questionnaire/components/questionnaire-wizard.tsx");
+  assert.match(source, /data-star-surface="questionnaire"/);
+  assert.match(source, /data-atelier-surface="questionnaire"/);
+  assert.match(source, /data-questionnaire-stepper="true"/);
+  assert.match(source, /data-star-step-panel|data-star-question-panel/);
+  assert.match(source, /继续/);
+  assert.match(source, /生成设计/);
+  assert.match(source, /上一步/);
+  // Sticky next action stays reachable on mobile.
+  assert.match(source, /fixed inset-x-0 bottom-0/);
+});
+
+test("design results keep selection, sticky DIY entry and compliance under the star surface", () => {
+  const source = readSource("./components/design-results.tsx");
+  assert.match(source, /data-star-surface="design-results"/);
+  assert.match(source, /data-atelier-surface="design-results"/);
+  assert.match(source, /data-results-action-bar="true"/);
+  assert.match(source, /data-results-layout="comparison-grid"/);
+  assert.match(source, /进入 DIY 调整/);
+  assert.match(source, /data-design-selected/);
+  assert.match(source, /data-star-result-card|data-star-entry-card/);
+});
+
+test("design summary and compliance notice retain status, privacy and disclaimer semantics", () => {
+  const summary = readSource("./components/design-summary.tsx");
+  const compliance = readSource("./components/compliance-notice.tsx");
+  assert.match(summary, /data-star-surface|data-star-design-summary/);
+  assert.match(summary, /Private/);
+  assert.match(compliance, /data-compliance-status/);
+  assert.match(compliance, /CULTURAL_REFERENCE_NOT_SCIENTIFIC_EFFECT|DESIGN_INSPIRATION_ONLY/);
+  assert.match(compliance, /文化意象仅作为设计灵感/);
+  assert.match(compliance, /仅用于审美表达与设计灵感/);
+  // No deterministic fortune, medical, or efficacy claims.
+  for (const source of [summary, compliance]) {
+    assert.doesNotMatch(source, /转运|招财|发财|保平安|辟邪|开光|加持|治愈|疗愈|旺|桃花|挽回|命定|注定|一定|必定|大师/);
+    assert.doesNotMatch(source, /—|──/);
+  }
+});
+
+test("star acquisition styles stay on the star token system without AI purple gradients or glass cards", () => {
+  const css = readSource("../../../app/styles/star-acquisition.css");
+  assert.match(css, /var\(--star-/);
+  assert.match(css, /data-star-surface/);
+  // No glassmorphism and no generic AI violet gradients.
+  assert.doesNotMatch(css, /backdrop-filter:\s*blur/);
+  assert.doesNotMatch(css, /(?:linear|radial)-gradient\([^)]*#(?:8b5cf6|a78bfa|7c3aed|6d28d9|c084fc)/i);
+  assert.doesNotMatch(css, /(?:linear|radial)-gradient\([^)]*rgb\(\s*124\s+58\s+237/);
+  // 44px interaction floor and reduced-motion support.
+  assert.match(css, /min-height:\s*2\.75rem|min-height:\s*44px/);
+  assert.match(css, /prefers-reduced-motion/);
+  // Never tint photographic crystal imagery.
+  assert.doesNotMatch(css, /filter:\s*(?:hue-rotate|sepia|saturate)\(/);
+});
+
+test("star acquisition scopes home, questionnaire and design results without unscoped layout rules", () => {
+  const css = readSource("../../../app/styles/star-acquisition.css");
+  assert.match(css, /\[data-star-surface="home"\]/);
+  assert.match(css, /\[data-star-surface="questionnaire"\]/);
+  assert.match(css, /\[data-star-surface="design-results"\]/);
+  assert.match(css, /\[data-star-surface="tarot/);
+  assert.match(css, /\[data-star-surface="oracle/);
+  // 320px safety: horizontal overflow is clipped at the surface root.
+  assert.match(css, /overflow-x:\s*(?:clip|hidden)/);
+});

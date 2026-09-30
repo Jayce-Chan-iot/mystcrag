@@ -610,3 +610,16 @@ test("disabled result route never mounts the oracle client", () => {
   assert.ok(gateIndex >= 0, "result page must gate on the rollout flag");
   assert.ok(clientIndex > gateIndex, "client mount must come after the flag gate");
 });
+
+test("oracle result adopts the star surface and keeps line labels independent of colour", () => {
+  const source = readFileSync(new URL("./components/oracle-result.tsx", import.meta.url), "utf8");
+  const linesSource = readFileSync(new URL("./components/oracle-lines.tsx", import.meta.url), "utf8");
+  assert.match(source, /data-star-surface="oracle-result"/);
+  assert.match(source, /data-oracle-result/);
+  assert.match(linesSource, /data-line-kind/);
+  assert.match(linesSource, /solid|broken/);
+  assert.match(linesSource, /动爻/);
+  const css = readFileSync(new URL("./oracle.module.css", import.meta.url), "utf8");
+  assert.match(css, /data-star-surface="oracle-result"|--star-/);
+  assert.doesNotMatch(css, /radial-gradient\([^)]*73 53 95/);
+});

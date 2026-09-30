@@ -1,3 +1,17 @@
+/* Star surface scoping for the Tarot page family (TASK-FE-STAR-001). */
+:global([data-star-surface="tarot-setup"]),
+:global([data-star-surface="tarot-draw"]),
+:global([data-star-surface="tarot-result"]) {
+  overflow-x: clip;
+  min-width: 0;
+}
+
+:global([data-star-surface="tarot-setup"]) :global(:is(button, a, select, textarea, input, summary)),
+:global([data-star-surface="tarot-draw"]) :global(:is(button, a, select, textarea, input, summary)),
+:global([data-star-surface="tarot-result"]) :global(:is(button, a, select, textarea, input, summary)) {
+  min-height: 2.75rem;
+}
+
 .tarotDrawPage {
   min-height: calc(100dvh - 5rem);
   overflow-x: clip;
@@ -16,7 +30,7 @@
 
 .tarotEyebrow {
   margin: 0;
-  color: #4d3765;
+  color: var(--star-brass-ink, #4d3765);
   font-family: Georgia, "Noto Serif SC", serif;
   font-size: clamp(1rem, 1.45vw, 1.35rem);
   letter-spacing: 0.08em;
@@ -27,7 +41,7 @@
   gap: 0.35rem;
   margin-top: 1.8rem;
   padding-left: 1.05rem;
-  border-left: 2px solid #72568e;
+  border-left: 2px solid var(--star-amethyst, #72568e);
 }
 
 .tarotThemeBlock span {
@@ -275,8 +289,7 @@
   padding: 1.25rem max(1.25rem, env(safe-area-inset-right)) calc(1.25rem + env(safe-area-inset-bottom)) max(1.25rem, env(safe-area-inset-left));
   border-top: 1px solid #e5ddd2;
   background: rgb(255 253 249 / 0.96);
-  backdrop-filter: blur(12px);
-}
+  }
 
 .tarotSecondaryAction,
 .tarotPrimaryAction {
@@ -720,8 +733,7 @@
   padding: 1rem max(1.2rem, env(safe-area-inset-right)) calc(1rem + env(safe-area-inset-bottom)) max(1.2rem, env(safe-area-inset-left));
   border-top: 1px solid #e6ddd2;
   background: rgb(255 253 249 / 0.96);
-  backdrop-filter: blur(14px);
-}
+  }
 
 .tarotResultActions .tarotSecondaryAction,
 .tarotResultActions .tarotPrimaryAction {

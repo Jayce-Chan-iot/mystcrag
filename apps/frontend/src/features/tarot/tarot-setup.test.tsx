@@ -338,3 +338,13 @@ test("Tarot route layout owns the ephemeral draft provider", () => {
   assert.match(markup, /只存在于当前路由树/);
   assert.equal((TarotSetupPage() as React.ReactElement).type, TarotSetup);
 });
+
+test("tarot setup adopts the star surface while keeping privacy and theme semantics", () => {
+  const source = readFileSync(new URL("./components/tarot-setup.tsx", import.meta.url), "utf8");
+  assert.match(source, /data-star-surface="tarot-setup"/);
+  assert.match(source, /data-atelier-surface="tarot-setup"/);
+  assert.match(source, /TAROT_THEMES/);
+  assert.match(source, /不代表事实预测|自我反思/);
+  const css = readFileSync(new URL("./tarot.module.css", import.meta.url), "utf8");
+  assert.match(css, /data-star-surface="tarot-setup"|--star-/);
+});

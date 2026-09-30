@@ -77,7 +77,7 @@ export function QuestionnaireWizard() {
   const options = step.id === "wrist" ? null : QUESTION_OPTIONS[step.id];
 
   return (
-    <main className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-5xl flex-col px-5 pb-28 pt-8 sm:px-8 sm:pb-16 sm:pt-12" data-atelier-surface="questionnaire">
+    <main className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-5xl flex-col px-5 pb-28 pt-8 sm:px-8 sm:pb-16 sm:pt-12" data-atelier-surface="questionnaire" data-star-surface="questionnaire">
       <div className="flex items-center justify-between text-xs tracking-[0.15em] text-[var(--muted)]">
         <span>AI DESIGN · PERSONAL BRIEF</span>
         <span aria-label={`第 ${stepIndex + 1} 步，共 ${QUESTIONNAIRE_STEPS.length} 步`}>{String(stepIndex + 1).padStart(2, "0")} / 06</span>
@@ -94,7 +94,7 @@ export function QuestionnaireWizard() {
         <div className="h-full bg-[var(--accent)] transition-all duration-500" style={{ width: `${progress}%` }} />
       </div>
 
-      <section className="mx-auto mt-14 w-full max-w-3xl sm:animate-reveal-softly" key={step.id} aria-labelledby="question-title">
+      <section className="mx-auto mt-14 w-full max-w-3xl sm:animate-reveal-softly" data-star-step-panel="true" key={step.id} aria-labelledby="question-title">
         <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--accent)]">{step.eyebrow}</p>
         <h1 className="mt-5 font-serif text-3xl leading-tight sm:text-5xl" id="question-title">{step.title}</h1>
         <p className="mt-4 max-w-2xl leading-7 text-[var(--muted)]">{step.description}</p>

@@ -3,7 +3,7 @@ import * as React from "react";
 
 export function DesignSummary({ design }: { design: PublicDesignV1 }) {
   return (
-    <section aria-labelledby="design-summary-heading">
+    <section aria-labelledby="design-summary-heading" data-star-design-summary="true">
       <h2 id="design-summary-heading">{design.designName}</h2>
       <p>{design.story.designStory}</p>
       <p>{design.community.visibility === "PRIVATE" ? "Private" : design.community.visibility}</p>

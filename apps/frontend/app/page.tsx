@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 
+import { STAR_PLATFORM_ASSETS } from "../src/features/design/model/star-assets";
 import { isOracleFeatureEnabled, isTarotFeatureEnabled } from "../src/lib/api/api-runtime";
 
 export const dynamic = "force-dynamic";
@@ -96,12 +97,20 @@ export default function HomePage() {
   };
   const creationPaths = getCreationPaths(capabilities);
   const heroCapabilityLabel = getHeroCapabilityLabel(capabilities);
+  const starTexture = STAR_PLATFORM_ASSETS.engravedStarMap;
 
   return (
-    <main data-atelier-surface="home">
-      <div className="home-reference-shell">
-        <section className="home-reference-hero" data-reference-home-hero="true">
+    <main data-atelier-surface="home" data-star-surface="home">
+      <div className="home-reference-shell" data-star-home-shell="true">
+        <section className="home-reference-hero" data-reference-home-hero="true" data-star-hero="true">
+          <div
+            aria-hidden="true"
+            className="star-home-texture"
+            data-star-texture="engraved-star-map"
+            style={{ backgroundImage: `url(${starTexture.src})` }}
+          />
           <div className="home-reference-hero-copy">
+            <p className="star-home-kicker" data-star-kicker="true">玄圭星台 · 观星成串</p>
             <h1>当灵感与矿石相遇，<br />每一串手链都是你的答案。</h1>
             <p>{heroCapabilityLabel}</p>
             <span>从你的当下、色彩与风格出发，为你提炼三种设计方向。每一颗珠子，都仍由你决定。</span>
@@ -118,13 +127,14 @@ export default function HomePage() {
         </section>
 
         <section
-          className="home-reference-paths"
           aria-label="选择创作方式"
+          className="home-reference-paths"
           data-creation-count={creationPaths.length}
           data-creation-path-group="true"
+          data-star-path-group="true"
         >
           {creationPaths.map((path) => (
-            <article data-creation-path={path.id} key={path.id}>
+            <article data-creation-path={path.id} data-star-entry-card="true" key={path.id}>
               <Link aria-label={path.action} className="home-reference-card-link" href={path.href} title={path.action}>
                 <div className="home-reference-entry-image" data-reference-entry-image="true">
                   <Image alt={path.imageAlt} fill sizes="(max-width: 767px) calc(100vw - 2rem), (max-width: 1536px) calc((100vw - 8rem) / 2), 44rem" src={path.image} />

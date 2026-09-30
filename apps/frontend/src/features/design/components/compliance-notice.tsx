@@ -17,7 +17,7 @@ export function ComplianceNotice({ design }: { design: PublicDesignV1 }) {
   const status = design.compliance.complianceStatus;
 
   return (
-    <aside aria-label="合规说明" className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] p-4 text-sm leading-6 text-[var(--muted)]" data-compliance-status={status}>
+    <aside aria-label="合规说明" className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] p-4 text-sm leading-6 text-[var(--muted)]" data-compliance-status={status} data-star-compliance-notice="true">
       <p className="font-medium text-[var(--foreground)]">{statusCopy[status]}</p>
       {design.compliance.disclaimerKeys.map((key) => (
         <small className="mt-1 block" key={key}>{disclaimerCopy[key]}</small>

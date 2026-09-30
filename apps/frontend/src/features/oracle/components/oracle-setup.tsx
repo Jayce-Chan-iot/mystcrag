@@ -172,7 +172,7 @@ export type OracleSetupProps = OracleSetupFieldsProps;
 
 export function OracleSetup(props: OracleSetupProps) {
   return (
-    <main className="oraclePage" data-oracle-setup="true">
+    <main className="oraclePage" data-oracle-setup="true" data-star-surface="oracle-setup">
       <div className="oracleShell">
         <header className="oracleHero">
           <p className="oracleEyebrow">玄圭星台</p>

@@ -7,6 +7,15 @@
 [data-star-surface="questionnaire"],
 [data-star-surface="design-results"] {
   color: var(--star-ink);
+  overflow-x: clip;
+}
+
+[data-star-surface="tarot-setup"],
+[data-star-surface="tarot-draw"],
+[data-star-surface="tarot-result"],
+[data-star-surface="oracle-setup"],
+[data-star-surface="oracle-result"] {
+  overflow-x: clip;
 }
 
 [data-star-surface="home"] [data-star-entry-card],
@@ -15,4 +24,288 @@
   border-radius: var(--star-radius-lg);
   background: var(--star-paper);
   min-height: 2.75rem;
+}
+
+/* Home: night-lacquer stage around the observatory hero and capability cards. */
+[data-star-surface="home"] {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--star-canvas) 92%, var(--star-ink)) 0%, var(--star-paper) 38rem);
+  color: var(--star-ink);
+}
+
+[data-star-surface="home"] [data-star-home-shell] {
+  width: min(100%, 92rem);
+  margin-inline: auto;
+  padding: clamp(1rem, 2.25vw, 2rem);
+}
+
+[data-star-surface="home"] [data-star-hero] {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--star-brass) 32%, transparent);
+  border-radius: var(--star-radius-lg);
+  background: linear-gradient(145deg, var(--star-canvas) 0%, color-mix(in srgb, var(--star-ink) 88%, var(--star-amethyst)) 100%);
+  box-shadow: var(--star-shadow-2);
+}
+
+[data-star-surface="home"] [data-star-texture] {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-position: center;
+  background-size: cover;
+  opacity: 0.18;
+  mix-blend-mode: soft-light;
+  pointer-events: none;
+}
+
+[data-star-surface="home"] [data-star-kicker] {
+  margin: 0 0 var(--star-space-3);
+  color: var(--star-brass);
+  font-size: 0.75rem;
+  letter-spacing: 0.22em;
+}
+
+[data-star-surface="home"] .home-reference-hero-copy {
+  position: relative;
+  z-index: 1;
+  color: var(--star-paper);
+}
+
+[data-star-surface="home"] .home-reference-hero-copy h1 {
+  color: var(--star-paper);
+  text-wrap: balance;
+}
+
+[data-star-surface="home"] .home-reference-hero-copy > p {
+  color: var(--star-brass);
+}
+
+[data-star-surface="home"] .home-reference-hero-copy > span {
+  color: color-mix(in srgb, var(--star-moon) 88%, var(--star-paper));
+}
+
+/* Capability grid: explicit counts so 2/3/4 cards never leave an orphan column. */
+[data-star-surface="home"] [data-creation-path-group] {
+  display: grid;
+  gap: clamp(1rem, 1.65vw, 1.5rem);
+  grid-template-columns: 1fr;
+}
+
+[data-star-surface="home"] [data-creation-count="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+[data-star-surface="home"] [data-creation-count="3"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+[data-star-surface="home"] [data-creation-count="4"] {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 1023px) {
+  [data-star-surface="home"] [data-creation-count="3"],
+  [data-star-surface="home"] [data-creation-count="4"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  [data-star-surface="home"] [data-creation-path-group],
+  [data-star-surface="home"] [data-creation-count="2"],
+  [data-star-surface="home"] [data-creation-count="3"],
+  [data-star-surface="home"] [data-creation-count="4"] {
+    grid-template-columns: 1fr;
+  }
+}
+
+[data-star-surface="home"] [data-star-entry-card] {
+  min-width: 0;
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-lg);
+  background: var(--star-paper);
+  box-shadow: var(--star-shadow-1);
+  transition:
+    border-color var(--star-motion-base) var(--star-motion-ease),
+    box-shadow var(--star-motion-base) var(--star-motion-ease),
+    transform var(--star-motion-base) var(--star-motion-ease);
+}
+
+[data-star-surface="home"] [data-star-entry-card]:has(.home-reference-card-link:is(:hover, :focus-visible)) {
+  border-color: color-mix(in srgb, var(--star-brass) 70%, var(--star-line));
+  box-shadow: var(--star-shadow-2);
+  transform: translateY(-2px);
+}
+
+[data-star-surface="home"] .home-reference-card-link {
+  border-color: transparent;
+  border-radius: var(--star-radius-lg);
+  background: transparent;
+  box-shadow: none;
+}
+
+[data-star-surface="home"] .home-reference-card-link:focus-visible {
+  outline: 2px solid var(--star-brass-ink);
+  outline-offset: 3px;
+}
+
+[data-star-surface="home"] .home-reference-entry-copy h2 {
+  color: var(--star-ink);
+  letter-spacing: 0.02em;
+}
+
+[data-star-surface="home"] .home-reference-entry-copy p,
+[data-star-surface="home"] .home-reference-entry-copy small {
+  color: color-mix(in srgb, var(--star-ink) 72%, var(--star-paper));
+}
+
+[data-star-surface="home"] .home-reference-entry-arrow {
+  border-color: color-mix(in srgb, var(--star-brass) 55%, var(--star-line));
+  background: transparent;
+  color: var(--star-brass-ink);
+}
+
+/* Questionnaire: instrument rail around one focused question. */
+[data-star-surface="questionnaire"] {
+  background:
+    linear-gradient(180deg, var(--star-paper) 0%, color-mix(in srgb, var(--star-paper) 92%, var(--star-paper-muted)) 100%);
+}
+
+[data-star-surface="questionnaire"] [data-star-step-panel] {
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-lg);
+  background: color-mix(in srgb, var(--star-paper) 92%, white);
+  box-shadow: var(--star-shadow-1);
+  padding: clamp(1.25rem, 3vw, 2rem);
+}
+
+[data-star-surface="questionnaire"] [data-questionnaire-stepper] li[data-active] span:first-child {
+  border-color: var(--star-brass);
+  background: var(--star-brass);
+  color: var(--star-canvas);
+}
+
+[data-star-surface="questionnaire"] [data-questionnaire-stepper] li[data-complete] span:first-child {
+  border-color: var(--star-brass-ink);
+  background: var(--star-brass-ink);
+  color: var(--star-paper);
+}
+
+[data-star-surface="questionnaire"] fieldset[role="radiogroup"] button {
+  min-height: 2.75rem;
+  border-radius: var(--star-radius-md);
+  border-color: var(--star-line);
+  background: var(--star-paper);
+  transition:
+    border-color var(--star-motion-fast) var(--star-motion-ease),
+    background-color var(--star-motion-fast) var(--star-motion-ease);
+}
+
+[data-star-surface="questionnaire"] fieldset[role="radiogroup"] button[aria-checked="true"] {
+  border-color: var(--star-brass);
+  background: color-mix(in srgb, var(--star-brass) 16%, var(--star-paper));
+}
+
+[data-star-surface="questionnaire"] button:focus-visible,
+[data-star-surface="questionnaire"] input:focus-visible {
+  outline: 2px solid var(--star-brass-ink);
+  outline-offset: 2px;
+}
+
+/* Design results: paper comparison cards on a lacquer stage. */
+[data-star-surface="design-results"] {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--star-canvas) 88%, var(--star-ink)) 0%, var(--star-paper) 28rem);
+}
+
+[data-star-surface="design-results"] [data-star-result-card],
+[data-star-surface="design-results"] .design-result-card {
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-lg);
+  background: var(--star-paper);
+  box-shadow: var(--star-shadow-1);
+  min-height: 2.75rem;
+}
+
+[data-star-surface="design-results"] .design-result-card[data-design-selected="true"] {
+  border-color: var(--star-brass);
+  box-shadow: var(--star-shadow-2);
+}
+
+[data-star-surface="design-results"] [data-results-action-bar="true"] {
+  border-color: color-mix(in srgb, var(--star-brass) 42%, var(--star-line));
+  border-radius: var(--star-radius-lg);
+  background: color-mix(in srgb, var(--star-paper) 94%, white);
+  box-shadow: var(--star-shadow-2);
+}
+
+[data-star-surface="design-results"] a,
+[data-star-surface="design-results"] button {
+  min-height: 2.75rem;
+}
+
+[data-star-surface="design-results"] a:focus-visible,
+[data-star-surface="design-results"] button:focus-visible {
+  outline: 2px solid var(--star-brass-ink);
+  outline-offset: 3px;
+}
+
+/* Tarot and Oracle: instrument framing, readable paper/lacquer panels. */
+[data-star-surface="tarot-setup"] main,
+[data-star-surface="tarot-draw"] main,
+[data-star-surface="tarot-result"] main,
+[data-star-surface="oracle-setup"] main,
+[data-star-surface="oracle-result"] main {
+  overflow-x: clip;
+}
+
+[data-star-surface="tarot-setup"] [data-star-entry-card],
+[data-star-surface="oracle-setup"] [data-star-entry-card] {
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-lg);
+  background: var(--star-paper);
+  min-height: 2.75rem;
+}
+
+[data-star-surface="oracle-setup"] .oraclePrimaryAction,
+[data-star-surface="oracle-result"] .oraclePrimaryAction {
+  min-height: 2.75rem;
+  border: 1px solid var(--star-brass);
+  border-radius: var(--star-radius-md);
+  background: var(--star-brass);
+  color: var(--star-canvas);
+  letter-spacing: 0.08em;
+  transition: background-color var(--star-motion-fast) var(--star-motion-ease);
+}
+
+[data-star-surface="oracle-setup"] .oraclePrimaryAction:focus-visible,
+[data-star-surface="oracle-result"] .oraclePrimaryAction:focus-visible {
+  outline: 2px solid var(--star-brass-ink);
+  outline-offset: 3px;
+}
+
+[data-star-surface="tarot-setup"] button,
+[data-star-surface="tarot-draw"] button,
+[data-star-surface="tarot-result"] button,
+[data-star-surface="tarot-setup"] a,
+[data-star-surface="tarot-draw"] a,
+[data-star-surface="tarot-result"] a,
+[data-star-surface="oracle-setup"] button,
+[data-star-surface="oracle-result"] button {
+  min-height: 2.75rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-star-surface="home"] [data-star-entry-card],
+  [data-star-surface="home"] .home-reference-card-link,
+  [data-star-surface="questionnaire"] fieldset[role="radiogroup"] button,
+  [data-star-surface="oracle-setup"] .oraclePrimaryAction {
+    transition: none;
+    transform: none;
+  }
+
+  [data-star-surface="home"] [data-star-entry-card]:has(.home-reference-card-link:is(:hover, :focus-visible)) {
+    transform: none;
+  }
 }

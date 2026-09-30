@@ -796,3 +796,13 @@ test("dynamic result page preserves the route session identity", async () => {
   const element = await TarotResultPage({ params: Promise.resolve({ sessionId: "session%2Fencoded" }) });
   assert.equal((element as React.ReactElement<{ sessionId: string }>).props.sessionId, "session%2Fencoded");
 });
+
+test("tarot result adopts the star surface and retains the non-predictive disclaimer", () => {
+  const source = readFileSync(new URL("./components/tarot-result.tsx", import.meta.url), "utf8");
+  assert.match(source, /data-star-surface="tarot-result"/);
+  assert.match(source, /data-atelier-surface="tarot-result"/);
+  assert.match(source, /interpretation\.disclaimer/);
+  const css = readFileSync(new URL("./tarot.module.css", import.meta.url), "utf8");
+  assert.match(css, /data-star-surface="tarot-result"|--star-/);
+  assert.doesNotMatch(css, /backdrop-filter:\s*blur/);
+});

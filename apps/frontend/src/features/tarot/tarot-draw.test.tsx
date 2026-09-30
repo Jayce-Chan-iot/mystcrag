@@ -808,3 +808,12 @@ test("dynamic page keeps the encoded route identity inside the draw component bo
   const element = await TarotDrawPage({ params: Promise.resolve({ sessionId: "session%2Fencoded" }) });
   assert.equal((element as React.ReactElement<{ sessionId: string }>).props.sessionId, "session%2Fencoded");
 });
+
+test("tarot draw adopts the star surface without changing draw state semantics", () => {
+  const source = readFileSync(new URL("./components/tarot-draw.tsx", import.meta.url), "utf8");
+  assert.match(source, /data-star-surface="tarot-draw"/);
+  assert.match(source, /data-atelier-surface="tarot-draw"/);
+  assert.match(source, /data-tarot-draw-layout/);
+  const css = readFileSync(new URL("./tarot.module.css", import.meta.url), "utf8");
+  assert.match(css, /data-star-surface="tarot-draw"|--star-/);
+});

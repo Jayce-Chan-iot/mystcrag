@@ -88,7 +88,7 @@ export function DesignResults({ designId }: { designId: string }) {
       : `${designs.length} 个方案`;
 
   return (
-    <main className="mx-auto min-h-[calc(100vh-5rem)] max-w-[90rem] px-5 pb-28 pt-7 sm:px-8 sm:pt-9" data-atelier-surface="design-results" data-results-layout="comparison-grid">
+    <main className="mx-auto min-h-[calc(100vh-5rem)] max-w-[90rem] px-5 pb-28 pt-7 sm:px-8 sm:pt-9" data-atelier-surface="design-results" data-results-layout="comparison-grid" data-star-surface="design-results">
       <header className="flex flex-wrap items-end justify-between gap-5">
         <div>
           <p className="text-[0.68rem] uppercase tracking-[0.3em] text-[var(--accent)]">AI Design · {optionCountLabel}</p>
@@ -115,7 +115,7 @@ export function DesignResults({ designId }: { designId: string }) {
             const budgetStatus = getBudgetStatus(design.pricing.totalPriceMinor, budget);
             const acceptedOverBudget = acceptedOverBudgetIds.includes(design.designId);
             const materialList = [...new Set(design.beads.map((bead) => materialNames[bead.materialKey] ?? materialNames[bead.crystalId] ?? bead.crystalId))].join(" · ");
-            return <article className={`design-result-card flex min-h-0 min-w-0 flex-col rounded-[1.5rem] border bg-[var(--surface)] p-4 transition ${selected ? "border-[var(--accent-deep)] shadow-[0_18px_45px_rgb(76_56_93/0.13)] ring-1 ring-[var(--accent)]/20" : "border-[var(--border)]"}`} data-design-selected={selected} data-option-index={index + 1} key={design.designId}>
+            return <article className={`design-result-card flex min-h-0 min-w-0 flex-col rounded-[1.5rem] border bg-[var(--surface)] p-4 transition ${selected ? "border-[var(--accent-deep)] shadow-[0_18px_45px_rgb(76_56_93/0.13)] ring-1 ring-[var(--accent)]/20" : "border-[var(--border)]"}`} data-design-selected={selected} data-option-index={index + 1} data-star-result-card="true" key={design.designId}>
               <div className="flex items-center justify-between">
                 <span className={`rounded-full px-3 py-1 text-xs ${selected ? "bg-[var(--accent-deep)] text-white" : "bg-[var(--surface-soft)] text-[var(--muted)]"}`}>方案 {String(index + 1).padStart(2, "0")}</span>
                 <button

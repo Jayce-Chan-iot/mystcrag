@@ -426,7 +426,7 @@ export function TarotResultView({
   const savedWithoutSelection = session.status === "SAVED" && session.selectedDesignId === undefined;
 
   return (
-    <main className={styles.resultPage} data-atelier-surface="tarot-result" data-results-layout="three-visible-no-carousel">
+    <main className={styles.resultPage} data-atelier-surface="tarot-result" data-star-surface="tarot-result" data-results-layout="three-visible-no-carousel">
       <header className={styles.resultHeader}>
         <p>{session.spreadType === "SINGLE" ? "单张指引解读" : "三张塔罗牌解读"}</p>
         <h1>{interpretation?.headline ?? "牌面已揭晓，准备展开设计灵感"}</h1>

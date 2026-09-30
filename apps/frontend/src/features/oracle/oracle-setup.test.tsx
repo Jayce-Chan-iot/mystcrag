@@ -274,3 +274,23 @@ test("setup layout keeps the one-tap ritual free of promotional clutter", () => 
   assert.match(markup, /不构成|不代表/);
   assert.doesNotMatch(markup, /转运|招财|发财|开光|加持|命定|注定/);
 });
+
+test("oracle setup adopts the star surface and keeps the one-tap cast as the sole primary action", () => {
+  const source = readFileSync(new URL("./components/oracle-setup.tsx", import.meta.url), "utf8");
+  assert.match(source, /data-star-surface="oracle-setup"/);
+  assert.match(source, /data-oracle-setup/);
+  // One primary cast action; no extra ceremonial steps appear before it.
+  assert.equal((source.match(/oraclePrimaryAction/g) ?? []).length >= 1, true);
+  assert.doesNotMatch(source, /data-oracle-ritual-step|启卦前请先|第一步.*第二步.*第三步/);
+  const css = readFileSync(new URL("./oracle.module.css", import.meta.url), "utf8");
+  assert.match(css, /data-star-surface="oracle-setup"|--star-/);
+});
+
+test("homepage capability counts stay balanced when oracle is on and off", () => {
+  const off = withOracleFlag(undefined, () => renderToStaticMarkup(<HomePage />));
+  const on = withOracleFlag("true", () => renderToStaticMarkup(<HomePage />));
+  assert.match(off, /data-creation-count="2"/);
+  assert.match(on, /data-creation-count="3"/);
+  assert.match(off, /data-star-surface="home"/);
+  assert.match(on, /data-star-entry-card/);
+});
