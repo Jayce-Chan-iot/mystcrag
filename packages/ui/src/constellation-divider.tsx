@@ -1,19 +1,33 @@
-import type { HTMLAttributes } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 
-export type ConstellationDividerProps = HTMLAttributes<HTMLDivElement> & {
+export type ConstellationDividerProps = Omit<
+  HTMLAttributes<HTMLDivElement>,
+  "aria-hidden" | "tabIndex" | "role" | "children"
+> & {
   className?: string;
 };
 
 /* Decorative instrument divider: armillary ring + star-map ticks + jade-disc center.
  * Geometry vocabulary only — circles, lines, ticks; no glyph labels or ritual marks.
+ * Decoration is always aria-hidden and non-interactive, even if callers pass overrides.
  */
-export function ConstellationDivider({ className = "", ...props }: ConstellationDividerProps) {
+export function ConstellationDivider({
+  className = "",
+  ...props
+}: ConstellationDividerProps & { children?: ReactNode }) {
+  const {
+    "aria-hidden": _ariaHidden,
+    tabIndex: _tabIndex,
+    role: _role,
+    ...safeProps
+  } = props as HTMLAttributes<HTMLDivElement>;
+
   return (
     <div
+      {...safeProps}
       aria-hidden="true"
       className={className}
       data-star-constellation-divider="true"
-      {...props}
     >
       <svg
         fill="none"

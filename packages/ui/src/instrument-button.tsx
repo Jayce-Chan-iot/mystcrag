@@ -9,8 +9,9 @@ type InstrumentButtonBase = {
 };
 
 type InstrumentButtonAsButton = InstrumentButtonBase &
-  Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children" | "className"> & {
+  Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children" | "className" | "type"> & {
     href?: undefined;
+    type?: "submit" | "reset" | "button";
   };
 
 type InstrumentButtonAsLink = InstrumentButtonBase &
@@ -26,27 +27,30 @@ export function InstrumentButton({
   className = "",
   ...props
 }: InstrumentButtonProps) {
-  const classes = className;
   if ("href" in props && props.href) {
     const { href, ...anchorProps } = props;
     return (
       <a
-        className={classes}
+        {...anchorProps}
+        className={className}
         data-star-instrument-button={variant}
         href={href}
-        {...anchorProps}
       >
         {children}
       </a>
     );
   }
-  const buttonProps = props as ButtonHTMLAttributes<HTMLButtonElement>;
+
+  const { type, ...buttonProps } = props as ButtonHTMLAttributes<HTMLButtonElement> & {
+    type?: "submit" | "reset" | "button";
+  };
+
   return (
     <button
-      className={classes}
-      data-star-instrument-button={variant}
-      type={buttonProps.type ?? "button"}
       {...buttonProps}
+      className={className}
+      data-star-instrument-button={variant}
+      type={type ?? "button"}
     >
       {children}
     </button>

@@ -212,3 +212,118 @@ test("package test script uses tsx and discovers TSX suites", () => {
   const nested = readOptional("tests/star-primitives.test.tsx");
   assert.ok(nested && nested.includes("star"), "the TSX suite must be loadable source");
 });
+
+test("ConstellationDivider cannot be un-hidden or focused by hostile props", async () => {
+  const source = read("src/constellation-divider.tsx");
+  assert.doesNotMatch(
+    source,
+    /Omit<[^>]*>\s*&\s*\{[^}]*(?:aria-hidden|tabIndex)/,
+    "props type must not invite aria-hidden/tabIndex overrides"
+  );
+
+  const { ConstellationDivider } = await import("../src/constellation-divider.tsx");
+  const hostile = renderToStaticMarkup(
+    <ConstellationDivider aria-hidden={false} tabIndex={0} className="x">
+      {/* misuse: decoration must stay hidden and non-interactive */}
+    </ConstellationDivider>
+  );
+  assert.match(hostile, /aria-hidden="true"/, "forced aria-hidden=true must win over caller props");
+  assert.doesNotMatch(hostile, /aria-hidden="false"/, "caller cannot un-hide decoration");
+  assert.doesNotMatch(hostile, /tabindex=/i, "caller cannot make decoration focusable");
+  assert.doesNotMatch(hostile, /tabIndex=/, "caller cannot make decoration focusable");
+
+  const coerced = renderToStaticMarkup(
+    <ConstellationDivider aria-hidden={"false" as unknown as boolean} tabIndex={-1} />
+  );
+  assert.match(coerced, /aria-hidden="true"/);
+  assert.doesNotMatch(coerced, /tabindex=/i);
+});
+
+test("InstrumentButton forces a default type and cannot drop it via props", async () => {
+  const source = read("src/instrument-button.tsx");
+  const { InstrumentButton } = await import("../src/instrument-button.tsx");
+
+  const defaulted = renderToStaticMarkup(<InstrumentButton>go</InstrumentButton>);
+  assert.match(defaulted, /type="button"/, "default host must be type=button");
+
+  const undefinedType = renderToStaticMarkup(
+    <InstrumentButton type={undefined}>go</InstrumentButton>
+  );
+  assert.match(undefinedType, /type="button"/, "type=undefined must still yield type=button");
+  assert.doesNotMatch(undefinedType, /type="submit"/);
+
+  const submit = renderToStaticMarkup(
+    <InstrumentButton type="submit" variant="primary">
+      send
+    </InstrumentButton>
+  );
+  assert.match(submit, /type="submit"/, "explicit submit is preserved");
+
+  const hostile = renderToStaticMarkup(
+    <InstrumentButton data-star-instrument-button={"quiet" as unknown as undefined} variant="primary">
+      go
+    </InstrumentButton>
+  );
+  assert.match(
+    hostile,
+    /data-star-instrument-button="primary"/,
+    "forced data-star-instrument-button must win over caller props"
+  );
+
+  assert.doesNotMatch(
+    source,
+    /type=\{[^}]*\}\s*\n\s*\{[^}]*\.\.\.buttonProps\}/,
+    "button props spread must not override the forced type"
+  );
+});
+
+test("StatusPanel region role exposes an accessible name without double-speaking status/alert", async () => {
+  const { StatusPanel } = await import("../src/status-panel.tsx");
+
+  const titled = renderToStaticMarkup(
+    <StatusPanel role="region" tone="success" title="ready">
+      done
+    </StatusPanel>
+  );
+  assert.match(titled, /role="region"/);
+  assert.match(titled, /aria-labelledby="[^"]+"/, "title must label a region");
+  assert.match(titled, /id="[^"]+"/, "title id must exist for aria-labelledby");
+  const labelId = titled.match(/aria-labelledby="([^"]+)"/)?.[1];
+  const titleId = titled.match(/id="([^"]+)"/)?.[1];
+  assert.ok(labelId && titleId && labelId === titleId, "aria-labelledby must reference the title id");
+
+  const labelled = renderToStaticMarkup(
+    <StatusPanel role="region" aria-label="progress">
+      working
+    </StatusPanel>
+  );
+  assert.match(labelled, /role="region"/);
+  assert.match(labelled, /aria-label="progress"/, "caller aria-label must be preserved for region");
+
+  const bareRegion = renderToStaticMarkup(
+    <StatusPanel role="region">
+      working
+    </StatusPanel>
+  );
+  assert.match(bareRegion, /role="region"/);
+  assert.ok(
+    /aria-label="[^"]+"/.test(bareRegion) || /aria-labelledby="[^"]+"/.test(bareRegion),
+    "region without title still needs an accessible name"
+  );
+
+  const status = renderToStaticMarkup(
+    <StatusPanel role="status" tone="info">
+      ok
+    </StatusPanel>
+  );
+  assert.match(status, /role="status"/);
+  assert.doesNotMatch(status, /aria-labelledby=/, "status must not auto-label and risk double announcement");
+
+  const alert = renderToStaticMarkup(
+    <StatusPanel role="alert" tone="danger">
+      failed
+    </StatusPanel>
+  );
+  assert.match(alert, /role="alert"/);
+  assert.doesNotMatch(alert, /aria-labelledby=/, "alert must not auto-label and risk double announcement");
+});
