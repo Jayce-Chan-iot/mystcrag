@@ -812,13 +812,13 @@ export function DiyEditor({ designId }: { designId: string }) {
   const requiresRestock = design.production.productionNotes.some((note) => note.includes("预计等待约 5 天"));
 
   return (
-    <main className="min-h-screen" data-atelier-surface="diy-workbench" data-diy-editor-page="true" onKeyDown={(event) => {
+    <main className="min-h-screen" data-atelier-surface="diy-workbench" data-star-surface="diy-workbench" data-diy-editor-page="true" onKeyDown={(event) => {
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "z" || isConflict) return;
       event.preventDefault();
       runHistory(event.shiftKey ? "redo" : "undo");
     }}>
-      <div className="hidden h-screen flex-col overflow-hidden bg-[var(--surface)] lg:flex" data-desktop-diy-workspace="true">
-        <header className="grid h-[3.25rem] shrink-0 grid-cols-[22.5rem_minmax(0,1fr)_14.5rem] items-center border-b border-[var(--border)]/70 bg-white/85">
+      <div className="hidden h-screen flex-col overflow-hidden bg-[var(--surface)] lg:flex" data-desktop-diy-workspace="true" data-star-workbench-frame="lacquer">
+        <header className="grid h-[3.25rem] shrink-0 grid-cols-[22.5rem_minmax(0,1fr)_14.5rem] items-center border-b border-[var(--border)]/70 bg-white/85" data-star-workbench-toolbar="true">
           <div className="flex h-full items-center gap-3 border-r border-[var(--border)]/70 px-5 xl:gap-5 xl:px-7">
             <Link className="font-serif text-lg tracking-[0.08em] text-[var(--accent-deep)]" href="/">玄矶 <span className="text-[0.55rem] tracking-[0.24em] text-[var(--muted)]">MYSTCRAG</span></Link>
             <span className="h-6 w-px bg-[var(--border)]" aria-hidden="true" />
@@ -856,8 +856,8 @@ export function DiyEditor({ designId }: { designId: string }) {
         </div>
 
         <div className="grid min-h-0 flex-1 grid-cols-[22.5rem_minmax(0,1fr)_14.5rem] grid-rows-[minmax(0,1fr)]">
-          <aside className="relative min-h-0 overflow-y-auto border-r border-[var(--border)]/70 bg-[#fbfaf7] py-4 pl-[5.25rem] pr-3" aria-labelledby="desktop-library-title">
-            <nav className="absolute inset-y-0 left-0 flex w-[4.4rem] flex-col border-r border-[var(--border)]/70 bg-white/82 pt-4" aria-label="工作台工具" data-workbench-toolrail="true">
+          <aside className="relative min-h-0 overflow-y-auto border-r border-[var(--border)]/70 bg-[#fbfaf7] py-4 pl-[5.25rem] pr-3" aria-labelledby="desktop-library-title" data-star-workbench-rail="catalog">
+            <nav className="absolute inset-y-0 left-0 flex w-[4.4rem] flex-col border-r border-[var(--border)]/70 bg-white/82 pt-4" aria-label="工作台工具" data-workbench-toolrail="true" data-star-workbench-rail="tools">
               <span
                 aria-current="page"
                 className="flex min-h-[4.7rem] items-center justify-center border-l-2 border-[var(--accent-deep)] bg-[var(--accent-soft)] px-1 text-center text-[0.66rem] leading-5 text-[var(--accent-deep)]"
@@ -970,7 +970,7 @@ export function DiyEditor({ designId }: { designId: string }) {
             </div>
           </aside>
 
-          <section className="relative min-h-0 overflow-hidden bg-[var(--surface)] px-8" aria-labelledby="desktop-preview-title">
+          <section className="relative min-h-0 overflow-hidden bg-[var(--surface)] px-8" aria-labelledby="desktop-preview-title" data-star-workbench-stage-frame="true">
             <h1 className="sr-only" id="desktop-preview-title">DIY 手串编辑预览</h1>
             <button
               aria-pressed={braceletConnected}
@@ -1027,7 +1027,7 @@ export function DiyEditor({ designId }: { designId: string }) {
             </div>
           </section>
 
-          <aside className="flex min-h-0 flex-col overflow-y-auto border-l border-[var(--border)]/70 bg-white px-5 py-6" aria-labelledby="selected-material-title" data-desktop-inspector="true">
+          <aside className="flex min-h-0 flex-col overflow-y-auto border-l border-[var(--border)]/70 bg-white px-5 py-6" aria-labelledby="selected-material-title" data-desktop-inspector="true" data-star-workbench-rail="inspector">
             <section className="border-b border-[var(--border)] pb-4" data-wrist-inspector="true">
               <h2 className="text-sm font-medium">成品手围与尺寸</h2>
               <WearFitSummary fit={braceletFit} />
@@ -1131,7 +1131,7 @@ export function DiyEditor({ designId }: { designId: string }) {
               </div>
             </section>
 
-            <div className="sticky bottom-0 mt-auto shrink-0 border-t border-[var(--border)]/70 bg-white pt-4" data-desktop-inspector-footer="true">
+            <div className="sticky bottom-0 mt-auto shrink-0 border-t border-[var(--border)]/70 bg-white pt-4" data-desktop-inspector-footer="true" data-star-workbench-complete="true">
               {order ? (
                 <div className="mb-4 rounded-2xl border border-[var(--success)]/30 bg-[var(--surface)] p-4" data-order-id={order.orderId} role="status">
                   <p className="text-sm font-medium text-[var(--success)]">设计已确认，订单快照已生成（未接支付）</p>

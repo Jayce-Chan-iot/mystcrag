@@ -13,6 +13,7 @@ export function DisplayTray({ material }: { material: DisplayTrayMaterial }) {
       aria-hidden="true"
       className="pointer-events-none absolute inset-0 overflow-hidden"
       data-display-tray={material}
+      data-star-workbench-tray="neutral"
     >
       <Image alt="" className="h-full w-full object-contain" fill priority sizes="(max-width: 767px) 94vw, 62vw" src={visual.src} />
       <span className="sr-only">{label}展示托盘，仅改变展示背景，不计入价格</span>
