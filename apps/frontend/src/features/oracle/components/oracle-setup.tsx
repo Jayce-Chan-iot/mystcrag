@@ -52,17 +52,23 @@ export function createOracleSetupSubmitter({
 
     questionStore.set(question);
 
-    inFlight = (async () => {
+    const attempt = (async () => {
       const response = await create({
         question,
         wristCircumferenceMm: input.wristCircumferenceMm
       });
       navigate(`/oracle/result/${encodeURIComponent(response.session.sessionId)}`);
-    })().finally(() => {
-      inFlight = null;
+    })();
+
+    // The guard is held after success: navigate() is fire-and-forget, so a second
+    // activation between the create settling and the route committing would otherwise
+    // start a second session. Only a rejection frees it, so the user can retry.
+    inFlight = attempt;
+    void attempt.catch(() => {
+      if (inFlight === attempt) inFlight = null;
     });
 
-    return inFlight;
+    return attempt;
   };
 }
 

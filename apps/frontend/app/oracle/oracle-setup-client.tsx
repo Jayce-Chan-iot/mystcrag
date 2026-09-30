@@ -106,13 +106,13 @@ export function OracleSetupClient({ enabled }: Readonly<{ enabled: boolean }>) {
       onSubmit={() => {
         setIsSubmitting(true);
         setError(null);
-        void submitter({ question, wristCircumferenceMm })
-          .catch((cause) => {
-            setError(toFrontendApiError(cause).code);
-          })
-          .finally(() => {
-            setIsSubmitting(false);
-          });
+        // isSubmitting stays true after a successful create until the route unmounts this
+        // screen, so the button cannot re-enable inside the navigation-commit window.
+        // Only a rejection restores it for the retry path.
+        void submitter({ question, wristCircumferenceMm }).catch((cause) => {
+          setError(toFrontendApiError(cause).code);
+          setIsSubmitting(false);
+        });
       }}
       onWristChange={setWristCircumferenceMm}
       question={question}

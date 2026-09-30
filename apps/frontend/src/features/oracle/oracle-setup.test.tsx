@@ -47,15 +47,14 @@ function createSubmitHarness(options?: { create?: (input: OracleSetupInput) => P
   let resolveCreate: ((value: { session: { sessionId: string } }) => void) | null = null;
   let rejectCreate: ((error: unknown) => void) | null = null;
 
-  const create =
-    options?.create ??
-    ((input: OracleSetupInput) => {
-      recorder.calls.push(input);
-      return new Promise<{ session: { sessionId: string } }>((resolve, reject) => {
-        resolveCreate = resolve;
-        rejectCreate = reject;
-      });
+  const create = (input: OracleSetupInput) => {
+    recorder.calls.push(input);
+    if (options?.create) return options.create(input);
+    return new Promise<{ session: { sessionId: string } }>((resolve, reject) => {
+      resolveCreate = resolve;
+      rejectCreate = reject;
     });
+  };
 
   const submit = createOracleSetupSubmitter({
     create,
@@ -136,6 +135,41 @@ test("double submit creates exactly one Oracle session", async () => {
 
   assert.equal(harness.recorder.calls.length, 1);
   assert.deepEqual(harness.recorder.navigate, ["/oracle/result/oracle-session-1"]);
+});
+
+test("a second activation after the create settled still reuses the in-flight guard", async () => {
+  const harness = createSubmitHarness({
+    create: async () => ({ session: { sessionId: "oracle-session-1" } })
+  });
+
+  const first = harness.submit(baseInput);
+  await first; // create settled and navigate() fired, but the /oracle screen is still mounted
+  const second = harness.submit(baseInput);
+  await second;
+
+  assert.equal(
+    harness.recorder.calls.length,
+    1,
+    "a post-settle activation must not start a second create before navigation commits"
+  );
+  assert.deepEqual(harness.recorder.navigate, ["/oracle/result/oracle-session-1"]);
+});
+
+test("a rejected create releases the guard so a retry can succeed", async () => {
+  let attempt = 0;
+  const harness = createSubmitHarness({
+    create: async () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("network down");
+      return { session: { sessionId: "oracle-session-retry" } };
+    }
+  });
+
+  await assert.rejects(() => harness.submit(baseInput), /network down/);
+  await harness.submit(baseInput);
+
+  assert.equal(harness.recorder.calls.length, 2);
+  assert.deepEqual(harness.recorder.navigate, ["/oracle/result/oracle-session-retry"]);
 });
 
 test("question text is held only in the in-memory store", () => {
