@@ -1,14 +1,18 @@
-/* Star surface scoping for the Tarot page family (TASK-FE-STAR-001). */
-:global([data-star-surface="tarot-setup"]),
-:global([data-star-surface="tarot-draw"]),
-:global([data-star-surface="tarot-result"]) {
+/* Star surface scoping for the Tarot page family (TASK-FE-STAR-001).
+   Attribute-only selectors: CSS Modules scopes classes and ids, never these,
+   so they are written directly. A `:global(...)` selector list is merged into
+   `:is(:global(...))` by the Turbopack CSS pipeline and leaks the invalid
+   `:global` pseudo-class into the built globals.css. */
+[data-star-surface="tarot-setup"],
+[data-star-surface="tarot-draw"],
+[data-star-surface="tarot-result"] {
   overflow-x: clip;
   min-width: 0;
 }
 
-:global([data-star-surface="tarot-setup"]) :global(:is(button, a, select, textarea, input, summary)),
-:global([data-star-surface="tarot-draw"]) :global(:is(button, a, select, textarea, input, summary)),
-:global([data-star-surface="tarot-result"]) :global(:is(button, a, select, textarea, input, summary)) {
+[data-star-surface="tarot-setup"] :is(button, a, select, textarea, input, summary),
+[data-star-surface="tarot-draw"] :is(button, a, select, textarea, input, summary),
+[data-star-surface="tarot-result"] :is(button, a, select, textarea, input, summary) {
   min-height: 2.75rem;
 }
 
