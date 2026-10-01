@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { FlowNotice } from "../../../components/flow-notice";
 import { designApi } from "../../../lib/api/design-api";
 import {
+  loadCompletedOrder,
   loadDesignBudgetContext,
   loadGeneratedDesignOptions,
   setOverBudgetAcceptance,
@@ -125,6 +126,87 @@ export function designSaveStateLabel(state: DesignSaveState): string {
   if (state.reason === "MOCK") return "本地演示模式，不读取设计库状态";
   if (state.reason === "LIMIT") return "设计库列表只返回最近 200 条，无法确认";
   return "暂时无法确认保存状态";
+}
+
+export const ORDER_LIST_LIMIT = 100;
+
+export type LocalOrderRecord = {
+  orderId: string;
+  orderStatus: OrderSummaryStatus;
+  createdAt: string;
+  design: { designId: string; revision: number };
+};
+
+export type DesignOrderState =
+  | { kind: "ORDERED"; orderId: string; status: OrderSummaryStatus; orderedRevision: number; createdAt: string; source: "SERVER" | "LOCAL" }
+  | { kind: "NOT_ORDERED" }
+  | { kind: "UNKNOWN"; reason: "FAILED" | "MOCK" | "LIMIT" };
+
+export function deriveDesignOrderState(
+  design: PublicDesignV1,
+  reads: DesignDetailReads,
+  readLocalOrder: (designId: string, revision: number) => LocalOrderRecord | null = loadCompletedOrder
+): DesignOrderState {
+  if (reads.ordersRead === "MOCK") return { kind: "UNKNOWN", reason: "MOCK" };
+
+  const match = reads.orders
+    .filter((order) => order.design.designId === design.designId)
+    .sort(
+      (left, right) =>
+        right.design.revision - left.design.revision || right.createdAt.localeCompare(left.createdAt)
+    )[0];
+  if (match) {
+    return {
+      kind: "ORDERED",
+      orderId: match.orderId,
+      status: match.status,
+      orderedRevision: match.design.revision,
+      createdAt: match.createdAt,
+      source: "SERVER"
+    };
+  }
+
+  const local = readLocalOrder(design.designId, design.revision);
+  if (local) {
+    return {
+      kind: "ORDERED",
+      orderId: local.orderId,
+      status: local.orderStatus,
+      orderedRevision: local.design.revision,
+      createdAt: local.createdAt,
+      source: "LOCAL"
+    };
+  }
+
+  if (reads.ordersRead === "FAILED") return { kind: "UNKNOWN", reason: "FAILED" };
+  if (reads.orders.length >= ORDER_LIST_LIMIT) return { kind: "UNKNOWN", reason: "LIMIT" };
+  return { kind: "NOT_ORDERED" };
+}
+
+const orderStatusLabels: Record<OrderSummaryStatus, string> = {
+  PENDING: "待确认",
+  AWAITING_RESTOCK: "等待补货",
+  CONFIRMED: "已确认",
+  IN_PRODUCTION: "制作中",
+  SHIPPED: "已发货",
+  COMPLETED: "已完成",
+  CANCELLED: "已取消"
+};
+
+export function designOrderStateLabel(state: DesignOrderState, currentRevision: number): string {
+  if (state.kind === "ORDERED") {
+    if (state.orderedRevision !== currentRevision) {
+      return `v${state.orderedRevision} 已下单（${orderStatusLabels[state.status]}），当前 v${currentRevision} 未下单`;
+    }
+    if (state.source === "LOCAL") {
+      return `本机已记录该版本下单（${orderStatusLabels[state.status]}），等待设计库列表确认`;
+    }
+    return `已下单（${orderStatusLabels[state.status]}）`;
+  }
+  if (state.kind === "NOT_ORDERED") return "当前版本未下单";
+  if (state.reason === "MOCK") return "本地演示模式，不读取订单状态";
+  if (state.reason === "LIMIT") return "最近 100 笔订单中未找到，无法确认下单状态";
+  return "暂时无法确认下单状态";
 }
 
 export function DesignResults({ designId }: { designId: string }) {
