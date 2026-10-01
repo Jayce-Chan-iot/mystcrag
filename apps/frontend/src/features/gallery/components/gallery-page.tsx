@@ -115,6 +115,184 @@ async function exportDesignCard(entry: GalleryEntry): Promise<string> {
   return `已导出「${entry.design.designName}」设计图`;
 }
 
+export type GalleryDesignCardProps = {
+  entry: GalleryEntry;
+  isFeatured: boolean;
+  busy: boolean;
+  deleteArmed: boolean;
+  menuOpen: boolean;
+  onExport: (entry: GalleryEntry) => void;
+  onClone: (entry: GalleryEntry) => void;
+  onArmDelete: (entry: GalleryEntry) => void;
+  onConfirmDelete: (entry: GalleryEntry) => void;
+  onToggleMenu: (entry: GalleryEntry) => void;
+};
+
+const OVERLAY_BASE_CLASSES =
+  "absolute inset-x-0 bottom-0 flex items-center justify-center gap-1 bg-[#241b2e]/85 px-3 py-2.5 text-xs text-white backdrop-blur-sm";
+
+export function galleryOverlayClassName(isFeatured: boolean): string {
+  if (isFeatured) return OVERLAY_BASE_CLASSES;
+  return `${OVERLAY_BASE_CLASSES} translate-y-full opacity-0 transition-all duration-200 group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100 focus-within:translate-y-0 focus-within:opacity-100`;
+}
+
+export function GalleryDesignCard({
+  entry,
+  isFeatured,
+  busy,
+  deleteArmed,
+  menuOpen,
+  onExport,
+  onClone,
+  onArmDelete,
+  onConfirmDelete,
+  onToggleMenu
+}: GalleryDesignCardProps) {
+  const { design } = entry;
+  const statusLabel = statusLabelFor(entry.status);
+  const isDraft = statusLabel === "草稿";
+  const visibility = design.community.visibility;
+  const visibilityLabel = visibilityLabelFor(visibility);
+  const wristCm = (design.bracelet.wristCircumferenceMm / 10).toFixed(1);
+
+  const overlayActions = (
+    <div className={galleryOverlayClassName(isFeatured)} data-gallery-overlay={design.designId}>
+      <Link className="flex min-h-9 items-center gap-1 rounded-full px-3 transition hover:bg-white/15" data-gallery-action="edit" href={editorRouteFor(design)}>
+        <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="13"><path d="M14.5 5.5 18.5 9.5 8.5 19.5H4.5v-4Z" /></svg>
+        继续编辑
+      </Link>
+      <Link className="flex min-h-9 items-center gap-1 rounded-full px-3 transition hover:bg-white/15" data-gallery-action="detail" href={detailRouteFor(design)}>
+        <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeWidth="1.7" viewBox="0 0 24 24" width="13"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" strokeLinecap="round" /></svg>
+        查看详情
+      </Link>
+      <button className="flex min-h-9 items-center gap-1 rounded-full px-3 transition hover:bg-white/15 disabled:opacity-55" data-gallery-action="export" disabled={busy} onClick={() => onExport(entry)} type="button">
+        <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="13"><path d="M12 4v11M7.5 11 12 15.5 16.5 11M5 19h14" /></svg>
+        导出设计图
+      </button>
+      <button className="flex min-h-9 items-center gap-1 rounded-full px-3 transition hover:bg-white/15 disabled:opacity-55" data-gallery-action="clone" disabled={busy} onClick={() => onClone(entry)} type="button">
+        <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="13"><rect height="12" rx="2" width="12" x="8" y="8" /><path d="M16 5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2" /></svg>
+        复制方案
+      </button>
+      <button
+        className={`flex min-h-9 items-center gap-1 rounded-full px-3 transition disabled:opacity-55 ${deleteArmed ? "bg-[var(--danger)] text-white" : "hover:bg-white/15"}`}
+        data-gallery-action={deleteArmed ? "delete-confirm" : "delete"}
+        disabled={busy}
+        onClick={() => (deleteArmed ? onConfirmDelete(entry) : onArmDelete(entry))}
+        type="button"
+      >
+        <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="13"><path d="M4 6.5h16M9 6.5V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1.5M6.5 6.5 7.3 19a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4l.8-12.5" /></svg>
+        {deleteArmed ? "确认删除" : "删除"}
+      </button>
+    </div>
+  );
+
+  return (
+    <article
+      className={`group relative flex flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-white transition hover:border-[var(--accent)]/60 hover:shadow-[0_10px_28px_rgb(57_45_67/0.08)] ${isFeatured ? "sm:col-span-2" : ""}`}
+      data-gallery-card={design.designId}
+      data-star-content-card="true"
+    >
+      <div className={`relative grid place-items-center bg-[#f5f4f2] p-5 lg:p-6 ${isFeatured ? "min-h-[13rem] lg:min-h-[16rem]" : "min-h-[10rem]"}`} data-star-photo-field="true">
+        {isFeatured ? (
+          <span className="absolute left-4 top-4 rounded-full bg-[var(--accent-deep)] px-3 py-1 text-xs text-white">精选</span>
+        ) : null}
+        <BeadStrip
+          beadClass={isFeatured ? "h-14 w-14 lg:h-16 lg:w-16" : "h-11 w-11 lg:h-13 lg:w-13"}
+          beads={sortedBeads(design)}
+          limit={isFeatured ? FEATURED_BEAD_LIMIT : CARD_BEAD_LIMIT}
+          total={design.beads.length}
+        />
+        <div className="hidden lg:block">{overlayActions}</div>
+      </div>
+      <div className="flex flex-1 flex-col gap-1.5 p-4">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <h3 className="truncate font-medium">
+              <Link className="hover:text-[var(--accent)]" href={detailRouteFor(design)}>{design.designName}</Link>
+            </h3>
+            <p className="mt-0.5 text-xs text-[var(--muted)]">{gallerySourceLabel(design)} · {statusLabel}</p>
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <span data-status-mark={isDraft ? "draft" : "complete"}>{statusLabel}</span>
+            <span data-visibility-mark={visibility === "PUBLIC" ? "public" : visibility === "UNLISTED" ? "unlisted" : "private"}>{visibilityLabel}</span>
+          </div>
+        </div>
+        <p className="text-xs leading-5 text-[var(--muted)]">
+          手围 {wristCm} cm · 材料总价 {formatMinorAmount({ amountMinor: design.pricing.totalPriceMinor, currency: design.currency, locale: design.locale })} · 更新时间 {formatGalleryUpdatedAt(entry.updatedAt)}
+        </p>
+        <div className="mt-auto flex items-center gap-2 pt-2 lg:hidden">
+          <Link
+            className="flex min-h-11 flex-1 items-center justify-center rounded-xl bg-[var(--accent-deep)] text-sm text-white"
+            data-gallery-action="edit"
+            href={editorRouteFor(design)}
+          >
+            继续编辑
+          </Link>
+          <button
+            aria-expanded={menuOpen}
+            aria-label={`更多操作：${design.designName}`}
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-[var(--border)] text-[var(--muted)]"
+            data-gallery-action="menu"
+            onClick={() => onToggleMenu(entry)}
+            type="button"
+          >
+            <svg aria-hidden="true" fill="currentColor" height="16" viewBox="0 0 24 24" width="16"><circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" /></svg>
+          </button>
+          {menuOpen ? (
+            <>
+              <button aria-label="关闭菜单" className="fixed inset-0 z-20 cursor-default" onClick={() => onToggleMenu(entry)} type="button" />
+              <div className="absolute bottom-16 right-3 z-30 w-40 overflow-hidden rounded-xl border border-[var(--border)] bg-white shadow-[0_12px_32px_rgb(36_27_46/0.16)]" data-gallery-menu={design.designId}>
+                <button className="flex w-full items-center gap-2 px-3.5 py-3 text-left text-sm hover:bg-[var(--surface-soft)] disabled:opacity-55" data-gallery-action="export" disabled={busy} onClick={() => onExport(entry)} type="button">
+                  <svg aria-hidden="true" fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="14"><path d="M12 4v11M7.5 11 12 15.5 16.5 11M5 19h14" /></svg>
+                  导出设计图
+                </button>
+                <button className="flex w-full items-center gap-2 px-3.5 py-3 text-left text-sm hover:bg-[var(--surface-soft)] disabled:opacity-55" data-gallery-action="clone" disabled={busy} onClick={() => onClone(entry)} type="button">
+                  <svg aria-hidden="true" fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="14"><rect height="12" rx="2" width="12" x="8" y="8" /><path d="M16 5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2" /></svg>
+                  复制方案
+                </button>
+                <button
+                  className={`flex w-full items-center gap-2 border-t border-[var(--border)] px-3.5 py-3 text-left text-sm hover:bg-[#f8edef] disabled:opacity-55 ${deleteArmed ? "font-medium text-[var(--danger)]" : "text-[var(--danger)]"}`}
+                  data-gallery-action={deleteArmed ? "delete-confirm" : "delete"}
+                  disabled={busy}
+                  onClick={() => (deleteArmed ? onConfirmDelete(entry) : onArmDelete(entry))}
+                  type="button"
+                >
+                  <svg aria-hidden="true" fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="14"><path d="M4 6.5h16M9 6.5V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1.5M6.5 6.5 7.3 19a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4l.8-12.5" /></svg>
+                  {deleteArmed ? "确认删除" : "删除"}
+                </button>
+              </div>
+            </>
+          ) : null}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+export async function cloneGalleryEntry(
+  entry: GalleryEntry,
+  deps: {
+    cloneDesign: (designId: string, expectedRevision: number) => Promise<unknown>;
+    refresh: () => Promise<unknown>;
+  }
+): Promise<string> {
+  await deps.cloneDesign(entry.design.designId, entry.design.revision);
+  await deps.refresh();
+  return `已复制「${entry.design.designName}」`;
+}
+
+export async function deleteGalleryEntry(
+  entry: GalleryEntry,
+  deps: {
+    deleteDesign: (designId: string, expectedRevision: number) => Promise<unknown>;
+    refresh: () => Promise<unknown>;
+  }
+): Promise<string> {
+  await deps.deleteDesign(entry.design.designId, entry.design.revision);
+  await deps.refresh();
+  return `已删除「${entry.design.designName}」`;
+}
+
 export function GalleryPage() {
   const [entries, setEntries] = React.useState<GalleryEntry[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -183,149 +361,41 @@ export function GalleryPage() {
     }
   };
 
-  const cloneEntry = (entry: GalleryEntry) => runEntryAction(entry, async () => {
-    await designApi.cloneDesign(entry.design.designId, entry.design.revision);
-    await loadEntries();
-    return `已复制「${entry.design.designName}」`;
-  });
+  const cloneEntry = (entry: GalleryEntry) =>
+    runEntryAction(entry, () =>
+      cloneGalleryEntry(entry, {
+        cloneDesign: (designId, expectedRevision) => designApi.cloneDesign(designId, expectedRevision),
+        refresh: loadEntries
+      })
+    );
 
-  const deleteEntry = (entry: GalleryEntry) => runEntryAction(entry, async () => {
-    await designApi.deleteDesign(entry.design.designId, entry.design.revision);
-    await loadEntries();
-    return `已删除「${entry.design.designName}」`;
-  });
+  const deleteEntry = (entry: GalleryEntry) =>
+    runEntryAction(entry, () =>
+      deleteGalleryEntry(entry, {
+        deleteDesign: (designId, expectedRevision) => designApi.deleteDesign(designId, expectedRevision),
+        refresh: loadEntries
+      })
+    );
 
   const exportEntry = (entry: GalleryEntry) => runEntryAction(entry, () => exportDesignCard(entry));
 
-  const renderCard = (entry: GalleryEntry, isFeatured: boolean) => {
-    const { design } = entry;
-    const statusLabel = statusLabelFor(entry.status);
-    const isDraft = statusLabel === "草稿";
-    const visibility = design.community.visibility;
-    const visibilityLabel = visibilityLabelFor(visibility);
-    const busy = busyDesignId === design.designId;
-    const deleteArmed = deleteArmedId === design.designId;
-    const wristCm = (design.bracelet.wristCircumferenceMm / 10).toFixed(1);
+  const toggleMenu = (entry: GalleryEntry) =>
+    setMenuOpenId((current) => (current === entry.design.designId ? null : entry.design.designId));
 
-    const overlayActions = (
-      <div
-        className={`absolute inset-x-0 bottom-0 flex items-center justify-center gap-1 bg-[#241b2e]/85 px-3 py-2.5 text-xs text-white backdrop-blur-sm ${isFeatured ? "" : "translate-y-full opacity-0 transition-all duration-200 group-hover:translate-y-0 group-hover:opacity-100"}`}
-        data-gallery-overlay={design.designId}
-      >
-        <Link className="flex min-h-9 items-center gap-1 rounded-full px-3 transition hover:bg-white/15" data-gallery-action="edit" href={editorRouteFor(design)}>
-          <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="13"><path d="M14.5 5.5 18.5 9.5 8.5 19.5H4.5v-4Z" /></svg>
-          继续编辑
-        </Link>
-        <Link className="flex min-h-9 items-center gap-1 rounded-full px-3 transition hover:bg-white/15" data-gallery-action="detail" href={detailRouteFor(design)}>
-          <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeWidth="1.7" viewBox="0 0 24 24" width="13"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" strokeLinecap="round" /></svg>
-          查看详情
-        </Link>
-        <button className="flex min-h-9 items-center gap-1 rounded-full px-3 transition hover:bg-white/15 disabled:opacity-55" data-gallery-action="export" disabled={busy} onClick={() => void exportEntry(entry)} type="button">
-          <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="13"><path d="M12 4v11M7.5 11 12 15.5 16.5 11M5 19h14" /></svg>
-          导出设计图
-        </button>
-        <button className="flex min-h-9 items-center gap-1 rounded-full px-3 transition hover:bg-white/15 disabled:opacity-55" data-gallery-action="clone" disabled={busy} onClick={() => void cloneEntry(entry)} type="button">
-          <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeWidth="1.7" viewBox="0 0 24 24" width="13"><rect height="12" rx="2" width="12" x="8" y="8" /><path d="M16 5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2" /></svg>
-          复制方案
-        </button>
-        {!isFeatured ? (
-          <button
-            className={`flex min-h-9 items-center gap-1 rounded-full px-3 transition disabled:opacity-55 ${deleteArmed ? "bg-[var(--danger)] text-white" : "hover:bg-white/15"}`}
-            data-gallery-action={deleteArmed ? "delete-confirm" : "delete"}
-            disabled={busy}
-            onClick={() => (deleteArmed ? void deleteEntry(entry) : setDeleteArmedId(design.designId))}
-            type="button"
-          >
-            <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="13"><path d="M4 6.5h16M9 6.5V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1.5M6.5 6.5 7.3 19a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4l.8-12.5" /></svg>
-            {deleteArmed ? "确认删除" : "删除"}
-          </button>
-        ) : null}
-      </div>
-    );
-
-    return (
-      <article
-        className={`group relative flex flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-white transition hover:border-[var(--accent)]/60 hover:shadow-[0_10px_28px_rgb(57_45_67/0.08)] ${isFeatured ? "sm:col-span-2" : ""}`}
-        data-gallery-card={design.designId}
-        data-star-content-card="true"
-        key={design.designId}
-      >
-        <div className={`relative grid place-items-center bg-[#f5f4f2] p-5 lg:p-6 ${isFeatured ? "min-h-[13rem] lg:min-h-[16rem]" : "min-h-[10rem]"}`} data-star-photo-field="true">
-          {isFeatured ? (
-            <span className="absolute left-4 top-4 rounded-full bg-[var(--accent-deep)] px-3 py-1 text-xs text-white">精选</span>
-          ) : null}
-          <BeadStrip
-            beadClass={isFeatured ? "h-14 w-14 lg:h-16 lg:w-16" : "h-11 w-11 lg:h-13 lg:w-13"}
-            beads={sortedBeads(design)}
-            limit={isFeatured ? FEATURED_BEAD_LIMIT : CARD_BEAD_LIMIT}
-            total={design.beads.length}
-          />
-          <div className="hidden lg:block">{overlayActions}</div>
-        </div>
-        <div className="flex flex-1 flex-col gap-1.5 p-4">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <h3 className="truncate font-medium">
-                <Link className="hover:text-[var(--accent)]" href={detailRouteFor(design)}>{design.designName}</Link>
-              </h3>
-              <p className="mt-0.5 text-xs text-[var(--muted)]">{gallerySourceLabel(design)} · {statusLabel}</p>
-            </div>
-            <div className="flex shrink-0 flex-col items-end gap-1">
-              <span data-status-mark={isDraft ? "draft" : "complete"}>{statusLabel}</span>
-              <span data-visibility-mark={visibility === "PUBLIC" ? "public" : visibility === "UNLISTED" ? "unlisted" : "private"}>{visibilityLabel}</span>
-            </div>
-          </div>
-          <p className="text-xs leading-5 text-[var(--muted)]">
-            手围 {wristCm} cm · 材料总价 {formatMinorAmount({ amountMinor: design.pricing.totalPriceMinor, currency: design.currency, locale: design.locale })} · 更新时间 {formatGalleryUpdatedAt(entry.updatedAt)}
-          </p>
-          <div className="mt-auto flex items-center gap-2 pt-2 lg:hidden">
-            <Link
-              className="flex min-h-11 flex-1 items-center justify-center rounded-xl bg-[var(--accent-deep)] text-sm text-white"
-              data-gallery-action="edit"
-              href={editorRouteFor(design)}
-            >
-              继续编辑
-            </Link>
-            <button
-              aria-expanded={menuOpenId === design.designId}
-              aria-label={`更多操作：${design.designName}`}
-              className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-[var(--border)] text-[var(--muted)]"
-              data-gallery-action="menu"
-              onClick={() => setMenuOpenId((current) => (current === design.designId ? null : design.designId))}
-              type="button"
-            >
-              <svg aria-hidden="true" fill="currentColor" height="16" viewBox="0 0 24 24" width="16"><circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" /></svg>
-            </button>
-            {menuOpenId === design.designId ? (
-              <>
-                <button aria-label="关闭菜单" className="fixed inset-0 z-20 cursor-default" onClick={() => setMenuOpenId(null)} type="button" />
-                <div className="absolute bottom-16 right-3 z-30 w-40 overflow-hidden rounded-xl border border-[var(--border)] bg-white shadow-[0_12px_32px_rgb(36_27_46/0.16)]" data-gallery-menu={design.designId}>
-                  <button className="flex w-full items-center gap-2 px-3.5 py-3 text-left text-sm hover:bg-[var(--surface-soft)] disabled:opacity-55" data-gallery-action="export" disabled={busy} onClick={() => void exportEntry(entry)} type="button">
-                    <svg aria-hidden="true" fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="14"><path d="M12 4v11M7.5 11 12 15.5 16.5 11M5 19h14" /></svg>
-                    导出设计图
-                  </button>
-                  <button className="flex w-full items-center gap-2 px-3.5 py-3 text-left text-sm hover:bg-[var(--surface-soft)] disabled:opacity-55" data-gallery-action="clone" disabled={busy} onClick={() => void cloneEntry(entry)} type="button">
-                    <svg aria-hidden="true" fill="none" height="14" stroke="currentColor" strokeWidth="1.7" viewBox="0 0 24 24" width="14"><rect height="12" rx="2" width="12" x="8" y="8" /><path d="M16 5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2" /></svg>
-                    复制方案
-                  </button>
-                  <button
-                    className={`flex w-full items-center gap-2 border-t border-[var(--border)] px-3.5 py-3 text-left text-sm hover:bg-[#f8edef] disabled:opacity-55 ${deleteArmed ? "font-medium text-[var(--danger)]" : "text-[var(--danger)]"}`}
-                    data-gallery-action={deleteArmed ? "delete-confirm" : "delete"}
-                    disabled={busy}
-                    onClick={() => (deleteArmed ? void deleteEntry(entry) : setDeleteArmedId(design.designId))}
-                    type="button"
-                  >
-                    <svg aria-hidden="true" fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="14"><path d="M4 6.5h16M9 6.5V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1.5M6.5 6.5 7.3 19a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4l.8-12.5" /></svg>
-                    {deleteArmed ? "确认删除" : "删除"}
-                  </button>
-                </div>
-              </>
-            ) : null}
-          </div>
-        </div>
-      </article>
-    );
-  };
+  const renderCard = (entry: GalleryEntry, isFeatured: boolean) => (
+    <GalleryDesignCard
+      busy={busyDesignId === entry.design.designId}
+      deleteArmed={deleteArmedId === entry.design.designId}
+      entry={entry}
+      isFeatured={isFeatured}
+      menuOpen={menuOpenId === entry.design.designId}
+      onArmDelete={(target) => setDeleteArmedId(target.design.designId)}
+      onClone={cloneEntry}
+      onConfirmDelete={deleteEntry}
+      onExport={exportEntry}
+      onToggleMenu={toggleMenu}
+    />
+  );
 
   if (isLoading) {
     return (

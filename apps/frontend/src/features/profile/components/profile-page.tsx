@@ -2,7 +2,7 @@
 
 import type { CatalogMaterialProduct, PublicDesignV1 } from "@mystcrag/design-contract";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import * as React from "react";
 
 import { FlowNotice } from "../../../components/flow-notice";
@@ -32,8 +32,10 @@ import {
   resolveProfileTab,
   restockEtaDays,
   wristCentimeters,
+  type ProfileLevel,
   type ProfileOrder,
-  type ProfilePreferences
+  type ProfilePreferences,
+  type ProfileTab
 } from "../model/profile-model";
 
 const IDENTITY_STORAGE_KEY = "mystcrag:profile-identity";
@@ -43,9 +45,7 @@ const FEEDBACK_LOG_STORAGE_KEY = "mystcrag:feedback-log";
 const FAVORITES_STORAGE_KEY = "mystcrag:library-favorites";
 const PRIVACY_STORAGE_KEY = "mystcrag:privacy-prefs";
 
-type ProfileTab = "overview" | "designs" | "orders" | "favorites" | "addresses" | "settings";
-
-type ProfileIdentity = { name: string; email: string; phone: string };
+export type ProfileIdentity = { name: string; email: string; phone: string };
 
 type AddressEntry = {
   id: string;
@@ -56,7 +56,7 @@ type AddressEntry = {
   isDefault: boolean;
 };
 
-const SIDEBAR_ITEMS: ReadonlyArray<{ id: ProfileTab; label: string }> = [
+export const PROFILE_TAB_ITEMS: ReadonlyArray<{ id: ProfileTab; label: string }> = [
   { id: "overview", label: "账户概览" },
   { id: "designs", label: "我的设计" },
   { id: "orders", label: "我的订单" },
@@ -73,6 +73,34 @@ const SERVICE_ITEMS: ReadonlyArray<{ id: ProfileTab; label: string }> = [
   { id: "settings", label: "帮助与反馈" },
   { id: "settings", label: "隐私设置" }
 ];
+
+export function profileTabHref(tab: ProfileTab): string {
+  return tab === "overview" ? "/profile" : `/profile?tab=${tab}`;
+}
+
+export type ProfileTabNavigation = {
+  readonly activeTab: ProfileTab;
+  readonly selectTab: (tab: ProfileTab) => void;
+};
+
+/**
+ * The addressable URL is the only tab state: `activeTab` is read back from the
+ * query on every access so a later deep link on the same route cannot be
+ * outranked by a control that was clicked earlier.
+ */
+export function createProfileTabNavigation(input: {
+  readTabQuery: () => string | null | undefined;
+  navigate: (href: string) => void;
+}): ProfileTabNavigation {
+  return {
+    get activeTab() {
+      return resolveProfileTab(input.readTabQuery());
+    },
+    selectTab: (tab) => {
+      input.navigate(profileTabHref(tab));
+    }
+  };
+}
 
 function readJson<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
@@ -145,6 +173,111 @@ function OrderRow({ order, onOpen }: { order: ProfileOrder; onOpen: () => void }
   );
 }
 
+export function ProfileTabNav({
+  navigation,
+  variant
+}: {
+  navigation: ProfileTabNavigation;
+  variant: "sidebar" | "mobile";
+}) {
+  const activeTab = navigation.activeTab;
+  const isMobile = variant === "mobile";
+  return (
+    <nav
+      aria-label={isMobile ? "个人中心标签导航" : "个人中心导航"}
+      className={isMobile ? "lg:hidden -mx-4 overflow-x-auto px-4 pb-1" : "hidden lg:block mt-4"}
+      data-profile-tab-nav={variant}
+    >
+      <ul className={isMobile ? "flex gap-2 py-1" : "space-y-0.5"}>
+        {PROFILE_TAB_ITEMS.map((item) => {
+          const active = item.id === activeTab;
+          return (
+            <li className={isMobile ? "shrink-0" : undefined} key={item.id}>
+              <button
+                aria-current={active ? "page" : undefined}
+                className={
+                  isMobile
+                    ? `min-h-11 shrink-0 rounded-full border px-4 text-xs transition ${active ? "border-[var(--accent-deep)] bg-[var(--accent-deep)] text-white" : "border-[var(--border)] bg-white text-[var(--muted)] hover:border-[var(--accent)]"}`
+                    : `flex min-h-11 w-full items-center rounded-lg border-l-2 px-3 text-left text-sm transition ${active ? "border-[var(--accent-deep)] bg-[var(--accent-soft)] font-medium text-[var(--accent-deep)]" : "border-transparent text-[var(--muted)] hover:bg-[var(--surface-soft)]"}`
+                }
+                data-profile-tab={item.id}
+                onClick={() => navigation.selectTab(item.id)}
+                type="button"
+              >
+                {item.label}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
+  );
+}
+
+export function ProfileTabsFrame({
+  alerts,
+  identity,
+  level,
+  navigation,
+  onEditIdentity,
+  renderPanel
+}: {
+  alerts?: React.ReactNode;
+  identity: ProfileIdentity;
+  level: ProfileLevel;
+  navigation: ProfileTabNavigation;
+  onEditIdentity: () => void;
+  renderPanel: (tab: ProfileTab) => React.ReactNode;
+}) {
+  const activeTab = navigation.activeTab;
+  return (
+    <div className="mx-auto max-w-[92.5rem] px-4 pt-6 sm:px-6 lg:px-8 lg:pt-8">
+      <div className="flex items-center justify-between lg:hidden" data-star-content-header="true">
+        <div>
+          <p className="text-xs tracking-[0.18em] text-[var(--accent)]" data-star-content-kicker="true">Profile</p>
+          <h1 className="mt-1 font-serif text-2xl" data-star-content-title="true">我的</h1>
+        </div>
+        <button aria-label="设置与帮助" className="grid h-10 w-10 place-items-center rounded-full border border-[var(--border)] bg-white text-[var(--muted)]" data-profile-action="settings-tab" onClick={() => navigation.selectTab("settings")} type="button">
+          <svg aria-hidden="true" fill="none" height="17" stroke="currentColor" strokeWidth="1.6" viewBox="0 0 24 24" width="17"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3.05V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.31.6.92.99 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1Z" /></svg>
+        </button>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-6 lg:mt-0 lg:grid-cols-[13.5rem_minmax(0,1fr)] lg:gap-7">
+        <aside>
+          <div className="rounded-2xl border border-[var(--border)] bg-white p-4 lg:sticky lg:top-[4.5rem]" data-profile-sidebar="true">
+            <div className="flex items-center gap-3 lg:flex-col lg:items-center lg:text-center">
+              <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[#a88fc9] to-[var(--accent-deep)] font-serif text-xl text-white lg:h-20 lg:w-20 lg:text-3xl">
+                {identity.name.slice(0, 1)}
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium lg:mt-2 lg:text-base">{identity.name}</p>
+                <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-[var(--accent-soft)] px-2.5 py-0.5 text-[0.68rem] text-[var(--accent-deep)]">
+                  <svg aria-hidden="true" fill="currentColor" height="10" viewBox="0 0 24 24" width="10"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4Z" /></svg>
+                  Lv.{level.level} {level.title}
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 hidden space-y-1 text-xs text-[var(--muted)] lg:block">
+              <p>{identity.email ? maskContact("email", identity.email) : "未设置邮箱"}</p>
+              <p>{identity.phone ? maskContact("phone", identity.phone) : "未设置手机"}</p>
+            </div>
+            <button className="mt-3 flex min-h-10 w-full items-center justify-center rounded-xl border border-[var(--border)] text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]" data-profile-action="identity-edit" onClick={onEditIdentity} type="button">
+              编辑资料
+            </button>
+            <ProfileTabNav navigation={navigation} variant="sidebar" />
+          </div>
+        </aside>
+
+        <section className="min-w-0">
+          {alerts ? <div className="mb-4 space-y-4" data-profile-alerts="true">{alerts}</div> : null}
+          <ProfileTabNav navigation={navigation} variant="mobile" />
+          {renderPanel(activeTab)}
+        </section>
+      </div>
+    </div>
+  );
+}
+
 export function ProfilePage() {
   const [designs, setDesigns] = React.useState<GalleryEntry[]>([]);
   const [orders, setOrders] = React.useState<ProfileOrder[]>([]);
@@ -159,9 +292,15 @@ export function ProfilePage() {
   const [notice, setNotice] = React.useState<FrontendErrorCode | null>(null);
   const [message, setMessage] = React.useState("");
   const searchParams = useSearchParams();
-  const queryTab = resolveProfileTab(searchParams.get("tab"));
-  const [manualTab, setManualTab] = React.useState<ProfileTab | null>(null);
-  const activeTab = manualTab ?? queryTab;
+  const router = useRouter();
+  const navigation = React.useMemo<ProfileTabNavigation>(
+    () =>
+      createProfileTabNavigation({
+        readTabQuery: () => searchParams.get("tab"),
+        navigate: (href) => router.push(href, { scroll: false })
+      }),
+    [router, searchParams]
+  );
   const [identityDraft, setIdentityDraft] = React.useState<ProfileIdentity | null>(null);
   const [prefDraft, setPrefDraft] = React.useState<ProfilePreferences | null>(null);
   const [addressDraft, setAddressDraft] = React.useState<Partial<AddressEntry> | null>(null);
@@ -377,7 +516,7 @@ export function ProfilePage() {
     <div className="rounded-2xl border border-[var(--border)] bg-white p-4" data-profile-section="favorite-stones">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium">收藏的矿石</h2>
-        <button className="text-xs text-[var(--muted)] transition hover:text-[var(--accent)]" data-profile-action="favorites-tab" onClick={() => setManualTab("favorites")} type="button">
+        <button className="text-xs text-[var(--muted)] transition hover:text-[var(--accent)]" data-profile-action="favorites-tab" onClick={() => navigation.selectTab("favorites")} type="button">
           {favorites.length > 0 ? `共 ${favorites.length} 颗 →` : "去收藏 →"}
         </button>
       </div>
@@ -401,7 +540,7 @@ export function ProfilePage() {
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium">我的订单</h2>
         {limit < orders.length ? (
-          <button className="text-xs text-[var(--muted)] transition hover:text-[var(--accent)]" data-profile-action="orders-tab" onClick={() => setManualTab("orders")} type="button">
+          <button className="text-xs text-[var(--muted)] transition hover:text-[var(--accent)]" data-profile-action="orders-tab" onClick={() => navigation.selectTab("orders")} type="button">
             查看全部订单 →
           </button>
         ) : null}
@@ -409,7 +548,7 @@ export function ProfilePage() {
       {orders.length === 0 ? (
         <p className="mt-3 text-xs leading-5 text-[var(--muted)]">还没有订单，完成设计后即可下单制作。</p>
       ) : (
-        <div className="mt-1">{orders.slice(0, limit).map((order) => <OrderRow key={order.orderId} onOpen={() => setManualTab("orders")} order={order} />)}</div>
+        <div className="mt-1">{orders.slice(0, limit).map((order) => <OrderRow key={order.orderId} onOpen={() => navigation.selectTab("orders")} order={order} />)}</div>
       )}
     </div>
   );
@@ -424,7 +563,7 @@ export function ProfilePage() {
       <section aria-labelledby="profile-continue-title">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-medium" id="profile-continue-title">继续你的设计</h2>
-          <button className="text-xs text-[var(--muted)] transition hover:text-[var(--accent)]" data-profile-action="designs-tab" onClick={() => setManualTab("designs")} type="button">查看全部 →</button>
+          <button className="text-xs text-[var(--muted)] transition hover:text-[var(--accent)]" data-profile-action="designs-tab" onClick={() => navigation.selectTab("designs")} type="button">查看全部 →</button>
         </div>
         {continueDesigns.length === 0 ? (
           <div className="mt-3" data-star-empty="true">
@@ -584,106 +723,61 @@ export function ProfilePage() {
     );
   }
 
-  return (
-    <main className="min-h-screen bg-[var(--surface)] pb-24 lg:pb-16" data-profile-page="ready" data-star-surface="profile">
-      <div className="mx-auto max-w-[92.5rem] px-4 pt-6 sm:px-6 lg:px-8 lg:pt-8">
-        <div className="flex items-center justify-between lg:hidden" data-star-content-header="true">
-          <div>
-            <p className="text-xs tracking-[0.18em] text-[var(--accent)]" data-star-content-kicker="true">Profile</p>
-            <h1 className="mt-1 font-serif text-2xl" data-star-content-title="true">我的</h1>
-          </div>
-          <button aria-label="设置与帮助" className="grid h-10 w-10 place-items-center rounded-full border border-[var(--border)] bg-white text-[var(--muted)]" data-profile-action="settings-tab" onClick={() => setManualTab("settings")} type="button">
-            <svg aria-hidden="true" fill="none" height="17" stroke="currentColor" strokeWidth="1.6" viewBox="0 0 24 24" width="17"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3.05V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.31.6.92.99 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1Z" /></svg>
-          </button>
-        </div>
-
-        <div className="mt-4 grid grid-cols-1 gap-6 lg:mt-0 lg:grid-cols-[13.5rem_minmax(0,1fr)] lg:gap-7">
-          <aside>
-            <div className="rounded-2xl border border-[var(--border)] bg-white p-4 lg:sticky lg:top-[4.5rem]" data-profile-sidebar="true">
-              <div className="flex items-center gap-3 lg:flex-col lg:items-center lg:text-center">
-                <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[#a88fc9] to-[var(--accent-deep)] font-serif text-xl text-white lg:h-20 lg:w-20 lg:text-3xl">
-                  {identity.name.slice(0, 1)}
-                </span>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium lg:mt-2 lg:text-base">{identity.name}</p>
-                  <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-[var(--accent-soft)] px-2.5 py-0.5 text-[0.68rem] text-[var(--accent-deep)]">
-                    <svg aria-hidden="true" fill="currentColor" height="10" viewBox="0 0 24 24" width="10"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4Z" /></svg>
-                    Lv.{level.level} {level.title}
-                  </p>
-                </div>
-              </div>
-              <div className="mt-3 hidden space-y-1 text-xs text-[var(--muted)] lg:block">
-                <p>{identity.email ? maskContact("email", identity.email) : "未设置邮箱"}</p>
-                <p>{identity.phone ? maskContact("phone", identity.phone) : "未设置手机"}</p>
-              </div>
-              <button className="mt-3 flex min-h-10 w-full items-center justify-center rounded-xl border border-[var(--border)] text-xs text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]" data-profile-action="identity-edit" onClick={() => setIdentityDraft(identity)} type="button">
-                编辑资料
-              </button>
-              <nav aria-label="个人中心导航" className="mt-4 hidden lg:block">
-                <ul className="space-y-0.5">
-                  {SIDEBAR_ITEMS.map((item) => {
-                    const active = activeTab === item.id;
-                    return (
-                      <li key={`${item.id}-${item.label}`}>
-                        <button
-                          aria-current={active ? "page" : undefined}
-                          className={`flex min-h-10 w-full items-center rounded-lg border-l-2 px-3 text-left text-sm transition ${active ? "border-[var(--accent-deep)] bg-[var(--accent-soft)] font-medium text-[var(--accent-deep)]" : "border-transparent text-[var(--muted)] hover:bg-[var(--surface-soft)]"}`}
-                          data-profile-tab={item.id}
-                          onClick={() => setManualTab(item.id)}
-                          type="button"
-                        >
-                          {item.label}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </nav>
+  const renderOverviewPanel = () => (
+    <div className="space-y-5">
+      <div className="rounded-2xl border border-[var(--border)] bg-white p-4 lg:hidden">
+        <div className="flex items-center gap-3">
+          <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[#a88fc9] to-[var(--accent-deep)] font-serif text-xl text-white">{identity.name.slice(0, 1)}</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <p className="truncate text-base font-medium">{identity.name}</p>
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[0.68rem] text-[var(--accent-deep)]">
+                <svg aria-hidden="true" fill="currentColor" height="9" viewBox="0 0 24 24" width="9"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4Z" /></svg>
+                Lv.{level.level} {level.title}
+              </span>
             </div>
-          </aside>
-
-          <section className="min-w-0">
-            {notice ? <div className="mb-4"><FlowNotice code={notice} compact action={{ kind: "button", label: "知道了", onAction: () => setNotice(null) }} onDismissAuthRequired={() => setNotice(null)} /></div> : null}
-            {message ? <p className="mb-4 rounded-full bg-[var(--accent-soft)] px-5 py-2 text-sm text-[var(--success)]" data-profile-toast="true" role="status">{message}</p> : null}
-
-            {activeTab === "overview" ? (
-              <div className="space-y-5">
-                <div className="rounded-2xl border border-[var(--border)] bg-white p-4 lg:hidden">
-                  <div className="flex items-center gap-3">
-                    <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[#a88fc9] to-[var(--accent-deep)] font-serif text-xl text-white">{identity.name.slice(0, 1)}</span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="truncate text-base font-medium">{identity.name}</p>
-                        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[0.68rem] text-[var(--accent-deep)]">
-                          <svg aria-hidden="true" fill="currentColor" height="9" viewBox="0 0 24 24" width="9"><path d="M12 2 14.4 9.6 22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4Z" /></svg>
-                          Lv.{level.level} {level.title}
-                        </span>
-                      </div>
-                      <button className="mt-1 text-xs text-[var(--muted)]" data-profile-action="identity-edit" onClick={() => setIdentityDraft(identity)} type="button">编辑资料 ›</button>
-                    </div>
-                  </div>
-                </div>
-                {renderOverview()}
-                <section aria-labelledby="profile-services-title" className="lg:hidden">
-                  <h2 className="text-sm font-medium" id="profile-services-title">常用服务</h2>
-                  <div className="mt-2 grid grid-cols-3 overflow-hidden rounded-2xl border border-[var(--border)] bg-white">
-                    {SERVICE_ITEMS.map((item, index) => (
-                      <button className="flex min-h-20 flex-col items-center justify-center gap-1.5 border-b border-r border-[var(--border)] p-2 text-xs text-[var(--muted)] transition hover:text-[var(--accent)] [&:nth-child(3n)]:border-r-0 [&:nth-child(n+4)]:border-b-0" data-profile-service={item.label} key={`${item.id}-${item.label}-${index}`} onClick={() => setManualTab(item.id)} type="button">
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              </div>
-            ) : null}
-            {activeTab === "designs" ? renderDesignsTab() : null}
-            {activeTab === "orders" ? renderOrdersTab() : null}
-            {activeTab === "favorites" ? renderFavoritesTab() : null}
-            {activeTab === "addresses" ? renderAddressesTab() : null}
-            {activeTab === "settings" ? renderSettingsTab() : null}
-          </section>
+            <button className="mt-1 text-xs text-[var(--muted)]" data-profile-action="identity-edit" onClick={() => setIdentityDraft(identity)} type="button">编辑资料 ›</button>
+          </div>
         </div>
       </div>
+      {renderOverview()}
+      <section aria-labelledby="profile-services-title" className="lg:hidden">
+        <h2 className="text-sm font-medium" id="profile-services-title">常用服务</h2>
+        <div className="mt-2 grid grid-cols-3 overflow-hidden rounded-2xl border border-[var(--border)] bg-white">
+          {SERVICE_ITEMS.map((item, index) => (
+            <button className="flex min-h-20 flex-col items-center justify-center gap-1.5 border-b border-r border-[var(--border)] p-2 text-xs text-[var(--muted)] transition hover:text-[var(--accent)] [&:nth-child(3n)]:border-r-0 [&:nth-child(n+4)]:border-b-0" data-profile-service={item.label} key={`${item.id}-${item.label}-${index}`} onClick={() => navigation.selectTab(item.id)} type="button">
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+
+  const renderPanel = (tab: ProfileTab) => {
+    if (tab === "designs") return renderDesignsTab();
+    if (tab === "orders") return renderOrdersTab();
+    if (tab === "favorites") return renderFavoritesTab();
+    if (tab === "addresses") return renderAddressesTab();
+    if (tab === "settings") return renderSettingsTab();
+    return renderOverviewPanel();
+  };
+
+  return (
+    <main className="min-h-screen bg-[var(--surface)] pb-24 lg:pb-16" data-profile-page="ready" data-star-surface="profile">
+      <ProfileTabsFrame
+        alerts={
+          <>
+            {notice ? <FlowNotice code={notice} compact action={{ kind: "button", label: "知道了", onAction: () => setNotice(null) }} onDismissAuthRequired={() => setNotice(null)} /> : null}
+            {message ? <p className="rounded-full bg-[var(--accent-soft)] px-5 py-2 text-sm text-[var(--success)]" data-profile-toast="true" role="status">{message}</p> : null}
+          </>
+        }
+        identity={identity}
+        level={level}
+        navigation={navigation}
+        onEditIdentity={() => setIdentityDraft(identity)}
+        renderPanel={renderPanel}
+      />
 
       {identityDraft ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-label="编辑资料">
