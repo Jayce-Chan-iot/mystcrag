@@ -173,6 +173,43 @@ function OrderRow({ order, onOpen }: { order: ProfileOrder; onOpen: () => void }
   );
 }
 
+export function ProfileContinueCard({ entry }: { entry: GalleryEntry }) {
+  return (
+    <article className="flex w-56 shrink-0 flex-col gap-2 rounded-2xl border border-[var(--border)] bg-white p-3 sm:w-auto" data-profile-continue={entry.design.designId}>
+      <div className="grid aspect-[5/3] place-items-center rounded-xl bg-[#f5f4f2] p-3">
+        <BeadThumbnails beadClass="h-9 w-9" design={entry.design} limit={5} />
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="min-w-0 truncate text-sm font-medium">{entry.design.designName}</h3>
+        <span className="shrink-0 text-[0.68rem] text-[var(--muted)]">{statusLabelFor(entry.status)}</span>
+      </div>
+      <p className="text-xs text-[var(--muted)]">更新于 {formatGalleryUpdatedAt(entry.updatedAt)}</p>
+      <Link className="mt-auto inline-flex min-h-11 items-center justify-center rounded-xl border border-[var(--border)] text-xs text-[var(--accent-deep)] transition hover:border-[var(--accent)]" data-profile-action="continue" href={editorRouteFor(entry.design)}>
+        继续编辑 →
+      </Link>
+    </article>
+  );
+}
+
+export function ProfileDesignCard({ entry }: { entry: GalleryEntry }) {
+  return (
+    <article className="flex flex-col gap-2 rounded-2xl border border-[var(--border)] bg-white p-3" data-profile-design={entry.design.designId} data-star-content-card="true">
+      <div className="grid aspect-square place-items-center rounded-xl bg-[#f5f4f2] p-3" data-star-photo-field="true">
+        <BeadThumbnails beadClass="h-8 w-8" design={entry.design} limit={4} />
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="min-w-0 truncate text-sm font-medium">{entry.design.designName}</h3>
+        <span className="flex shrink-0 items-center gap-1">
+          <span data-status-mark={entry.status === "DRAFT" || entry.status === "GENERATED" ? "draft" : "complete"}>{statusLabelFor(entry.status)}</span>
+          <span data-visibility-mark={entry.design.community.visibility === "PUBLIC" ? "public" : entry.design.community.visibility === "UNLISTED" ? "unlisted" : "private"}>{visibilityLabelFor(entry.design.community.visibility)}</span>
+        </span>
+      </div>
+      <p className="text-xs text-[var(--muted)]">{gallerySourceLabel(entry.design)} · {formatGalleryUpdatedAt(entry.updatedAt)}</p>
+      <Link className="mt-auto inline-flex min-h-11 items-center justify-center rounded-xl border border-[var(--border)] text-xs text-[var(--accent-deep)] transition hover:border-[var(--accent)]" href={detailRouteFor(entry.design)}>查看 →</Link>
+    </article>
+  );
+}
+
 export function ProfileTabNav({
   navigation,
   variant
@@ -463,22 +500,6 @@ export function ProfilePage() {
     </div>
   );
 
-  const renderContinueCard = (entry: GalleryEntry) => (
-    <article className="flex w-56 shrink-0 flex-col gap-2 rounded-2xl border border-[var(--border)] bg-white p-3 sm:w-auto" data-profile-continue={entry.design.designId} key={entry.design.designId}>
-      <div className="grid aspect-[5/3] place-items-center rounded-xl bg-[#f5f4f2] p-3">
-        <BeadThumbnails beadClass="h-9 w-9" design={entry.design} limit={5} />
-      </div>
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="min-w-0 truncate text-sm font-medium">{entry.design.designName}</h3>
-        <span className="shrink-0 text-[0.68rem] text-[var(--muted)]">{statusLabelFor(entry.status)}</span>
-      </div>
-      <p className="text-xs text-[var(--muted)]">更新于 {formatGalleryUpdatedAt(entry.updatedAt)}</p>
-      <Link className="mt-auto inline-flex min-h-9 items-center justify-center rounded-xl border border-[var(--border)] text-xs text-[var(--accent-deep)] transition hover:border-[var(--accent)]" data-profile-action="continue" href={editorRouteFor(entry.design)}>
-        继续编辑 →
-      </Link>
-    </article>
-  );
-
   const renderPreferencesCard = () => (
     <div className="rounded-2xl border border-[var(--border)] bg-white p-4" data-profile-section="preferences">
       <div className="flex items-center justify-between">
@@ -574,7 +595,7 @@ export function ProfilePage() {
             </div>
           </div>
         ) : (
-          <div className="mt-3 flex gap-3 overflow-x-auto pb-1 sm:grid sm:grid-cols-3 sm:overflow-visible">{continueDesigns.map(renderContinueCard)}</div>
+          <div className="mt-3 flex gap-3 overflow-x-auto pb-1 sm:grid sm:grid-cols-3 sm:overflow-visible">{continueDesigns.map((entry) => <ProfileContinueCard entry={entry} key={entry.design.designId} />)}</div>
         )}
       </section>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
@@ -591,22 +612,7 @@ export function ProfilePage() {
     <div className="space-y-4" data-profile-tab-panel="designs">
       <h2 className="font-serif text-2xl">我的设计 <span className="text-sm text-[var(--muted)]">共 {designs.length} 件</span></h2>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-        {sortedDesigns.map((entry) => (
-          <article className="flex flex-col gap-2 rounded-2xl border border-[var(--border)] bg-white p-3" data-profile-design={entry.design.designId} data-star-content-card="true" key={entry.design.designId}>
-            <div className="grid aspect-square place-items-center rounded-xl bg-[#f5f4f2] p-3" data-star-photo-field="true">
-              <BeadThumbnails beadClass="h-8 w-8" design={entry.design} limit={4} />
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="min-w-0 truncate text-sm font-medium">{entry.design.designName}</h3>
-              <span className="flex shrink-0 items-center gap-1">
-                <span data-status-mark={entry.status === "DRAFT" || entry.status === "GENERATED" ? "draft" : "complete"}>{statusLabelFor(entry.status)}</span>
-                <span data-visibility-mark={entry.design.community.visibility === "PUBLIC" ? "public" : entry.design.community.visibility === "UNLISTED" ? "unlisted" : "private"}>{visibilityLabelFor(entry.design.community.visibility)}</span>
-              </span>
-            </div>
-            <p className="text-xs text-[var(--muted)]">{gallerySourceLabel(entry.design)} · {formatGalleryUpdatedAt(entry.updatedAt)}</p>
-            <Link className="mt-auto inline-flex min-h-9 items-center justify-center rounded-xl border border-[var(--border)] text-xs text-[var(--accent-deep)] transition hover:border-[var(--accent)]" href={detailRouteFor(entry.design)}>查看 →</Link>
-          </article>
-        ))}
+        {sortedDesigns.map((entry) => <ProfileDesignCard entry={entry} key={entry.design.designId} />)}
       </div>
       {designs.length === 0 ? (
         <div data-star-empty="true">

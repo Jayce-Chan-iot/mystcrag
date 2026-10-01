@@ -1004,7 +1004,7 @@ export function CrystalLibraryPage() {
                   </svg>
                 </button>
               </div>
-              <Link className="mt-1 inline-flex min-h-9 items-center text-xs text-[var(--accent)]" href={`/diy/${encodeURIComponent(design.designId)}`}>查看全部 ›</Link>
+              <Link className="mt-1 inline-flex min-h-11 items-center px-1 text-xs text-[var(--accent)]" href={`/diy/${encodeURIComponent(design.designId)}`}>查看全部 ›</Link>
 
               {!panelCollapsed ? (
                 <div className="mt-3">

@@ -794,3 +794,130 @@ test("every mounted gallery card action keeps the 44px floor, links included", (
     }
   }
 });
+
+// ---------------------------------------------------------------------------
+// Round 4 contract: `star-content.css` floors `button`, `select` and
+// `a[data-star-recovery]` only, so a button-shaped Next `Link` that declares
+// its own height is the one target family the CSS cannot rescue. Three of them
+// still shipped at `min-h-9` (36px) in this task's own sources, which breaks
+// the "visible interactive targets remain at least 44x44 px" rule in
+// `UI_DESIGN_SYSTEM.md` and the 44x44 measurement gate in
+// `INTERACTION_TEST_PLAN.md`.
+// ---------------------------------------------------------------------------
+
+const TARGET_FLOOR_PX = 44; // Tailwind h-11 / min-h-11 === 2.75rem === 44px
+
+function heightPixelsOf(token: string): number | null {
+  const match = /^(?:min-h-|h-)(?:\[(.+?)\]|(\d+))(?:\/\d+)?$/.exec(token);
+  if (!match) return null;
+  const [, arbitrary, step] = match;
+  if (arbitrary !== undefined) {
+    if (arbitrary.includes("star-target-min")) return TARGET_FLOOR_PX;
+    const rem = /(\d*\.?\d+)rem/.exec(arbitrary);
+    if (rem) return Number.parseFloat(rem[1]!) * 16;
+    const px = /(\d+(?:\.\d+)?)px/.exec(arbitrary);
+    if (px) return Number.parseFloat(px[1]!);
+    return null;
+  }
+  if (step === undefined) return null;
+  return Number.parseInt(step, 10) * 4;
+}
+
+function declaredTargetFloor(classes: readonly string[]): number | null {
+  let tallest: number | null = null;
+  for (const token of classes) {
+    const px = heightPixelsOf(token);
+    if (px === null) continue;
+    if (tallest === null || px > tallest) tallest = px;
+  }
+  return tallest;
+}
+
+function assertFloor(label: string, classes: readonly string[]): void {
+  const floor = declaredTargetFloor(classes);
+  assert.ok(
+    floor !== null && floor >= TARGET_FLOOR_PX,
+    `${label} must declare a visible target of at least ${TARGET_FLOOR_PX}x${TARGET_FLOOR_PX} px, found ${floor === null ? "no height token" : `${floor}px`}`
+  );
+}
+
+const HEIGHT_TOKEN = /(?:^|\s)(?:min-h-|h-)(?:\[[^\]]+\]|\d+)/;
+
+/**
+ * Only links that size themselves are control-shaped; a link that flows inside
+ * a sentence keeps the text affordance instead and is deliberately out of this
+ * contract, as is `a[data-star-recovery]` which CSS already floors.
+ */
+function isButtonShapedLinkTag(tag: string, classes: readonly string[]): boolean {
+  return tag === "a" && !classes.includes("data-star-recovery") && classes.some((token) => HEIGHT_TOKEN.test(token));
+}
+
+function linkTagsFromSource(text: string): Array<{ classes: string[]; line: number }> {
+  const found: Array<{ classes: string[]; line: number }> = [];
+  for (const [index, line] of text.split(/\r?\n/).entries()) {
+    for (const match of line.matchAll(/<(?:Link|a)\b([^>]*)>/g)) {
+      const attributes = match[1] ?? "";
+      const className = /className=[{"'`]*([^"'`}]+)/.exec(attributes)?.[1];
+      if (!className) continue;
+      found.push({ classes: className.split(/\s+/).filter(Boolean), line: index + 1 });
+    }
+  }
+  return found;
+}
+
+test("button-shaped content page links declare the 44px target floor", () => {
+  const offenders: string[] = [];
+  for (const rel of [
+    CONTENT_SOURCES.library,
+    CONTENT_SOURCES.gallery,
+    CONTENT_SOURCES.profile
+  ]) {
+    const text = source(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    for (const tag of linkTagsFromSource(text)) {
+      if (!isButtonShapedLinkTag("a", tag.classes)) continue;
+      const floor = declaredTargetFloor(tag.classes);
+      if (floor !== null && floor >= TARGET_FLOOR_PX) continue;
+      offenders.push(`${rel}:${tag.line} ${tag.classes.join(" ")}`);
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `every self-sized content link must reach ${TARGET_FLOOR_PX}px; star-content.css only floors button/select/a[data-star-recovery]`
+  );
+});
+
+function profileCardComponent(name: "ProfileContinueCard" | "ProfileDesignCard"): HookFreeComponent {
+  return requireExport(profilePage[name] as HookFreeComponent | undefined, name);
+}
+
+function mountedTargetsOfAnyTag(markup: string): MountedTarget[] {
+  const targets: MountedTarget[] = [];
+  for (const match of markup.matchAll(/<(a|button)\b([^>]*)>/g)) {
+    const tag = match[1] ?? "";
+    const attributes = match[2] ?? "";
+    const className = /class="([^"]*)"/.exec(attributes)?.[1] ?? "";
+    targets.push({ tag, action: tag, classes: className.split(/\s+/).filter(Boolean) });
+  }
+  return targets;
+}
+
+test("the profile continue and design cards mount their action link at 44px", () => {
+  const Continue = profileCardComponent("ProfileContinueCard");
+  const Design = profileCardComponent("ProfileDesignCard");
+  const entry = galleryEntry(0);
+
+  const continueMarkup = renderToStaticMarkup(mount(Continue, { entry }));
+  const continueTargets = mountedTargetsOfAnyTag(continueMarkup).filter((target) =>
+    isButtonShapedLinkTag(target.tag, target.classes)
+  );
+  assert.equal(continueTargets.length, 1, "the continue card must mount exactly one action link");
+  for (const target of continueTargets) assertFloor("profile continue card action link", target.classes);
+
+  const designMarkup = renderToStaticMarkup(mount(Design, { entry }));
+  const designTargets = mountedTargetsOfAnyTag(designMarkup).filter((target) =>
+    isButtonShapedLinkTag(target.tag, target.classes)
+  );
+  assert.equal(designTargets.length, 1, "the designs tab card must mount exactly one action link");
+  for (const target of designTargets) assertFloor("profile design card action link", target.classes);
+});
