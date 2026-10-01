@@ -54,7 +54,7 @@ function BeadStrip({
         </span>
       ))}
       {hidden > 0 ? (
-        <span className={`grid place-items-center rounded-full bg-white/90 text-[0.65rem] text-[var(--muted)] ${beadClass}`}>+{hidden}</span>
+        <span className={`grid place-items-center rounded-full bg-white text-[0.65rem] text-[var(--muted)] ${beadClass}`}>+{hidden}</span>
       ) : null}
     </div>
   );
@@ -129,7 +129,7 @@ export type GalleryDesignCardProps = {
 };
 
 const OVERLAY_BASE_CLASSES =
-  "absolute inset-x-0 bottom-0 flex items-center justify-center gap-1 bg-[#241b2e]/85 px-3 py-2.5 text-xs text-white backdrop-blur-sm";
+  "absolute inset-x-0 bottom-0 flex items-center justify-center gap-1 bg-[var(--star-ink)] px-3 py-2.5 text-xs text-white";
 
 export function galleryOverlayClassName(isFeatured: boolean): string {
   if (isFeatured) return OVERLAY_BASE_CLASSES;
@@ -157,24 +157,24 @@ export function GalleryDesignCard({
 
   const overlayActions = (
     <div className={galleryOverlayClassName(isFeatured)} data-gallery-overlay={design.designId}>
-      <Link className="flex min-h-9 items-center gap-1 rounded-full px-3 transition hover:bg-white/15" data-gallery-action="edit" href={editorRouteFor(design)}>
+      <Link className="flex min-h-11 items-center gap-1 rounded-full px-3 transition hover:bg-white/15" data-gallery-action="edit" href={editorRouteFor(design)}>
         <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="13"><path d="M14.5 5.5 18.5 9.5 8.5 19.5H4.5v-4Z" /></svg>
         继续编辑
       </Link>
-      <Link className="flex min-h-9 items-center gap-1 rounded-full px-3 transition hover:bg-white/15" data-gallery-action="detail" href={detailRouteFor(design)}>
+      <Link className="flex min-h-11 items-center gap-1 rounded-full px-3 transition hover:bg-white/15" data-gallery-action="detail" href={detailRouteFor(design)}>
         <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeWidth="1.7" viewBox="0 0 24 24" width="13"><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" strokeLinecap="round" /></svg>
         查看详情
       </Link>
-      <button className="flex min-h-9 items-center gap-1 rounded-full px-3 transition hover:bg-white/15 disabled:opacity-55" data-gallery-action="export" disabled={busy} onClick={() => onExport(entry)} type="button">
+      <button className="flex min-h-11 items-center gap-1 rounded-full px-3 transition hover:bg-white/15 disabled:opacity-55" data-gallery-action="export" disabled={busy} onClick={() => onExport(entry)} type="button">
         <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="13"><path d="M12 4v11M7.5 11 12 15.5 16.5 11M5 19h14" /></svg>
         导出设计图
       </button>
-      <button className="flex min-h-9 items-center gap-1 rounded-full px-3 transition hover:bg-white/15 disabled:opacity-55" data-gallery-action="clone" disabled={busy} onClick={() => onClone(entry)} type="button">
+      <button className="flex min-h-11 items-center gap-1 rounded-full px-3 transition hover:bg-white/15 disabled:opacity-55" data-gallery-action="clone" disabled={busy} onClick={() => onClone(entry)} type="button">
         <svg aria-hidden="true" fill="none" height="13" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="13"><rect height="12" rx="2" width="12" x="8" y="8" /><path d="M16 5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2" /></svg>
         复制方案
       </button>
       <button
-        className={`flex min-h-9 items-center gap-1 rounded-full px-3 transition disabled:opacity-55 ${deleteArmed ? "bg-[var(--danger)] text-white" : "hover:bg-white/15"}`}
+        className={`flex min-h-11 items-center gap-1 rounded-full px-3 transition disabled:opacity-55 ${deleteArmed ? "bg-[var(--danger)] text-white" : "hover:bg-white/15"}`}
         data-gallery-action={deleteArmed ? "delete-confirm" : "delete"}
         disabled={busy}
         onClick={() => (deleteArmed ? onConfirmDelete(entry) : onArmDelete(entry))}
@@ -231,7 +231,7 @@ export function GalleryDesignCard({
           <button
             aria-expanded={menuOpen}
             aria-label={`更多操作：${design.designName}`}
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-[var(--border)] text-[var(--muted)]"
+            className="grid h-11 min-h-11 w-11 shrink-0 place-items-center rounded-xl border border-[var(--border)] text-[var(--muted)]"
             data-gallery-action="menu"
             onClick={() => onToggleMenu(entry)}
             type="button"
@@ -242,16 +242,16 @@ export function GalleryDesignCard({
             <>
               <button aria-label="关闭菜单" className="fixed inset-0 z-20 cursor-default" onClick={() => onToggleMenu(entry)} type="button" />
               <div className="absolute bottom-16 right-3 z-30 w-40 overflow-hidden rounded-xl border border-[var(--border)] bg-white shadow-[0_12px_32px_rgb(36_27_46/0.16)]" data-gallery-menu={design.designId}>
-                <button className="flex w-full items-center gap-2 px-3.5 py-3 text-left text-sm hover:bg-[var(--surface-soft)] disabled:opacity-55" data-gallery-action="export" disabled={busy} onClick={() => onExport(entry)} type="button">
+                <button className="flex min-h-11 w-full items-center gap-2 px-3.5 py-3 text-left text-sm hover:bg-[var(--surface-soft)] disabled:opacity-55" data-gallery-action="export" disabled={busy} onClick={() => onExport(entry)} type="button">
                   <svg aria-hidden="true" fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="14"><path d="M12 4v11M7.5 11 12 15.5 16.5 11M5 19h14" /></svg>
                   导出设计图
                 </button>
-                <button className="flex w-full items-center gap-2 px-3.5 py-3 text-left text-sm hover:bg-[var(--surface-soft)] disabled:opacity-55" data-gallery-action="clone" disabled={busy} onClick={() => onClone(entry)} type="button">
+                <button className="flex min-h-11 w-full items-center gap-2 px-3.5 py-3 text-left text-sm hover:bg-[var(--surface-soft)] disabled:opacity-55" data-gallery-action="clone" disabled={busy} onClick={() => onClone(entry)} type="button">
                   <svg aria-hidden="true" fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="14"><rect height="12" rx="2" width="12" x="8" y="8" /><path d="M16 5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2" /></svg>
                   复制方案
                 </button>
                 <button
-                  className={`flex w-full items-center gap-2 border-t border-[var(--border)] px-3.5 py-3 text-left text-sm hover:bg-[#f8edef] disabled:opacity-55 ${deleteArmed ? "font-medium text-[var(--danger)]" : "text-[var(--danger)]"}`}
+                  className={`flex min-h-11 w-full items-center gap-2 border-t border-[var(--border)] px-3.5 py-3 text-left text-sm hover:bg-[#f8edef] disabled:opacity-55 ${deleteArmed ? "font-medium text-[var(--danger)]" : "text-[var(--danger)]"}`}
                   data-gallery-action={deleteArmed ? "delete-confirm" : "delete"}
                   disabled={busy}
                   onClick={() => (deleteArmed ? onConfirmDelete(entry) : onArmDelete(entry))}

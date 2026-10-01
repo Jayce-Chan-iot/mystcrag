@@ -680,3 +680,117 @@ test("gallery clone and delete stay revision aware", async () => {
   assert.match(deleteMessage, /已删除/);
   assert.match(cloneMessage, /已复制/);
 });
+
+// ---------------------------------------------------------------------------
+// Round 3 contracts: the "no glassmorphism" ban must survive Tailwind, and the
+// 44px floor must cover link actions too, not only buttons.
+//
+// `UI_DESIGN_SYSTEM.md` viewport density contract keeps "visible interactive
+// targets at least 44x44 px" and `INTERACTION_TEST_PLAN.md` rejects any visible
+// target below 44x44 px, while the content-page grammar forbids frosted glass.
+// The previous contract only matched the CSS property `backdrop-filter: blur`,
+// so Tailwind's `backdrop-blur-*` and high-alpha panel fills passed straight
+// through.
+// ---------------------------------------------------------------------------
+
+const TRANSLUCENT_ALPHA = /\/(?:[7-9]\d|100)\]?$/;
+
+function isTranslucentSurfaceFill(token: string): boolean {
+  return token.startsWith("bg-") && TRANSLUCENT_ALPHA.test(token);
+}
+
+function isFrostedToken(token: string): boolean {
+  return /backdrop-blur/.test(token);
+}
+
+test("content page sources never use frosted-glass utilities or translucent panel fills", () => {
+  const offenders: string[] = [];
+  for (const rel of [
+    CONTENT_SOURCES.library,
+    CONTENT_SOURCES.gallery,
+    CONTENT_SOURCES.profile,
+    CONTENT_SOURCES.designDetail,
+    CONTENT_SOURCES.starContent
+  ]) {
+    const text = source(rel)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    for (const line of text.split(/\r?\n/)) {
+      for (const token of line.split(/[\s"'`;{}()]+/)) {
+        if (isFrostedToken(token)) offenders.push(`${rel}: ${token}`);
+        if (isTranslucentSurfaceFill(token)) offenders.push(`${rel}: ${token}`);
+      }
+      if (/backdrop-filter\s*:\s*blur/i.test(line)) offenders.push(`${rel}: backdrop-filter blur`);
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    "frosted glass is banned by the content-page grammar; panels must paint an opaque surface"
+  );
+});
+
+test("the gallery action overlay mounts on an opaque star-token surface", () => {
+  const Card = galleryCard();
+  const hookFree = [Card];
+  for (const isFeatured of [true, false]) {
+    const overlay = findHost(
+      mount(Card, galleryCardProps(galleryEntry(isFeatured ? 0 : 1), { isFeatured }).props),
+      hookFree,
+      isOverlay,
+      `the ${isFeatured ? "featured" : "regular"} desktop action overlay`
+    );
+    const tokens = classTokens(overlay);
+    assert.deepEqual(
+      tokens.filter((token) => isFrostedToken(token) || isTranslucentSurfaceFill(token)),
+      [],
+      `the ${isFeatured ? "featured" : "regular"} overlay must be opaque`
+    );
+    assert.ok(
+      tokens.some((token) => /^bg-\[var\(--star-[a-z-]+\)\]$/.test(token)),
+      `the ${isFeatured ? "featured" : "regular"} overlay must fill from a star token`
+    );
+  }
+});
+
+type MountedTarget = { tag: string; action: string; classes: string[] };
+
+/**
+ * Read the action controls back out of mounted markup rather than the element
+ * tree: `next/link` renders through the server renderer into a real anchor, so
+ * link targets are covered by the same floor as buttons.
+ */
+function mountedGalleryTargets(markup: string): MountedTarget[] {
+  const targets: MountedTarget[] = [];
+  for (const match of markup.matchAll(/<(a|button)\b([^>]*)>/g)) {
+    const tag = match[1] ?? "";
+    const attributes = match[2] ?? "";
+    const action = /data-gallery-action="([^"]+)"/.exec(attributes)?.[1];
+    if (!action) continue;
+    const className = /class="([^"]*)"/.exec(attributes)?.[1] ?? "";
+    targets.push({ tag, action, classes: className.split(/\s+/).filter(Boolean) });
+  }
+  return targets;
+}
+
+test("every mounted gallery card action keeps the 44px floor, links included", () => {
+  const Card = galleryCard();
+  for (const isFeatured of [true, false]) {
+    const label = isFeatured ? "featured" : "regular";
+    const markup = renderToStaticMarkup(
+      mount(Card, galleryCardProps(galleryEntry(isFeatured ? 0 : 1), { isFeatured }).props)
+    );
+    const targets = mountedGalleryTargets(markup);
+    assert.ok(targets.length >= 7, `the ${label} card must mount every owner action`);
+    assert.ok(
+      targets.filter((target) => target.tag === "a").length >= 3,
+      `${label}: the card's link actions must be inside this contract, not only the buttons`
+    );
+    for (const target of targets) {
+      assert.ok(
+        target.classes.includes("min-h-11"),
+        `${label} ${target.action} (${target.tag}) must keep the 44x44 visible target floor`
+      );
+    }
+  }
+});

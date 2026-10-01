@@ -863,7 +863,7 @@ export function CrystalLibraryPage() {
 
         <div className="mt-5 grid gap-6 lg:mt-0 lg:grid-cols-[14rem_minmax(0,1fr)_14.5rem] lg:gap-7">
           <aside className="hidden lg:block">
-            <div className="sticky top-[4.5rem] space-y-5 rounded-2xl border border-[var(--border)] bg-white/70 p-4" data-library-filters="desktop" data-star-filter-surface="desktop">
+            <div className="sticky top-[4.5rem] space-y-5 rounded-2xl border border-[var(--border)] bg-white p-4" data-library-filters="desktop" data-star-filter-surface="desktop">
               <div className="grid grid-cols-3 gap-1 rounded-xl border border-[var(--border)] bg-white p-1" aria-label="商品品类">
                 {PRODUCT_TYPES.map((type) => (
                   <button
@@ -1068,7 +1068,7 @@ export function CrystalLibraryPage() {
       </div>
 
       {design ? (
-      <div className="sticky bottom-[3.4rem] z-40 border-t border-[var(--border)] bg-white/97 backdrop-blur-xl lg:hidden" data-current-design-panel="mobile">
+      <div className="sticky bottom-[3.4rem] z-40 border-t border-[var(--border)] bg-white shadow-[var(--star-shadow-1)] lg:hidden" data-current-design-panel="mobile">
         <div className="mx-auto flex max-w-[92.5rem] items-center gap-3 px-4 py-2.5 sm:px-6">
           <div className="flex min-w-0 items-center gap-1">
             {sortedBeads.slice(0, 5).map((bead) => (
