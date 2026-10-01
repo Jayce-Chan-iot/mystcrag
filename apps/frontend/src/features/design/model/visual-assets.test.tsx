@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { DISPLAY_TRAY_OPTIONS } from "./display-tray";
@@ -23,6 +24,18 @@ test("core demo materials resolve to dedicated photographic assets without CSS f
 
 test("unknown materials use the neutral photographic fallback", () => {
   assert.deepEqual(getBeadVisual("future-material"), getBeadVisual("clear-quartz-v1"));
+});
+
+test("the star workbench keeps bead imagery untinted and its tray neutral", () => {
+  const bead = readFileSync(new URL("../components/crystal-bead-image.tsx", import.meta.url), "utf8");
+  assert.match(bead, /data-star-workbench-bead="true"/);
+  const css = readFileSync(new URL("../../../../app/styles/star-workbench.css", import.meta.url), "utf8");
+  // The workbench shell never tints, blends, or filters the photographic material.
+  assert.doesNotMatch(css, /\b(?:filter|backdrop-filter|mix-blend-mode|background-blend-mode)\s*:/);
+  assert.doesNotMatch(css, /\[data-star-workbench-(?:tray|bead)\][^{]*\{/);
+  for (const materialKey of coreMaterials) {
+    assert.equal(getBeadVisual(materialKey).filter, "none", `${materialKey} must stay untinted`);
+  }
 });
 
 test("every display tray resolves to a real photographic surface", () => {

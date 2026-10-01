@@ -1,21 +1,108 @@
 /* star-workbench.css — DIY workbench page family
  * Owned by TASK-UI-STAR-001 as the style entry; workbench composition is TASK-FE-STAR-002.
  * New route rules are scoped to [data-star-surface].
+ *
+ * Instrument grammar: night-lacquer frame and operation rails, restrained brass
+ * linework, warm paper information surfaces, and the existing photographic trays
+ * at the editing centre. The tray and bead imagery are never tinted, filtered,
+ * blended, or restyled by CSS so material colour stays faithful.
  */
 
 [data-star-surface="diy-workbench"] {
   color: var(--star-ink);
+  background: var(--star-paper);
 }
 
-[data-star-surface="diy-workbench"] [data-star-workbench-tool],
-[data-star-surface="diy-workbench"] button,
-[data-star-surface="diy-workbench"] a {
-  min-height: 2.75rem;
-  min-width: 2.75rem;
+/* Night-lacquer instrument frame. */
+[data-star-surface="diy-workbench"] [data-star-workbench-frame="lacquer"] {
+  background: var(--star-canvas);
+  color: var(--star-paper);
+}
+
+/* Top toolbar is part of the frame, not an information surface. */
+[data-star-surface="diy-workbench"] [data-star-workbench-toolbar="true"] {
+  border-bottom: 1px solid color-mix(in srgb, var(--star-brass) 34%, transparent);
+  background: color-mix(in srgb, var(--star-canvas) 86%, var(--star-ink));
+  color: var(--star-paper);
+}
+
+[data-star-surface="diy-workbench"] [data-star-workbench-toolbar="true"] :is(a, h1, span, button) {
+  color: var(--star-paper);
+}
+
+[data-star-surface="diy-workbench"] [data-star-workbench-toolbar="true"] :is(a, button):hover {
+  color: var(--star-brass);
+}
+
+/* Operation rail: lacquer with brass linework. */
+[data-star-surface="diy-workbench"] [data-star-workbench-rail="tools"] {
+  border-right: 1px solid color-mix(in srgb, var(--star-brass) 30%, transparent);
+  background: var(--star-canvas);
+  color: var(--star-moon);
+}
+
+[data-star-surface="diy-workbench"] [data-star-workbench-rail="tools"] :is(button, a, span) {
+  color: var(--star-moon);
+}
+
+[data-star-surface="diy-workbench"] [data-star-workbench-rail="tools"] [aria-current="page"] {
+  border-left-color: var(--star-brass);
+  background: color-mix(in srgb, var(--star-brass) 16%, transparent);
+  color: var(--star-paper);
+}
+
+[data-star-surface="diy-workbench"] [data-star-workbench-rail="tools"] :is(button, a):hover {
+  background: color-mix(in srgb, var(--star-brass) 14%, transparent);
+  color: var(--star-paper);
+}
+
+/* Rails scroll internally so the tray and completion action stay reachable. */
+[data-star-surface="diy-workbench"] [data-star-workbench-rail] {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Sticky completion rail. */
+[data-star-surface="diy-workbench"] [data-star-workbench-complete="true"] {
+  position: sticky;
+  bottom: 0;
+  border-top: 1px solid var(--star-line);
+  background: var(--star-paper);
+}
+
+/* Neutral photographic stage: a quiet paper field, never a tint over the material. */
+[data-star-surface="diy-workbench"] [data-star-workbench-stage-frame="true"] {
+  border-left: 1px solid var(--star-line);
+  border-right: 1px solid var(--star-line);
+  background: var(--star-paper-muted);
 }
 
 [data-star-surface="diy-workbench"] [data-star-workbench-stage] {
   border: 1px solid var(--star-line);
   border-radius: var(--star-radius-lg);
   background: var(--star-paper-muted);
+}
+
+/* 44px interaction floor for instrument controls (never the photographic stage). */
+[data-star-surface="diy-workbench"] [data-star-workbench-tool],
+[data-star-surface="diy-workbench"] [data-star-workbench-toolbar="true"] :is(button, a, input, select),
+[data-star-surface="diy-workbench"] [data-star-workbench-rail] :is(button, a, input, select),
+[data-star-surface="diy-workbench"] [data-star-workbench-complete="true"] button {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+}
+
+@media (min-width: 1024px) and (max-height: 640px) {
+  [data-star-surface="diy-workbench"] [data-star-workbench-frame="lacquer"] {
+    height: calc(100dvh - 1px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-star-surface="diy-workbench"] *,
+  [data-star-surface="diy-workbench"] *::before,
+  [data-star-surface="diy-workbench"] *::after {
+    animation-duration: 0.01ms;
+    transition-duration: 0.01ms;
+  }
 }

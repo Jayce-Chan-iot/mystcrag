@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
+import { DisplayTray } from "../components/display-tray";
 import {
   DISPLAY_TRAY_OPTIONS,
   displayTrayCanvasPalette,
@@ -64,4 +68,14 @@ test("each display tray has an export-safe canvas palette", () => {
     assert.match(palette.surface, /^#[0-9a-f]{6}$/i);
     assert.match(palette.rim, /^#[0-9a-f]{6}$/i);
   }
+});
+
+test("the display tray renders a neutral photographic surface for the star workbench", () => {
+  const markup = renderToStaticMarkup(<DisplayTray material="BONE_CHINA" />);
+  assert.match(markup, /data-star-workbench-tray="neutral"/);
+  assert.match(markup, /data-display-tray="BONE_CHINA"/);
+  const source = readFileSync(new URL("../components/display-tray.tsx", import.meta.url), "utf8");
+  // The tray is a photographic presentation layer: it never tints the material.
+  assert.doesNotMatch(source, /\b(?:filter|backdrop-filter|mix-blend-mode|background-blend-mode)\s*:/);
+  assert.doesNotMatch(source, /style=\{\{[^}]*background/);
 });

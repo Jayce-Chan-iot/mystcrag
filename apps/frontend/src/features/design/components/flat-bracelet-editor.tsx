@@ -300,6 +300,7 @@ export function FlatBraceletEditor({
         className="relative mx-auto aspect-square w-full max-w-[35rem] select-none"
         data-bracelet-layout="loose"
         data-flat-bracelet-editor="true"
+        data-star-workbench-stage="true"
         ref={modeStageRef}
         style={fitDesktopViewport ? { maxWidth: "clamp(14rem, calc(100dvh - 20.5rem), 35rem)" } : undefined}
       >
@@ -392,6 +393,7 @@ export function FlatBraceletEditor({
       data-bracelet-layout={visualConnected ? "connected" : "spread"}
       data-drag-reflow-active={reflowActive}
       data-flat-bracelet-editor="true"
+      data-star-workbench-stage="true"
       ref={(node) => {
         stageRef.current = node;
         modeStageRef.current = node;
@@ -483,6 +485,7 @@ export function FlatBraceletEditor({
             className={`absolute z-10 -translate-x-1/2 -translate-y-1/2 touch-none rounded-full transition-[transform,left,top] duration-300 motion-reduce:transition-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${isBead ? "cursor-grab active:cursor-grabbing" : "cursor-default"} ${selected ? "ring-2 ring-[var(--accent)] ring-offset-2 ring-offset-[var(--surface)]" : ""} ${dragging ? "z-30 scale-110 cursor-grabbing transition-none drop-shadow-[0_16px_20px_rgb(57_45_67/0.32)]" : "hover:scale-105"}`}
             data-component-id={component.componentId}
             data-drag-lifted={dragging || undefined}
+            data-star-workbench-selected={selected || undefined}
             disabled={busy || !isBead}
             draggable={isBead && !busy}
             key={component.componentId}

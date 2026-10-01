@@ -184,3 +184,46 @@ test("workbench notices live in a dedicated status region outside stage control 
   assert.doesNotMatch(editor, /absolute left-8 right-8 top-4 z-30/);
   assert.doesNotMatch(editor, /absolute left-8 top-4 z-30 rounded-full/);
 });
+
+test("the star workbench frames a neutral photographic tray inside a lacquer instrument shell", () => {
+  const editor = source("./components/diy-editor.tsx");
+  const stage = source("./components/flat-bracelet-editor.tsx");
+  const tray = source("./components/display-tray.tsx");
+  const bead = source("./components/crystal-bead-image.tsx");
+  const css = source("../../../app/styles/star-workbench.css");
+
+  // The workbench opts into the star route surface while retaining the atelier contract.
+  assert.match(editor, /data-star-surface="diy-workbench"/);
+  assert.match(editor, /data-atelier-surface="diy-workbench"/);
+
+  // The dark lacquer instrument frame owns only the toolbars and the internal rails.
+  assert.match(editor, /data-star-workbench-frame="lacquer"/);
+  assert.match(editor, /data-star-workbench-toolbar="true"/);
+  assert.match(editor, /data-star-workbench-rail="tools"/);
+  assert.match(editor, /data-star-workbench-rail="catalog"/);
+  assert.match(editor, /data-star-workbench-rail="inspector"/);
+
+  // The editing centre stays a neutral, untinted photographic tray.
+  assert.match(editor, /data-star-workbench-stage-frame="true"/);
+  assert.match(stage, /data-star-workbench-stage="true"/);
+  assert.match(tray, /data-star-workbench-tray="neutral"/);
+  assert.match(bead, /data-star-workbench-bead="true"/);
+
+  // Selected-bead identity and the sticky completion rail stay explicit.
+  assert.match(stage, /data-star-workbench-selected=/);
+  assert.match(editor, /data-star-workbench-complete="true"/);
+
+  // Photographic fidelity: the star workbench never tints, blends, or filters the material.
+  assert.doesNotMatch(css, /\b(?:filter|backdrop-filter|mix-blend-mode|background-blend-mode)\s*:/);
+  assert.doesNotMatch(css, /\[data-star-workbench-(?:tray|bead)\][^{]*\{/);
+  assert.doesNotMatch(css, /#[0-9a-fA-F]{3,8}\b/, "the workbench uses star tokens, not literal colors");
+
+  // 44px floor, internal scroll rails, sticky completion, short viewport, reduced motion.
+  assert.match(css, /\[data-star-surface="diy-workbench"\][\s\S]*?min-height:\s*2\.75rem/);
+  assert.match(css, /\[data-star-surface="diy-workbench"\] \[data-star-workbench-rail\][^{]*\{[^}]*overflow-y:\s*auto/);
+  assert.match(css, /\[data-star-surface="diy-workbench"\] \[data-star-workbench-complete="true"\][^{]*\{[^}]*position:\s*sticky/);
+  assert.match(css, /@media \(min-width: 1024px\) and \(max-height: 640px\)[\s\S]*?\[data-star-surface="diy-workbench"\]/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.doesNotMatch(css, /(?:^|[;{]\s*)zoom\s*:/m);
+  assert.doesNotMatch(css, /(?:html|body)[^{]*\{[^}]*transform:\s*scale\(/s);
+});

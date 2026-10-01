@@ -45,6 +45,7 @@ export function CrystalBeadImage({
       aria-hidden={alt ? undefined : true}
       className="relative block h-full w-full drop-shadow-[0_7px_6px_rgb(57_45_67/0.18)]"
       data-photo-real-bead="true"
+      data-star-workbench-bead="true"
     >
       <Image
         alt={alt}
