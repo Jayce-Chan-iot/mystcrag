@@ -192,6 +192,10 @@ export function sortAccessories(
   return sorted;
 }
 
+export function stockStatusLabel(availableQuantity: number): string {
+  return availableQuantity > 0 ? "有库存" : "需补货";
+}
+
 export function accessoryDisplayNames(accessory: CatalogAccessoryProduct): { nameCn: string; nameEn: string } {
   const typeLabels: Record<string, string> = {
     SPACER: "隔珠",

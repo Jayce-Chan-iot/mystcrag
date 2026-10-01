@@ -1,6 +1,7 @@
-/* star-content.css — content page family (library / gallery / profile)
- * Owned by TASK-UI-STAR-001 as the style entry; page composition is TASK-FE-STAR-003.
- * New route rules are scoped to [data-star-surface].
+/* star-content.css — content page family (library / gallery / profile / design detail)
+ * Page composition is TASK-FE-STAR-003. Route rules stay scoped to [data-star-surface].
+ * Grammar: star-map header, paper index/filter, photographic item grid,
+ * text-bearing status marks, explicit empty and no-result recovery.
  */
 
 [data-star-surface="library"],
@@ -8,8 +9,110 @@
 [data-star-surface="profile"],
 [data-star-surface="content"] {
   color: var(--star-ink);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--star-canvas) 4%, var(--star-paper)) 0%, var(--star-paper) 12rem);
 }
 
+/* Star-map header: brass instrument line under a persistent title block */
+[data-star-surface="library"] [data-star-content-header],
+[data-star-surface="gallery"] [data-star-content-header],
+[data-star-surface="profile"] [data-star-content-header],
+[data-star-surface="content"] [data-star-content-header] {
+  position: relative;
+  padding-block-end: var(--star-space-5);
+  border-block-end: 1px solid var(--star-line);
+}
+
+[data-star-surface="library"] [data-star-content-header]::after,
+[data-star-surface="gallery"] [data-star-content-header]::after,
+[data-star-surface="profile"] [data-star-content-header]::after,
+[data-star-surface="content"] [data-star-content-header]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: -1px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--star-brass) 18%,
+    color-mix(in srgb, var(--star-brass) 55%, transparent) 50%,
+    var(--star-brass) 82%,
+    transparent 100%
+  );
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+[data-star-surface="library"] [data-star-content-kicker],
+[data-star-surface="gallery"] [data-star-content-kicker],
+[data-star-surface="profile"] [data-star-content-kicker],
+[data-star-surface="content"] [data-star-content-kicker] {
+  color: var(--star-brass-ink);
+  letter-spacing: 0.18em;
+  text-transform: none;
+}
+
+[data-star-surface="library"] [data-star-content-title],
+[data-star-surface="gallery"] [data-star-content-title],
+[data-star-surface="profile"] [data-star-content-title],
+[data-star-surface="content"] [data-star-content-title] {
+  color: var(--star-ink);
+  font-family: var(--star-font-display, "Songti SC", "Noto Serif SC", serif);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+[data-star-surface="library"] [data-star-content-lede],
+[data-star-surface="gallery"] [data-star-content-lede],
+[data-star-surface="profile"] [data-star-content-lede],
+[data-star-surface="content"] [data-star-content-lede] {
+  color: color-mix(in srgb, var(--star-ink) 72%, var(--star-paper));
+  max-width: 42rem;
+}
+
+/* Paper index / filter surface */
+[data-star-surface="library"] [data-star-filter-surface],
+[data-star-surface="gallery"] [data-star-filter-surface],
+[data-star-surface="profile"] [data-star-filter-surface],
+[data-star-surface="content"] [data-star-filter-surface] {
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-lg);
+  background: color-mix(in srgb, var(--star-paper) 88%, white);
+  box-shadow: var(--star-shadow-1);
+}
+
+[data-star-surface="library"] [data-star-filter-label],
+[data-star-surface="gallery"] [data-star-filter-label],
+[data-star-surface="profile"] [data-star-filter-label],
+[data-star-surface="content"] [data-star-filter-label] {
+  color: var(--star-ink);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  min-height: 1.5rem;
+}
+
+[data-star-surface="library"] [data-star-filter-field],
+[data-star-surface="gallery"] [data-star-filter-field],
+[data-star-surface="profile"] [data-star-filter-field],
+[data-star-surface="content"] [data-star-filter-field] {
+  min-height: var(--star-target-min);
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-md);
+  background: var(--star-paper);
+  color: var(--star-ink);
+}
+
+[data-star-surface="library"] [data-star-filter-field]:focus-visible,
+[data-star-surface="gallery"] [data-star-filter-field]:focus-visible,
+[data-star-surface="profile"] [data-star-filter-field]:focus-visible,
+[data-star-surface="content"] [data-star-filter-field]:focus-visible {
+  outline: 2px solid var(--star-brass);
+  outline-offset: 2px;
+}
+
+/* Photographic item grid cards */
 [data-star-surface="library"] [data-star-content-card],
 [data-star-surface="gallery"] [data-star-content-card],
 [data-star-surface="profile"] [data-star-content-card],
@@ -17,12 +120,160 @@
   border: 1px solid var(--star-line);
   border-radius: var(--star-radius-md);
   background: var(--star-paper);
+  box-shadow: var(--star-shadow-1);
+  overflow: hidden;
+}
+
+[data-star-surface="library"] [data-star-photo-field],
+[data-star-surface="gallery"] [data-star-photo-field],
+[data-star-surface="profile"] [data-star-photo-field],
+[data-star-surface="content"] [data-star-photo-field] {
+  background: var(--star-paper-muted);
+  /* Product photos stay color-accurate: no filter, blend, or tint on the field. */
+}
+
+/* Status marks: text-bearing badges, never color alone */
+[data-star-surface="library"] [data-status-mark],
+[data-star-surface="gallery"] [data-status-mark],
+[data-star-surface="profile"] [data-status-mark],
+[data-star-surface="content"] [data-status-mark],
+[data-star-surface="library"] [data-stock-mark],
+[data-star-surface="gallery"] [data-stock-mark],
+[data-star-surface="profile"] [data-stock-mark],
+[data-star-surface="content"] [data-stock-mark],
+[data-star-surface="library"] [data-visibility-mark],
+[data-star-surface="gallery"] [data-visibility-mark],
+[data-star-surface="profile"] [data-visibility-mark],
+[data-star-surface="content"] [data-visibility-mark] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 1.5rem;
+  padding-inline: 0.55rem;
+  padding-block: 0.15rem;
+  border: 1px solid var(--star-line);
+  border-radius: 999px;
+  background: var(--star-paper);
+  color: var(--star-ink);
+  font-size: 0.75rem;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+[data-star-surface="library"] [data-stock-mark="restock"],
+[data-star-surface="gallery"] [data-status-mark="draft"],
+[data-star-surface="content"] [data-status-mark="draft"] {
+  border-color: color-mix(in srgb, var(--star-warning) 45%, var(--star-line));
+  color: var(--star-warning);
+}
+
+[data-star-surface="library"] [data-stock-mark="in-stock"],
+[data-star-surface="gallery"] [data-status-mark="complete"],
+[data-star-surface="content"] [data-status-mark="complete"] {
+  border-color: color-mix(in srgb, var(--star-success) 40%, var(--star-line));
+  color: var(--star-success);
+}
+
+[data-star-surface="gallery"] [data-visibility-mark="private"],
+[data-star-surface="profile"] [data-visibility-mark="private"],
+[data-star-surface="content"] [data-visibility-mark="private"] {
+  border-color: color-mix(in srgb, var(--star-amethyst) 40%, var(--star-line));
+  color: var(--star-amethyst);
+}
+
+[data-star-surface="gallery"] [data-visibility-mark="public"],
+[data-star-surface="profile"] [data-visibility-mark="public"],
+[data-star-surface="content"] [data-visibility-mark="public"] {
+  border-color: color-mix(in srgb, var(--star-brass) 50%, var(--star-line));
+  color: var(--star-brass-ink);
+}
+
+/* Empty and no-result recovery panels */
+[data-star-surface="library"] [data-star-empty],
+[data-star-surface="gallery"] [data-star-empty],
+[data-star-surface="profile"] [data-star-empty],
+[data-star-surface="content"] [data-star-empty] {
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-lg);
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--star-brass) 10%, transparent), transparent 55%),
+    var(--star-paper);
+  padding: var(--star-space-6) var(--star-space-5);
+  text-align: center;
+}
+
+[data-star-surface="library"] [data-star-recovery],
+[data-star-surface="gallery"] [data-star-recovery],
+[data-star-surface="profile"] [data-star-recovery],
+[data-star-surface="content"] [data-star-recovery] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--star-target-min);
+  min-width: var(--star-target-min);
+  padding-inline: var(--star-space-5);
+  border: 1px solid var(--star-brass);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--star-brass) 14%, var(--star-paper));
+  color: var(--star-brass-ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background var(--star-motion-fast) var(--star-motion-ease), color var(--star-motion-fast) var(--star-motion-ease);
+}
+
+[data-star-surface="library"] [data-star-recovery]:hover,
+[data-star-surface="gallery"] [data-star-recovery]:hover,
+[data-star-surface="profile"] [data-star-recovery]:hover,
+[data-star-surface="content"] [data-star-recovery]:hover {
+  background: color-mix(in srgb, var(--star-brass) 24%, var(--star-paper));
+}
+
+[data-star-surface="library"] [data-star-recovery]:focus-visible,
+[data-star-surface="gallery"] [data-star-recovery]:focus-visible,
+[data-star-surface="profile"] [data-star-recovery]:focus-visible,
+[data-star-surface="content"] [data-star-recovery]:focus-visible {
+  outline: 2px solid var(--star-brass);
+  outline-offset: 2px;
+}
+
+/* Interactive floor for content controls */
+[data-star-surface="library"] button,
+[data-star-surface="gallery"] button,
+[data-star-surface="profile"] button,
+[data-star-surface="content"] button,
+[data-star-surface="library"] a[data-star-recovery],
+[data-star-surface="gallery"] a[data-star-recovery],
+[data-star-surface="profile"] a[data-star-recovery],
+[data-star-surface="content"] a[data-star-recovery],
+[data-star-surface="library"] select,
+[data-star-surface="gallery"] select,
+[data-star-surface="profile"] select,
+[data-star-surface="content"] select {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
 }
 
 [data-star-surface="library"] button,
 [data-star-surface="gallery"] button,
 [data-star-surface="profile"] button,
 [data-star-surface="content"] button {
-  min-height: 2.75rem;
-  min-width: 2.75rem;
+  cursor: pointer;
+}
+
+[data-star-surface="library"] button:focus-visible,
+[data-star-surface="gallery"] button:focus-visible,
+[data-star-surface="profile"] button:focus-visible,
+[data-star-surface="content"] button:focus-visible {
+  outline: 2px solid var(--star-brass);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-star-surface="library"] [data-star-recovery],
+  [data-star-surface="gallery"] [data-star-recovery],
+  [data-star-surface="profile"] [data-star-recovery],
+  [data-star-surface="content"] [data-star-recovery] {
+    transition: none;
+  }
 }

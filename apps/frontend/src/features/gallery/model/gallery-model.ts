@@ -32,6 +32,14 @@ export function statusLabelFor(status: DesignPersistenceStatus): string {
   return DRAFT_STATUSES.has(status) ? "草稿" : "已完成";
 }
 
+export type DesignVisibility = "PRIVATE" | "PUBLIC" | "UNLISTED";
+
+export function visibilityLabelFor(visibility: DesignVisibility): string {
+  if (visibility === "PUBLIC") return "公开";
+  if (visibility === "UNLISTED") return "未列出";
+  return "私密";
+}
+
 export function gallerySourceLabel(design: PublicDesignV1): string {
   if (AI_DESIGN_MODES.has(design.designMode)) return "AI 设计";
   if (design.designMode === "TAROT_GUIDED") return "塔罗灵感";

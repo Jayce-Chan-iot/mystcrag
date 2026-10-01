@@ -11,7 +11,8 @@ import {
   filterCrystalGroups,
   groupMaterialsByCrystal,
   sortAccessories,
-  sortCrystalGroups
+  sortCrystalGroups,
+  stockStatusLabel
 } from "./library-model";
 
 function material(overrides: Partial<CatalogMaterialProduct> & { crystalId: string }): CatalogMaterialProduct {
@@ -141,4 +142,10 @@ test("accessory display names localize type and material", () => {
   const { nameCn, nameEn } = accessoryDisplayNames(ACCESSORIES[0]!);
   assert.equal(nameCn, "925银隔珠");
   assert.equal(nameEn, "925 Silver Spacer");
+});
+
+test("stock status labels are truthful text marks for sellability", () => {
+  assert.equal(stockStatusLabel(12), "有库存");
+  assert.equal(stockStatusLabel(1), "有库存");
+  assert.equal(stockStatusLabel(0), "需补货");
 });

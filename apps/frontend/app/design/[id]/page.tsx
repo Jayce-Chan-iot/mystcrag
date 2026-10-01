@@ -6,5 +6,9 @@ export const metadata: Metadata = { title: "AI 设计方案" };
 
 export default async function DesignResultPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  return <DesignResults designId={id} />;
+  return (
+    <div data-star-surface="content" data-design-detail-root="true">
+      <DesignResults designId={id} />
+    </div>
+  );
 }
