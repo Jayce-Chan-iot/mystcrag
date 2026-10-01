@@ -1,6 +1,6 @@
 "use client";
 
-import type { PublicDesignV1 } from "@mystcrag/design-contract";
+import type { DesignPersistenceStatus, OrderSummaryStatus, PublicDesignV1 } from "@mystcrag/design-contract";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -56,6 +56,76 @@ const budgetLabels: Record<BudgetStatus, string> = {
   WITHIN_BUDGET: "预算范围内",
   OVER_BUDGET: "OVER_BUDGET · 超出预算"
 };
+
+export type DetailReadStatus = "OK" | "FAILED" | "MOCK";
+
+export type SavedDesignEntry = {
+  status: DesignPersistenceStatus;
+  design: { designId: string; revision: number };
+};
+
+export type OrderSummaryEntry = {
+  orderId: string;
+  status: OrderSummaryStatus;
+  createdAt: string;
+  design: { designId: string; revision: number };
+};
+
+export type DesignDetailReads = {
+  designs: PublicDesignV1[];
+  budget: DesignBudgetContext | null;
+  savedDesigns: SavedDesignEntry[];
+  orders: OrderSummaryEntry[];
+  savedDesignsRead: DetailReadStatus;
+  ordersRead: DetailReadStatus;
+};
+
+export type DesignSaveState =
+  | { kind: "CONFIRMED"; status: DesignPersistenceStatus; serverRevision: number }
+  | { kind: "STALE_VIEW"; status: DesignPersistenceStatus; serverRevision: number }
+  | { kind: "NOT_SAVED" }
+  | { kind: "UNKNOWN"; reason: "FAILED" | "MOCK" | "LIMIT" };
+
+export const DESIGN_LIST_LIMIT = 200;
+
+function unknownDetailReadReason(status: Exclude<DetailReadStatus, "OK">): "FAILED" | "MOCK" {
+  return status === "MOCK" ? "MOCK" : "FAILED";
+}
+
+export function deriveDesignSaveState(design: PublicDesignV1, reads: DesignDetailReads): DesignSaveState {
+  if (reads.savedDesignsRead !== "OK") {
+    return { kind: "UNKNOWN", reason: unknownDetailReadReason(reads.savedDesignsRead) };
+  }
+  const entry = reads.savedDesigns.find((item) => item.design.designId === design.designId);
+  if (!entry) {
+    if (reads.savedDesigns.length >= DESIGN_LIST_LIMIT) return { kind: "UNKNOWN", reason: "LIMIT" };
+    return { kind: "NOT_SAVED" };
+  }
+  if (entry.design.revision === design.revision) {
+    return { kind: "CONFIRMED", status: entry.status, serverRevision: entry.design.revision };
+  }
+  return { kind: "STALE_VIEW", status: entry.status, serverRevision: entry.design.revision };
+}
+
+const persistenceLabels: Record<DesignPersistenceStatus, string> = {
+  DRAFT: "草稿",
+  GENERATED: "刚生成",
+  SAVED: "已保存",
+  ARCHIVED: "已归档"
+};
+
+export function designSaveStateLabel(state: DesignSaveState): string {
+  if (state.kind === "CONFIRMED") {
+    return `设计库确认：${persistenceLabels[state.status]} · v${state.serverRevision}`;
+  }
+  if (state.kind === "STALE_VIEW") {
+    return `本页版本落后于设计库：设计库为 v${state.serverRevision}（${persistenceLabels[state.status]}）`;
+  }
+  if (state.kind === "NOT_SAVED") return "尚未保存到设计库";
+  if (state.reason === "MOCK") return "本地演示模式，不读取设计库状态";
+  if (state.reason === "LIMIT") return "设计库列表只返回最近 200 条，无法确认";
+  return "暂时无法确认保存状态";
+}
 
 export function DesignResults({ designId }: { designId: string }) {
   const [designs, setDesigns] = useState<PublicDesignV1[]>([]);
