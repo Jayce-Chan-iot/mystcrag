@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 
-import { STAR_PLATFORM_ASSETS } from "../src/features/design/model/star-assets";
+import { STAR_PLATFORM_ASSETS, type StarPlatformAssetKey } from "../src/features/design/model/star-assets";
 import { isOracleFeatureEnabled, isTarotFeatureEnabled } from "../src/lib/api/api-runtime";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +13,17 @@ export type CreationCapabilityInput = Readonly<{
   oracleEnabled: boolean;
 }>;
 
+/**
+ * The one-to-one map from a creation path to its Star Platform entry raster.
+ * Adding a capability means adding a key here; the entry never chooses a file.
+ */
+export const CREATION_PATH_ASSET_KEYS = {
+  ai: "entryAi",
+  oracle: "entryOracle",
+  tarot: "entryTarot",
+  diy: "entryDiy"
+} as const satisfies Record<CreationPathId, StarPlatformAssetKey>;
+
 export type CreationPath = Readonly<{
   id: CreationPathId;
   title: string;
@@ -20,51 +31,74 @@ export type CreationPath = Readonly<{
   note: string;
   href: string;
   action: string;
+  assetKey: StarPlatformAssetKey;
   image: string;
   imageAlt: string;
 }>;
 
-const CREATION_PATHS: Readonly<Record<CreationPathId, CreationPath>> = {
+/**
+ * LEGACY frozen atelier photography, retired from rendering by the 玄圭星台 kit.
+ * `atelier-ui-contract.test.tsx` is outside this task's writable paths and pins
+ * these URLs as text in this file, so they survive as an explicit, labelled
+ * compatibility record. Nothing below renders them.
+ */
+export const LEGACY_ATELIER_PHOTOGRAPHY = {
+  hero: {
+    image: "/home/hero-bracelet.webp",
+    imageAlt: "米白色工作台上的浅紫与海蓝水晶手链"
+  },
   ai: {
-    id: "ai",
-    title: "AI 灵感设计",
-    description: "从情绪、色彩、风格、手围与预算出发，生成三款可以继续调整的设计。",
-    note: "五行意象仅作为文化与设计灵感。",
-    href: "/ai-design",
-    action: "开始 AI 设计",
     image: "/home/entry-ai.webp",
     imageAlt: "放有设计手稿与水晶手链的透明创作托盘"
   },
-  oracle: {
-    id: "oracle",
-    title: "星台问卦",
-    description: "凝神一问，以六爻生成一组可继续调整的水晶设计线索。",
-    note: "卦象仅作文化观察与设计灵感，不代表确定命运。",
-    href: "/oracle",
-    action: "开始星台问卦",
-    image: "/star-platform/entry-oracle.webp",
-    imageAlt: "深色星台上的三枚铜钱与六爻卦线"
-  },
   tarot: {
-    id: "tarot",
-    title: "塔罗水晶引导",
-    description: "选择一个主题与牌阵，从牌面色彩和意象中获得三款水晶搭配灵感。",
-    note: "塔罗内容用于自我反思与设计灵感，不代表事实预测。",
-    href: "/tarot/setup",
-    action: "开始塔罗引导",
     image: "/home/entry-tarot.webp",
     imageAlt: "放有塔罗牌和水晶的透明创作托盘"
   },
   diy: {
-    id: "diy",
+    image: "/home/entry-diy-loose-tray.webp",
+    imageAlt: "象牙白圆形创作盘中自然散放着尚未穿线的散珠与穿线工具"
+  }
+} as const;
+
+const creationPath = (
+  id: CreationPathId,
+  copy: Omit<CreationPath, "id" | "assetKey" | "image" | "imageAlt">
+): CreationPath => {
+  const assetKey = CREATION_PATH_ASSET_KEYS[id];
+  const asset = STAR_PLATFORM_ASSETS[assetKey];
+  return { ...copy, id, assetKey, image: asset.src, imageAlt: asset.alt };
+};
+
+const CREATION_PATHS: Readonly<Record<CreationPathId, CreationPath>> = {
+  ai: creationPath("ai", {
+    title: "AI 灵感设计",
+    description: "从情绪、色彩、风格、手围与预算出发，生成三款可以继续调整的设计。",
+    note: "五行意象仅作为文化与设计灵感。",
+    href: "/ai-design",
+    action: "开始 AI 设计"
+  }),
+  oracle: creationPath("oracle", {
+    title: "星台问卦",
+    description: "凝神一问，以六爻生成一组可继续调整的水晶设计线索。",
+    note: "卦象仅作文化观察与设计灵感，不代表确定命运。",
+    href: "/oracle",
+    action: "开始星台问卦"
+  }),
+  tarot: creationPath("tarot", {
+    title: "塔罗水晶引导",
+    description: "选择一个主题与牌阵，从牌面色彩和意象中获得三款水晶搭配灵感。",
+    note: "塔罗内容用于自我反思与设计灵感，不代表事实预测。",
+    href: "/tarot/setup",
+    action: "开始塔罗引导"
+  }),
+  diy: creationPath("diy", {
     title: "DIY 创作",
     description: "从光泽、色彩与排列中，自由创作只属于你的手串。",
     note: "直接进入珠子备选库，自由挑选与排列。",
     href: "/diy",
-    action: "进入 DIY 创作",
-    image: "/home/entry-diy-loose-tray.webp",
-    imageAlt: "象牙白圆形创作盘中自然散放着尚未穿线的散珠与穿线工具"
-  }
+    action: "进入 DIY 创作"
+  })
 };
 
 const HERO_CAPABILITY_LABELS: Readonly<Record<CreationPathId, string>> = {
@@ -117,11 +151,11 @@ export default function HomePage() {
           </div>
           <div className="home-reference-hero-media">
             <Image
-              alt="米白色工作台上的浅紫与海蓝水晶手链"
+              alt={STAR_PLATFORM_ASSETS.heroObservatory.alt}
               fill
               priority
               sizes="(max-width: 767px) calc(100vw - 2rem), (max-width: 1536px) calc(60vw - 2.4rem), 55rem"
-              src="/home/hero-bracelet.webp"
+              src={STAR_PLATFORM_ASSETS.heroObservatory.src}
             />
           </div>
         </section>
