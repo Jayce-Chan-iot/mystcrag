@@ -67,9 +67,10 @@ test("disabled landing omits only the Tarot entry", () => {
   assert.doesNotMatch(landing, /href="\/tarot\/setup"/);
   assert.match(landing, /href="\/ai-design"/);
   assert.match(landing, /href="\/diy"/);
-  assert.match(landing, /hero-bracelet\.webp/);
-  assert.match(landing, /entry-ai\.webp/);
-  assert.match(landing, /entry-diy-loose-tray\.webp/);
+  // Cards render the typed Star Platform kit, not the frozen /home photography.
+  assert.match(landing, /star-platform(?:%2F|\/)hero-observatory\.webp/);
+  assert.match(landing, /star-platform(?:%2F|\/)entry-ai\.webp/);
+  assert.match(landing, /star-platform(?:%2F|\/)entry-diy\.webp/);
   assert.doesNotMatch(landing, /entry-tarot\.webp/);
 });
 
@@ -347,4 +348,58 @@ test("tarot setup adopts the star surface while keeping privacy and theme semant
   assert.match(source, /不代表事实预测|自我反思/);
   const css = readFileSync(new URL("./tarot.module.css", import.meta.url), "utf8");
   assert.match(css, /data-star-surface="tarot-setup"|--star-/);
+});
+
+function splitTopLevelSelectors(selectorList: string): string[] {
+  const selectors: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const character of selectorList) {
+    if (character === "(") depth += 1;
+    else if (character === ")") depth -= 1;
+    if (character === "," && depth === 0) {
+      selectors.push(current);
+      current = "";
+      continue;
+    }
+    current += character;
+  }
+  if (current.trim().length > 0) selectors.push(current);
+  return selectors;
+}
+
+test("tarot module CSS scopes the star surfaces without invalid :global selectors", () => {
+  const raw = readFileSync(new URL("./tarot.module.css", import.meta.url), "utf8");
+  // Comments explain the pipeline behaviour and quote the offending selectors;
+  // only the parsed stylesheet is checked.
+  const css = raw.replace(/\/\*[\s\S]*?\*\//g, "");
+  // Turbopack rewrites a `:global(...)` selector list into `:is(:global(...))`
+  // and keeps a chained `:global(...) :global(...)`. Both leak the invalid
+  // `:global` pseudo-class into the built globals.css, so production builds
+  // report "global is not recognized as a valid pseudo-class".
+  for (const fragment of css.matchAll(/([^{}]+)\{/g)) {
+    const selectors = splitTopLevelSelectors(fragment[1]!);
+    assert.ok(
+      selectors.filter((selector) => selector.includes(":global(")).length <= 1,
+      `a rule must not list several :global(...) selectors: ${fragment[1]!.trim()}`
+    );
+    for (const selector of selectors) {
+      assert.ok(
+        (selector.match(/:global\(/g) ?? []).length <= 1,
+        `selector must not nest :global(...): ${selector.trim()}`
+      );
+      assert.doesNotMatch(selector, /:global\(\s*:/);
+    }
+  }
+  // Attribute-only surface selectors are never rewritten by CSS Modules, so the
+  // tarot scoping is written directly instead of through :global.
+  assert.doesNotMatch(css, /:global\(\s*\[data-star-surface=/);
+  // The 44px interaction floor still targets exactly the three tarot surfaces.
+  for (const surface of ["tarot-setup", "tarot-draw", "tarot-result"]) {
+    assert.match(
+      css,
+      new RegExp(`\\[data-star-surface="${surface}"\\][^{}]*\\{[^}]*min-height:\\s*2\\.75rem`, "s"),
+      `${surface} must keep the 2.75rem interaction floor`
+    );
+  }
 });

@@ -6,6 +6,8 @@ import { GenerateDesignRequestSchema, PublicDesignV1Schema, RecommendDesignReque
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import HomePage, { CREATION_PATH_ASSET_KEYS, getCreationPaths } from "../../../app/page";
+import { STAR_PLATFORM_ASSETS } from "./model/star-assets";
 import { FlowNotice } from "../../components/flow-notice";
 import { FRONTEND_ERROR_CODES, FrontendApiError } from "../../lib/api/frontend-api-error";
 import { MOCK_MATERIALS, mockGetDesignOptions, mockReplaceBead } from "../../lib/api/mock-design-api";
@@ -28,6 +30,10 @@ import {
   toRecommendDesignRequest,
   validateQuestionnaireStep
 } from "../questionnaire/model/questionnaire";
+
+// `app/page.tsx` is outside the frontend tsconfig directory and is transpiled
+// with the classic JSX runtime, so rendering it needs React on the global.
+(globalThis as typeof globalThis & { React: typeof React }).React = React;
 
 test("AI questionnaire defines all six required steps and validates input", () => {
   assert.deepEqual(QUESTIONNAIRE_STEPS.map((step) => step.id), ["state", "color", "style", "budget", "wrist", "culture"]);
@@ -562,17 +568,122 @@ function readSource(rel: string): string {
   return readFileSync(new URL(rel, import.meta.url), "utf8");
 }
 
-test("homepage adopts the star surface and typed star platform assets for decoration", () => {
+const assetSrcInMarkup = (markup: string, src: string): boolean =>
+  markup.includes(src) || markup.includes(encodeURIComponent(src));
+
+test("homepage resolves the hero and every creation entry from the typed Star Platform kit", () => {
   const home = readSource("../../../app/page.tsx");
+  // Star surface, texture and count-driven grid stay wired.
   assert.match(home, /data-star-surface="home"/);
   assert.match(home, /data-atelier-surface="home"/);
-  assert.match(home, /STAR_PLATFORM_ASSETS|getStarPlatformAsset/);
-  assert.match(home, /heroObservatory|engravedStarMap|xuanPaperGrain/);
   assert.match(home, /data-creation-count=\{creationPaths\.length\}/);
   assert.match(home, /data-star-entry-card/);
-  // Frozen atelier photography remains present for the non-writable contract.
+  // Hero consumes the typed observatory asset for both src and alt.
+  assert.match(home, /STAR_PLATFORM_ASSETS\.heroObservatory\.src/);
+  assert.match(home, /STAR_PLATFORM_ASSETS\.heroObservatory\.alt/);
+  // Cards render the resolved typed asset instead of the frozen photography.
+  assert.match(home, /src=\{path\.image\}/);
+  assert.match(home, /alt=\{path\.imageAlt\}/);
+  // The frozen atelier photography contract survives only as an explicit,
+  // labelled legacy block and is never the render source.
+  assert.match(home, /LEGACY_ATELIER_PHOTOGRAPHY/);
   assert.match(home, /\/home\/hero-bracelet\.webp/);
   assert.match(home, /data-reference-entry-image="true"/);
+});
+
+test("creation path asset keys map one-to-one onto the typed Star Platform entries", () => {
+  assert.deepEqual(CREATION_PATH_ASSET_KEYS, {
+    ai: "entryAi",
+    oracle: "entryOracle",
+    tarot: "entryTarot",
+    diy: "entryDiy"
+  });
+  const expectedAsset = {
+    ai: STAR_PLATFORM_ASSETS.entryAi,
+    oracle: STAR_PLATFORM_ASSETS.entryOracle,
+    tarot: STAR_PLATFORM_ASSETS.entryTarot,
+    diy: STAR_PLATFORM_ASSETS.entryDiy
+  } as const;
+  const paths = getCreationPaths({ tarotEnabled: true, oracleEnabled: true });
+  assert.deepEqual(paths.map((path) => path.id), ["ai", "oracle", "tarot", "diy"]);
+  for (const path of paths) {
+    const asset = expectedAsset[path.id];
+    assert.equal(path.assetKey, CREATION_PATH_ASSET_KEYS[path.id], `${path.id} must declare its typed asset key`);
+    assert.equal(path.image, asset.src, `${path.id} entry must render the typed ${path.id} src`);
+    assert.equal(path.imageAlt, asset.alt, `${path.id} entry must render the typed ${path.id} alt`);
+  }
+  assert.equal(new Set(paths.map((path) => path.image)).size, 4, "entries must not share one asset");
+});
+
+test("rendered homepage exposes the typed hero and entry assets and drops the frozen photography", () => {
+  const markup = renderToStaticMarkup(<HomePage />);
+  const hero = STAR_PLATFORM_ASSETS.heroObservatory;
+  assert.ok(assetSrcInMarkup(markup, hero.src), "hero must render the typed observatory src");
+  assert.ok(markup.includes(hero.alt), "hero must render the typed observatory alt");
+  // AI and DIY entries are capability-independent and always render.
+  for (const asset of [STAR_PLATFORM_ASSETS.entryAi, STAR_PLATFORM_ASSETS.entryDiy]) {
+    assert.ok(assetSrcInMarkup(markup, asset.src), `entry must render typed src ${asset.src}`);
+    assert.ok(markup.includes(asset.alt), `entry must render typed alt ${asset.alt}`);
+  }
+  // The frozen atelier photography must never reach the rendered page.
+  assert.doesNotMatch(markup, /home(?:%2F|\/)hero-bracelet\.webp/);
+  assert.doesNotMatch(markup, /home(?:%2F|\/)entry-ai\.webp/);
+  assert.doesNotMatch(markup, /home(?:%2F|\/)entry-diy-loose-tray\.webp/);
+});
+
+test("rendered homepage maps every gated entry to its own typed src and alt", () => {
+  const previousTarot = process.env.MYSTCRAG_TAROT_ENABLED;
+  const previousOracle = process.env.MYSTCRAG_ORACLE_ENABLED;
+  let markup = "";
+  try {
+    process.env.MYSTCRAG_TAROT_ENABLED = "true";
+    process.env.MYSTCRAG_ORACLE_ENABLED = "true";
+    markup = renderToStaticMarkup(<HomePage />);
+  } finally {
+    if (previousTarot === undefined) delete process.env.MYSTCRAG_TAROT_ENABLED;
+    else process.env.MYSTCRAG_TAROT_ENABLED = previousTarot;
+    if (previousOracle === undefined) delete process.env.MYSTCRAG_ORACLE_ENABLED;
+    else process.env.MYSTCRAG_ORACLE_ENABLED = previousOracle;
+  }
+
+  assert.equal((markup.match(/data-creation-path=/g) ?? []).length, 4);
+  const entryKeysByPathId = { ai: "entryAi", oracle: "entryOracle", tarot: "entryTarot", diy: "entryDiy" } as const;
+  for (const [pathId, assetKey] of Object.entries(entryKeysByPathId)) {
+    const card = markup.match(new RegExp(`<article[^>]*data-creation-path="${pathId}"[^>]*>[\\s\\S]*?</article>`))?.[0];
+    assert.ok(card, `missing ${pathId} creation card`);
+    const asset = STAR_PLATFORM_ASSETS[assetKey as keyof typeof STAR_PLATFORM_ASSETS];
+    assert.ok(assetSrcInMarkup(card, asset.src), `${pathId} card must render typed src ${asset.src}`);
+    assert.ok(card.includes(asset.alt), `${pathId} card must render typed alt for ${assetKey}`);
+    assert.doesNotMatch(card, /home(?:%2F|\/)entry-/, `${pathId} card must not fall back to frozen photography`);
+  }
+});
+
+test("design results action bar stays opaque without glassmorphism", () => {
+  const source = readSource("./components/design-results.tsx");
+  const actionBarTag = source.match(/<div\b[^>]*data-results-action-bar="true"[^>]*>/)?.[0];
+  assert.ok(actionBarTag, "sticky action bar must remain present");
+  assert.doesNotMatch(actionBarTag, /bg-white\/\d+/);
+  assert.doesNotMatch(actionBarTag, /backdrop-blur/);
+  assert.match(actionBarTag, /bg-\[var\(--star-paper\)\]/);
+  assert.doesNotMatch(source, /backdrop-blur/);
+});
+
+test("design result selection control keeps a square 44x44 target on both axes", () => {
+  const source = readSource("./components/design-results.tsx");
+  const selectionButton = source.match(/<button\b[^>]*aria-pressed=\{selected\}[^>]*>/)?.[0];
+  assert.ok(selectionButton, "per-card selection button must remain present");
+  // Precise contract: the control declares both axes itself at 2.75rem/44px so
+  // the hit area is square. A CSS min-height floor alone stretched 32x32 into
+  // an ellipse, which `rounded-full` then rendered as a distorted target.
+  assert.match(selectionButton, /\bh-11\b/);
+  assert.match(selectionButton, /\bw-11\b/);
+  assert.doesNotMatch(selectionButton, /\bh-(4|5|6|7|8|9|10)\b/);
+  assert.doesNotMatch(selectionButton, /\bw-(4|5|6|7|8|9|10)\b/);
+  assert.match(selectionButton, /\bplace-items-center\b/);
+  assert.match(selectionButton, /\brounded-full\b/);
+  // The star surface still guarantees the 44px floor for every result action.
+  const css = readSource("../../../app/styles/star-acquisition.css");
+  assert.match(css, /\[data-star-surface="design-results"\] button[^{]*\{[^}]*min-height:\s*2\.75rem/s);
 });
 
 test("homepage capability grid is balanced at two, three and four cards with no orphan column", () => {
