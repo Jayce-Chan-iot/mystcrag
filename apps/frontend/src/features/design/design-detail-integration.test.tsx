@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import type { PublicDesignV1 } from "@mystcrag/design-contract";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { createDesignApiClient, createMoveRequest } from "../../lib/api/design-api";
 import {
   deriveDesignOrderState,
   deriveDesignSaveState,
@@ -325,4 +327,79 @@ test("the detail region renders no status until both list reads have settled", (
   assert.match(markup, /data-design-detail-state="pending"/);
   assert.match(markup, /正在确认保存与下单状态/);
   assert.doesNotMatch(markup, /data-design-save-state|data-design-order-state/);
+});
+
+
+// A revision above the fixture's 1 so a hard-coded expectedRevision cannot pass by luck.
+const currentDesign: PublicDesignV1 = { ...mockPublicDesign, revision: 4 };
+
+type CapturedCall = { path: string; body: Record<string, unknown> };
+
+// Every call is recorded and then answered with a stable 500 so the assertions
+// read the real transport body instead of a hand-built success envelope.
+function captureFetcher(captured: CapturedCall[]) {
+  return (async (path: string | URL | Request, init?: RequestInit) => {
+    captured.push({
+      path: String(path),
+      body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>
+    });
+    return new Response(JSON.stringify({ error: { code: "INTERNAL_ERROR", message: "captured" } }), {
+      status: 500,
+      headers: { "content-type": "application/json" }
+    });
+  }) as typeof fetch;
+}
+
+test("update and order mutations thread the loaded design revision", async () => {
+  const captured: CapturedCall[] = [];
+  const client = createDesignApiClient({ useMock: false, fetcher: captureFetcher(captured) });
+
+  await assert.rejects(() => client.update(createMoveRequest(currentDesign, currentDesign.beads[0]!.componentId, 1)));
+  await assert.rejects(() => client.createOrder(currentDesign));
+
+  const update = captured.find((call) => call.path === "/api/design/update");
+  const order = captured.find((call) => call.path === "/api/orders/from-design");
+  assert.ok(update && order, "both mutation routes must be called");
+  assert.equal(update.body.expectedRevision, 4);
+  assert.equal(order.body.expectedRevision, 4);
+  assert.equal(order.body.expectedPricingVersion, "cny-retail-2026-07-v1");
+  assert.equal(order.body.expectedTotalPriceMinor, 5500);
+  assert.equal((order.body.design as { revision: number }).revision, 4);
+});
+
+test("delete and clone pass the caller revision straight through to the body", async () => {
+  const captured: CapturedCall[] = [];
+  const client = createDesignApiClient({ useMock: false, fetcher: captureFetcher(captured) });
+
+  await assert.rejects(() => client.deleteDesign("design-ai-standard", 4));
+  await assert.rejects(() => client.cloneDesign("design-ai-standard", 4));
+
+  assert.equal(captured[0]?.body.expectedRevision, 4);
+  assert.equal(captured[1]?.body.expectedRevision, 4);
+});
+
+test("a REJECTED design is blocked by the frozen contract before any request leaves", async () => {
+  let calls = 0;
+  const client = createDesignApiClient({
+    useMock: false,
+    fetcher: (async () => {
+      calls += 1;
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch
+  });
+
+  await assert.rejects(() => client.createOrder({
+    ...mockPublicDesign,
+    compliance: { ...mockPublicDesign.compliance, complianceStatus: "REJECTED" }
+  }));
+  assert.equal(calls, 0);
+});
+
+test("the design detail region performs no mutation and hands off the authoritative id only", () => {
+  const detailSource = readFileSync(new URL("./components/design-results.tsx", import.meta.url), "utf8");
+
+  assert.doesNotMatch(detailSource, /designApi\.(save|createOrder|update|deleteDesign|cloneDesign|price)\(/);
+  assert.doesNotMatch(detailSource, /\bfetch\(/);
+  assert.match(detailSource, /href=\{`\/diy\/\$\{encodeURIComponent\(selectedDesign\.designId\)\}`\}/);
+  assert.match(detailSource, /<DesignDetailPanel design=\{selectedDesign\} reads=\{reads\} \/>/);
 });
