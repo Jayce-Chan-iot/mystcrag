@@ -1,10 +1,17 @@
 "use client";
 
-import type { DesignPersistenceStatus, OrderSummaryStatus, PublicDesignV1 } from "@mystcrag/design-contract";
+import type {
+  DesignPersistenceStatus,
+  ListMyDesignsResponse,
+  ListMyOrdersResponse,
+  OrderSummaryStatus,
+  PublicDesignV1
+} from "@mystcrag/design-contract";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { FlowNotice } from "../../../components/flow-notice";
+import { isMockApiEnabled } from "../../../lib/api/api-runtime";
 import { designApi } from "../../../lib/api/design-api";
 import {
   loadCompletedOrder,
@@ -209,9 +216,39 @@ export function designOrderStateLabel(state: DesignOrderState, currentRevision: 
   return "暂时无法确认下单状态";
 }
 
+export type DesignDetailReadApi = {
+  get: (designId: string) => Promise<PublicDesignV1>;
+  listDesigns: () => Promise<ListMyDesignsResponse>;
+  listOrders: () => Promise<ListMyOrdersResponse>;
+};
+
+export async function loadDesignDetailReads(
+  designId: string,
+  api: DesignDetailReadApi = designApi,
+  options: { mockApiEnabled?: boolean; optionIds?: string[] } = {}
+): Promise<DesignDetailReads> {
+  const mockApiEnabled = options.mockApiEnabled ?? isMockApiEnabled;
+  const optionIds = options.optionIds ?? loadGeneratedDesignOptions(designId);
+  const designs = await Promise.all(optionIds.map((optionId) => api.get(optionId)));
+  const budget = loadDesignBudgetContext(designId);
+
+  if (mockApiEnabled) {
+    return { designs, budget, savedDesigns: [], orders: [], savedDesignsRead: "MOCK", ordersRead: "MOCK" };
+  }
+
+  const [savedResult, ordersResult] = await Promise.allSettled([api.listDesigns(), api.listOrders()]);
+  return {
+    designs,
+    budget,
+    savedDesigns: savedResult.status === "fulfilled" ? savedResult.value.designs : [],
+    orders: ordersResult.status === "fulfilled" ? ordersResult.value.orders : [],
+    savedDesignsRead: savedResult.status === "fulfilled" ? "OK" : "FAILED",
+    ordersRead: ordersResult.status === "fulfilled" ? "OK" : "FAILED"
+  };
+}
+
 export function DesignResults({ designId }: { designId: string }) {
-  const [designs, setDesigns] = useState<PublicDesignV1[]>([]);
-  const [budget, setBudget] = useState<DesignBudgetContext | null>(null);
+  const [reads, setReads] = useState<DesignDetailReads | null>(null);
   const [selectedDesignId, setSelectedDesignId] = useState("");
   const [acceptedOverBudgetIds, setAcceptedOverBudgetIds] = useState<string[]>([]);
   const [errorCode, setErrorCode] = useState<FrontendErrorCode | null>(null);
@@ -219,18 +256,22 @@ export function DesignResults({ designId }: { designId: string }) {
 
   useEffect(() => {
     let active = true;
-    const optionIds = loadGeneratedDesignOptions(designId);
-    void Promise.all(optionIds.map((optionId) => designApi.get(optionId))).then((results) => {
+    void loadDesignDetailReads(designId).then((next) => {
       if (!active) return;
-      setDesigns(results);
-      setSelectedDesignId((current) => results.some((design) => design.designId === current) ? current : results[0]?.designId ?? "");
-      setBudget(loadDesignBudgetContext(designId));
+      const results = next.designs;
+      setReads(next);
+      setSelectedDesignId((current) =>
+        results.some((design) => design.designId === current) ? current : results[0]?.designId ?? ""
+      );
       setErrorCode(null);
     }).catch((error: unknown) => {
       if (active) setErrorCode(toFrontendApiError(error).code);
     });
     return () => { active = false; };
   }, [attempt, designId]);
+
+  const designs = reads?.designs ?? [];
+  const budget = reads?.budget ?? null;
 
   const selectedDesign = designs.find((design) => design.designId === selectedDesignId) ?? designs[0];
   const optionCountLabel = designs.length === 0

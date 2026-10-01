@@ -9,10 +9,13 @@ import {
   deriveDesignOrderState,
   deriveDesignSaveState,
   designOrderStateLabel,
+  loadDesignDetailReads,
+  type DesignDetailReadApi,
   type DesignDetailReads,
   type LocalOrderRecord
 } from "./components/design-results";
 import { DesignSummary, formatDesignUtcMinute } from "./components/design-summary";
+import { mockDesignOptions } from "./fixtures/mock-design-options";
 import { mockPublicDesign } from "./fixtures/mock-public-design";
 
 test("design summary exposes identity, revision, source and update time as text", () => {
@@ -149,4 +152,82 @@ test("order state stays unknown on read failure, mock mode, and the 100 entry ca
     design: { designId: `other-${index}`, revision: 1 }
   }));
   assert.deepEqual(deriveDesignOrderState(mockPublicDesign, readsWith({ orders: capped }), () => null), { kind: "UNKNOWN", reason: "LIMIT" });
+});
+
+function fakeApi(overrides: Partial<DesignDetailReadApi> = {}) {
+  const calls = { get: 0, listDesigns: 0, listOrders: 0 };
+  const api: DesignDetailReadApi = {
+    get: async (designId) => {
+      calls.get += 1;
+      const match = mockDesignOptions.find((design) => design.designId === designId);
+      if (!match) throw new Error(`missing ${designId}`);
+      return match;
+    },
+    listDesigns: async () => {
+      calls.listDesigns += 1;
+      return { designs: [{ design: mockPublicDesign, status: "SAVED", updatedAt: "2026-07-21T06:05:00.000Z" }] };
+    },
+    listOrders: async () => {
+      calls.listOrders += 1;
+      return { orders: [] };
+    },
+    ...overrides
+  };
+  return { api, calls };
+}
+
+test("detail reads load every option and report the library and order lists", async () => {
+  const { api, calls } = fakeApi();
+  const reads = await loadDesignDetailReads("rain-after-blue", api, {
+    mockApiEnabled: false,
+    optionIds: ["rain-after-blue", "mountain-violet"]
+  });
+
+  assert.equal(calls.get, 2);
+  assert.equal(reads.designs.length, 2);
+  assert.equal(reads.savedDesignsRead, "OK");
+  assert.equal(reads.ordersRead, "OK");
+  assert.equal(reads.savedDesigns[0]?.status, "SAVED");
+});
+
+test("a failed library or order list read degrades to unknown instead of throwing", async () => {
+  const { api } = fakeApi({
+    listDesigns: async () => {
+      throw new Error("401");
+    },
+    listOrders: async () => {
+      throw new Error("500");
+    }
+  });
+  const reads = await loadDesignDetailReads("rain-after-blue", api, {
+    mockApiEnabled: false,
+    optionIds: ["rain-after-blue"]
+  });
+
+  assert.equal(reads.savedDesignsRead, "FAILED");
+  assert.equal(reads.ordersRead, "FAILED");
+  assert.deepEqual(reads.savedDesigns, []);
+  assert.deepEqual(reads.orders, []);
+});
+
+test("a failed design read still rejects so the route keeps its canonical error notice", async () => {
+  const { api } = fakeApi();
+
+  await assert.rejects(() => loadDesignDetailReads("missing-design", api, {
+    mockApiEnabled: false,
+    optionIds: ["missing-design"]
+  }));
+});
+
+test("mock mode reads no library or order list because an empty mock list proves nothing", async () => {
+  const { api, calls } = fakeApi();
+  const reads = await loadDesignDetailReads("rain-after-blue", api, {
+    mockApiEnabled: true,
+    optionIds: ["rain-after-blue"]
+  });
+
+  assert.equal(calls.listDesigns, 0);
+  assert.equal(calls.listOrders, 0);
+  assert.equal(reads.savedDesignsRead, "MOCK");
+  assert.equal(reads.ordersRead, "MOCK");
 });
