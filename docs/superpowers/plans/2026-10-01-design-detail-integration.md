@@ -15,7 +15,7 @@
 - Registered task: `TASK-FE-STAR-004`, owner `Qoder CN / Qwen3.8-Flash`, branch `task/fe-star-004-design-detail-integration`, worktree `.codex/worktrees/fe-star-004-design-detail/玄矶水晶DIY设计网页端`, starting point `eeb49c3` (accepted `TASK-FE-STAR-001`).
 - Writable paths are exactly the registry row's set: `docs/tasks/TASK_REGISTRY.md`, this plan, `apps/frontend/app/design/[id]/page.tsx`, `apps/frontend/src/features/design/components/design-results.tsx`, `apps/frontend/src/features/design/components/design-summary.tsx`, `apps/frontend/src/features/design/components/wear-fit-summary.tsx`, `apps/frontend/src/features/design/components/compliance-notice.tsx`, `apps/frontend/src/lib/api/design-api.ts`, `apps/frontend/src/lib/api/design-session.ts`, `apps/frontend/src/features/design/frontend-ai-flow.test.tsx`, `apps/frontend/src/features/design/star-content-contract.test.tsx`, and the new `apps/frontend/src/features/design/design-detail-integration.test.tsx`.
 - Forbidden: Backend, Prisma, `packages/**` (including every Design Contract DTO), root config, `pnpm-lock.yaml` and any `package.json`, `apps/frontend/next-env.d.ts`, other task rows, generated output, new Backend APIs, push, deploy, `main` merge. `next build` rewrites `apps/frontend/next-env.d.ts`; restore it byte-for-byte after every build (SHA-256 `7b550dda…12651`) and never stage it.
-- Combine `TASK-FE-STAR-003` first. Its accepted implementation-gate chain is `a31f017` → `528ede0` → `5163931` → `12a663a`, and that task is still `REVIEW`. `git merge-tree --write-tree eeb49c3 12a663a` reports no conflicting paths, so the combination is a clean merge; if a later rebase produces a conflict, resolve `docs/tasks/TASK_REGISTRY.md` by keeping the `TASK-FE-STAR-001` `DONE` row verbatim, keeping the newest `TASK-FE-STAR-003` `REVIEW` evidence row verbatim, and adding only the `TASK-FE-STAR-004` row. Never restate or shorten another task's evidence.
+- Combine `TASK-FE-STAR-003` first. Its accepted implementation-gate chain is `a31f017` → `528ede0` → `5163931` → `12a663a`, and that task is still `REVIEW`. At the bare starting point `eeb49c3` the merge was conflict-free, but this task's own registry row now sits next to the `TASK-FE-STAR-003` row: at registration commit `b62fd01`, `git merge-tree --write-tree HEAD 12a663a` reports exactly one conflicted path, `docs/tasks/TASK_REGISTRY.md`, and all twelve runtime, model, test and stylesheet paths merge cleanly. Resolve that single conflict by keeping the `TASK-FE-STAR-001` `DONE` row verbatim, keeping the newest `TASK-FE-STAR-003` `REVIEW` evidence row verbatim, and keeping the `TASK-FE-STAR-004` row. Never restate, shorten or reorder another task's evidence, and never accept `--ours`/`--theirs` wholesale on this file.
 - Reuse, do not fork. `DesignSummary` is the canonical identity/privacy renderer, `WearFitSummary` the sole measurement-label owner, `ComplianceNotice` the sole compliance renderer, `StatusPanel` the canonical status surface, `BraceletPreview` the compact view. A new identity block, fit block, compliance block, or status shell is a plan violation.
 - `wear-fit-summary.tsx` and `compliance-notice.tsx` are writable but are expected to stay unchanged. Touch them only if a real RED proves a gap, and record that RED in the acceptance note.
 - Never fabricate a state. A design list read that failed, a mock-mode list that is empty by design, or an order list that hit its documented cap must render as an explicit unknown. `docs/INTERACTION_TEST_PLAN.md` state invariant 4 (`Frontend code never invents a successful revision, price, save time, or order`) governs every assertion in this plan.
@@ -53,42 +53,60 @@
 **Governance task:** `TASK-FE-STAR-004`, branch `task/fe-star-004-design-detail-integration`
 
 **Files:**
-- Modify: `docs/tasks/TASK_REGISTRY.md` (only if a conflict appears; the `TASK-FE-STAR-004` row already exists)
+- Resolve: `docs/tasks/TASK_REGISTRY.md` (the one conflicted path; the `TASK-FE-STAR-004` row already exists and must survive)
 - Merge input: `task/fe-star-003-content-account-pages` at `12a663a`
 
 - [ ] **Step 1: Confirm the starting point and the dependency chain**
 
 ```bash
-git log --oneline -1
+git log --oneline -3
+git merge-base --is-ancestor eeb49c3 HEAD && echo "FE-STAR-001 baseline is an ancestor"
 git log --oneline eeb49c3..12a663a
 ```
 
-Expected: HEAD is `eeb49c3 docs(tasks): accept star platform guided flows rework`, and the chain lists exactly `a31f017`, `528ede0`, `5163931`, `12a663a`.
+Expected: HEAD is `b62fd01 docs(tasks): register FE-STAR-004 design detail integration plan` with parent `eeb49c3 docs(tasks): accept star platform guided flows rework`; the ancestor check prints `FE-STAR-001 baseline is an ancestor`; the chain lists exactly `a31f017`, `528ede0`, `5163931`, `12a663a`.
 
-- [ ] **Step 2: Prove the merge is conflict-free before touching the worktree**
+- [ ] **Step 2: Confirm the expected conflict surface before touching the worktree**
 
 ```bash
-git merge-tree --write-tree eeb49c3 12a663a | grep -i conflic
+git merge-tree --write-tree HEAD 12a663a
+git merge-base HEAD 12a663a
 ```
 
-Expected: no output. `git merge-base eeb49c3 12a663a` prints `edbf56072b0785bbf1afaed4e16da95e6c840b88`, which is an ancestor of HEAD, so the combination only adds `TASK-FE-STAR-003` work.
+Expected: exit status 1 with exactly one conflicted path, `docs/tasks/TASK_REGISTRY.md`, listed in all three stages (base `65e32b2…`, ours `4c9f645…`, theirs `5bb1311…`). `git merge-base` prints `edbf56072b0785bbf1afaed4e16da95e6c840b88`, an ancestor of HEAD, so the merge only adds `TASK-FE-STAR-003` work. No other path conflicts: this task's registry row sits two lines from the `TASK-FE-STAR-003` row, so the row block is the single overlap.
 
-- [ ] **Step 3: Merge with an explicit merge commit**
+- [ ] **Step 3: Merge and resolve the registry row block**
 
 ```bash
 git merge --no-ff 12a663a -m "chore(task): combine accepted FE-STAR-003 candidate for FE-STAR-004"
 ```
 
-Expected: `Merge made by the 'ort' strategy`, 13 files changed. If `docs/tasks/TASK_REGISTRY.md` conflicts, resolve it with the Global Constraints policy: keep the `TASK-FE-STAR-001` `DONE` row, keep the `TASK-FE-STAR-003` `REVIEW` row, keep the `TASK-FE-STAR-004` row, discard nothing.
+Expected: `Auto-merging docs/tasks/TASK_REGISTRY.md` then `CONFLICT (content)`, and every other path merges silently. Resolve only the row block so all four `TASK-FE-STAR-00x` rows survive, taking the `TASK-FE-STAR-001` `DONE` row and the new `TASK-FE-STAR-004` row from ours and the `TASK-FE-STAR-003` `REVIEW` row from theirs. Never accept `--ours` or `--theirs` for the whole file, and never retype another row's evidence. Verify mechanically before staging:
+
+```bash
+grep -c "^<<<<<<<\|^=======\|^>>>>>>>" docs/tasks/TASK_REGISTRY.md
+grep -c "^| TASK-FE-STAR-00" docs/tasks/TASK_REGISTRY.md
+grep -c "^| TASK-FE-STAR-003 | Qoder CN / Qwen3.8-Flash (round-2 handoff from the expired MiMo session)" docs/tasks/TASK_REGISTRY.md
+grep -c "^| TASK-FE-STAR-001 | Qoder CN / Qwen3.8-Flash | \`task/fe-star-001-guided-flows\` | DONE" docs/tasks/TASK_REGISTRY.md
+grep -c "^| TASK-FE-STAR-004 | Qoder CN / Qwen3.8-Flash | \`task/fe-star-004-design-detail-integration\` | IN_PROGRESS" docs/tasks/TASK_REGISTRY.md
+```
+
+Expected: `0`, `4`, `1`, `1`, `1`. Then:
+
+```bash
+git add docs/tasks/TASK_REGISTRY.md
+git commit --no-edit
+```
 
 - [ ] **Step 4: Verify the combination is lossless**
 
 ```bash
 git diff --name-only eeb49c3..HEAD | sort
 git diff --name-only 12a663a..HEAD | grep -E "gallery|profile|library|star-content" || echo "FE-STAR-003 paths preserved"
+git status --short
 ```
 
-Expected: the first command lists exactly the 13 `TASK-FE-STAR-003` paths plus `docs/tasks/TASK_REGISTRY.md`. The second prints `FE-STAR-003 paths preserved`, proving the merge did not drop any of that task's files.
+Expected: the first command lists 14 paths, the 13 changed by `TASK-FE-STAR-003` (including `docs/tasks/TASK_REGISTRY.md`) plus this plan file, and nothing else. The second prints `FE-STAR-003 paths preserved`, proving the resolution did not drop any of that task's files. The third is empty.
 
 - [ ] **Step 5: Run the combined baseline gate**
 
