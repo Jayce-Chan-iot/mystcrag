@@ -121,7 +121,7 @@ export function DesignResults({ designId }: { designId: string }) {
                 <button
                   aria-label={selected ? `已选择 ${design.designName}` : `选择 ${design.designName}`}
                   aria-pressed={selected}
-                  className={`grid h-8 w-8 place-items-center rounded-full border text-sm transition ${selected ? "border-[var(--accent-deep)] bg-[var(--accent-deep)] text-white" : "border-[var(--border)] text-transparent hover:border-[var(--accent)]"}`}
+                  className={`grid h-11 w-11 place-items-center rounded-full border text-sm transition ${selected ? "border-[var(--accent-deep)] bg-[var(--accent-deep)] text-white" : "border-[var(--border)] text-transparent hover:border-[var(--accent)]"}`}
                   disabled={budgetStatus === "OVER_BUDGET" && !acceptedOverBudget}
                   onClick={() => setSelectedDesignId(design.designId)}
                   type="button"
@@ -165,7 +165,7 @@ export function DesignResults({ designId }: { designId: string }) {
       ) : null}
 
       {selectedDesign ? (
-        <div className="sticky bottom-4 z-40 mt-5 grid gap-4 rounded-[1.4rem] border border-[var(--border)] bg-white/94 p-4 shadow-[0_20px_60px_rgb(57_45_67/0.16)] backdrop-blur lg:grid-cols-[minmax(13rem,0.7fr)_minmax(18rem,1fr)_minmax(16rem,0.8fr)] lg:items-center" data-results-action-bar="true">
+        <div className="sticky bottom-4 z-40 mt-5 grid gap-4 rounded-[1.4rem] border border-[var(--border)] bg-[var(--star-paper)] p-4 shadow-[0_20px_60px_rgb(57_45_67/0.16)] lg:grid-cols-[minmax(13rem,0.7fr)_minmax(18rem,1fr)_minmax(16rem,0.8fr)] lg:items-center" data-results-action-bar="true">
           <div>
             <p className="text-xs text-[var(--muted)]">当前选择</p>
             <div className="mt-1 flex items-baseline justify-between gap-3 lg:block">
