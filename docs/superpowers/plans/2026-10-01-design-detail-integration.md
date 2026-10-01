@@ -1268,22 +1268,36 @@ If Step 2 failed on the mount assertion, adjust the call in `apps/frontend/src/f
 
 - [ ] **Step 4: Prove the revision guards have teeth by mutation**
 
-Temporarily edit the writable `apps/frontend/src/lib/api/design-api.ts`, run the suite, and revert in the same step:
+`expectedRevision: design.revision,` appears four times in `apps/frontend/src/lib/api/design-api.ts` (line 280 inside `createOrder`, 341 inside `optimize`, 380 inside `createReplaceRequest`, 404 inside `createOperationsRequest`). A whole-file `str.replace` therefore breaks three unrelated members at once, and the same recipe must not assert a count of one. Mutate the single occurrence that belongs to `createOrder`, located by anchoring forward from that member's declaration line, so exactly one line changes:
 
 ```bash
 python3 - <<'PY'
 import pathlib
+
 path = pathlib.Path("apps/frontend/src/lib/api/design-api.ts")
 text = path.read_text()
-assert text.count("expectedRevision: design.revision,") == 1, text.count("expectedRevision: design.revision,")
-path.write_text(text.replace("expectedRevision: design.revision,", "expectedRevision: 1,"))
+anchor = "expectedRevision: design.revision,"
+member = "async createOrder(design: PublicDesignV1)"
+
+assert text.count(anchor) == 4, text.count(anchor)
+start = text.index(member)
+offset = text.index(anchor, start)
+mutated = text[:offset] + "expectedRevision: 1," + text[offset + len(anchor):]
+
+assert mutated.count(anchor) == 3, mutated.count(anchor)
+assert "expectedRevision: 1," in mutated[start:start + 400], "the mutation must sit inside createOrder"
+path.write_text(mutated)
 PY
+grep -c "expectedRevision: 1," apps/frontend/src/lib/api/design-api.ts
+git diff --numstat -- apps/frontend/src/lib/api/design-api.ts
 cd apps/frontend && npx tsx --test src/features/design/design-detail-integration.test.tsx
 git checkout -- apps/frontend/src/lib/api/design-api.ts
 git status --short
 ```
 
-Expected: the mutation makes `update and order mutations thread the loaded design revision` FAIL on `assert.equal(order.body.expectedRevision, 4)` with `1 !== 4`; note the exact failing test name and message for the acceptance note. After the revert, `git status --short` is empty and the suite passes again. A guard that cannot fail is deleted, not kept.
+Expected, in order: the `grep -c` prints `1`; `git diff --numstat` prints `1 1 apps/frontend/src/lib/api/design-api.ts` (one line added, one removed, no other file). The suite then FAILS on `update and order mutations thread the loaded design revision`, and it fails at `assert.ok(update && order, "both mutation routes must be called")` rather than on a numeric compare: `CreateOrderFromDesignRequestSchema` carries a `superRefine` rule rejecting any request whose `expectedRevision` differs from `design.revision`, so the mismatched request throws in `createOrder` before `callApi` runs and `/api/orders/from-design` is never fetched. That is the strongest available proof of the threading property: the frozen contract physically refuses a mutation that does not carry the loaded revision. Record the failing test name and this exact reason in the acceptance note.
+
+After `git checkout --`, `git status --short` is empty and re-running the suite passes. A guard that cannot fail is deleted, not kept.
 
 - [ ] **Step 5: Confirm no forbidden path reached a commit**
 
