@@ -9,6 +9,7 @@ import {
   deriveDesignOrderState,
   deriveDesignSaveState,
   designOrderStateLabel,
+  DesignDetailPanel,
   loadDesignDetailReads,
   type DesignDetailReadApi,
   type DesignDetailReads,
@@ -230,4 +231,41 @@ test("mock mode reads no library or order list because an empty mock list proves
   assert.equal(calls.listOrders, 0);
   assert.equal(reads.savedDesignsRead, "MOCK");
   assert.equal(reads.ordersRead, "MOCK");
+});
+
+test("the design detail region mounts identity, price provenance, fit, privacy and compliance", () => {
+  const markup = renderToStaticMarkup(<DesignDetailPanel design={mockPublicDesign} />);
+
+  assert.match(markup, /Rain After Blue/);
+  assert.match(markup, /design-ai-standard/);
+  assert.match(markup, /Private（仅自己可见）/);
+  assert.match(markup, /权威总价/);
+  assert.match(markup, /¥55\.00/);
+  assert.match(markup, /cny-retail-2026-07-v1/);
+  assert.match(markup, /计算于 2026-07-21 06:05 UTC/);
+  assert.match(markup, /data-wear-fit-summary="true"/);
+  assert.match(markup, /腕围/);
+  assert.match(markup, /data-compliance-status="PASSED"/);
+  assert.match(markup, /文化意象仅作为设计灵感/);
+});
+
+test("the design detail region never duplicates a second fit, compliance or identity renderer", () => {
+  const markup = renderToStaticMarkup(<DesignDetailPanel design={mockPublicDesign} />);
+
+  assert.equal((markup.match(/data-wear-fit-summary="true"/g) ?? []).length, 1);
+  assert.equal((markup.match(/data-compliance-status/g) ?? []).length, 1);
+  assert.equal((markup.match(/data-star-design-summary="true"/g) ?? []).length, 1);
+});
+
+test("the design detail region renders no forbidden claim", () => {
+  const markup = renderToStaticMarkup(<DesignDetailPanel design={mockPublicDesign} />);
+
+  // The canonical FE-STAR-001 compliance disclaimer legitimately contains the negated
+  // word 功效 ("不代表科学功效"), so only that aside element is masked out; the mount
+  // contract above still requires it, and every region-authored string stays in scope.
+  const regionCopy = markup.replace(/<aside aria-label="合规说明"[\s\S]*?<\/aside>/g, "");
+
+  for (const banned of [/转运/, /招财/, /保平安/, /辟邪/, /治愈/, /疗愈/, /命定/, /注定/, /一定/, /必定/, /大师/, /功效/, /疗效/]) {
+    assert.doesNotMatch(regionCopy, banned, `visible copy must not claim ${String(banned.source)}`);
+  }
 });

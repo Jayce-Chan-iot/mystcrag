@@ -8,6 +8,7 @@ import type {
   PublicDesignV1
 } from "@mystcrag/design-contract";
 import Link from "next/link";
+import * as React from "react";
 import { useEffect, useState } from "react";
 
 import { FlowNotice } from "../../../components/flow-notice";
@@ -22,8 +23,11 @@ import {
 } from "../../../lib/api/design-session";
 import { toFrontendApiError, type FrontendErrorCode } from "../../../lib/api/frontend-api-error";
 import { formatMinorAmount } from "../model/format-minor-amount";
+import { evaluateBraceletFit } from "../model/bracelet-fit";
 import { BraceletPreview } from "./bracelet-preview";
 import { ComplianceNotice } from "./compliance-notice";
+import { DesignSummary, formatDesignUtcMinute } from "./design-summary";
+import { WearFitSummary } from "./wear-fit-summary";
 
 const materialNames: Record<string, string> = {
   "crystal-aquamarine-material-v1": "海蓝宝",
@@ -247,6 +251,44 @@ export async function loadDesignDetailReads(
   };
 }
 
+export type DesignDetailPanelProps = {
+  design: PublicDesignV1;
+};
+
+export function DesignDetailPanel({ design }: DesignDetailPanelProps) {
+  return (
+    <section
+      aria-label="设计详情"
+      className="mt-6 rounded-[1.5rem] border border-[var(--border)] bg-[var(--star-paper)] p-5"
+      data-design-detail-region="true"
+    >
+      <DesignSummary design={design} />
+
+      <div className="mt-4 flex flex-wrap items-end justify-between gap-4 border-t border-[var(--border)] pt-4">
+        <p>
+          <span className="block text-xs text-[var(--muted)]">权威总价</span>
+          <strong className="mt-1 block font-serif text-2xl text-[var(--foreground)]">
+            {formatMinorAmount({ amountMinor: design.pricing.totalPriceMinor, currency: design.currency, locale: design.locale })}
+          </strong>
+        </p>
+        <p className="text-right text-xs text-[var(--muted)]" data-design-price-provenance="true" data-status-mark="true">
+          价格版本 {design.pricing.pricingVersion}
+          <br />
+          计算于 {formatDesignUtcMinute(design.pricing.priceCalculatedAt)}
+        </p>
+      </div>
+
+      <div className="mt-4 border-t border-[var(--border)] pt-4">
+        <WearFitSummary fit={evaluateBraceletFit(design)} />
+      </div>
+
+      <div className="mt-4 border-t border-[var(--border)] pt-4">
+        <ComplianceNotice design={design} />
+      </div>
+    </section>
+  );
+}
+
 export function DesignResults({ designId }: { designId: string }) {
   const [reads, setReads] = useState<DesignDetailReads | null>(null);
   const [selectedDesignId, setSelectedDesignId] = useState("");
@@ -358,16 +400,17 @@ export function DesignResults({ designId }: { designId: string }) {
       ) : null}
 
       {selectedDesign ? (
-        <div className="sticky bottom-4 z-40 mt-5 grid gap-4 rounded-[1.4rem] border border-[var(--border)] bg-[var(--star-paper)] p-4 shadow-[0_20px_60px_rgb(57_45_67/0.16)] lg:grid-cols-[minmax(13rem,0.7fr)_minmax(18rem,1fr)_minmax(16rem,0.8fr)] lg:items-center" data-results-action-bar="true">
+        <DesignDetailPanel design={selectedDesign} />
+      ) : null}
+
+      {selectedDesign ? (
+        <div className="sticky bottom-4 z-40 mt-5 flex flex-wrap items-center justify-between gap-4 rounded-[1.4rem] border border-[var(--border)] bg-[var(--star-paper)] p-4 shadow-[0_20px_60px_rgb(57_45_67/0.16)]" data-results-action-bar="true">
           <div>
             <p className="text-xs text-[var(--muted)]">当前选择</p>
             <div className="mt-1 flex items-baseline justify-between gap-3 lg:block">
               <strong className="block font-serif text-xl">{selectedDesign.designName}</strong>
               <span className="block text-sm text-[var(--success)]">{formatMinorAmount({ amountMinor: selectedDesign.pricing.totalPriceMinor, currency: selectedDesign.currency, locale: selectedDesign.locale })}</span>
             </div>
-          </div>
-          <div className="min-w-0">
-            <ComplianceNotice design={selectedDesign} />
           </div>
           <Link className="inline-flex min-h-14 items-center justify-center rounded-xl bg-[var(--accent-deep)] px-7 text-center text-base font-medium text-white shadow-[0_12px_28px_rgb(73_53_95/0.24)] transition hover:-translate-y-0.5 hover:bg-[var(--accent)]" href={`/diy/${encodeURIComponent(selectedDesign.designId)}`}>进入 DIY 调整</Link>
         </div>
