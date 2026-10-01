@@ -921,3 +921,30 @@ test("the profile continue and design cards mount their action link at 44px", ()
   assert.equal(designTargets.length, 1, "the designs tab card must mount exactly one action link");
   for (const target of designTargets) assertFloor("profile design card action link", target.classes);
 });
+
+const DESIGN_DETAIL_SOURCE = "../../../src/features/design/components/design-results.tsx";
+
+test("the design detail region obeys the star content grammar", () => {
+  const detail = source(DESIGN_DETAIL_SOURCE);
+  const regionTag = detail.match(/<section\b[^>]*data-design-detail-region="true"[^>]*>/)?.[0];
+  assert.ok(regionTag, "the design detail region must stay present");
+
+  assert.match(regionTag, /bg-\[var\(--star-paper\)\]/);
+  assert.doesNotMatch(regionTag, /bg-white\/\d+/, "no translucent white fill on the detail region");
+  assert.doesNotMatch(regionTag, /backdrop-blur/, "no frosted glass on the detail region");
+  assert.doesNotMatch(detail, /backdrop-filter:\s*blur/i);
+  assert.doesNotMatch(detail, /——|—(?!>)/, "detail copy must not use em-dash filler");
+  assert.doesNotMatch(detail, /转运|招财|发财|保平安|辟邪|开光|加持|治愈|疗愈|命定|注定|一定|必定|大师|功效|疗效/);
+  assert.match(detail, /data-status-mark=/, "status must stay text-bearing");
+  assert.match(detail, /data-design-detail-state="pending"/, "the unsettled state stays visible");
+});
+
+test("the design detail region reuses canonical renderers instead of forking them", () => {
+  const detail = source(DESIGN_DETAIL_SOURCE);
+
+  assert.match(detail, /<DesignSummary design=\{design\} \/>/);
+  assert.match(detail, /<WearFitSummary fit=\{evaluateBraceletFit\(design\)\} \/>/);
+  assert.match(detail, /<ComplianceNotice design=\{design\} \/>/);
+  assert.match(detail, /<StatusPanel/);
+  assert.doesNotMatch(detail, /腕围|目标内周长|结构余量/, "measurement labels stay owned by WearFitSummary");
+});

@@ -7,6 +7,7 @@ import type {
   OrderSummaryStatus,
   PublicDesignV1
 } from "@mystcrag/design-contract";
+import { StatusPanel, type StatusPanelTone } from "@mystcrag/ui";
 import Link from "next/link";
 import * as React from "react";
 import { useEffect, useState } from "react";
@@ -253,9 +254,26 @@ export async function loadDesignDetailReads(
 
 export type DesignDetailPanelProps = {
   design: PublicDesignV1;
+  reads: DesignDetailReads | null;
 };
 
-export function DesignDetailPanel({ design }: DesignDetailPanelProps) {
+export function designSaveStateTone(state: DesignSaveState): StatusPanelTone {
+  if (state.kind === "CONFIRMED") return "success";
+  if (state.kind === "STALE_VIEW") return "warning";
+  return "info";
+}
+
+export function designOrderStateTone(state: DesignOrderState): StatusPanelTone {
+  if (state.kind !== "ORDERED") return "info";
+  if (state.status === "CANCELLED") return "danger";
+  if (state.status === "AWAITING_RESTOCK") return "warning";
+  return "success";
+}
+
+export function DesignDetailPanel({ design, reads }: DesignDetailPanelProps) {
+  const saveState = reads ? deriveDesignSaveState(design, reads) : null;
+  const orderState = reads ? deriveDesignOrderState(design, reads) : null;
+
   return (
     <section
       aria-label="设计详情"
@@ -285,6 +303,45 @@ export function DesignDetailPanel({ design }: DesignDetailPanelProps) {
       <div className="mt-4 border-t border-[var(--border)] pt-4">
         <ComplianceNotice design={design} />
       </div>
+
+      {saveState && orderState ? (
+        <div className="mt-4 grid gap-4 border-t border-[var(--border)] pt-4 sm:grid-cols-2">
+          <StatusPanel
+            className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4"
+            role="region"
+            title="保存状态"
+            tone={designSaveStateTone(saveState)}
+          >
+            <p className="text-sm text-[var(--foreground)]" data-design-save-state={saveState.kind} data-status-mark="true">
+              {designSaveStateLabel(saveState)}
+            </p>
+            <p className="mt-1 text-xs text-[var(--muted)]">当前版本 v{design.revision}</p>
+          </StatusPanel>
+
+          <StatusPanel
+            className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4"
+            role="region"
+            title="下单状态"
+            tone={designOrderStateTone(orderState)}
+          >
+            <p
+              className="text-sm text-[var(--foreground)]"
+              data-design-order-state={orderState.kind}
+              data-order-status={orderState.kind === "ORDERED" ? orderState.status : "NONE"}
+              data-status-mark="true"
+            >
+              {designOrderStateLabel(orderState, design.revision)}
+            </p>
+            {orderState.kind === "ORDERED" ? (
+              <p className="mt-1 break-all text-xs text-[var(--muted)]">订单号 {orderState.orderId}</p>
+            ) : null}
+          </StatusPanel>
+        </div>
+      ) : (
+        <p aria-live="polite" className="mt-4 text-sm text-[var(--muted)]" data-design-detail-state="pending" role="status">
+          正在确认保存与下单状态
+        </p>
+      )}
     </section>
   );
 }
@@ -400,7 +457,7 @@ export function DesignResults({ designId }: { designId: string }) {
       ) : null}
 
       {selectedDesign ? (
-        <DesignDetailPanel design={selectedDesign} />
+        <DesignDetailPanel design={selectedDesign} reads={reads} />
       ) : null}
 
       {selectedDesign ? (

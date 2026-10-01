@@ -19,6 +19,11 @@ import { DesignSummary, formatDesignUtcMinute } from "./components/design-summar
 import { mockDesignOptions } from "./fixtures/mock-design-options";
 import { mockPublicDesign } from "./fixtures/mock-public-design";
 
+// `apps/frontend/tsconfig.json` sets `"jsx": "preserve"`, so tsx compiles every module
+// under the classic runtime and `@mystcrag/ui` sources, which import only named hooks,
+// need a React global. Same shim as `packages/ui/tests/star-primitives.test.tsx`.
+(globalThis as typeof globalThis & { React: typeof React }).React = React;
+
 test("design summary exposes identity, revision, source and update time as text", () => {
   const markup = renderToStaticMarkup(<DesignSummary design={mockPublicDesign} />);
 
@@ -234,7 +239,7 @@ test("mock mode reads no library or order list because an empty mock list proves
 });
 
 test("the design detail region mounts identity, price provenance, fit, privacy and compliance", () => {
-  const markup = renderToStaticMarkup(<DesignDetailPanel design={mockPublicDesign} />);
+  const markup = renderToStaticMarkup(<DesignDetailPanel design={mockPublicDesign} reads={readsWith()} />);
 
   assert.match(markup, /data-design-detail-region="true"/);
   assert.match(markup, /Rain After Blue/);
@@ -251,7 +256,7 @@ test("the design detail region mounts identity, price provenance, fit, privacy a
 });
 
 test("the design detail region never duplicates a second fit, compliance or identity renderer", () => {
-  const markup = renderToStaticMarkup(<DesignDetailPanel design={mockPublicDesign} />);
+  const markup = renderToStaticMarkup(<DesignDetailPanel design={mockPublicDesign} reads={readsWith()} />);
 
   assert.equal((markup.match(/data-wear-fit-summary="true"/g) ?? []).length, 1);
   assert.equal((markup.match(/data-compliance-status/g) ?? []).length, 1);
@@ -259,7 +264,7 @@ test("the design detail region never duplicates a second fit, compliance or iden
 });
 
 test("the design detail region renders no forbidden claim", () => {
-  const markup = renderToStaticMarkup(<DesignDetailPanel design={mockPublicDesign} />);
+  const markup = renderToStaticMarkup(<DesignDetailPanel design={mockPublicDesign} reads={readsWith()} />);
 
   // Only the one canonical FE-STAR-001 sentence whose negation legitimately contains
   // the banned word 功效 is masked out, and only when it is really present. Every other
@@ -272,4 +277,52 @@ test("the design detail region renders no forbidden claim", () => {
   for (const banned of [/转运/, /招财/, /保平安/, /辟邪/, /治愈/, /疗愈/, /命定/, /注定/, /一定/, /必定/, /大师/, /功效/, /疗效/]) {
     assert.doesNotMatch(regionCopy, banned, `visible copy must not claim ${String(banned.source)}`);
   }
+});
+
+test("the save status panel states the library confirmation as text", () => {
+  const markup = renderToStaticMarkup(
+    <DesignDetailPanel design={mockPublicDesign} reads={readsWith({ savedDesigns: [savedEntry(mockPublicDesign, "SAVED")] })} />
+  );
+
+  assert.match(markup, /data-design-save-state="CONFIRMED"/);
+  assert.match(markup, /设计库确认：已保存 · v1/);
+  assert.match(markup, /当前版本 v1/);
+  assert.match(markup, /保存状态/);
+  assert.match(markup, /data-star-status-panel="success"/);
+});
+
+test("the order status panel reports the ordered revision, status text and order id", () => {
+  const markup = renderToStaticMarkup(
+    <DesignDetailPanel design={mockPublicDesign} reads={readsWith({
+      orders: [{ orderId: "order-7", status: "AWAITING_RESTOCK", createdAt: "2026-07-21T01:00:00.000Z", design: { designId: "design-ai-standard", revision: 1 } }]
+    })} />
+  );
+
+  assert.match(markup, /data-design-order-state="ORDERED"/);
+  assert.match(markup, /data-order-status="AWAITING_RESTOCK"/);
+  assert.match(markup, /已下单（等待补货）/);
+  assert.match(markup, /下单状态/);
+  assert.match(markup, /订单号 order-7/);
+});
+
+test("unknown reads render an explicit unknown panel, never a saved or ordered label", () => {
+  const markup = renderToStaticMarkup(
+    <DesignDetailPanel design={mockPublicDesign} reads={readsWith({ savedDesignsRead: "MOCK", ordersRead: "FAILED" })} />
+  );
+
+  assert.match(markup, /data-design-save-state="UNKNOWN"/);
+  assert.match(markup, /本地演示模式，不读取设计库状态/);
+  assert.match(markup, /data-design-order-state="UNKNOWN"/);
+  assert.match(markup, /data-order-status="NONE"/);
+  assert.match(markup, /暂时无法确认下单状态/);
+  assert.doesNotMatch(markup, /设计库确认|已下单（|尚未保存到设计库/);
+});
+
+test("the detail region renders no status until both list reads have settled", () => {
+  const markup = renderToStaticMarkup(<DesignDetailPanel design={mockPublicDesign} reads={null} />);
+
+  assert.match(markup, /data-design-detail-region="true"/);
+  assert.match(markup, /data-design-detail-state="pending"/);
+  assert.match(markup, /正在确认保存与下单状态/);
+  assert.doesNotMatch(markup, /data-design-save-state|data-design-order-state/);
 });
