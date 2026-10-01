@@ -39,3 +39,26 @@ The reference is a 640 × 512 composition image rather than a declared browser v
 - Final workspace validation and launcher self-check are recorded in the task handoff.
 
 final result: passed
+
+## Star Platform visual gate (TASK-QA-STAR-001, 2026-10-02)
+
+The full Star Platform redesign gate is recorded in
+`docs/progress/2026-09-26_STAR_PLATFORM_UI_QA_REPORT.md`. It runs the repeatable
+`scripts/ui-qa/capture_star_platform.py` (85 screenshots over 17 route-states × 5
+viewports) and the `--validate` matrix (73 checks).
+
+System states: loading, error, empty, offline and 404 all render through the one
+`SystemState` primitive with a real next action, correct live-region roles and no
+placeholder skeleton copy.
+
+Gate result: **62 PASS / 9 FAIL**. All nine failures are page-family deviations
+outside this task's writable scope and are filed as follow-ups (DEV-1 AA contrast
+on accent micro-copy, DEV-2 `/profile` 200 % overflow, DEV-3 `/gallery` React key
+warning / dev error overlay). Verified PASS on every route: 320 px reflow,
+reduced motion, keyboard traversal with visible focus, keyboard-only Oracle cast,
+44 px mobile targets, no CTA clipping, no overlay interception, untinted crystal
+imagery.
+
+Result: **passed with documented deviations** — the shared system-state contract
+and the legacy-drift cleanup are complete; the three page-family deviations are
+tracked follow-ups, not silent passes.

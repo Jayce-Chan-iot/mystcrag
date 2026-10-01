@@ -15,8 +15,22 @@ export type FlowNoticeProps = {
   compact?: boolean;
 };
 
-const ACTION_CLASS = "mt-4 inline-flex min-h-11 items-center text-sm font-semibold underline decoration-current/30 underline-offset-4";
+const ACTION_CLASS = "star-system-action mt-4 inline-flex min-h-11 items-center text-sm font-semibold underline decoration-current/30 underline-offset-4";
 
+function flowTone(code: FrontendErrorCode): "info" | "warning" | "danger" {
+  const tone = ERROR_PRESENTATION[code].tone;
+  if (tone === "danger") return "danger";
+  if (tone === "warning") return "warning";
+  return "info";
+}
+
+/**
+ * Inline notice for every non-auth flow code. The frame is the star `flow-notice`
+ * surface, so an inline network/empty notice reads from the same star tokens as a
+ * full-page system state instead of the previous hardcoded legacy hex palette.
+ * The caller still owns the single action control, so a retry (button) and a
+ * destination (link) stay distinguishable and no notice invents either one.
+ */
 export function FlowNotice({ code, action, onDismissAuthRequired, compact = false }: FlowNoticeProps) {
   if (code === "UNAUTHORIZED") {
     // The auth prompt is a pure login gate: dismissing it ("暂不登录") must never trigger
@@ -26,14 +40,17 @@ export function FlowNotice({ code, action, onDismissAuthRequired, compact = fals
   }
 
   const content = ERROR_PRESENTATION[code];
-  const tone = content.tone === "danger"
-    ? "border-[var(--danger)]/25 bg-[#f8edef] text-[var(--danger)]"
-    : content.tone === "warning"
-      ? "border-[var(--warning)]/25 bg-[#f8f2e8] text-[var(--warning)]"
-      : "border-[var(--border)] bg-[var(--surface-soft)] text-[var(--foreground)]";
 
   return (
-    <div className={`rounded-2xl border ${tone} ${compact ? "p-4" : "p-6 sm:p-7"}`} role={content.tone === "danger" ? "alert" : "status"} data-error-code={code}>
+    <div
+      className="star-flow-notice"
+      data-compact={compact ? "true" : "false"}
+      data-error-code={code}
+      data-star-flow-tone={flowTone(code)}
+      data-star-surface="flow-notice"
+      data-star-system-state={code}
+      role={content.tone === "danger" ? "alert" : "status"}
+    >
       <p className="font-medium">{content.title}</p>
       <p className="mt-2 text-sm leading-6 opacity-80">{content.message}</p>
       {action?.kind === "link" ? (

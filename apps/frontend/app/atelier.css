@@ -399,10 +399,6 @@ body {
   background: #f8f6f1;
 }
 
-[data-atelier-surface="diy-workbench"] [data-desktop-diy-workspace="true"] > header {
-  background: rgb(255 253 248 / 0.94);
-}
-
 [data-atelier-surface="diy-workbench"] aside {
   scrollbar-color: #c7c0b7 transparent;
 }
@@ -483,13 +479,6 @@ body {
 [data-atelier-surface="diy-workbench"] [aria-labelledby="desktop-design-summary-title"] p,
 [data-atelier-surface="diy-workbench"] [data-catalog-sheet-state] button span {
   font-size: 0.75rem;
-}
-
-[data-atelier-surface="content-shell"] > div {
-  border: 1px solid var(--atelier-line);
-  border-radius: 0.75rem;
-  background: rgb(255 253 248 / 0.72);
-  box-shadow: var(--atelier-shadow);
 }
 
 /* The workbench owns its own tool header and must not inherit the marketing shell. */

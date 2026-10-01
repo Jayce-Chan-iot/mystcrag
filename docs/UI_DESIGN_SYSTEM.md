@@ -15,6 +15,23 @@ The frontend scaffold defines semantic colors for background, foreground, surfac
 
 All new layouts must remain mobile first, keyboard accessible, and usable without relying on color alone. The current route pages are structural placeholders, not approved final visual designs.
 
+## Star Platform semantic tokens
+
+The approved Star Platform palette is the semantic token layer in `apps/frontend/app/styles/star-tokens.css` (`--star-paper`, `--star-paper-muted`, `--star-ink`, `--star-line`, `--star-canvas`, `--star-amethyst`, `--star-brass-ink`, `--star-warning`, `--star-danger`, `--star-space-*`, `--star-radius-*`, `--star-shadow-*`). Customer route surfaces read from these tokens; the initialization palette in `app/globals.css` remains only as the neutral fallback for un-migrated shells.
+
+`app/globals.css` imports `./atelier.css` first and the star stylesheets (`star-tokens`, `star-shell`, `star-components`, `star-acquisition`, `star-workbench`, `star-content`) after it, so an equal-specificity star rule always wins over the labelled `LEGACY` atelier baseline. The atelier namespace is a legacy record: it must not declare `[data-star-surface=...]` selectors, and the dead `[data-atelier-surface="content-shell"] > div` child rule was removed because the scaffold renders a `section`, so it could never match.
+
+Each customer route root declares one `data-star-surface` value that its owning stylesheet owns: `home`, `questionnaire`, `design-results`, `tarot-setup`, `tarot-draw`, `tarot-result`, `oracle-setup`, `oracle-result` (`star-acquisition.css`), `diy-workbench` (`star-workbench.css`), `library`, `gallery`, `profile`, `content` (`star-content.css`).
+
+## System state contract (loading / error / empty / offline / 404)
+
+Every informational or recoverable state renders through one primitive: `SystemState`/`SystemStatePanel` in `apps/frontend/components/page-scaffold.tsx`, which delegates to the shared `@mystcrag/ui` status panel. The app router mounts it from `app/loading.tsx` (`kind="loading"`), `app/error.tsx` (`kind="error"`, client boundary), and `app/not-found.tsx` (`kind="not-found"`, route-approved localized copy); the inline `FlowNotice` reuses the same hooks for non-auth flow codes.
+
+- Copy, tone, and live-region role come from one table (`systemStateCopy`), which reads the canonical `ERROR_PRESENTATION` map so a page state and an inline notice can never drift. Only `loading` is `aria-busy`; recoverable failures are `role="alert"` and informational states stay `role="status"`.
+- Each actionable state exposes at most one real next action supplied by the caller. A retry is a `button` action; a destination is a `link` action, so recovery and navigation stay distinguishable. No state renders a dead control.
+- No state ships placeholder/skeleton copy or an `animate-pulse` fake: the shared panel is a text status, not a shimmer.
+- The state surfaces keep a 44 px action floor, honour `prefers-reduced-motion`, and read from star tokens only (no literal hex, no `zoom`, no `html`/`body` scale).
+
 ## DIY editor visual contract
 
 The primary DIY workspace is a top-down 2.5D composition. Individual beads use realistic rendered product imagery to preserve translucency, inclusions, gloss, and material depth, but the editor does not expose a perspective camera, orbit controls, or a free-moving WebGL scene. The bracelet rests on a large circular presentation tray. Users may switch among clear acrylic, off-white bone china, wood, and French linen; this preference is saved locally per Design and included in the exported PNG background, but never changes product, price, inventory, revision, or order data.
@@ -58,3 +75,13 @@ The setup surface presents one primary “一键启卦” action. An optional qu
 After a cast the six lines reveal bottom-to-top, honoring `prefers-reduced-motion` (a shortened reveal rather than a removed result), and the result route renders the cast, the original interpretation, and exactly three ranked design directions (`BALANCED`, `CONTRAST`, `NEUTRAL_LED`) with authoritative price and stock state. Selecting a direction saves the session and continues into the existing DIY workspace; a save failure keeps the user on the Oracle result with a retry and never silently navigates to DIY. Double-activating “启卦” creates at most one session, and a page refresh restores the existing session through a GET without drawing new entropy.
 
 Oracle surfaces follow the same viewport-density and accessibility rules as the rest of the product: mobile-first composition, visible keyboard focus, controls with accurate labels, at least 44x44 px targets, no horizontal overflow at 320 px width, usable at 200% zoom, and state never communicated by color alone.
+
+## Text on star surfaces
+
+Accent colour is surface-dependent, because the same brass reads very differently on the two Star Platform grounds:
+
+- `--star-brass` (`#b08d57`) is an **accent for dark surfaces** — it is the aged-brass ink on the obsidian night ground, and it fails AA when used as small text on warm paper (measured 2.70:1 on `--star-paper`).
+- `--star-brass-ink` (`#7a5c32`) is the **text-safe brass on light surfaces** — it clears AA on warm paper (measured 5.26:1).
+- `--muted` (62 % `--star-ink` over `--star-paper`) is the neutral supporting-text colour; it clears AA on plain paper, but a label that paints it over a tinted panel must still be measured.
+
+The legacy aliases `--accent` / `--accent-deep` map onto `--star-brass`, so a component that renders `text-[var(--accent)]` is using dark-surface brass as text on whatever ground happens to sit behind it. Page families must pick the text token for their own surface rather than reusing the alias as text; the shared system-state and notice surfaces already do this. The current page-family deviations from this rule are recorded as DEV-1 in `docs/progress/2026-09-26_STAR_PLATFORM_UI_QA_REPORT.md`.

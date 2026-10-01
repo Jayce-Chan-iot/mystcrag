@@ -127,3 +127,103 @@
     transition: none;
   }
 }
+
+/* System states — loading / error / empty / offline / 404 share one presentation.
+ * The route shell supplies the stage; the panel itself is the shared primitive. */
+[data-star-surface="system-state"] {
+  display: grid;
+  place-items: center;
+  min-height: min(60vh, 34rem);
+  padding: var(--star-space-6) var(--star-space-4);
+  background: var(--star-paper);
+  color: var(--star-ink);
+}
+
+[data-star-surface="system-state"] .star-system-state {
+  width: min(100%, 42rem);
+}
+
+[data-star-surface="system-state"] [data-star-status-title] {
+  font-size: 1.25rem;
+  letter-spacing: 0.02em;
+}
+
+[data-star-surface="system-state"] [data-star-system-message] {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+
+[data-star-system-action] {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  margin-top: var(--star-space-3);
+}
+
+[data-star-surface="system-state"] [data-star-instrument-button],
+[data-star-surface="system-state"] .star-system-action {
+  min-height: 2.75rem;
+}
+
+@media (max-width: 480px) {
+  [data-star-surface="system-state"] {
+    min-height: min(50vh, 26rem);
+    padding: var(--star-space-4) var(--star-space-3);
+  }
+}
+
+/* Inline flow notices — the star token frame for the inline network/empty/offline
+ * notice. Tone comes from the caller's flow tone, so the notice reads from star
+ * tokens instead of the previous hardcoded legacy hex palette. */
+[data-star-surface="flow-notice"] {
+  display: grid;
+  gap: var(--star-space-2);
+  padding: var(--star-space-6) var(--star-space-5);
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-md);
+  background: color-mix(in srgb, var(--star-paper) 88%, var(--star-paper-muted));
+  color: var(--star-ink);
+}
+
+[data-star-surface="flow-notice"][data-compact="true"] {
+  padding: var(--star-space-4);
+}
+
+[data-star-surface="flow-notice"][data-star-flow-tone="info"] {
+  border-color: color-mix(in srgb, var(--star-amethyst) 45%, var(--star-line));
+}
+
+[data-star-surface="flow-notice"][data-star-flow-tone="warning"] {
+  border-color: color-mix(in srgb, var(--star-warning) 55%, var(--star-line));
+}
+
+[data-star-surface="flow-notice"][data-star-flow-tone="danger"] {
+  border-color: color-mix(in srgb, var(--star-danger) 55%, var(--star-line));
+}
+
+[data-star-surface="flow-notice"] button,
+[data-star-surface="flow-notice"] a {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+}
+
+/* Auth gate — appearance-only alignment of the existing provider-neutral dialog.
+ * The Authing OIDC href, launcher recovery branch, focus trap and copy stay owned
+ * by auth-required-dialog.tsx; only the surface reads from star tokens. */
+[data-auth-required-dialog="true"] {
+  background: color-mix(in srgb, var(--star-canvas) 42%, transparent);
+}
+
+[data-star-surface="auth-gate"] {
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-lg);
+  background: var(--star-paper);
+  color: var(--star-ink);
+  box-shadow: var(--star-shadow-2);
+}
+
+[data-star-surface="auth-gate"] :focus-visible {
+  outline: 2px solid var(--star-brass-ink);
+  outline-offset: 3px;
+}

@@ -246,7 +246,8 @@ export function AuthRequiredDialog({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
-        className="w-full max-w-sm rounded-2xl border border-[var(--border)] bg-white p-6"
+        className="w-full max-w-sm p-6"
+        data-star-surface="auth-gate"
       >
         <h2 id={titleId} className="text-base font-medium text-[var(--foreground)]">
           {title}

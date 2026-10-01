@@ -188,3 +188,35 @@ test("neither FlowNotice nor the dialog navigates back or reloads on dismiss", (
   assert.doesNotMatch(flowSource, /router\.back|history\.back|location\.reload/);
   assert.doesNotMatch(dialogSource, /router\.back|history\.back|location\.reload/);
 });
+
+test("the star restyle is appearance-only: OIDC entry, launcher recovery and focus trap are unchanged", () => {
+  const oidc = renderToStaticMarkup(
+    <AuthRequiredDialog
+      loginHref="/auth/login?returnTo=%2Foracle"
+      initialPromptMode="oidc"
+      onDismiss={() => undefined}
+    />
+  );
+  // The frozen Auth contract still drives a real Authing OIDC login destination.
+  assert.match(oidc, /href="\/auth\/login\?returnTo=%2Foracle"/);
+  assert.match(oidc, /data-auth-primary-state="oidc"/);
+  assert.match(oidc, /data-auth-required-dialog="true"/);
+  assert.match(oidc, /aria-modal="true"/);
+  assert.match(oidc, /min-h-11/);
+
+  const desktop = renderToStaticMarkup(
+    <AuthRequiredDialog initialPromptMode="desktop-recovery" onDismiss={() => undefined} />
+  );
+  // Desktop mode keeps launcher recovery and still offers no inert login link.
+  assert.match(desktop, /data-auth-primary-state="desktop-recovery"/);
+  assert.match(desktop, /本地演示身份需要刷新/);
+  assert.match(desktop, /我知道了/);
+  assert.doesNotMatch(desktop, /href="\/auth\/login/);
+
+  // Only the surface changed; the panel is tagged for the star stylesheet and no
+  // second session-required component exists anywhere in the frontend source.
+  assert.match(oidc, /data-star-surface="auth-gate"/);
+  const source = readFileSync(new URL("./auth-required-dialog.tsx", import.meta.url), "utf8");
+  assert.match(source, /export function AuthRequiredDialog/);
+  assert.doesNotMatch(source, /SessionRequired|LoginRequired|AuthGate/);
+});
