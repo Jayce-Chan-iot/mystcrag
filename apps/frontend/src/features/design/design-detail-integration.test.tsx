@@ -236,6 +236,7 @@ test("mock mode reads no library or order list because an empty mock list proves
 test("the design detail region mounts identity, price provenance, fit, privacy and compliance", () => {
   const markup = renderToStaticMarkup(<DesignDetailPanel design={mockPublicDesign} />);
 
+  assert.match(markup, /data-design-detail-region="true"/);
   assert.match(markup, /Rain After Blue/);
   assert.match(markup, /design-ai-standard/);
   assert.match(markup, /Private（仅自己可见）/);
@@ -260,10 +261,13 @@ test("the design detail region never duplicates a second fit, compliance or iden
 test("the design detail region renders no forbidden claim", () => {
   const markup = renderToStaticMarkup(<DesignDetailPanel design={mockPublicDesign} />);
 
-  // The canonical FE-STAR-001 compliance disclaimer legitimately contains the negated
-  // word 功效 ("不代表科学功效"), so only that aside element is masked out; the mount
-  // contract above still requires it, and every region-authored string stays in scope.
-  const regionCopy = markup.replace(/<aside aria-label="合规说明"[\s\S]*?<\/aside>/g, "");
+  // Only the one canonical FE-STAR-001 sentence whose negation legitimately contains
+  // the banned word 功效 is masked out, and only when it is really present. Every other
+  // visible string in the region, including the rest of the compliance notice, stays in
+  // scope, so a forbidden claim can never hide behind the mask.
+  const negatedDisclaimer = "文化意象仅作为设计灵感，不代表科学功效。";
+  assert.ok(markup.includes(negatedDisclaimer), "the canonical negated disclaimer must render before any masking");
+  const regionCopy = markup.replaceAll(negatedDisclaimer, "");
 
   for (const banned of [/转运/, /招财/, /保平安/, /辟邪/, /治愈/, /疗愈/, /命定/, /注定/, /一定/, /必定/, /大师/, /功效/, /疗效/]) {
     assert.doesNotMatch(regionCopy, banned, `visible copy must not claim ${String(banned.source)}`);
