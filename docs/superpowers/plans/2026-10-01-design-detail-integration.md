@@ -1268,36 +1268,53 @@ If Step 2 failed on the mount assertion, adjust the call in `apps/frontend/src/f
 
 - [ ] **Step 4: Prove the revision guards have teeth by mutation**
 
-`expectedRevision: design.revision,` appears four times in `apps/frontend/src/lib/api/design-api.ts` (line 280 inside `createOrder`, 341 inside `optimize`, 380 inside `createReplaceRequest`, 404 inside `createOperationsRequest`). A whole-file `str.replace` therefore breaks three unrelated members at once, and the same recipe must not assert a count of one. Mutate the single occurrence that belongs to `createOrder`, located by anchoring forward from that member's declaration line, so exactly one line changes:
+`expectedRevision: design.revision,` appears four times in `apps/frontend/src/lib/api/design-api.ts` (line 280 inside `createOrder`, 341 inside `optimize`, 380 inside `createReplaceRequest`, 404 inside `createOperationsRequest`), so a bare one-line hunk keyed on that text is ambiguous and may rewrite the wrong member. Anchor the hunk on the surrounding `createOrder` body instead: `expectedPricingVersion` and `expectedTotalPriceMinor` each occur exactly once in the file, so the seven-line context below matches only inside `createOrder` and exactly one line changes.
+
+Mutate `createOrder` to a hard-coded revision with this exact forward hunk:
 
 ```bash
-python3 - <<'PY'
-import pathlib
-
-path = pathlib.Path("apps/frontend/src/lib/api/design-api.ts")
-text = path.read_text()
-anchor = "expectedRevision: design.revision,"
-member = "async createOrder(design: PublicDesignV1)"
-
-assert text.count(anchor) == 4, text.count(anchor)
-start = text.index(member)
-offset = text.index(anchor, start)
-mutated = text[:offset] + "expectedRevision: 1," + text[offset + len(anchor):]
-
-assert mutated.count(anchor) == 3, mutated.count(anchor)
-assert "expectedRevision: 1," in mutated[start:start + 400], "the mutation must sit inside createOrder"
-path.write_text(mutated)
-PY
+git apply - <<'PATCH'
+--- a/apps/frontend/src/lib/api/design-api.ts
++++ b/apps/frontend/src/lib/api/design-api.ts
+@@ -277,7 +277,7 @@
+       const request: CreateOrderFromDesignRequest = CreateOrderFromDesignRequestSchema.parse({
+         requestId: requestId("order"),
+         design,
+-        expectedRevision: design.revision,
++        expectedRevision: 1,
+         expectedPricingVersion: design.pricing.pricingVersion,
+         expectedTotalPriceMinor: design.pricing.totalPriceMinor
+       });
+PATCH
 grep -c "expectedRevision: 1," apps/frontend/src/lib/api/design-api.ts
 git diff --numstat -- apps/frontend/src/lib/api/design-api.ts
-cd apps/frontend && npx tsx --test src/features/design/design-detail-integration.test.tsx
-git checkout -- apps/frontend/src/lib/api/design-api.ts
-git status --short
+(cd apps/frontend && npx tsx --test src/features/design/design-detail-integration.test.tsx)
 ```
 
 Expected, in order: the `grep -c` prints `1`; `git diff --numstat` prints `1 1 apps/frontend/src/lib/api/design-api.ts` (one line added, one removed, no other file). The suite then FAILS on `update and order mutations thread the loaded design revision`, and it fails at `assert.ok(update && order, "both mutation routes must be called")` rather than on a numeric compare: `CreateOrderFromDesignRequestSchema` carries a `superRefine` rule rejecting any request whose `expectedRevision` differs from `design.revision`, so the mismatched request throws in `createOrder` before `callApi` runs and `/api/orders/from-design` is never fetched. That is the strongest available proof of the threading property: the frozen contract physically refuses a mutation that does not carry the loaded revision. Record the failing test name and this exact reason in the acceptance note.
 
-After `git checkout --`, `git status --short` is empty and re-running the suite passes. A guard that cannot fail is deleted, not kept.
+Revert with the symmetric reverse hunk — the same seven lines with `-` and `+` exchanged, so no checkout and no generated file is involved:
+
+```bash
+git apply - <<'PATCH'
+--- a/apps/frontend/src/lib/api/design-api.ts
++++ b/apps/frontend/src/lib/api/design-api.ts
+@@ -277,7 +277,7 @@
+       const request: CreateOrderFromDesignRequest = CreateOrderFromDesignRequestSchema.parse({
+         requestId: requestId("order"),
+         design,
+-        expectedRevision: 1,
++        expectedRevision: design.revision,
+         expectedPricingVersion: design.pricing.pricingVersion,
+         expectedTotalPriceMinor: design.pricing.totalPriceMinor
+       });
+PATCH
+grep -c "expectedRevision: 1," apps/frontend/src/lib/api/design-api.ts || true
+git diff -- apps/frontend/src/lib/api/design-api.ts
+(cd apps/frontend && npx tsx --test src/features/design/design-detail-integration.test.tsx)
+```
+
+Expected: `grep -c` prints `0` (the `|| true` keeps a zero match from aborting an errexit shell, it does not hide a leftover), `git diff -- apps/frontend/src/lib/api/design-api.ts` is empty, proving the revert is byte-exact rather than a re-render, and the suite PASSes again. A guard that cannot fail is deleted, not kept.
 
 - [ ] **Step 5: Confirm no forbidden path reached a commit**
 
