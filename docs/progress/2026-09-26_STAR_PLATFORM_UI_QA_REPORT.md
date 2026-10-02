@@ -19,7 +19,7 @@ business-logic change:
 | `task/fe-star-005-browser-remediation` (page-family remediation of DEV-1/2/3) | `8272c1f` | DONE, fast-forward merged into the QA candidate on 2026-10-02 |
 
 - Composition commit (HEAD at QA start): `a678264` — `chore(task): combine accepted FE-STAR-002 workbench into QA candidate`.
-- Final QA candidate (HEAD after the FE-STAR-005 fast-forward merge): `8272c1f` — `docs(tasks): accept TASK-FE-STAR-005`.
+- Accepted implementation base after the FE-STAR-005 fast-forward merge: `8272c1f` — `docs(tasks): accept TASK-FE-STAR-005`; the QA evidence/documentation handoff is `50f951a`.
 - The only conflicted path while merging FE-STAR-002 was `docs/tasks/TASK_REGISTRY.md`; it was resolved mechanically to keep each FE-STAR task's own DONE acceptance record and to set this task's row. No accepted business code was rewritten, and no non-registry conflict occurred. FE-STAR-005 was a clean fast-forward, so no conflict arose and its accepted DONE row is unchanged.
 - `apps/frontend/next-env.d.ts` is a generated file that `next dev`/`next build` rewrite. It is restored to its HEAD content before handoff (SHA-256 `7b550dda9686c16f36a17bf9051d5dbf31e98555b30d114ac49fc49a1e712651`) and is **not** a user-authored change.
 
