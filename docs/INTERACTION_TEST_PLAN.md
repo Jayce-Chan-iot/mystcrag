@@ -318,19 +318,21 @@ The gate is one repeatable script, `scripts/ui-qa/capture_star_platform.py`:
 | STAR-QA-002 | Recoverable error | `app/error.tsx` retries via `reset`; it never fakes recovery with `router.back`/`location.reload`, and retry is distinguishable from navigation. | PASS (`component`) |
 | STAR-QA-003 | Star surface ownership | Every customer route declares one `data-star-surface`; star stylesheets load after `atelier.css` so an equal-specificity star rule wins; the legacy namespace declares no star selectors. | PASS (`component`) |
 | STAR-QA-004 | 320 px reflow | No horizontal scroll on the nine customer routes at 320 px. | PASS (`browser`, 9/9) |
-| STAR-QA-005 | 200 % text resize | No horizontal scroll at 200 % text resize. | FAIL on `/profile` (118 px) — DEV-2, out of scope |
+| STAR-QA-005 | 200 % text resize | No horizontal scroll at 200 % text resize. | PASS (`browser`, 9/9; `zoom-200:profile` overflowX 0) |
 | STAR-QA-006 | Reduced motion | The reduced-motion rule is present and no animation iterates forever. | PASS (`browser`) |
-| STAR-QA-007 | AA contrast | Rendered text/background contrast meets the WCAG AA floor (4.5, or 3.0 for large text). | FAIL on 7 routes — DEV-1, out of scope |
+| STAR-QA-007 | AA contrast | Rendered text/background contrast meets the WCAG AA floor (4.5, or 3.0 for large text). | PASS (`browser`, all 9 routes ≥ 4.5) |
 | STAR-QA-008 | 44 px mobile targets | No visible control below 44 px on mobile. | PASS (`browser`) |
 | STAR-QA-009 | CTA visibility | The primary CTA is fully inside the viewport (no clipping). | PASS (`browser`, 9/9) |
-| STAR-QA-010 | Overlay interception | No overlay intercepts the page centre and no runtime error dialog is mounted. | PASS except `/gallery` dev overlay — DEV-3, out of scope |
+| STAR-QA-010 | Overlay interception | No overlay intercepts the page centre and no runtime error dialog is mounted. | PASS (`browser`, 9/9 including `/gallery`) |
 | STAR-QA-011 | Faithful imagery | Crystal/tray imagery carries no colour-mapping filter or non-normal blend mode. | PASS (`browser`, 13 library + 86 workbench images) |
 | STAR-QA-012 | Capability switch | The homepage renders as many creation cards as it declares (2/3/4 states). | PASS (`browser`, 4/4) |
 | STAR-QA-013 | One-tap Oracle | One activation of 启卦 sends exactly one create request. | PASS (`browser`) |
 | STAR-QA-014 | Keyboard-only journey | Real Tab traversal reaches real controls with a visible focus indicator on every customer route, and Tab + Enter complete the Oracle cast. | PASS (`browser`, 9/9 + Oracle) |
 
-Known non-goals for this gate: no production-build browser run (blocked by the
-documented Next 16 Turbopack BFF baseline defect, `TASK-AUTH-006`); no live
-Authing provider login; no real-device touch. The three FAIL rows are page-family
-deviations outside `TASK-QA-STAR-001`'s writable scope and are recorded as
-follow-ups DEV-1/DEV-2/DEV-3 in the report.
+Known non-goals for this gate: no production-build browser run (the matrix runs
+against `next dev`; a production-build run against the canonical Authing OIDC
+session needs live provider credentials); no live Authing provider login; no
+real-device touch. The initial run recorded three page-family deviations
+DEV-1/DEV-2/DEV-3 outside `TASK-QA-STAR-001`'s writable scope; they are now
+closed by `TASK-FE-STAR-005`, and the final re-verified matrix on `8272c1f` is
+73/73 PASS (initial pre-remediation run: 64 PASS / 9 FAIL).

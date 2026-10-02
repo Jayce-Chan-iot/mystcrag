@@ -16,10 +16,12 @@ business-logic change:
 | --- | --- | --- |
 | `task/fe-star-004-design-detail-integration` (composes FE-STAR-001 + FE-STAR-003/004) | `797d69a` | DONE, QA start point |
 | `task/fe-star-002-diy-workbench` | `eb765e4` | DONE, merged into the candidate |
+| `task/fe-star-005-browser-remediation` (page-family remediation of DEV-1/2/3) | `8272c1f` | DONE, fast-forward merged into the QA candidate on 2026-10-02 |
 
 - Composition commit (HEAD at QA start): `a678264` — `chore(task): combine accepted FE-STAR-002 workbench into QA candidate`.
-- The only conflicted path while merging FE-STAR-002 was `docs/tasks/TASK_REGISTRY.md`; it was resolved mechanically to keep each FE-STAR task's own DONE acceptance record and to set this task's row. No accepted business code was rewritten, and no non-registry conflict occurred.
-- `apps/frontend/next-env.d.ts` carries a pre-existing local dev-path modification (`./.next/types/...` → `./.next/dev/types/...`) owned by the user. It is intentionally **not** staged or rewritten by this task.
+- Final QA candidate (HEAD after the FE-STAR-005 fast-forward merge): `8272c1f` — `docs(tasks): accept TASK-FE-STAR-005`.
+- The only conflicted path while merging FE-STAR-002 was `docs/tasks/TASK_REGISTRY.md`; it was resolved mechanically to keep each FE-STAR task's own DONE acceptance record and to set this task's row. No accepted business code was rewritten, and no non-registry conflict occurred. FE-STAR-005 was a clean fast-forward, so no conflict arose and its accepted DONE row is unchanged.
+- `apps/frontend/next-env.d.ts` is a generated file that `next dev`/`next build` rewrite. It is restored to its HEAD content before handoff (SHA-256 `7b550dda9686c16f36a17bf9051d5dbf31e98555b30d114ac49fc49a1e712651`) and is **not** a user-authored change.
 
 ## 2. What this task changed
 
@@ -38,6 +40,12 @@ business-logic change:
 | `docs/UI_DESIGN_SYSTEM.md`, `docs/INTERACTION_TEST_PLAN.md`, `apps/frontend/design-qa.md` | Controlling docs updated to production. |
 
 No API, database, `DesignV1`, price, stock, Bracelet Engine, save, revision, order, Auth-contract, or manifest behaviour was changed.
+
+FE-STAR-005's page-family remediation is included by the fast-forward merge above.
+It adds surface-aware readable text tokens in the page-family stylesheets, wraps and
+shrinks the `/profile` preview row, and keys the gallery list children by stable
+`designId`. Those edits change presentation attributes/CSS and page-family render keys
+only — no API, design-state, pricing, inventory, route, save, or order behaviour.
 
 ## 3. TDD: RED → GREEN
 
@@ -70,6 +78,12 @@ lives only in the canonical, git-ignored `output/playwright/task-qa-star-001/`.
 Coverage: 17 route-states × 5 viewports (`390×844`, `768×1024`, `1024×768`,
 `1440×560`, `1440×900`) = **85 screenshots**.
 
+Final re-verification run on the FE-STAR-005-composed candidate captured
+**85/85** screenshots with `not_captured=0` and `overlay_rows=0`
+(`capture-run.log`, `capture-summary.json`). The earlier pre-remediation run on
+`c3967e4` captured 80/85 and flagged the five `/gallery` rows with the dev error
+overlay; the fast-forward merge removes that overlay.
+
 Route-states captured: `home`, `ai-design`, `oracle-setup`, `tarot-setup`,
 `diy-workbench` (`/diy/design-diy-private`), `crystal-library`, `gallery`,
 `design-detail` (`/design/design-ai-published`), `profile`, `not-found`,
@@ -88,7 +102,12 @@ through their real setup flow.
 STAR_QA_BASE_URL=http://localhost:3000 python3 -u scripts/ui-qa/capture_star_platform.py --validate
 ```
 
-Result: **73 checks, 62 PASS, 9 FAIL** (`validation-summary.json`).
+Result of the final re-verification on the FE-STAR-005-composed candidate
+(2026-10-02): **73 checks, 73 PASS, 0 FAIL** (`validation-summary.json`,
+`validation-run.log`). The initial run on the pre-remediation candidate
+(`c3967e4`) was **64 PASS / 9 FAIL** (`64/73`); those nine failures were the
+page-family deviations DEV-1/2/3 recorded in §7 and are now closed by
+TASK-FE-STAR-005.
 
 Checks performed:
 
@@ -106,24 +125,30 @@ Checks performed:
 12. `keyboard-focus:*` — real Tab traversal reaches real controls and every stop shows a visible focus indicator.
 13. `keyboard-complete:oracle` — Tab reaches the cast action and Enter completes the cast.
 
-PASS highlights: all 9 routes reflow at 320 px; reduced motion honoured; all 9
-routes keyboard-navigable with visible focus (`noRing` empty everywhere); the
-Oracle cast completes keyboard-only; 44 px mobile targets hold; no CTA clipping;
-no overlay interception; crystal imagery untinted (13 library + 86 workbench
-images); capability switch renders 4/4 cards.
+PASS highlights (final run): all 9 routes reflow at 320 px and at 200 % text
+resize (`zoom-200:profile` overflowX 0); every `contrast-aa:*` row meets the floor
+— home 5.8, ai-design 8.19, oracle-setup 6.18, tarot-setup 5.14, diy-workbench
+5.98, crystal-library 5.14, gallery 4.85, design-detail 5.01, profile 5.44;
+reduced motion honoured; all 9 routes keyboard-navigable with visible focus
+(`noRing` empty everywhere); the Oracle cast completes keyboard-only; 44 px mobile
+targets hold; no CTA clipping; no overlay interception and `no-error-overlay:*` =
+none on all 9 routes including `/gallery`; crystal imagery untinted (13 library +
+86 workbench images); capability switch renders 4/4 cards; one Oracle activation
+sends exactly one create POST.
 
 ### Automated gate commands
 
 | Command | Result |
 | --- | --- |
 | `pnpm --filter @mystcrag/frontend exec tsx --test src/features/design/star-system-states.test.tsx src/features/design/star-shell-contract.test.tsx src/features/design/star-content-contract.test.tsx` | 48/48 PASS |
+| `pnpm --filter @mystcrag/frontend exec tsx --test src/features/design/star-browser-remediation.test.tsx` | 9/9 PASS (FE-STAR-005 remediation contract) |
 | `pnpm --filter @mystcrag/frontend test` | 6/6 PASS — the configured script's unquoted `src/**/*.test.tsx` is expanded by `sh` as `src/*/*.test.tsx`, so it reaches only the shallow test files |
-| `pnpm exec tsx --test "src/**/*.test.tsx"` (frontend root, Node-side glob) | 1263/1263 PASS — the complete frontend suite |
+| `pnpm exec tsx --test "src/**/*.test.tsx"` (frontend root, Node-side glob) | 1272/1272 PASS — the complete frontend suite |
 | `pnpm --filter @mystcrag/frontend typecheck` | PASS |
 | `pnpm --filter @mystcrag/frontend lint` | PASS |
 | `pnpm --filter @mystcrag/frontend build` | PASS (`next build`) |
-| `node --test tests/architecture.test.mjs` | 82/82 PASS |
-| `pnpm validate` | PASS — 18/18 turbo tasks (lint + typecheck + test + build) |
+| `node --test tests/architecture.test.mjs` | 23/23 PASS |
+| `pnpm validate` | PASS — 18/18 turbo tasks (lint + typecheck + test + build), exit 0 |
 | `git diff --check` | clean |
 
 The full frontend suite is run with the glob quoted so Node expands it. The
@@ -137,14 +162,17 @@ task's writable set) and is recorded here rather than worked around.
 | Route | reflow 320 | zoom 200 | contrast AA | touch 44 | CTA | overlay | keyboard | Verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/` (home) | PASS | PASS | PASS 5.8 | PASS | n/a | PASS | PASS | PASS |
-| `/ai-design` | PASS | PASS | **FAIL 2.72** | n/a | n/a | PASS | PASS | FAIL (contrast) |
-| `/oracle` (setup) | PASS | PASS | **FAIL 2.59** | PASS | PASS | PASS | PASS | FAIL (contrast) |
-| `/tarot/setup` | PASS | PASS | **FAIL 2.70** | n/a | PASS | PASS | PASS | FAIL (contrast) |
-| `/diy/design-diy-private` | PASS | PASS | **FAIL 3.93** | n/a | n/a | PASS | PASS | FAIL (contrast) |
-| `/crystal-library` | PASS | PASS | **FAIL 3.82** | PASS | n/a | PASS | PASS | FAIL (contrast) |
-| `/gallery` | PASS | PASS | **FAIL 3.53** | n/a | n/a | **FAIL overlay** | PASS | FAIL (contrast + runtime overlay) |
-| `/design/design-ai-published` | PASS | PASS | **FAIL 3.31** | n/a | n/a | PASS | PASS | FAIL (contrast) |
-| `/profile` | PASS | **FAIL 118 px** | PASS 5.44 | n/a | n/a | PASS | PASS | FAIL (200 % zoom overflow) |
+| `/ai-design` | PASS | PASS | PASS 8.19 | n/a | n/a | PASS | PASS | PASS |
+| `/oracle` (setup) | PASS | PASS | PASS 6.18 | PASS | PASS | PASS | PASS | PASS |
+| `/tarot/setup` | PASS | PASS | PASS 5.14 | n/a | PASS | PASS | PASS | PASS |
+| `/diy/design-diy-private` | PASS | PASS | PASS 5.98 | n/a | n/a | PASS | PASS | PASS |
+| `/crystal-library` | PASS | PASS | PASS 5.14 | PASS | n/a | PASS | PASS | PASS |
+| `/gallery` | PASS | PASS | PASS 4.85 | n/a | n/a | PASS | PASS | PASS |
+| `/design/design-ai-published` | PASS | PASS | PASS 5.01 | n/a | n/a | PASS | PASS | PASS |
+| `/profile` | PASS | PASS (0 px) | PASS 5.44 | n/a | n/a | PASS | PASS | PASS |
+
+Ratios are the worst measured row per route from the final run (the checked
+element may be a paragraph or a button); every row meets the 4.5 floor.
 
 System states: `not-found` (`data-star-surface="system-state"`), `state-empty`
 (library empty), `state-error` (recoverable 500 notice), `state-offline`
@@ -152,11 +180,16 @@ System states: `not-found` (`data-star-surface="system-state"`), `state-empty`
 with no horizontal overflow and no unexpected error overlay. Session routes
 `oracle-result`, `tarot-draw`, `tarot-result` captured at every viewport.
 
-## 7. Remaining deviations (out of this task's writable scope)
+## 7. Initial-run deviations DEV-1/2/3 — closed by TASK-FE-STAR-005
 
-All nine failures originate in page-family components/stylesheets that are
-**not** in `TASK-QA-STAR-001`'s writable path set. Per the task instruction they
-are recorded here as boundary-clear follow-ups rather than fixed in this change.
+The initial run on `c3967e4` recorded nine failures in page-family
+components/stylesheets that are **not** in `TASK-QA-STAR-001`'s writable path
+set. They were filed here as boundary-clear follow-ups (DEV-1/2/3) rather than
+fixed in this change, and are now **closed** by the accepted, independently
+reviewed `TASK-FE-STAR-005` remediation that this candidate fast-forwards onto.
+The final run on `8272c1f` reproduces 73/73 PASS with each DEV acceptance
+criterion met. The original symptom/root-cause records are retained below as
+evidence.
 
 ### DEV-1 — AA contrast on accent micro-copy (7 routes)
 
@@ -166,6 +199,7 @@ are recorded here as boundary-clear follow-ups rather than fixed in this change.
 - Why it is not fixed here: the correct repair is a surface-scoped text token in each page-family stylesheet (or its component). Editing those paths would breach this task's writable set; a global `--accent` change is rejected because it would break the currently-passing dark-surface contrast (`home` 5.8:1 → ~3.1:1).
 - Repro: `STAR_QA_BASE_URL=http://localhost:3000 python3 scripts/ui-qa/capture_star_platform.py --validate` → the `contrast-aa:*` rows.
 - Acceptance: every `contrast-aa:*` row ≥ 4.5 (or ≥ 3.0 for large text).
+- Status: **CLOSED** by `TASK-FE-STAR-005`. Final run: ai-design 8.19, oracle-setup 6.18, tarot-setup 5.14, diy-workbench 5.98, crystal-library 5.14, gallery 4.85, design-detail 5.01 — all ≥ 4.5; home stays 5.8.
 
 ### DEV-2 — `/profile` horizontal overflow at 200 % text resize (118 px)
 
@@ -173,6 +207,7 @@ are recorded here as boundary-clear follow-ups rather than fixed in this change.
 - Root cause: the profile design-preview row lays out rem-sized bead thumbnails (`h-9 w-9`, i.e. `2.25rem`) in a `flex items-center gap-1` row; at a 200 % root font size the row exceeds the viewport.
 - Owning file (outside scope): `src/features/profile/components/profile-page.tsx`.
 - Acceptance: `zoom-200:profile` `overflowX ≤ 1`.
+- Status: **CLOSED** by `TASK-FE-STAR-005`. Final run: `zoom-200:profile` overflowX 0, and `reflow-320:profile` still 0.
 
 ### DEV-3 — `/gallery` runtime error overlay (React key warning)
 
@@ -180,8 +215,11 @@ are recorded here as boundary-clear follow-ups rather than fixed in this change.
 - Root cause: `GalleryPage` renders a child list without unique `key` props.
 - Owning file (outside scope): `src/features/gallery/components/gallery-page.tsx`.
 - Acceptance: `no-error-overlay:gallery = none` and zero console errors on `/gallery`.
+- Status: **CLOSED** by `TASK-FE-STAR-005`. Final run: `no-error-overlay:gallery` none; all five gallery rows capture with `overlay=None`.
 
-Suggested follow-up: register one page-family task (e.g. `TASK-FE-STAR-005`) whose writable paths name the files above, with the three acceptance commands above as its gate.
+Follow-up: `TASK-FE-STAR-005` was registered with exactly the files above in its
+writable set and the three acceptance criteria above as its gate; Codex accepted
+it as `8272c1f` and this candidate fast-forwards onto it.
 
 ## 8. Why Knowledge admin is token-only
 
@@ -196,12 +234,13 @@ workbench-toolbar override that was defeating the star surface.
 
 ## 9. Not executed / blocked (recorded honestly, not marked PASS)
 
-- Production-build browser E2E: the browser matrix ran against `next dev`
-  (localhost:3000) with the isolated QA database and Backend on :4000. A
-  production-build browser run is blocked by the documented baseline defect
-  where the Next 16 Turbopack production build breaks authenticated POSTs
-  through the Auth0 SDK BFF path (`TASK-AUTH-006`), which is unrelated to this
-  redesign.
+- Production-build browser E2E: **not executed**. The browser matrix ran against
+  `next dev` (localhost:3000) with the isolated QA database and Backend on :4000,
+  using the development-only desktop signed-test identity. A production-build
+  browser run against the canonical Authing OIDC session needs live provider
+  credentials and is recorded here as a real environment limitation, not a PASS.
+  Auth0 is not part of the current stack (`MYSTCRAG_AUTH_PROVIDER='auth0'` is
+  explicitly rejected by `auth-config.ts`).
 - Live Authing OIDC login for a real end-user session: the capture used the
   documented desktop demo identity plus QA-database fixtures; live provider
   credentials were not available.
@@ -217,6 +256,13 @@ workbench-toolbar override that was defeating the star surface.
 - Canonical evidence (git-ignored): `output/playwright/task-qa-star-001/` —
   `screenshots/` (85 PNGs), `capture-summary.json` / `.tsv`, `capture-run.log`,
   `validation-summary.json`, `validation-run.log`.
-- Validation summary: 73 checks, 62 PASS, 9 FAIL (the nine deviations in §7).
+- Validation summary: 73 checks, **73 PASS, 0 FAIL** on the final
+  FE-STAR-005-composed candidate (`8272c1f`); the initial pre-remediation run on
+  `c3967e4` was **64 PASS / 9 FAIL** (`64/73`).
 - Working tree: only the registered writable paths are modified/added;
-  `apps/frontend/next-env.d.ts` is left unstaged; no temporary artifacts remain.
+  `apps/frontend/next-env.d.ts` is restored to its HEAD content (SHA-256
+  `7b550dda9686c16f36a17bf9051d5dbf31e98555b30d114ac49fc49a1e712651`). The
+  temporary dev services (frontend :3000, Backend :4000), the temporary desktop
+  signed-test identity mapping in the ignored `.env` / `apps/frontend/.env.local`,
+  and the isolated QA databases were removed after verification; no temporary
+  artifacts remain.

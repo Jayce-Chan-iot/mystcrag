@@ -51,14 +51,18 @@ System states: loading, error, empty, offline and 404 all render through the one
 `SystemState` primitive with a real next action, correct live-region roles and no
 placeholder skeleton copy.
 
-Gate result: **62 PASS / 9 FAIL**. All nine failures are page-family deviations
-outside this task's writable scope and are filed as follow-ups (DEV-1 AA contrast
-on accent micro-copy, DEV-2 `/profile` 200 % overflow, DEV-3 `/gallery` React key
-warning / dev error overlay). Verified PASS on every route: 320 px reflow,
-reduced motion, keyboard traversal with visible focus, keyboard-only Oracle cast,
-44 px mobile targets, no CTA clipping, no overlay interception, untinted crystal
-imagery.
+Gate result: final re-verification on the FE-STAR-005-composed candidate
+(`8272c1f`) is **73 checks, 73 PASS, 0 FAIL**, with 85/85 screenshots captured and
+no dev error overlay. The initial pre-remediation run (`c3967e4`) was
+**64 PASS / 9 FAIL**; the nine failures were the page-family deviations DEV-1 (AA
+contrast on accent micro-copy), DEV-2 (`/profile` 200 % overflow) and DEV-3
+(`/gallery` React key dev overlay), now closed by the accepted `TASK-FE-STAR-005`
+remediation this candidate fast-forwards onto. Verified PASS on every route:
+320 px reflow, 200 % text resize (`zoom-200:profile` overflowX 0), AA contrast
+(all `contrast-aa:*` rows ≥ 4.5), reduced motion, keyboard traversal with visible
+focus, keyboard-only Oracle cast, 44 px mobile targets, no CTA clipping, no
+overlay interception, untinted crystal imagery, and exactly one Oracle create
+POST per activation.
 
-Result: **passed with documented deviations** — the shared system-state contract
-and the legacy-drift cleanup are complete; the three page-family deviations are
-tracked follow-ups, not silent passes.
+Result: **passed** — the shared system-state contract, the legacy-drift cleanup
+and the page-family DEV-1/2/3 remediations are all complete and re-verified.
