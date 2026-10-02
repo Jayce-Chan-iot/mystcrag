@@ -886,7 +886,7 @@ export function DiyEditor({ designId }: { designId: string }) {
               </Link>
             </nav>
             <h2 className="font-serif text-xl" id="desktop-library-title">全部水晶</h2>
-            <p className="mt-1 text-xs text-[var(--muted)]">{materialOptions.length}/{catalogMaterials.length} 款可选</p>
+            <p className="mt-1 text-xs text-[var(--star-micro-text)]">{materialOptions.length}/{catalogMaterials.length} 款可选</p>
 
             <div className="mt-5 grid grid-cols-3 gap-1 rounded-2xl border border-[var(--border)] bg-white/65 p-1" aria-label="商品品类">
               {CATALOG_PRODUCT_TYPES.map((productType) => (

@@ -13,6 +13,15 @@
   background: var(--star-paper);
 }
 
+/* Readable micro-copy layer for the warm paper information surfaces: the 12px
+ * catalogue counter inherits the muted alias, which is cut for the page body and not
+ * for the near-white rail. The lacquer frame and tool rail set their own light type
+ * above, so they are unaffected. */
+[data-star-surface="diy-workbench"] {
+  --star-kicker-text: color-mix(in srgb, var(--star-brass-ink) 68%, var(--star-canvas));
+  --star-micro-text: color-mix(in srgb, var(--star-ink) 78%, var(--star-paper));
+}
+
 /* Night-lacquer instrument frame. */
 [data-star-surface="diy-workbench"] [data-star-workbench-frame="lacquer"] {
   background: var(--star-canvas);

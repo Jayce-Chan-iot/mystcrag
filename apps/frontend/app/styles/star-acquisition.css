@@ -18,6 +18,32 @@
   overflow-x: clip;
 }
 
+/* Readable micro-copy layer. The 12px kicker/counter copy inherits `--accent` and
+ * `--muted`, and both are cut for a single background: brass on 宣纸 reads on paper
+ * only, brass-ink on 漆夜 reads on lacquer only. Each surface therefore resolves its
+ * own readable pair instead of inheriting the opposite surface's value. */
+[data-star-surface="questionnaire"],
+[data-star-surface="tarot-setup"] {
+  --star-kicker-text: color-mix(in srgb, var(--star-brass-ink) 68%, var(--star-canvas));
+  --star-micro-text: color-mix(in srgb, var(--star-ink) 78%, var(--star-paper));
+}
+
+/* The oracle hero and the results header band sit on the night lacquer, so they take
+ * the moonlit brass cut — the same brass, read the other way round. */
+[data-star-surface="oracle-setup"],
+[data-star-surface="oracle-result"],
+[data-star-surface="design-results"] {
+  --star-kicker-text: color-mix(in srgb, var(--star-brass) 55%, var(--star-paper));
+  --star-heading-text: var(--star-paper);
+  --star-lede-text: color-mix(in srgb, var(--star-moon) 72%, var(--star-paper));
+}
+
+/* The results header opens on the same night band as the oracle hero, so its display
+ * type must not inherit the page's 墨 colour. */
+[data-star-surface="design-results"] > header h1 {
+  color: var(--star-heading-text);
+}
+
 [data-star-surface="home"] [data-star-entry-card],
 [data-star-surface="questionnaire"] [data-star-entry-card] {
   border: 1px solid var(--star-line);

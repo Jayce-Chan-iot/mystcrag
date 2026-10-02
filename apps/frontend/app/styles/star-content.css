@@ -13,6 +13,18 @@
     linear-gradient(180deg, color-mix(in srgb, var(--star-canvas) 4%, var(--star-paper)) 0%, var(--star-paper) 12rem);
 }
 
+/* Readable micro-copy layer for the paper index surfaces: the kicker and the 12px
+ * counter/lede copy inherit accent and muted aliases that were cut for one background.
+ * Scoping the readable pair here keeps 黄铜 as the accent identity while letting the
+ * small type clear WCAG AA on 宣纸. */
+[data-star-surface="library"],
+[data-star-surface="gallery"],
+[data-star-surface="profile"],
+[data-star-surface="content"] {
+  --star-kicker-text: color-mix(in srgb, var(--star-brass-ink) 68%, var(--star-canvas));
+  --star-micro-text: color-mix(in srgb, var(--star-ink) 78%, var(--star-paper));
+}
+
 /* Star-map header: brass instrument line under a persistent title block */
 [data-star-surface="library"] [data-star-content-header],
 [data-star-surface="gallery"] [data-star-content-header],
@@ -48,7 +60,7 @@
 [data-star-surface="gallery"] [data-star-content-kicker],
 [data-star-surface="profile"] [data-star-content-kicker],
 [data-star-surface="content"] [data-star-content-kicker] {
-  color: var(--star-brass-ink);
+  color: var(--star-kicker-text);
   letter-spacing: 0.18em;
   text-transform: none;
 }

@@ -269,6 +269,44 @@ export function GalleryDesignCard({
   );
 }
 
+export type GalleryCardViewState = {
+  busyDesignId: string | null;
+  deleteArmedId: string | null;
+  menuOpenId: string | null;
+};
+
+export type GalleryCardActions = {
+  onArmDelete: (entry: GalleryEntry) => void;
+  onClone: (entry: GalleryEntry) => void;
+  onConfirmDelete: (entry: GalleryEntry) => void;
+  onExport: (entry: GalleryEntry) => void;
+  onToggleMenu: (entry: GalleryEntry) => void;
+};
+
+export function renderGalleryCard(
+  entry: GalleryEntry,
+  isFeatured: boolean,
+  view: GalleryCardViewState,
+  actions: GalleryCardActions
+): React.ReactElement {
+  const designId = entry.design.designId;
+  return (
+    <GalleryDesignCard
+      busy={view.busyDesignId === designId}
+      deleteArmed={view.deleteArmedId === designId}
+      entry={entry}
+      isFeatured={isFeatured}
+      key={designId}
+      menuOpen={view.menuOpenId === designId}
+      onArmDelete={actions.onArmDelete}
+      onClone={actions.onClone}
+      onConfirmDelete={actions.onConfirmDelete}
+      onExport={actions.onExport}
+      onToggleMenu={actions.onToggleMenu}
+    />
+  );
+}
+
 export async function cloneGalleryEntry(
   entry: GalleryEntry,
   deps: {
@@ -382,20 +420,19 @@ export function GalleryPage() {
   const toggleMenu = (entry: GalleryEntry) =>
     setMenuOpenId((current) => (current === entry.design.designId ? null : entry.design.designId));
 
-  const renderCard = (entry: GalleryEntry, isFeatured: boolean) => (
-    <GalleryDesignCard
-      busy={busyDesignId === entry.design.designId}
-      deleteArmed={deleteArmedId === entry.design.designId}
-      entry={entry}
-      isFeatured={isFeatured}
-      menuOpen={menuOpenId === entry.design.designId}
-      onArmDelete={(target) => setDeleteArmedId(target.design.designId)}
-      onClone={cloneEntry}
-      onConfirmDelete={deleteEntry}
-      onExport={exportEntry}
-      onToggleMenu={toggleMenu}
-    />
-  );
+  const renderCard = (entry: GalleryEntry, isFeatured: boolean) =>
+    renderGalleryCard(
+      entry,
+      isFeatured,
+      { busyDesignId, deleteArmedId, menuOpenId },
+      {
+        onArmDelete: (target) => setDeleteArmedId(target.design.designId),
+        onClone: cloneEntry,
+        onConfirmDelete: deleteEntry,
+        onExport: exportEntry,
+        onToggleMenu: toggleMenu
+      }
+    );
 
   if (isLoading) {
     return (
@@ -419,9 +456,9 @@ export function GalleryPage() {
         <header className="lg:hidden" data-star-content-header="true">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-xs tracking-[0.18em] text-[var(--accent)]" data-star-content-kicker="true">Gallery</p>
+              <p className="text-xs tracking-[0.18em] text-[var(--star-kicker-text)]" data-star-content-kicker="true">Gallery</p>
               <h1 className="mt-1 font-serif text-2xl" data-star-content-title="true">我的作品</h1>
-              <p className="mt-1 text-xs text-[var(--muted)]" aria-live="polite" data-star-content-lede="true">{stats.total} 个设计 · {stats.drafts} 个草稿</p>
+              <p className="mt-1 text-xs text-[var(--star-micro-text)]" aria-live="polite" data-star-content-lede="true">{stats.total} 个设计 · {stats.drafts} 个草稿</p>
             </div>
             <Link className="flex min-h-11 shrink-0 items-center rounded-xl bg-[var(--accent-deep)] px-5 text-sm text-white" data-gallery-action="create" href="/diy">新建</Link>
           </div>
@@ -429,7 +466,7 @@ export function GalleryPage() {
 
         <div className="hidden items-end justify-between gap-6 lg:flex" data-star-content-header="desktop">
           <div>
-            <p className="text-xs tracking-[0.18em] text-[var(--accent)]" data-star-content-kicker="true">Gallery</p>
+            <p className="text-xs tracking-[0.18em] text-[var(--star-kicker-text)]" data-star-content-kicker="true">Gallery</p>
             <h1 className="mt-1 font-serif text-3xl" data-star-content-title="true">作品画廊</h1>
             <p className="mt-1.5 text-sm text-[var(--muted)]" data-star-content-lede="true">保存灵感，也继续未完成的设计。</p>
           </div>

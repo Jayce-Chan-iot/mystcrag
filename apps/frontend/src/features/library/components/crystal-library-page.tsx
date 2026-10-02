@@ -856,9 +856,9 @@ export function CrystalLibraryPage() {
     <main className="min-h-screen bg-[var(--surface)]" data-library-page="ready" data-star-surface="library">
       <div className="mx-auto max-w-[92.5rem] px-4 pb-16 pt-6 sm:px-6 lg:px-8 lg:pt-8">
         <header className="lg:hidden" data-star-content-header="true">
-          <p className="text-xs tracking-[0.18em] text-[var(--accent)]" data-star-content-kicker="true">Crystal Library</p>
+          <p className="text-xs tracking-[0.18em] text-[var(--star-kicker-text)]" data-star-content-kicker="true">Crystal Library</p>
           <h1 className="mt-1 font-serif text-2xl" data-star-content-title="true">矿石库</h1>
-          <p className="mt-1 text-xs text-[var(--muted)]" data-star-content-lede="true">按材质、色彩与尺寸寻找你的下一颗珠子</p>
+          <p className="mt-1 text-xs text-[var(--star-micro-text)]" data-star-content-lede="true">按材质、色彩与尺寸寻找你的下一颗珠子</p>
         </header>
 
         <div className="mt-5 grid gap-6 lg:mt-0 lg:grid-cols-[14rem_minmax(0,1fr)_14.5rem] lg:gap-7">
@@ -883,7 +883,7 @@ export function CrystalLibraryPage() {
 
           <section aria-labelledby="library-main-title" className="min-w-0">
             <div className="hidden lg:block" data-star-content-header="true">
-              <p className="text-xs tracking-[0.18em] text-[var(--accent)]" data-star-content-kicker="true">Crystal Library</p>
+              <p className="text-xs tracking-[0.18em] text-[var(--star-kicker-text)]" data-star-content-kicker="true">Crystal Library</p>
               <h1 className="mt-1 font-serif text-3xl" data-star-content-title="true" id="library-main-title">矿石库</h1>
               <p className="mt-1.5 text-sm text-[var(--muted)]" data-star-content-lede="true">按材质、色彩与尺寸寻找你的下一颗珠子</p>
             </div>

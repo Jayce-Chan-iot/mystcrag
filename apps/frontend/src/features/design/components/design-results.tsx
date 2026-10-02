@@ -383,9 +383,9 @@ export function DesignResults({ designId }: { designId: string }) {
     <main className="mx-auto min-h-[calc(100vh-5rem)] max-w-[90rem] px-5 pb-28 pt-7 sm:px-8 sm:pt-9" data-atelier-surface="design-results" data-results-layout="comparison-grid" data-star-surface="design-results">
       <header className="flex flex-wrap items-end justify-between gap-5">
         <div>
-          <p className="text-[0.68rem] uppercase tracking-[0.3em] text-[var(--accent)]">AI Design · {optionCountLabel}</p>
+          <p className="text-[0.68rem] uppercase tracking-[0.3em] text-[var(--star-kicker-text)]">AI Design · {optionCountLabel}</p>
           <h1 className="mt-2 font-serif text-3xl sm:text-5xl">你的设计已经生成</h1>
-          <p className="mt-2 text-sm leading-6 text-[var(--muted)]">选择喜欢的方案，下一步可以继续换珠、调整顺序和尺寸。</p>
+          <p className="mt-2 text-sm leading-6 text-[var(--star-lede-text)]">选择喜欢的方案，下一步可以继续换珠、调整顺序和尺寸。</p>
         </div>
         <Link className="inline-flex min-h-11 items-center rounded-full px-4 text-sm text-[var(--accent-deep)] transition hover:bg-[var(--accent-soft)]" href="/ai-design">重新生成方案</Link>
       </header>
@@ -409,11 +409,11 @@ export function DesignResults({ designId }: { designId: string }) {
             const materialList = [...new Set(design.beads.map((bead) => materialNames[bead.materialKey] ?? materialNames[bead.crystalId] ?? bead.crystalId))].join(" · ");
             return <article className={`design-result-card flex min-h-0 min-w-0 flex-col rounded-[1.5rem] border bg-[var(--surface)] p-4 transition ${selected ? "border-[var(--accent-deep)] shadow-[0_18px_45px_rgb(76_56_93/0.13)] ring-1 ring-[var(--accent)]/20" : "border-[var(--border)]"}`} data-design-selected={selected} data-option-index={index + 1} data-star-result-card="true" key={design.designId}>
               <div className="flex items-center justify-between">
-                <span className={`rounded-full px-3 py-1 text-xs ${selected ? "bg-[var(--accent-deep)] text-white" : "bg-[var(--surface-soft)] text-[var(--muted)]"}`}>方案 {String(index + 1).padStart(2, "0")}</span>
+                <span className={`rounded-full px-3 py-1 text-xs ${selected ? "bg-[var(--star-brass-ink)] text-white" : "bg-[var(--surface-soft)] text-[var(--muted)]"}`}>方案 {String(index + 1).padStart(2, "0")}</span>
                 <button
                   aria-label={selected ? `已选择 ${design.designName}` : `选择 ${design.designName}`}
                   aria-pressed={selected}
-                  className={`grid h-11 w-11 place-items-center rounded-full border text-sm transition ${selected ? "border-[var(--accent-deep)] bg-[var(--accent-deep)] text-white" : "border-[var(--border)] text-transparent hover:border-[var(--accent)]"}`}
+                  className={`grid h-11 w-11 place-items-center rounded-full border text-sm transition ${selected ? "border-[var(--star-brass-ink)] bg-[var(--star-brass-ink)] text-white" : "border-[var(--border)] text-transparent hover:border-[var(--accent)]"}`}
                   disabled={budgetStatus === "OVER_BUDGET" && !acceptedOverBudget}
                   onClick={() => setSelectedDesignId(design.designId)}
                   type="button"

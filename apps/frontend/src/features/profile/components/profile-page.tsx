@@ -124,7 +124,7 @@ function sortedBeads(design: PublicDesignV1) {
 function BeadThumbnails({ design, limit, beadClass }: { design: PublicDesignV1; limit: number; beadClass: string }) {
   const beads = sortedBeads(design).slice(0, limit);
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex min-w-0 flex-wrap items-center justify-center gap-1">
       {beads.map((bead) => (
         <span className={`block shrink-0 ${beadClass}`} key={bead.componentId}>
           <CrystalBeadImage alt="" materialKey={bead.materialKey} textureAssetKey={bead.textureAssetKey} sizes="64px" />
@@ -175,8 +175,8 @@ function OrderRow({ order, onOpen }: { order: ProfileOrder; onOpen: () => void }
 
 export function ProfileContinueCard({ entry }: { entry: GalleryEntry }) {
   return (
-    <article className="flex w-56 shrink-0 flex-col gap-2 rounded-2xl border border-[var(--border)] bg-white p-3 sm:w-auto" data-profile-continue={entry.design.designId}>
-      <div className="grid aspect-[5/3] place-items-center rounded-xl bg-[#f5f4f2] p-3">
+    <article className="flex w-56 min-w-0 shrink-0 flex-col gap-2 rounded-2xl border border-[var(--border)] bg-white p-3 sm:w-auto" data-profile-continue={entry.design.designId}>
+      <div className="grid aspect-[5/3] min-w-0 place-items-center rounded-xl bg-[#f5f4f2] p-3">
         <BeadThumbnails beadClass="h-9 w-9" design={entry.design} limit={5} />
       </div>
       <div className="flex items-center justify-between gap-2">

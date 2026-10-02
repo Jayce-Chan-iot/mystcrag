@@ -86,7 +86,7 @@ export function QuestionnaireWizard() {
         {QUESTIONNAIRE_STEPS.map((questionnaireStep, index) => (
           <li className="min-w-0 text-center" data-active={index === stepIndex || undefined} data-complete={index < stepIndex || undefined} key={questionnaireStep.id}>
             <span className={`mx-auto grid h-7 w-7 place-items-center rounded-full border text-[0.68rem] ${index <= stepIndex ? "border-[var(--accent-deep)] bg-[var(--accent-deep)] text-white" : "border-[var(--border)] bg-white text-[var(--muted)]"}`}>{index + 1}</span>
-            <span className="mt-1 hidden truncate text-[0.62rem] text-[var(--muted)] sm:block">{questionnaireStep.eyebrow.replace(/^\d+\s*\u00b7\s*/, "")}</span>
+            <span className="mt-1 hidden truncate text-[0.62rem] text-[var(--star-micro-text)] sm:block">{questionnaireStep.eyebrow.replace(/^\d+\s*\u00b7\s*/, "")}</span>
           </li>
         ))}
       </ol>
@@ -95,7 +95,7 @@ export function QuestionnaireWizard() {
       </div>
 
       <section className="mx-auto mt-14 w-full max-w-3xl sm:animate-reveal-softly" data-star-step-panel="true" key={step.id} aria-labelledby="question-title">
-        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--accent)]">{step.eyebrow}</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--star-kicker-text)]">{step.eyebrow}</p>
         <h1 className="mt-5 font-serif text-3xl leading-tight sm:text-5xl" id="question-title">{step.title}</h1>
         <p className="mt-4 max-w-2xl leading-7 text-[var(--muted)]">{step.description}</p>
 
