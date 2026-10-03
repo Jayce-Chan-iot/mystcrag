@@ -79,6 +79,37 @@ All paths below are relative to `apps/frontend/public`. Consumers must use `STAR
 
 `STAR_PLATFORM_ASSETS` also publishes intrinsic width/height/aspectRatio, dominant surface (`obsidian-night` / `xuan-paper` / `aged-brass` / `amethyst` / `moon-silver`), and Chinese alt intent (empty only when `decorative`).
 
+## Star Platform clean kit (`TASK-UX-ASSET-001`, 2026-10-04)
+
+Curated replacement imagery, registered in `STAR_PLATFORM_CLEAN_ASSET_KEYS`. All seven
+assets above stay on disk unchanged as the rollback fallback. Consumers must read sizes
+and alt intent from `STAR_PLATFORM_ASSETS`; no page or CSS consumes these files yet.
+
+| Asset key | Runtime path | Size | Role | Intended use | Rendering rule |
+| --- | --- | --- | --- | --- | --- |
+| `heroCleanDesktop` | `/star-platform/hero-clean-desktop.webp` | 1920×1080 | hero | Home hero, desktop | `object-fit: cover`; keep the left ~45% quiet for the headline; do not tint; avoid detail-critical crops (interpolated source). |
+| `heroCleanMobile` | `/star-platform/hero-clean-mobile.webp` | 1080×1920 | hero | Home hero, mobile | Portrait; `object-fit: cover` with the lower third reserved for text; gated by its own 1080×1920 assertion, not the landscape hero minimum. |
+| `entryAiClean` | `/star-platform/entry-ai-clean.webp` | 1448×1086 | entry | Home AI card | Full-bleed card image; loose unthreaded beads only; never a finished bracelet. |
+| `entryOracleClean` | `/star-platform/entry-oracle-clean.webp` | 1448×1086 | entry | Home Oracle card | Decorative mood art; must not be presented as a cast result. See the exception below. |
+| `entryTarotClean` | `/star-platform/entry-tarot-clean.webp` | 1447×1087 | entry | Home Tarot card | Decorative mood art only; must never stand in for a licensed deck face or a draw result. |
+| `entryDiyClean` | `/star-platform/entry-diy-clean.webp` | 1448×1086 | entry | Home DIY card | Overhead **empty** tray with a **hooked** beading needle at right; no preset bead, no finished bracelet. |
+
+Two files are **Product Owner selection exceptions** recorded in
+`docs/superpowers/specs/2026-10-03-star-platform-ux-remediation-design.md` §3.1 (2026-10-03)
+and pinned by SHA-256 there: `entry-oracle-clean.webp` (aged square-hole coins with
+inscription-like marks, rough stone) and `entry-tarot-clean.webp` (two illustrated card
+faces plus an ornate moon-phase back). For these two decorative entries only, the
+"blank brass discs" and "blank card backs" rules in the table above are relaxed by the
+产品所有者's explicit byte-exact selection. The relaxation does not extend to the home
+hero, DIY, AI or any other image, and it does not change the runtime Tarot deck, which
+continues to use `/tarot/cards/*.png`.
+
+The two hero files are **interpolated derivatives**, not native high-resolution captures:
+they were resampled from 1672×941 and 941×1672 originals with macOS
+`sips --resampleHeightWidth`. `STAR_PLATFORM_MIN_SIZE` was not lowered to accommodate
+them. Full source, transform, purpose, size, SHA-256 and the manual original-size
+acceptance record are in `apps/frontend/public/star-platform/CLEAN_ASSET_SOURCE.md`.
+
 ## Asset provenance
 
 - Existing Tarot card provenance is recorded in `apps/frontend/public/tarot/cards/UPSTREAM_SOURCE.md`.

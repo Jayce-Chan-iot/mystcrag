@@ -41,8 +41,18 @@ export type StarPlatformAssetKey =
   | "entryDiy"
   | "entryTarot"
   | "xuanPaperGrain"
-  | "engravedStarMap";
+  | "engravedStarMap"
+  | "heroCleanDesktop"
+  | "heroCleanMobile"
+  | "entryAiClean"
+  | "entryOracleClean"
+  | "entryTarotClean"
+  | "entryDiyClean";
 
+/**
+ * 2026-09 delivery kit. Kept on disk as the rollback set and as the scope of
+ * `UPSTREAM_SOURCE.md`; the curated 2026-10 kit is listed separately below.
+ */
 export const STAR_PLATFORM_ASSET_KEYS = [
   "heroObservatory",
   "entryAi",
@@ -52,6 +62,36 @@ export const STAR_PLATFORM_ASSET_KEYS = [
   "xuanPaperGrain",
   "engravedStarMap",
 ] as const satisfies readonly StarPlatformAssetKey[];
+
+/**
+ * Curated clean kit (`TASK-UX-ASSET-001`). Provenance for these six files is
+ * recorded in `CLEAN_ASSET_SOURCE.md`, not in `UPSTREAM_SOURCE.md`.
+ */
+export const STAR_PLATFORM_CLEAN_ASSET_KEYS = [
+  "heroCleanDesktop",
+  "heroCleanMobile",
+  "entryAiClean",
+  "entryOracleClean",
+  "entryTarotClean",
+  "entryDiyClean",
+] as const satisfies readonly StarPlatformAssetKey[];
+
+/** Runtime file name for every key in the kit. */
+export const STAR_PLATFORM_ASSET_FILE_NAME: Record<StarPlatformAssetKey, string> = {
+  heroObservatory: "hero-observatory.webp",
+  entryAi: "entry-ai.webp",
+  entryOracle: "entry-oracle.webp",
+  entryDiy: "entry-diy.webp",
+  entryTarot: "entry-tarot.webp",
+  xuanPaperGrain: "xuan-paper-grain.webp",
+  engravedStarMap: "engraved-star-map.webp",
+  heroCleanDesktop: "hero-clean-desktop.webp",
+  heroCleanMobile: "hero-clean-mobile.webp",
+  entryAiClean: "entry-ai-clean.webp",
+  entryOracleClean: "entry-oracle-clean.webp",
+  entryTarotClean: "entry-tarot-clean.webp",
+  entryDiyClean: "entry-diy-clean.webp",
+};
 
 /** Minimum delivered raster sizes enforced by `star-assets.test.tsx`. */
 export const STAR_PLATFORM_MIN_SIZE = {
@@ -67,7 +107,7 @@ const asset = (
   const width = value.width;
   const height = value.height;
   return {
-    src: value.src ?? `/star-platform/${key === "heroObservatory" ? "hero-observatory" : key === "entryAi" ? "entry-ai" : key === "entryOracle" ? "entry-oracle" : key === "entryDiy" ? "entry-diy" : key === "entryTarot" ? "entry-tarot" : key === "xuanPaperGrain" ? "xuan-paper-grain" : "engraved-star-map"}.webp`,
+    src: value.src ?? `/star-platform/${STAR_PLATFORM_ASSET_FILE_NAME[key]}`,
     width,
     height,
     aspectRatio: Number((width / height).toFixed(6)),
@@ -138,6 +178,54 @@ export const STAR_PLATFORM_ASSETS = {
     role: "texture",
     alt: "",
     decorative: true,
+  }),
+  heroCleanDesktop: asset("heroCleanDesktop", {
+    width: 1920,
+    height: 1080,
+    dominantSurface: "xuan-paper",
+    role: "hero",
+    alt: "玄圭星台首页横版主视觉：哑光米白台面上立着一张镌有星盘刻度的深色牌卡，旁置天然水晶散珠与一串成品手串，左侧留出安静的标题区域",
+    decorative: false,
+  }),
+  heroCleanMobile: asset("heroCleanMobile", {
+    width: 1080,
+    height: 1920,
+    dominantSurface: "xuan-paper",
+    role: "hero",
+    alt: "玄圭星台首页竖版主视觉：哑光米白台面上的星盘刻度牌卡、白晶与紫晶簇和水晶手串，下方留出安静的文字区域",
+    decorative: false,
+  }),
+  entryAiClean: asset("entryAiClean", {
+    width: 1448,
+    height: 1086,
+    dominantSurface: "xuan-paper",
+    role: "entry",
+    alt: "AI 设计方向入口：哑光米白台面上五颗未穿线的天然水晶裸珠，旁放一张五色色卡与磨砂石器",
+    decorative: false,
+  }),
+  entryOracleClean: asset("entryOracleClean", {
+    width: 1448,
+    height: 1086,
+    dominantSurface: "aged-brass",
+    role: "entry",
+    alt: "星台问卦入口装饰氛围图：暗色石面上三枚旧化方孔铜钱与粗石、生晶，仅作卡片配图，不表示任何卦象或结果",
+    decorative: false,
+  }),
+  entryTarotClean: asset("entryTarotClean", {
+    width: 1447,
+    height: 1087,
+    dominantSurface: "obsidian-night",
+    role: "entry",
+    alt: "Tarot 入口装饰氛围图：暗色石面上两张插画牌卡与一张月相牌背，不代表运行时授权牌组的牌面或抽牌结果",
+    decorative: false,
+  }),
+  entryDiyClean: asset("entryDiyClean", {
+    width: 1448,
+    height: 1086,
+    dominantSurface: "xuan-paper",
+    role: "entry",
+    alt: "DIY 手作入口：哑光台面上的完全空的白色圆形托盘，右侧一支带小弯钩的串珠钩针，旁放少量未穿线散珠与透明弹力线",
+    decorative: false,
   }),
 } as const satisfies Record<StarPlatformAssetKey, StarPlatformAsset>;
 

@@ -15,6 +15,37 @@ import {
 const PUBLIC_DIR = path.join(process.cwd(), "public");
 const STAR_DIR = path.join(PUBLIC_DIR, "star-platform");
 const UPSTREAM_SOURCE = path.join(PUBLIC_DIR, STAR_PLATFORM_UPSTREAM_SOURCE_PATH.replace(/^\//, ""));
+const CLEAN_ASSET_SOURCE = path.join(STAR_DIR, "CLEAN_ASSET_SOURCE.md");
+
+/**
+ * Curated clean kit (`TASK-UX-ASSET-001`). The mobile hero is portrait, so it
+ * is gated separately instead of widening the landscape hero minimum.
+ */
+type CleanAssetKey =
+  | "heroCleanDesktop"
+  | "heroCleanMobile"
+  | "entryAiClean"
+  | "entryOracleClean"
+  | "entryTarotClean"
+  | "entryDiyClean";
+
+const CLEAN_KEYS: readonly CleanAssetKey[] = [
+  "heroCleanDesktop",
+  "heroCleanMobile",
+  "entryAiClean",
+  "entryOracleClean",
+  "entryTarotClean",
+  "entryDiyClean",
+];
+const CLEAN_ENTRY_KEYS: readonly CleanAssetKey[] = [
+  "entryAiClean",
+  "entryOracleClean",
+  "entryTarotClean",
+  "entryDiyClean",
+];
+
+/** Independent portrait gate for the mobile hero; never lowers STAR_PLATFORM_MIN_SIZE. */
+const MOBILE_HERO_PORTRAIT_MIN = { width: 1080, height: 1920 } as const;
 
 const FILE_NAME: Record<StarPlatformAssetKey, string> = {
   heroObservatory: "hero-observatory.webp",
@@ -24,6 +55,12 @@ const FILE_NAME: Record<StarPlatformAssetKey, string> = {
   entryTarot: "entry-tarot.webp",
   xuanPaperGrain: "xuan-paper-grain.webp",
   engravedStarMap: "engraved-star-map.webp",
+  heroCleanDesktop: "hero-clean-desktop.webp",
+  heroCleanMobile: "hero-clean-mobile.webp",
+  entryAiClean: "entry-ai-clean.webp",
+  entryOracleClean: "entry-oracle-clean.webp",
+  entryTarotClean: "entry-tarot-clean.webp",
+  entryDiyClean: "entry-diy-clean.webp",
 };
 
 function readWebpSize(buf: Buffer): { width: number; height: number } {
@@ -191,4 +228,126 @@ test("UI reference manifest documents the Star Platform runtime assets", () => {
     assert.ok(text.includes(FILE_NAME[key]), `manifest must name ${FILE_NAME[key]}`);
   }
   assert.match(text, /STAR_PLATFORM_ASSETS/);
+});
+
+test("the seven legacy Star Platform assets stay on disk as rollback fallbacks", () => {
+  for (const key of STAR_PLATFORM_ASSET_KEYS) {
+    const legacyPath = path.join(STAR_DIR, FILE_NAME[key]);
+    assert.ok(existsSync(legacyPath), `legacy fallback must be preserved: ${FILE_NAME[key]}`);
+    assertWebpFile(legacyPath);
+  }
+});
+
+test("clean kit registers six typed keys whose files exist and match intrinsic sizes", () => {
+  for (const key of CLEAN_KEYS) {
+    const typed = STAR_PLATFORM_ASSETS[key];
+    assert.ok(typed, `STAR_PLATFORM_ASSETS must expose the new key ${key}`);
+    const { width, height } = assertWebpFile(path.join(STAR_DIR, FILE_NAME[key]));
+    assert.equal(typed.src, `/star-platform/${FILE_NAME[key]}`, `${key} src`);
+    assert.equal(typed.width, width, `${key} typed width must match delivered file`);
+    assert.equal(typed.height, height, `${key} typed height must match delivered file`);
+    assert.equal(typed.aspectRatio, Number((width / height).toFixed(6)), `${key} aspect`);
+    assert.ok(["hero", "entry"].includes(typed.role), `${key} role`);
+    assert.equal(typed.decorative, false, `${key} clean kit images carry alt intent`);
+  }
+});
+
+test("desktop clean hero meets the unchanged landscape hero minimum", () => {
+  const { width, height } = assertWebpFile(path.join(STAR_DIR, FILE_NAME.heroCleanDesktop));
+  assert.ok(
+    width >= STAR_PLATFORM_MIN_SIZE.hero.width && height >= STAR_PLATFORM_MIN_SIZE.hero.height,
+    `hero-clean-desktop ${width}×${height} below ${STAR_PLATFORM_MIN_SIZE.hero.width}×${STAR_PLATFORM_MIN_SIZE.hero.height}`
+  );
+  assert.ok(width > height, "desktop hero must stay landscape");
+});
+
+test("mobile clean hero passes its own portrait gate without touching the shared minimum", () => {
+  const { width, height } = assertWebpFile(path.join(STAR_DIR, FILE_NAME.heroCleanMobile));
+  assert.ok(height > width, "mobile hero must be portrait");
+  assert.ok(
+    width >= MOBILE_HERO_PORTRAIT_MIN.width && height >= MOBILE_HERO_PORTRAIT_MIN.height,
+    `hero-clean-mobile ${width}×${height} below portrait ${MOBILE_HERO_PORTRAIT_MIN.width}×${MOBILE_HERO_PORTRAIT_MIN.height}`
+  );
+  assert.ok(
+    height >= STAR_PLATFORM_MIN_SIZE.hero.width,
+    `hero-clean-mobile height ${height} must still reach ${STAR_PLATFORM_MIN_SIZE.hero.width}`
+  );
+});
+
+test("clean entry cards meet the unchanged entry minimum", () => {
+  for (const key of CLEAN_ENTRY_KEYS) {
+    const { width, height } = assertWebpFile(path.join(STAR_DIR, FILE_NAME[key]));
+    assert.ok(
+      width >= STAR_PLATFORM_MIN_SIZE.entry.width && height >= STAR_PLATFORM_MIN_SIZE.entry.height,
+      `${key} ${width}×${height} below ${STAR_PLATFORM_MIN_SIZE.entry.width}×${STAR_PLATFORM_MIN_SIZE.entry.height}`
+    );
+  }
+});
+
+test("shared size contract is not weakened while the clean kit is added", () => {
+  assert.equal(STAR_PLATFORM_MIN_SIZE.hero.width, 1920);
+  assert.equal(STAR_PLATFORM_MIN_SIZE.hero.height, 1080);
+  assert.equal(STAR_PLATFORM_MIN_SIZE.entry.width, 1200);
+  assert.equal(STAR_PLATFORM_MIN_SIZE.entry.height, 900);
+  assert.equal(STAR_PLATFORM_MIN_SIZE.texture.width, 1024);
+  assert.equal(STAR_PLATFORM_MIN_SIZE.texture.height, 1024);
+});
+
+test("clean kit alt intent is Chinese and states the DIY empty tray and hooked needle", () => {
+  for (const key of CLEAN_KEYS) {
+    const typed = STAR_PLATFORM_ASSETS[key];
+    assert.ok(typed.alt.trim().length > 0, `${key} needs non-empty alt intent`);
+    assert.match(typed.alt, /[一-鿿]/, `${key} alt intent must include Chinese`);
+  }
+  assert.match(STAR_PLATFORM_ASSETS.entryDiyClean.alt, /空/, "DIY alt must state the empty tray");
+  assert.match(STAR_PLATFORM_ASSETS.entryDiyClean.alt, /钩针/, "DIY alt must state the hook needle");
+});
+
+test("owner-selected Oracle and Tarot entries disclose decorative mood-image status in alt", () => {
+  for (const key of ["entryOracleClean", "entryTarotClean"] as const) {
+    const typed = STAR_PLATFORM_ASSETS[key];
+    assert.match(typed.alt, /装饰|氛围/, `${key} must be labelled a decorative entry image`);
+  }
+  assert.match(
+    STAR_PLATFORM_ASSETS.entryTarotClean.alt,
+    /授权牌组|不代表/,
+    "tarot entry alt must not imply the licensed deck faces"
+  );
+});
+
+test("clean kit provenance records source, transform, purpose, size and SHA-256", () => {
+  assert.ok(existsSync(CLEAN_ASSET_SOURCE), "missing apps/frontend/public/star-platform/CLEAN_ASSET_SOURCE.md");
+  const text = readFileSync(CLEAN_ASSET_SOURCE, "utf8");
+  for (const key of CLEAN_KEYS) {
+    assert.ok(text.includes(FILE_NAME[key]), `provenance must name ${FILE_NAME[key]}`);
+    const digest = createHash("sha256")
+      .update(readFileSync(path.join(STAR_DIR, FILE_NAME[key])))
+      .digest("hex");
+    assert.ok(
+      text.includes(digest),
+      `provenance must record SHA-256 for ${FILE_NAME[key]} (${digest})`
+    );
+  }
+  assert.match(text, /SHA-256/i);
+  assert.match(text, /用途|purpose/i);
+  assert.match(text, /来源|source/i);
+});
+
+test("clean kit provenance states the heroes are interpolated derivatives, not native capture", () => {
+  const text = readFileSync(CLEAN_ASSET_SOURCE, "utf8");
+  assert.match(text, /插值|interpolat/i, "must disclose interpolation");
+  assert.match(text, /sips/, "must name the transform tool");
+  assert.match(text, /1672×941/, "must cite the desktop source resolution");
+  assert.match(text, /941×1672/, "must cite the mobile source resolution");
+  assert.match(text, /非原生|not native/i, "must deny native high-resolution capture");
+});
+
+test("manifest documents the six clean assets and their owner-exception entries", () => {
+  const manifestPath = path.resolve(process.cwd(), "../../docs/UI_REFERENCE_AND_ASSET_MANIFEST.md");
+  const text = readFileSync(manifestPath, "utf8");
+  for (const key of CLEAN_KEYS) {
+    assert.ok(text.includes(FILE_NAME[key]), `manifest must name ${FILE_NAME[key]}`);
+  }
+  assert.match(text, /CLEAN_ASSET_SOURCE\.md/, "manifest must route to the clean provenance record");
+  assert.match(text, /产品所有者|Product Owner/, "manifest must record the owner-selected exceptions");
 });
