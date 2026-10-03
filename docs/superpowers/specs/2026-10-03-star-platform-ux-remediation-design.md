@@ -43,7 +43,9 @@
 
 产品所有者补充要求全站保持克制、整洁：新生成的首页、塔罗、问卦、DIY 与 AI 入口图使用平整哑光背景和少量真实物件，不使用脏污颗粒、粗石纹、裂纹大理石、密集星线或杂乱道具；真实水晶自身的细微内含物与光泽可以保留。DIY 入口图右侧工具必须是前端有清晰小弯钩的串珠钩针，不能再出现锥子、尖刺或钻孔工具。图片不得带文字、价格或伪造商品。
 
-2026-10-03 产品所有者对**两张入口图**作出明确选片例外：问卦入口使用其上传的旧化方孔钱、粗石与微弱星轨摄影原图（已逐字节保存为 `mystcrag-product-images-v3-refined/02-oracle-user-selected-unchanged.png`，SHA-256 `f4429ca3dbcf2f8ae33df1687d0efdbc326c4b3b628c16cfc023715ea857fc5c`）；塔罗入口使用其指定的两张清晰插画牌面、一张牌背的摄影原图（`mystcrag-product-images-v3-refined/06-tarot-user-selected-unchanged.png`，SHA-256 `65582003f5a18475690b03356f87e0b7ca5e2d64235f5e09c0fe438eeab8ce24`）。两个目录均位于 `/Users/chenyanyan/.codex/visualizations/2026/10/03/01a101bc-eb7f-7e30-8b34-68f04436d255/`。这仅放宽这两张入口装饰图的粗纹/旧化及清晰插画验收，不放宽首页、DIY 和其他图片的整洁要求。塔罗插画只作入口氛围图，不得冒充运行时授权牌组的具体牌面或抽牌结果；运行时 Tarot 卡牌仍使用现有授权资产。产品所有者指定的两张图不再被自动重绘为无纹铜钱或空白牌背。现有首页 hero 最小像素门槛仍有效，不能靠插值放大或调低常量通过。
+2026-10-03 产品所有者对**两张入口图**作出明确选片例外：问卦入口使用其上传的旧化方孔钱、粗石与微弱星轨摄影原图（已逐字节保存为 `mystcrag-product-images-v3-refined/02-oracle-user-selected-unchanged.png`，SHA-256 `f4429ca3dbcf2f8ae33df1687d0efdbc326c4b3b628c16cfc023715ea857fc5c`）；塔罗入口使用其指定的两张清晰插画牌面、一张牌背的摄影原图（`mystcrag-product-images-v3-refined/06-tarot-user-selected-unchanged.png`，SHA-256 `65582003f5a18475690b03356f87e0b7ca5e2d64235f5e09c0fe438eeab8ce24`）。两个目录均位于 `/Users/chenyanyan/.codex/visualizations/2026/10/03/01a101bc-eb7f-7e30-8b34-68f04436d255/`。这仅放宽这两张入口装饰图的粗纹/旧化及清晰插画验收，不放宽首页、DIY 和其他图片的整洁要求。塔罗插画只作入口氛围图，不得冒充运行时授权牌组的具体牌面或抽牌结果；运行时 Tarot 卡牌仍使用现有授权资产。产品所有者指定的两张图不再被自动重绘为无纹铜钱或空白牌背。
+
+2026-10-04 产品所有者进一步批准**仅对已选 V3-refined 首页横版与竖版图直接插值放大**，不改变原图构图，也不降低现行 `STAR_PLATFORM_MIN_SIZE`。这撤销上段旧的“不可插值放大”限制，不等于宣称获得原生高分辨率细节。原 PNG 保留不覆盖；衍生 PNG 分别为 `mystcrag-product-images-v3-refined/01-desktop-home-hero-v3-upscaled-1920x1080.png`（1920×1080）和 `mystcrag-product-images-v3-refined/03-mobile-home-hero-v3-upscaled-1080x1920.png`（1080×1920），均位于上述绝对目录。Qwen 登记运行时 WebP 时须注明由 1672×941 / 941×1672 原图经 macOS `sips --resampleHeightWidth` 插值而来，并分别复核桌面与手机展示、图像质量及哈希；像素达标本身不代表图像细节或视觉验收通过。问卦与塔罗两张用户指定原图不参与该放大操作。
 
 标题可保留适合中文的书卷气；正文、价格、尺寸、导航和按钮优先使用高可读字体。卡片圆角、描边、阴影和按钮尺寸建立单一语法，不使用所有区域都套大圆角米色卡片的方式制造“高级”。
 
