@@ -158,6 +158,7 @@ The snapshot preserves design revision, currency, pricing version, component seq
 The package exports request and response schemas for these Design and Order operations:
 
 - Generate Design
+- Create First-Bead DIY Design
 - Update Design
 - Price Design
 - Save Design
@@ -168,6 +169,8 @@ The package exports request and response schemas for these Design and Order oper
 - List My Designs and List My Orders (owner-scoped listing responses)
 
 Mutation responses contain a validated public design and structured warnings, except Delete (identity plus `deletedAt`) and the two list responses (bounded arrays of `{ design, status, updatedAt }` and order summaries with immutable design snapshots). Update requests use only `REPLACE_COMPONENT`, `MOVE_COMPONENT`, `ADD_COMPONENT`, `REMOVE_COMPONENT`, and `UPDATE_BRACELET`; arbitrary JSON Patch is rejected. Publish and create-order requests enforce consent/compliance and revision or price expectations at the schema boundary where the required design context is present. Delete and Clone require the source design's current revision and surface stale revisions as `CONFLICT` at the Backend boundary.
+
+`CreateDiyFirstBeadRequestSchema` / `CreateDiyFirstBeadResponseSchema` freeze the `POST /api/design/diy-first-bead` boundary that starts a brand-new DIY draft. A fresh tray is completely empty: before the first real catalog bead is chosen there is no design ID, no zero-bead `DesignV1`, no quote, and no saved state, so the empty tray stays a frontend-only transient state and no zero-bead persistence special case is added. The strict request accepts only `requestId`, `beadProductId`, `locale`, and `currency`; client-supplied owner/actor identity, `unitPriceMinor`, stock, `revision`, and fabricated `bead`/`beads` objects are rejected. The response carries `requestId`, exactly one private `DIY_CREATED` `PublicDesignV1` at revision 1, and `warnings`; zero-bead, multi-bead, non-`DIY_CREATED`, above-revision-1, and non-private designs are rejected. Owner identity, price, inventory, and revision remain server-authoritative. This preserves the `DesignV1` at-least-one-bead constraint and leaves the Generate and Clone DTOs unchanged.
 
 The package also exports these Tarot session DTO families:
 

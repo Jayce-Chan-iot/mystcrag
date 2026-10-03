@@ -97,6 +97,20 @@ GET /api/designs
 
 Requires verified authentication. Returns the actor's non-archived designs using `ListMyDesignsResponseSchema`: up to 200 `{ design: PublicDesignV1, status, updatedAt }` entries ordered for gallery/profile listings. `status` is the persistence status (`DRAFT`, `GENERATED`, `SAVED`, `ARCHIVED`). Owner scoping is enforced by the repository; the endpoint never accepts actor identity from the request.
 
+## DIY First Bead API
+
+POST /api/design/diy-first-bead
+
+Contract DTOs: `CreateDiyFirstBeadRequestSchema` and `CreateDiyFirstBeadResponseSchema`, frozen by `TASK-UX-DIY-CONTRACT-001`. This section specifies the wire contract only; the Backend route is wired by the dependent Database and Backend tasks, so the endpoint is not yet registered by current startup. Requires verified authentication: the owner is always the verified actor and is never accepted from the request.
+
+A brand-new DIY draft begins from a completely empty tray. Before the user selects the first real catalog bead there is no design ID, no zero-bead `DesignV1`, no quote, and no saved state; the empty tray is a frontend-only transient state. The client submits only the real catalog bead the user picked:
+
+- `requestId` (idempotency key), `beadProductId`, `locale`, `currency`.
+
+The request is a strict object. `owner`/`actorId`, `unitPriceMinor`, `availableQuantity`/stock, `revision`, and any fabricated `bead`/`beads` object are rejected. The server resolves the active catalog bead, current stock, and authoritative pricing, and is the sole source of design identity, price, inventory, and revision.
+
+The response carries `requestId`, exactly one `PublicDesignV1` bead, and `warnings`. The design is a private `DIY_CREATED` design at revision 1; zero-bead, multi-bead, non-`DIY_CREATED`, above-revision-1, and non-private designs are rejected. This preserves the existing `DesignV1` at-least-one-bead constraint and adds no zero-bead persistence special case. One actor and one `requestId` must resolve to the same design across double-clicks and network retries, without re-pricing or re-checking stock. The existing Generate and Clone DTOs are unchanged.
+
 ## Design Recommendation API
 
 All five endpoints require verified bearer authentication and owner-scoped access. They expose the deterministic design engine (spec §4.1, ADR-6 scoring) through the Backend: no LLM call participates in candidate generation, and identical inputs produce identical candidates. Their executable DTOs live in [recommendation-api.schema.ts](../packages/design-contract/src/schemas/recommendation-api.schema.ts); every request rejects unknown fields and every successful response is parsed before it leaves Backend.

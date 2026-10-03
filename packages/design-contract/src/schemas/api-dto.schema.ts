@@ -59,6 +59,50 @@ export const GenerateDesignRequestSchema = z.strictObject({
 
 export const GenerateDesignResponseSchema = z.strictObject(PublicDesignResponseShape);
 
+// A brand-new DIY draft starts from a completely empty tray. The client submits
+// only which real catalog bead the user picked; owner identity, price, stock,
+// revision and bead objects are server-authoritative and never accepted here.
+export const CreateDiyFirstBeadRequestSchema = z.strictObject({
+  requestId: RequestIdSchema,
+  beadProductId: IdentifierSchema,
+  locale: LocaleSchema,
+  currency: CurrencySchema
+});
+
+export const CreateDiyFirstBeadResponseSchema = z
+  .strictObject(PublicDesignResponseShape)
+  .superRefine((response, context) => {
+    const { design } = response;
+    if (design.beads.length !== 1) {
+      context.addIssue({
+        code: "custom",
+        message: "A first-bead DIY design must contain exactly one bead",
+        path: ["design", "beads"]
+      });
+    }
+    if (design.designMode !== "DIY_CREATED") {
+      context.addIssue({
+        code: "custom",
+        message: "A first-bead DIY design must use DIY_CREATED mode",
+        path: ["design", "designMode"]
+      });
+    }
+    if (design.revision !== 1) {
+      context.addIssue({
+        code: "custom",
+        message: "A first-bead DIY design must be revision 1",
+        path: ["design", "revision"]
+      });
+    }
+    if (design.community.visibility !== "PRIVATE") {
+      context.addIssue({
+        code: "custom",
+        message: "A first-bead DIY design must remain private",
+        path: ["design", "community", "visibility"]
+      });
+    }
+  });
+
 export const ReplaceComponentOperationSchema = z.strictObject({
   operation: z.literal("REPLACE_COMPONENT"),
   componentId: IdentifierSchema,
@@ -311,6 +355,8 @@ export const ListMyOrdersResponseSchema = z.strictObject({
 export type ContractWarning = z.infer<typeof ContractWarningSchema>;
 export type GenerateDesignRequest = z.infer<typeof GenerateDesignRequestSchema>;
 export type GenerateDesignResponse = z.infer<typeof GenerateDesignResponseSchema>;
+export type CreateDiyFirstBeadRequest = z.infer<typeof CreateDiyFirstBeadRequestSchema>;
+export type CreateDiyFirstBeadResponse = z.infer<typeof CreateDiyFirstBeadResponseSchema>;
 export type UpdateDesignOperation = z.infer<typeof UpdateDesignOperationSchema>;
 export type UpdateDesignRequest = z.infer<typeof UpdateDesignRequestSchema>;
 export type UpdateDesignResponse = z.infer<typeof UpdateDesignResponseSchema>;
