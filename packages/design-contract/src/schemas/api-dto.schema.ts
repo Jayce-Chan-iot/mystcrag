@@ -80,6 +80,13 @@ export const CreateDiyFirstBeadResponseSchema = z
         path: ["design", "beads"]
       });
     }
+    if (design.accessories.length !== 0) {
+      context.addIssue({
+        code: "custom",
+        message: "A first-bead DIY design must not contain accessories",
+        path: ["design", "accessories"]
+      });
+    }
     if (design.designMode !== "DIY_CREATED") {
       context.addIssue({
         code: "custom",

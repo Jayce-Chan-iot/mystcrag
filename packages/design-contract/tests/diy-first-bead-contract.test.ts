@@ -64,6 +64,45 @@ function makeDiyDesign(beadCount: number) {
   return design;
 }
 
+function makeDiyDesignWithAccessory() {
+  const design = makeDiyDesign(1);
+  const bead = design.beads[0];
+  const [spacer, pendant] = structuredClone(standardAiDesignFixture.accessories);
+  if (bead === undefined || spacer === undefined || pendant === undefined) {
+    throw new Error("The standard design fixture must contain one bead, an inline spacer, and an anchored pendant");
+  }
+
+  design.accessories = [spacer, pendant];
+  design.pricing.accessorySubtotalMinor = spacer.unitPriceMinor + pendant.unitPriceMinor;
+  design.pricing.totalPriceMinor =
+    design.pricing.materialSubtotalMinor +
+    design.pricing.accessorySubtotalMinor +
+    design.pricing.laborFeeMinor +
+    design.pricing.designFeeMinor +
+    design.pricing.packagingFeeMinor +
+    design.pricing.platformFeeEstimateMinor +
+    design.pricing.logisticsFeeEstimateMinor -
+    design.pricing.discountMinor;
+  design.production.billOfMaterials = [
+    ...design.production.billOfMaterials,
+    ...structuredClone(standardAiDesignFixture.production.billOfMaterials).filter(
+      (item) =>
+        item.sourceComponentIds.includes(spacer.componentId) ||
+        item.sourceComponentIds.includes(pendant.componentId)
+    )
+  ];
+  design.production.componentSequence = [bead.componentId, spacer.componentId];
+  design.production.anchoredComponents = [
+    {
+      componentId: pendant.componentId,
+      anchorComponentId: spacer.componentId,
+      anchorSlot: 0
+    }
+  ];
+
+  return design;
+}
+
 function parseResponse(design: unknown) {
   return CreateDiyFirstBeadResponseSchema.safeParse({
     requestId: validRequest.requestId,
@@ -134,6 +173,13 @@ test("CreateDiyFirstBeadResponseSchema rejects a zero-bead design", () => {
 
 test("CreateDiyFirstBeadResponseSchema rejects more than one bead", () => {
   const design = makeDiyDesign(2);
+  assert.equal(DesignV1Schema.safeParse(design).success, true);
+  assert.equal(parseResponse(design).success, false);
+});
+
+test("CreateDiyFirstBeadResponseSchema rejects accessories the user never selected", () => {
+  const design = makeDiyDesignWithAccessory();
+  assert.equal(design.accessories.length > 0, true);
   assert.equal(DesignV1Schema.safeParse(design).success, true);
   assert.equal(parseResponse(design).success, false);
 });
