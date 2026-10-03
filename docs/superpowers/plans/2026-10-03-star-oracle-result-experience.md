@@ -1,14 +1,14 @@
-# 星台问卦结果易读化实施计划
+# 星台问卦结果易读化 Implementation Plan
 
-> **供执行代理使用：** 必须逐任务使用 `superpowers:subagent-driven-development` 或 `superpowers:executing-plans`；用 `- [ ]` 跟踪步骤。每个任务先登记唯一 owner、分支、精确可写路径并置为 `IN_PROGRESS`。
+> **供执行代理使用：** REQUIRED SUB-SKILL：逐任务使用 `superpowers:executing-plans`；用 `- [ ]` 跟踪步骤。GPT 先串行登记唯一 owner、`task/<task-id>-<slug>` 分支、独立工作树和精确可写路径，并置为 `IN_PROGRESS`；执行者不编辑任务注册表。GPT 只审查和下发。
 
-**目标：** 把技术卦象页变为一眼看懂的“灵感方向 → 真实石材 → 三款可选设计 → 继续创作”。
+**Goal / 目标：** 把技术卦象页变为一眼看懂的“灵感方向 → 真实石材 → 三款可选设计 → 继续创作”。
 
-**架构：** 只改变客户呈现与已持久化事实的展示投影。`oracle-coordinator.ts` 保持唯一请求生命周期和服务端幂等/修订权威；`OraclePublicSession` 的 cast/signal 仍供后台审计，客户 DOM 不渲染六爻、算法或卦名明细。
+**Architecture / 架构：** 只改变客户呈现与已持久化事实的展示投影。`oracle-coordinator.ts` 保持唯一请求生命周期和服务端幂等/修订权威；`OraclePublicSession` 的 cast/signal 仍供后台审计，客户 DOM 不渲染六爻、算法或卦名明细。进入 DIY 时消费已完成的 owner-safe 入口，不回到固定演示 ID。
 
-**技术栈：** React、Next.js、Design Contract/Oracle Presentation DTO、现有 `BraceletPreview`、CSS Modules、tsx 测试。
+**Tech Stack / 技术栈：** React、Next.js、Design Contract/Oracle Presentation DTO、现有 `BraceletPreview`、CSS Modules、tsx 测试。
 
-**规格：** [已批准的中文设计规格](../specs/2026-10-03-star-platform-ux-remediation-design.md) §4、§8；依赖[三语内容计划](2026-10-03-star-three-locale-content.md)的投影契约/服务端与[手串工作台计划](2026-10-03-star-bracelet-workbench.md)的紧凑预览。
+**Spec / 规格：** [已批准的中文设计规格](../specs/2026-10-03-star-platform-ux-remediation-design.md) §4、§8；依赖[三语内容计划](2026-10-03-star-three-locale-content.md)的投影契约/服务端、[DIY 入口计划](2026-10-03-star-diy-entry-ownership.md)的所有权恢复与[手串工作台计划](2026-10-03-star-bracelet-workbench.md)的紧凑预览。
 
 ## 全局约束
 
@@ -27,7 +27,7 @@
 
 ---
 
-### 任务 1：结果视图结构（登记 owner `QWEN`，模块 `FRONTEND`）
+### 任务 1：结果视图结构（拟登记 `TASK-UX-ORACLE-FE-001`；Qwen 3.8 Flash / `FRONTEND`）
 
 **文件：** 修改 `apps/frontend/src/features/oracle/components/oracle-result.tsx`、`apps/frontend/src/features/oracle/oracle.module.css`、`apps/frontend/src/features/oracle/oracle-result.test.tsx`、`docs/UI_DESIGN_SYSTEM.md` 中 Oracle 客户呈现段。`oracle-lines.tsx` 和 `oracle-reveal.tsx` 暂不删除，只断开客户结果页挂载；清理需另立生命周期任务。
 
@@ -38,19 +38,19 @@
 - [ ] 实现用户信息层级，删除技术 details 的客户挂载；更新 UI 设计系统的重叠段落，不改 cast DTO 和 coordinator。
 - [ ] 重跑该测试、前端 typecheck 与 lint，均通过；提交 `feat(frontend): explain Oracle as design cues`。
 
-### 任务 2：真实石材与三款方案状态（登记 owner `QWEN`，模块 `FRONTEND`，与任务 1 串行）
+### 任务 2：真实石材与三款方案状态（拟登记 `TASK-UX-ORACLE-FE-002`；Qwen 3.8 Flash / `FRONTEND`，与任务 1 串行）
 
 **文件：** 修改 `apps/frontend/app/oracle/result/[sessionId]/oracle-result-client.tsx`、`apps/frontend/src/features/oracle/components/oracle-result.tsx`、`apps/frontend/src/features/oracle/oracle-result.test.tsx`、`apps/frontend/src/features/oracle/oracle-coordinator.test.tsx`、`apps/frontend/src/features/oracle/oracle.module.css`。紧凑手串预览的尺寸、线和几何不在本任务编辑。
 
 **接口：** 结果页按当前 `DisplayLocale` 调用只读 `oracleApi.presentation(sessionId, locale)`；`OracleMaterials` 按 `beadProductId` 关联已选推荐中的真实材料/目录，显示名称、角色、规格和可用性；卡片使用 `designId` 稳定选中态。结果页不基于卦名臆造石材，也不改 `OracleCoordinator` 的 save/retry 策略。
 
-- [ ] 写失败测试：三语请求只发 GET；有三个不同方向且真实 `designId`；石材图/名/角色来自匹配的 SKU；下架 SKU 处理；推荐失败保留主题；保存失败保留选择。
+- [ ] 写失败测试：三语请求只发 GET；有三个不同方向且真实 `designId`；石材图/名/角色来自匹配的 SKU；下架 SKU 处理；推荐失败保留主题；保存失败保留选择；“继续创作”只进入当前用户拥有的设计。
 - [ ] 运行 Oracle 结果和 coordinator 目标测试，确认红因。
 - [ ] 实现数据关联、加载/错误/空状态、三卡标题/正文两三行限制与可访问“查看材料”；主按钮仅在有已选推荐时可用。
 - [ ] 重跑 Oracle 测试、前端 typecheck/lint；浏览器检查 320×568、390×844、1440×900、1440×560 和 200% 文本缩放，无溢出。
 - [ ] 提交 `feat(frontend): pair Oracle cues with real crystal designs`。
 
-### 任务 3：问卦流程回归（登记 owner `QWEN`，模块 `QA`）
+### 任务 3：问卦流程回归（拟登记 `TASK-UX-ORACLE-QA-001`；DeepSeek V4.1 Flash / `QA`；GPT 独立复核）
 
 **文件：** 修改 `tests/oracle-journey.test.mjs`（若当前不存在，则新建同名跨工作区测试）、`docs/INTERACTION_TEST_PLAN.md` 的 Oracle 验收段；浏览器证据存放在 `docs/governance/QA_EVIDENCE_RETENTION.md` 规定位置，不写入源码树。
 

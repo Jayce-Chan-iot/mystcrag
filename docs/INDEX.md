@@ -17,7 +17,7 @@ Repository governance entry points:
 - QA/output evidence retention: `governance/QA_EVIDENCE_RETENTION.md`
 - Consumer login prompt and desktop development identity: `superpowers/specs/2026-09-12-auth-login-prompt-desktop-auto-auth.md`, `superpowers/plans/2026-09-12-auth-login-prompt-desktop-auto-auth.md`, `AUTH_SESSION_CONTRACT.md`
 - Star Oracle and full customer UI redesign: `superpowers/specs/2026-09-26-star-oracle-crystal-design.md`, `superpowers/plans/2026-09-26-phase0-priority-ui-repairs.md`, `superpowers/plans/2026-09-26-star-oracle-integration.md`, `superpowers/plans/2026-09-26-star-platform-full-ui-redesign.md`
-- Approved Star Platform UX remediation: `superpowers/specs/2026-10-03-star-platform-ux-remediation-design.md`; implementation plans: `superpowers/plans/2026-10-03-star-diy-entry-ownership.md`, `superpowers/plans/2026-10-03-star-three-locale-content.md`, `superpowers/plans/2026-10-03-star-oracle-result-experience.md`, `superpowers/plans/2026-10-03-star-bracelet-workbench.md`, `superpowers/plans/2026-10-03-star-page-family-visual-qa.md`
+- Approved Star Platform UX remediation: `superpowers/specs/2026-10-03-star-platform-ux-remediation-design.md`; two-model dispatch: `superpowers/plans/2026-10-03-star-execution-dispatch.md`; detailed plans: `superpowers/plans/2026-10-03-star-diy-entry-ownership.md`, `superpowers/plans/2026-10-03-star-three-locale-content.md`, `superpowers/plans/2026-10-03-star-oracle-result-experience.md`, `superpowers/plans/2026-10-03-star-bracelet-workbench.md`, `superpowers/plans/2026-10-03-star-page-family-visual-qa.md`
 
 | Task | Controlling documents |
 | --- | --- |
@@ -39,7 +39,7 @@ Repository governance entry points:
 | Dependencies / OSS | `DEPENDENCY_DECISIONS.md`, `OSS_RESEARCH.md` |
 | Tarot-guided design | `superpowers/specs/2026-08-19-tarot-guided-bracelet-design.md`, `superpowers/plans/2026-08-20-tarot-guided-bracelet-integration.md`, `API_SPECIFICATION.md`, `SECURITY_AND_PRIVACY.md` |
 | Star Oracle / customer UI redesign | `superpowers/specs/2026-09-26-star-oracle-crystal-design.md`, `superpowers/plans/2026-09-26-phase0-priority-ui-repairs.md`, `superpowers/plans/2026-09-26-star-oracle-integration.md`, `superpowers/plans/2026-09-26-star-platform-full-ui-redesign.md` |
-| Star Platform UX remediation | `superpowers/specs/2026-10-03-star-platform-ux-remediation-design.md`, the five `superpowers/plans/2026-10-03-star-*.md` plans listed above |
+| Star Platform UX remediation | `superpowers/specs/2026-10-03-star-platform-ux-remediation-design.md`, `superpowers/plans/2026-10-03-star-execution-dispatch.md` and the five detailed plans listed above |
 | Star Oracle release QA | `progress/2026-09-26_STAR_ORACLE_QA_REPORT.md`, `governance/FEATURE_REGISTRY.md`, `governance/CANONICAL_COMPONENTS.md`, `INTERACTION_TEST_PLAN.md` |
 
 Files ending in `_REPORT.md` or `_PLAN.md` describe earlier implementation phases. Consult them when tracing a decision, regression, or prior verification result. `DECISION_LOG.md` remains the cross-module decision record.
