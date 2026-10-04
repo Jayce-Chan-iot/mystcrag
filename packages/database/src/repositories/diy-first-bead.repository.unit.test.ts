@@ -66,6 +66,10 @@ function oneBeadDesign(designId: string): DesignV1 {
   });
 }
 
+function firstBeadVariant(designId: string, overrides: Partial<DesignV1>): DesignV1 {
+  return DesignV1Schema.parse({ ...oneBeadDesign(designId), ...overrides });
+}
+
 function designRow(design: DesignV1, ownerId: string, requestId: string, fingerprint: string) {
   return {
     id: design.designId,
@@ -326,4 +330,63 @@ test("createFirstBeadIdempotently raises CONFLICT when the concurrent winner has
       return true;
     }
   );
+});
+
+test("createFirstBeadIdempotently rejects a non-DIY_CREATED snapshot before any database work", async () => {
+  let transactionCalls = 0;
+  const prisma = {
+    $transaction: async () => {
+      transactionCalls += 1;
+      throw new Error("The transaction must not start for an invalid snapshot");
+    }
+  } as unknown as PrismaClient;
+  const aiDesign = firstBeadVariant("design-non-diy", { designMode: "AI_GENERATED" });
+
+  await assert.rejects(
+    new DesignRepository(prisma).createFirstBeadIdempotently(
+      "actor-1",
+      "request-non-diy",
+      FINGERPRINT_A,
+      aiDesign
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof PersistenceError);
+      assert.equal(error.code, "VALIDATION_ERROR");
+      return true;
+    }
+  );
+  assert.equal(transactionCalls, 0);
+});
+
+test("createFirstBeadIdempotently rejects a non-private snapshot before any database work", async () => {
+  let transactionCalls = 0;
+  const prisma = {
+    $transaction: async () => {
+      transactionCalls += 1;
+      throw new Error("The transaction must not start for an invalid snapshot");
+    }
+  } as unknown as PrismaClient;
+  const publicDesign = firstBeadVariant("design-non-private", {
+    community: {
+      visibility: "PUBLIC",
+      publishConsent: true,
+      allowRemix: false,
+      creatorDisplayMode: "ANONYMOUS"
+    }
+  });
+
+  await assert.rejects(
+    new DesignRepository(prisma).createFirstBeadIdempotently(
+      "actor-1",
+      "request-non-private",
+      FINGERPRINT_A,
+      publicDesign
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof PersistenceError);
+      assert.equal(error.code, "VALIDATION_ERROR");
+      return true;
+    }
+  );
+  assert.equal(transactionCalls, 0);
 });

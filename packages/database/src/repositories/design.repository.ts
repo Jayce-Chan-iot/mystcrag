@@ -54,6 +54,18 @@ function validateForPersistence(snapshot: unknown, revision?: number): DesignV1 
 
 function validateFirstBeadSnapshot(snapshot: unknown): DesignV1 {
   const parsed = validateForPersistence(snapshot, 1);
+  if (parsed.designMode !== "DIY_CREATED") {
+    throw new PersistenceError(
+      "VALIDATION_ERROR",
+      "A first-bead design must use the DIY_CREATED design mode"
+    );
+  }
+  if (parsed.community.visibility !== "PRIVATE") {
+    throw new PersistenceError(
+      "VALIDATION_ERROR",
+      "A first-bead design must remain private"
+    );
+  }
   if (parsed.beads.length !== 1) {
     throw new PersistenceError("VALIDATION_ERROR", "A first-bead design must contain exactly one bead");
   }

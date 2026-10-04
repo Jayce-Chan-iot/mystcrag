@@ -63,6 +63,10 @@ function oneBeadDesign(designId: string): DesignV1 {
   });
 }
 
+function firstBeadVariant(designId: string, overrides: Partial<DesignV1>): DesignV1 {
+  return DesignV1Schema.parse({ ...oneBeadDesign(designId), ...overrides });
+}
+
 test("live first-bead idempotent creation matrix", { skip: !databaseUrl }, async (t) => {
   const prisma = createPrismaClient(databaseUrl);
   const repository = new DesignRepository(prisma);
@@ -248,6 +252,57 @@ test("live first-bead idempotent creation matrix", { skip: !databaseUrl }, async
           return true;
         }
       );
+    });
+
+    await t.test("9. a non-DIY_CREATED snapshot is rejected and never persisted", async () => {
+      const aiDesign = firstBeadVariant(`${prefix}-non-diy`, { designMode: "AI_GENERATED" });
+      await assert.rejects(
+        repository.createFirstBeadIdempotently(
+          userA.id,
+          key("non-diy"),
+          fingerprint,
+          aiDesign
+        ),
+        (error: unknown) => {
+          assert.ok(error instanceof PersistenceError);
+          assert.equal(error.code, "VALIDATION_ERROR");
+          return true;
+        }
+      );
+
+      const rows = await prisma.design.findMany({
+        where: { ownerId: userA.id, creationRequestId: key("non-diy") }
+      });
+      assert.equal(rows.length, 0);
+    });
+
+    await t.test("10. a non-private snapshot is rejected and never persisted", async () => {
+      const publicDesign = firstBeadVariant(`${prefix}-non-private`, {
+        community: {
+          visibility: "PUBLIC",
+          publishConsent: true,
+          allowRemix: false,
+          creatorDisplayMode: "ANONYMOUS"
+        }
+      });
+      await assert.rejects(
+        repository.createFirstBeadIdempotently(
+          userA.id,
+          key("non-private"),
+          fingerprint,
+          publicDesign
+        ),
+        (error: unknown) => {
+          assert.ok(error instanceof PersistenceError);
+          assert.equal(error.code, "VALIDATION_ERROR");
+          return true;
+        }
+      );
+
+      const rows = await prisma.design.findMany({
+        where: { ownerId: userA.id, creationRequestId: key("non-private") }
+      });
+      assert.equal(rows.length, 0);
     });
   } finally {
     await prisma.$disconnect();
