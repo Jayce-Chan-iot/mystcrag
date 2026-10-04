@@ -119,6 +119,7 @@ function createHarness(
   const catalogById = new Map(catalog.map((product) => [product.id, product]));
   const current = new Map<string, PersistedDesign>();
   const revisionRows = new Map<string, PersistedDesignRevision[]>();
+  const firstBeadRequests = new Map<string, { designId: string; fingerprint: string }>();
   const orderSnapshots: DesignV1[] = [];
   const orderRows: Array<{
     id: string;
@@ -244,6 +245,33 @@ function createHarness(
       const existing = requireOwned(ownerId, designId);
       existing.deletedAt = fixedNow;
       existing.status = "ARCHIVED";
+    },
+    async findFirstBeadByRequest(ownerId: string, requestId: string, fingerprint: string) {
+      const record = firstBeadRequests.get(`${ownerId}\u0000${requestId}`);
+      if (!record) return null;
+      if (record.fingerprint !== fingerprint) {
+        throw new DomainApiError("CONFLICT", "The creation request key was already used");
+      }
+      return structuredClone(current.get(record.designId)!);
+    },
+    async createFirstBeadIdempotently(
+      ownerId: string,
+      requestId: string,
+      fingerprint: string,
+      snapshot: DesignV1
+    ) {
+      const key = `${ownerId}\u0000${requestId}`;
+      const record = firstBeadRequests.get(key);
+      if (record) {
+        if (record.fingerprint !== fingerprint) {
+          throw new DomainApiError("CONFLICT", "The creation request key was already used");
+        }
+        return structuredClone(current.get(record.designId)!);
+      }
+      createAttempts += 1;
+      seed(snapshot, ownerId);
+      firstBeadRequests.set(key, { designId: snapshot.designId, fingerprint });
+      return structuredClone(current.get(snapshot.designId)!);
     }
   };
 
@@ -1082,6 +1110,104 @@ test("GET /api/designs returns owner-scoped design list without other owners' ro
     otherActorResponse.json().designs[0].design.designId,
     "design-owned-by-someone-else"
   );
+  await app.close();
+});
+
+const firstBeadBody = {
+  requestId: "request-first-bead-route",
+  beadProductId: "product-aquamarine-round-8",
+  locale: "zh-CN",
+  currency: "CNY" as const
+};
+
+test("POST /api/design/diy-first-bead requires authentication", async () => {
+  const harness = createHarness();
+  const app = createApp({ designService: harness.service, authProvider });
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/design/diy-first-bead",
+    payload: firstBeadBody
+  });
+
+  assert.equal(response.statusCode, 401);
+  assert.equal(response.json().error.code, "UNAUTHORIZED");
+  assert.equal(harness.current.size, 0);
+  await app.close();
+});
+
+test("POST /api/design/diy-first-bead creates a private one-bead revision-1 design", async () => {
+  const harness = createHarness();
+  const app = createApp({ designService: harness.service, authProvider });
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/design/diy-first-bead",
+    headers: requestHeaders(),
+    payload: firstBeadBody
+  });
+
+  assert.equal(response.statusCode, 200);
+  const payload = response.json();
+  assert.equal(payload.requestId, firstBeadBody.requestId);
+  assert.equal(payload.design.revision, 1);
+  assert.equal(payload.design.designMode, "DIY_CREATED");
+  assert.equal(payload.design.community.visibility, "PRIVATE");
+  assert.equal(payload.design.beads.length, 1);
+  assert.equal(payload.design.accessories.length, 0);
+  assert.equal(payload.design.beads[0].beadProductId, firstBeadBody.beadProductId);
+  assert.equal(payload.design.beads[0].unitPriceMinor, 1200);
+  assert.equal(JSON.stringify(payload).includes("ownerId"), false);
+  await app.close();
+});
+
+test("first-bead replay returns the original design and stays owner-scoped", async () => {
+  const harness = createHarness();
+  const app = createApp({ designService: harness.service, authProvider });
+  const first = await app.inject({
+    method: "POST",
+    url: "/api/design/diy-first-bead",
+    headers: requestHeaders(),
+    payload: firstBeadBody
+  });
+  const replay = await app.inject({
+    method: "POST",
+    url: "/api/design/diy-first-bead",
+    headers: requestHeaders(),
+    payload: firstBeadBody
+  });
+
+  assert.equal(replay.statusCode, 200);
+  assert.equal(replay.json().design.designId, first.json().design.designId);
+  assert.equal(harness.current.size, 1);
+
+  const forbidden = await app.inject({
+    method: "GET",
+    url: `/api/design/${first.json().design.designId}`,
+    headers: requestHeaders("different-actor")
+  });
+  assert.equal(forbidden.statusCode, 403);
+  assert.equal(forbidden.json().error.code, "FORBIDDEN");
+  await app.close();
+});
+
+test("first-bead rejects a changed bead for the same request key", async () => {
+  const harness = createHarness();
+  const app = createApp({ designService: harness.service, authProvider });
+  await app.inject({
+    method: "POST",
+    url: "/api/design/diy-first-bead",
+    headers: requestHeaders(),
+    payload: firstBeadBody
+  });
+  const conflict = await app.inject({
+    method: "POST",
+    url: "/api/design/diy-first-bead",
+    headers: requestHeaders(),
+    payload: { ...firstBeadBody, beadProductId: "product-moonstone-round-6" }
+  });
+
+  assert.equal(conflict.statusCode, 409);
+  assert.equal(conflict.json().error.code, "CONFLICT");
+  assert.equal(harness.current.size, 1);
   await app.close();
 });
 

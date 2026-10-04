@@ -1,6 +1,8 @@
 import {
   CloneDesignRequestSchema,
   CloneDesignResponseSchema,
+  CreateDiyFirstBeadRequestSchema,
+  CreateDiyFirstBeadResponseSchema,
   CreateOrderFromDesignRequestSchema,
   CreateOrderFromDesignResponseSchema,
   DeleteDesignRequestSchema,
@@ -46,6 +48,16 @@ export function registerDesignContractRoutes(
       GenerateDesignRequestSchema,
       GenerateDesignResponseSchema,
       (api, actorId, input) => api.generate(actorId, input),
+      service
+    )
+  );
+  app.post("/api/design/diy-first-bead", protectedRoute, (request, reply) =>
+    handleDesignPost(
+      request,
+      reply,
+      CreateDiyFirstBeadRequestSchema,
+      CreateDiyFirstBeadResponseSchema,
+      (api, actorId, input) => api.createDiyFirstBead(actorId, input),
       service
     )
   );

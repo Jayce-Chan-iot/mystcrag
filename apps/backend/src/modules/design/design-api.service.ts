@@ -7,6 +7,8 @@ import {
   BeadShapeSchema,
   CloneDesignRequestSchema,
   CloneDesignResponseSchema,
+  CreateDiyFirstBeadRequestSchema,
+  CreateDiyFirstBeadResponseSchema,
   CulturalInspirationSchema,
   DeleteDesignRequestSchema,
   DeleteDesignResponseSchema,
@@ -21,6 +23,8 @@ import {
   type CloneDesignRequest,
   type CloneDesignResponse,
   type ContractWarning,
+  type CreateDiyFirstBeadRequest,
+  type CreateDiyFirstBeadResponse,
   type CreateOrderFromDesignRequest,
   type CreateOrderFromDesignResponse,
   type DeleteDesignRequest,
@@ -163,6 +167,22 @@ export type DesignStore = {
   saveDesign(actorId: string, designId: string, expectedRevision: number): Promise<StoredDesign>;
   softDeleteDesign(actorId: string, designId: string): Promise<void>;
 };
+
+// First-bead persistence is optional on the base store so lifecycle-focused
+// stores that never create designs remain valid; the first-bead flow requires it.
+export type FirstBeadDesignStore = {
+  findFirstBeadByRequest(
+    actorId: string,
+    requestId: string,
+    fingerprint: string
+  ): Promise<StoredDesign | null>;
+  createFirstBeadIdempotently(
+    actorId: string,
+    requestId: string,
+    fingerprint: string,
+    snapshot: DesignV1
+  ): Promise<StoredDesign>;
+};
 export type CatalogStore = {
   getCatalogProducts(productIds: readonly string[]): Promise<CatalogProduct[]>;
   listActiveCatalogProducts(
@@ -299,6 +319,10 @@ export type RevisionListResponse = {
 
 export interface DesignApiService {
   generate(actorId: string, request: GenerateDesignRequest): Promise<GenerateDesignResponse>;
+  createDiyFirstBead(
+    actorId: string,
+    request: CreateDiyFirstBeadRequest
+  ): Promise<CreateDiyFirstBeadResponse>;
   update(actorId: string, request: UpdateDesignRequest): Promise<UpdateDesignResponse>;
   price(actorId: string, request: PriceDesignRequest): Promise<PriceDesignResponse>;
   save(actorId: string, request: SaveDesignRequest): Promise<SaveDesignResponse>;
@@ -317,7 +341,7 @@ export interface DesignApiService {
 }
 
 export type DesignApplicationDependencies = {
-  designs: DesignStore;
+  designs: DesignStore & Partial<FirstBeadDesignStore>;
   catalog: CatalogStore;
   pricing: PriceStore;
   inventory: InventoryStore;
@@ -718,6 +742,122 @@ function buildGeneratedDesign(
   return rebuildDerived(withEmptyDerivedPricing);
 }
 
+// A brand-new tray has no measured wrist size yet; this provisional working
+// circumference keeps the bracelet contract valid until the user confirms it.
+const FIRST_BEAD_WORKING_WRIST_MM = 155;
+
+// The fingerprint covers exactly the user-visible request parameters and never
+// the display-language cookie, so the same intent replays across UI languages.
+function firstBeadRequestFingerprint(request: CreateDiyFirstBeadRequest): string {
+  return createHash("sha256")
+    .update(JSON.stringify([request.beadProductId, request.locale, request.currency]))
+    .digest("hex");
+}
+
+function buildFirstBeadDesign(
+  request: CreateDiyFirstBeadRequest,
+  product: CatalogProduct,
+  timestamp: string,
+  designId: string,
+  createComponentId: (prefix: string) => string
+): DesignV1 {
+  const componentId = createComponentId("component");
+  const bead: BeadV1 = {
+    componentId,
+    positionIndex: 0,
+    beadProductId: product.id,
+    crystalId: z.string().min(1).parse(product.crystalId),
+    materialKey: z.string().min(1).parse(product.materialKey),
+    shape: BeadShapeSchema.parse(product.shape),
+    diameterMm: z.number().positive().parse(product.diameterMm),
+    ...(product.lengthAlongStringMm === null || product.lengthAlongStringMm === undefined
+      ? {}
+      : { lengthAlongStringMm: product.lengthAlongStringMm }),
+    quantity: 1,
+    role: "FOCAL",
+    modelAssetKey: requireAsset(product.modelAssetKey, product.id, "modelAssetKey"),
+    textureAssetKey: requireAsset(product.textureAssetKey, product.id, "textureAssetKey"),
+    unitPriceMinor: product.unitPriceMinor
+  };
+  const materialSubtotalMinor = bead.unitPriceMinor;
+  const designName = (product.name.trim() || "我的首珠设计").slice(0, 200);
+  const design = {
+    schemaVersion: "1.0.0" as const,
+    designId,
+    designName,
+    designMode: "DIY_CREATED" as const,
+    revision: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    locale: request.locale,
+    currency: request.currency,
+    bracelet: {
+      wristCircumferenceMm: FIRST_BEAD_WORKING_WRIST_MM,
+      targetInnerCircumferenceMm: FIRST_BEAD_WORKING_WRIST_MM + 7,
+      elasticAllowanceMm: 7,
+      braceletLayout: "CIRCLE" as const,
+      beadGapMm: 0.4,
+      totalBeadCount: 1
+    },
+    beads: [bead],
+    accessories: [] as AccessoryV1[],
+    story: {
+      emotionTags: [],
+      styleTags: [],
+      colorPalette: [],
+      culturalInspiration: [],
+      designStory: "",
+      recommendationReasons: [],
+      sourceTemplateIds: []
+    },
+    pricing: {
+      materialSubtotalMinor,
+      accessorySubtotalMinor: 0,
+      laborFeeMinor: 0,
+      designFeeMinor: 0,
+      packagingFeeMinor: 0,
+      platformFeeEstimateMinor: 0,
+      logisticsFeeEstimateMinor: 0,
+      discountMinor: 0,
+      adjustments: [],
+      totalPriceMinor: materialSubtotalMinor,
+      pricingVersion: "catalog-pending",
+      priceCalculatedAt: timestamp
+    },
+    production: {
+      wristCircumferenceMm: FIRST_BEAD_WORKING_WRIST_MM,
+      billOfMaterials: [],
+      componentSequence: [],
+      anchoredComponents: [],
+      productionNotes: [],
+      substitutionRules: []
+    },
+    compliance: {
+      complianceStatus: "PASSED" as const,
+      restrictedClaims: [],
+      disclaimerKeys: [],
+      reviewRequired: false
+    },
+    provenance: {
+      generatedBy: "USER" as const,
+      modelProvider: null,
+      modelName: null,
+      promptVersion: null,
+      knowledgeBaseVersion: null,
+      designTemplateVersion: null,
+      pricingRuleVersion: "catalog-pending",
+      sourceDesignId: null
+    },
+    community: {
+      visibility: "PRIVATE" as const,
+      publishConsent: false,
+      allowRemix: false,
+      creatorDisplayMode: "ANONYMOUS" as const
+    }
+  } as DesignV1;
+  return rebuildDerived(design);
+}
+
 function applyOperations(current: DesignV1, operations: readonly UpdateDesignOperation[]): DesignV1 {
   let ring: Array<BeadV1 | Extract<AccessoryV1, { placementMode: "INLINE" }>> = [
     ...current.beads,
@@ -981,6 +1121,66 @@ export class DesignApplicationService implements DesignApiService {
     return catalogVersionOfRows(
       await this.dependencies.catalog.listActiveCatalogProducts(currency)
     );
+  }
+
+  async createDiyFirstBead(
+    actorId: string,
+    request: CreateDiyFirstBeadRequest
+  ): Promise<CreateDiyFirstBeadResponse> {
+    const validated = CreateDiyFirstBeadRequestSchema.parse(request);
+    const fingerprint = firstBeadRequestFingerprint(validated);
+    const store = this.dependencies.designs;
+    const findReplay = store.findFirstBeadByRequest?.bind(store);
+    const persist = store.createFirstBeadIdempotently?.bind(store);
+    if (!findReplay || !persist) {
+      throw new DomainApiError("INTERNAL_ERROR", "First-bead persistence is not configured.");
+    }
+
+    // Owner-scoped replay runs before any catalog, stock or pricing side effect
+    // so a retry returns the original design unchanged even after catalog drift.
+    const existing = await findReplay(actorId, validated.requestId, fingerprint);
+    if (existing) {
+      return CreateDiyFirstBeadResponseSchema.parse({
+        requestId: validated.requestId,
+        design: toPublicDesign(existing.snapshot),
+        warnings: []
+      });
+    }
+
+    const [product] = await this.dependencies.catalog.getCatalogProducts([
+      validated.beadProductId
+    ]);
+    if (
+      !product ||
+      product.productType !== "MATERIAL" ||
+      !product.active ||
+      product.currency !== validated.currency
+    ) {
+      throw new DomainApiError(
+        "INVENTORY_CHANGED",
+        `Bead ${validated.beadProductId} is unavailable.`
+      );
+    }
+
+    const timestamp = this.now().toISOString();
+    const draft = buildFirstBeadDesign(
+      validated,
+      product,
+      timestamp,
+      this.createId("design"),
+      this.createId
+    );
+    const priced = DesignV1Schema.parse(
+      await this.dependencies.pricing.recalculateDesignPrice(draft)
+    );
+    await this.dependencies.inventory.validateAvailability(quantitiesByProduct(priced));
+
+    const persisted = await persist(actorId, validated.requestId, fingerprint, priced);
+    return CreateDiyFirstBeadResponseSchema.parse({
+      requestId: validated.requestId,
+      design: toPublicDesign(persisted.snapshot),
+      warnings: []
+    });
   }
 
   async update(actorId: string, request: UpdateDesignRequest): Promise<UpdateDesignResponse> {
