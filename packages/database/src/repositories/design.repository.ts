@@ -1,8 +1,23 @@
+import { createHash } from "node:crypto";
+
 import { DesignV1Schema, type DesignV1 } from "@mystcrag/design-contract";
 
 import type { PrismaClient } from "../../generated/client/client.js";
 import { PersistenceError, rethrowPersistenceError } from "../errors/persistence-errors.js";
 import { parseDesignSnapshot, toPrismaJson } from "../mappers/snapshot.mapper.js";
+
+// The first-bead idempotency fingerprint covers exactly the user-visible request
+// parameters and never the display-language cookie, so the same intent replays
+// even when the UI language changes.
+export function createFirstBeadRequestFingerprint(input: {
+  beadProductId: string;
+  locale: string;
+  currency: string;
+}): string {
+  return createHash("sha256")
+    .update(JSON.stringify([input.beadProductId, input.locale, input.currency]))
+    .digest("hex");
+}
 
 export type PersistedDesign = {
   id: string;
@@ -35,6 +50,29 @@ function validateForPersistence(snapshot: unknown, revision?: number): DesignV1 
     throw new PersistenceError("VALIDATION_ERROR", `Snapshot revision must be ${revision}`);
   }
   return parsed.data;
+}
+
+function validateFirstBeadSnapshot(snapshot: unknown): DesignV1 {
+  const parsed = validateForPersistence(snapshot, 1);
+  if (parsed.beads.length !== 1) {
+    throw new PersistenceError("VALIDATION_ERROR", "A first-bead design must contain exactly one bead");
+  }
+  if (parsed.accessories.length !== 0) {
+    throw new PersistenceError("VALIDATION_ERROR", "A first-bead design must not contain accessories");
+  }
+  return parsed;
+}
+
+function assertRequestFingerprintMatches(
+  row: { creationRequestFingerprint: string | null },
+  fingerprint: string
+): void {
+  if (row.creationRequestFingerprint !== fingerprint) {
+    throw new PersistenceError(
+      "CONFLICT",
+      "The creation request key was already used with different parameters"
+    );
+  }
 }
 
 function mapDesign(row: {
@@ -117,6 +155,84 @@ export class DesignRepository {
       });
       return mapDesign(row);
     }).catch(rethrowPersistenceError);
+  }
+
+  async findFirstBeadByRequest(
+    actorId: string,
+    requestId: string,
+    fingerprint: string
+  ): Promise<PersistedDesign | null> {
+    const row = await this.prisma.design.findFirst({
+      where: { ownerId: actorId, creationRequestId: requestId }
+    });
+    if (!row) return null;
+    assertRequestFingerprintMatches(row, fingerprint);
+    return mapDesign(row);
+  }
+
+  async createFirstBeadIdempotently(
+    actorId: string,
+    requestId: string,
+    fingerprint: string,
+    snapshotInput: DesignV1
+  ): Promise<PersistedDesign> {
+    const snapshot = validateFirstBeadSnapshot(snapshotInput);
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.design.findFirst({
+        where: { ownerId: actorId, creationRequestId: requestId }
+      });
+      if (existing) {
+        assertRequestFingerprintMatches(existing, fingerprint);
+        return mapDesign(existing);
+      }
+      const row = await tx.design.create({
+        data: {
+          id: snapshot.designId,
+          ownerId: actorId,
+          name: snapshot.designName,
+          mode: snapshot.designMode,
+          status: snapshot.designMode === "AI_GENERATED" ? "GENERATED" : "DRAFT",
+          schemaVersion: snapshot.schemaVersion,
+          currentRevision: 1,
+          locale: snapshot.locale,
+          currency: snapshot.currency,
+          currentSnapshot: toPrismaJson(snapshot),
+          complianceStatus: snapshot.compliance.complianceStatus,
+          visibility: snapshot.community.visibility,
+          publishConsent: snapshot.community.publishConsent,
+          allowRemix: snapshot.community.allowRemix,
+          creatorDisplayMode: snapshot.community.creatorDisplayMode,
+          creationRequestId: requestId,
+          creationRequestFingerprint: fingerprint,
+          revisions: {
+            create: {
+              revisionNumber: 1,
+              schemaVersion: snapshot.schemaVersion,
+              snapshot: toPrismaJson(snapshot),
+              changeType: "CREATED",
+              changeReason: "Initial DIY design",
+              createdBy: actorId
+            }
+          }
+        }
+      });
+      return mapDesign(row);
+    }).catch(async (error: unknown) => {
+      const code =
+        typeof error === "object" && error !== null && "code" in error
+          ? String((error as { code?: unknown }).code)
+          : undefined;
+      if (code === "P2002") {
+        const existing = await this.prisma.design.findFirst({
+          where: { ownerId: actorId, creationRequestId: requestId }
+        });
+        if (existing) {
+          assertRequestFingerprintMatches(existing, fingerprint);
+          return mapDesign(existing);
+        }
+      }
+      return rethrowPersistenceError(error);
+    });
   }
 
   async getDesign(actorId: string, designId: string): Promise<PersistedDesign> {

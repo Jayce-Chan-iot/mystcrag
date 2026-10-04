@@ -284,32 +284,35 @@ model DesignTemplate {
 }
 
 model Design {
-  id                    String                       @id
-  ownerId               String                       @map("owner_id")
-  name                  String
-  mode                  DesignMode
-  status                DesignStatus                 @default(DRAFT)
-  schemaVersion         String                       @map("schema_version")
-  currentRevision       Int                          @default(1) @map("current_revision")
-  locale                String
-  currency              Currency
-  currentSnapshot       Json                         @map("current_snapshot")
-  complianceStatus      ComplianceStatus             @map("compliance_status")
-  visibility            Visibility                   @default(PRIVATE)
-  publishConsent        Boolean                      @default(false) @map("publish_consent")
-  allowRemix            Boolean                      @default(false) @map("allow_remix")
-  creatorDisplayMode    CreatorDisplayMode           @default(ANONYMOUS) @map("creator_display_mode")
-  createdAt             DateTime                     @default(now()) @map("created_at")
-  updatedAt             DateTime                     @updatedAt @map("updated_at")
-  deletedAt             DateTime?                    @map("deleted_at")
-  owner                 User                         @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  revisions             DesignRevision[]
-  publications          DesignPublication[]
-  decisionTraces        DesignDecisionTrace[]
-  tarotRecommendations  TarotDesignRecommendation[]
-  oracleRecommendations OracleDesignRecommendation[]
-  usageEvents           KnowledgeUsageEvent[]
+  id                         String                       @id
+  ownerId                    String                       @map("owner_id")
+  name                       String
+  mode                       DesignMode
+  status                     DesignStatus                 @default(DRAFT)
+  schemaVersion              String                       @map("schema_version")
+  currentRevision            Int                          @default(1) @map("current_revision")
+  locale                     String
+  currency                   Currency
+  currentSnapshot            Json                         @map("current_snapshot")
+  complianceStatus           ComplianceStatus             @map("compliance_status")
+  visibility                 Visibility                   @default(PRIVATE)
+  publishConsent             Boolean                      @default(false) @map("publish_consent")
+  allowRemix                 Boolean                      @default(false) @map("allow_remix")
+  creatorDisplayMode         CreatorDisplayMode           @default(ANONYMOUS) @map("creator_display_mode")
+  createdAt                  DateTime                     @default(now()) @map("created_at")
+  updatedAt                  DateTime                     @updatedAt @map("updated_at")
+  deletedAt                  DateTime?                    @map("deleted_at")
+  creationRequestId          String?                      @map("creation_request_id")
+  creationRequestFingerprint String?                      @map("creation_request_fingerprint")
+  owner                      User                         @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  revisions                  DesignRevision[]
+  publications               DesignPublication[]
+  decisionTraces             DesignDecisionTrace[]
+  tarotRecommendations       TarotDesignRecommendation[]
+  oracleRecommendations      OracleDesignRecommendation[]
+  usageEvents                KnowledgeUsageEvent[]
 
+  @@unique([ownerId, creationRequestId])
   @@index([ownerId, updatedAt])
   @@index([status, deletedAt])
   @@map("designs")

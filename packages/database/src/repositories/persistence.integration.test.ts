@@ -28,7 +28,8 @@ const migrationNames = [
   "20260825100000_add_external_identities",
   "20260831_add_bead_asset_import",
   "20260905_add_asset_backend_orchestration",
-  "20260926090000_add_oracle_sessions"
+  "20260926090000_add_oracle_sessions",
+  "20261004120000_add_design_creation_idempotency"
 ];
 
 function nextRevision(
