@@ -1152,6 +1152,7 @@ export class DesignApplicationService implements DesignApiService {
     ]);
     if (
       !product ||
+      product.id !== validated.beadProductId ||
       product.productType !== "MATERIAL" ||
       !product.active ||
       product.currency !== validated.currency
@@ -1173,6 +1174,21 @@ export class DesignApplicationService implements DesignApiService {
     const priced = DesignV1Schema.parse(
       await this.dependencies.pricing.recalculateDesignPrice(draft)
     );
+    // The authoritative pricing pipeline must echo the requested identity back
+    // verbatim; otherwise the server cannot vouch for the design it would store.
+    const [pricedBead] = priced.beads;
+    if (
+      priced.beads.length !== 1 ||
+      !pricedBead ||
+      pricedBead.beadProductId !== validated.beadProductId ||
+      priced.locale !== validated.locale ||
+      priced.currency !== validated.currency
+    ) {
+      throw new DomainApiError(
+        "INTERNAL_ERROR",
+        "The priced design does not match the requested bead, locale and currency."
+      );
+    }
     await this.dependencies.inventory.validateAvailability(quantitiesByProduct(priced));
 
     const persisted = await persist(actorId, validated.requestId, fingerprint, priced);

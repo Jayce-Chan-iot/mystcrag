@@ -64,7 +64,14 @@ function request(overrides: Partial<CreateDiyFirstBeadRequest> = {}): CreateDiyF
   };
 }
 
-function createHarness(options: { products?: CatalogProduct[]; available?: boolean } = {}) {
+function createHarness(
+  options: {
+    products?: CatalogProduct[];
+    available?: boolean;
+    getCatalogProducts?: (ids: readonly string[]) => CatalogProduct[];
+    recalculateDesignPrice?: (input: unknown) => Promise<DesignV1>;
+  } = {}
+) {
   const products = options.products ?? [materialProduct()];
   let available = options.available ?? true;
   const byId = new Map(products.map((product) => [product.id, product]));
@@ -164,6 +171,9 @@ function createHarness(options: { products?: CatalogProduct[]; available?: boole
     designs: store,
     catalog: {
       async getCatalogProducts(ids: readonly string[]) {
+        if (options.getCatalogProducts) {
+          return options.getCatalogProducts(ids).map((product) => ({ ...product }));
+        }
         return products.filter((product) => ids.includes(product.id)).map((product) => ({ ...product }));
       },
       async listActiveCatalogProducts(currency: "CNY" | "TWD") {
@@ -181,6 +191,9 @@ function createHarness(options: { products?: CatalogProduct[]; available?: boole
     pricing: {
       async recalculateDesignPrice(input: unknown) {
         priceLookups += 1;
+        if (options.recalculateDesignPrice) {
+          return options.recalculateDesignPrice(input);
+        }
         const design = DesignV1Schema.parse(input);
         const beads = design.beads.map((bead) => ({
           ...bead,
@@ -349,4 +362,93 @@ test("different actors never share a design for the same request key", async () 
 
   assert.notEqual(owner.design.designId, other.design.designId);
   assert.equal(harness.designsById.size, 2);
+});
+
+test("a catalog response whose product id differs from the request is rejected without persisting", async () => {
+  const harness = createHarness({
+    getCatalogProducts: () => [materialProduct({ id: "product-other-round-8" })]
+  });
+
+  await assert.rejects(
+    harness.service.createDiyFirstBead(actorId, request()),
+    (error: unknown) => error instanceof DomainApiError && error.code === "INVENTORY_CHANGED"
+  );
+  assert.equal(harness.designsById.size, 0);
+  assert.equal(harness.getCreateAttempts(), 0);
+});
+
+test("a priced bead whose product id drifts from the request is rejected without persisting", async () => {
+  const harness = createHarness({
+    recalculateDesignPrice: async (input) => {
+      const design = DesignV1Schema.parse(input);
+      return DesignV1Schema.parse({
+        ...design,
+        beads: design.beads.map((bead) => ({
+          ...bead,
+          beadProductId: "product-tampered-round-8"
+        }))
+      });
+    }
+  });
+
+  await assert.rejects(
+    harness.service.createDiyFirstBead(actorId, request()),
+    (error: unknown) => error instanceof DomainApiError && error.code === "INTERNAL_ERROR"
+  );
+  assert.equal(harness.designsById.size, 0);
+  assert.equal(harness.getCreateAttempts(), 0);
+});
+
+test("a priced design whose locale drifts from the request is rejected without persisting", async () => {
+  const harness = createHarness({
+    recalculateDesignPrice: async (input) => {
+      const design = DesignV1Schema.parse(input);
+      return DesignV1Schema.parse({ ...design, locale: "en-US" });
+    }
+  });
+
+  await assert.rejects(
+    harness.service.createDiyFirstBead(actorId, request()),
+    (error: unknown) => error instanceof DomainApiError && error.code === "INTERNAL_ERROR"
+  );
+  assert.equal(harness.designsById.size, 0);
+  assert.equal(harness.getCreateAttempts(), 0);
+});
+
+test("a priced design whose currency drifts from the request is rejected without persisting", async () => {
+  const harness = createHarness({
+    recalculateDesignPrice: async (input) => {
+      const design = DesignV1Schema.parse(input);
+      return DesignV1Schema.parse({ ...design, currency: "TWD" });
+    }
+  });
+
+  await assert.rejects(
+    harness.service.createDiyFirstBead(actorId, request()),
+    (error: unknown) => error instanceof DomainApiError && error.code === "INTERNAL_ERROR"
+  );
+  assert.equal(harness.designsById.size, 0);
+  assert.equal(harness.getCreateAttempts(), 0);
+});
+
+test("reusing a request key with a different locale conflicts", async () => {
+  const harness = createHarness();
+  await harness.service.createDiyFirstBead(actorId, request());
+
+  await assert.rejects(
+    harness.service.createDiyFirstBead(actorId, request({ locale: "en-US" })),
+    (error: unknown) => error instanceof DomainApiError && error.code === "CONFLICT"
+  );
+  assert.equal(harness.designsById.size, 1);
+});
+
+test("reusing a request key with a different currency conflicts", async () => {
+  const harness = createHarness();
+  await harness.service.createDiyFirstBead(actorId, request());
+
+  await assert.rejects(
+    harness.service.createDiyFirstBead(actorId, request({ currency: "TWD" })),
+    (error: unknown) => error instanceof DomainApiError && error.code === "CONFLICT"
+  );
+  assert.equal(harness.designsById.size, 1);
 });
