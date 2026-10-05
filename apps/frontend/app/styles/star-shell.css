@@ -83,3 +83,38 @@
     transition: none;
   }
 }
+
+/* Language preference control (TASK-UX-I18N-FE-001).
+ * Scoped to the header so the shell keeps its 80px budget; the popover is capped to
+ * the viewport so a 320px header can never overflow horizontally. */
+[data-star-header] [data-language-switcher-root="true"] {
+  display: flex;
+  align-items: center;
+}
+
+[data-star-header] [data-language-menu="true"] {
+  font-size: 0.875rem;
+  max-width: min(15rem, calc(100vw - 1.5rem));
+}
+
+[data-star-header] [data-language-menu="true"] [data-language-active="true"] {
+  background: color-mix(in srgb, var(--star-accent) 12%, transparent);
+}
+
+@media (max-width: 767px) {
+  [data-star-header] [data-header-actions="true"] {
+    gap: 0.4rem;
+  }
+
+  [data-star-header] [data-language-switcher="true"] {
+    font-size: 0.75rem;
+    padding-inline: 0.6rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-star-header] [data-language-switcher="true"],
+  [data-star-header] [data-language-option] {
+    transition: none;
+  }
+}

@@ -57,6 +57,14 @@ DesignV1
 
 `FlatBraceletEditor` is the only production DIY renderer. Both experimental renderers already have decided lifecycles and machine guards: `BraceletSequenceEditor` was decided EXPERIMENTAL test-only by TASK-FE-001 (guarded by `tests/fe-sequence-editor-lifecycle.test.mjs`), and `ThreeBraceletPreview` was decided EXPERIMENTAL_NOT_PRODUCTION_MOUNTED by TASK-3D-001 (guarded by `tests/three-preview-lifecycle.test.mjs`). No lifecycle decision is pending; changing either component's production role requires a new product decision and task.
 
+### `CANONICAL_DISPLAY_LOCALE`
+
+`apps/frontend/src/i18n/locale.ts` plus `locale-provider.tsx` are the single authority for the **display** language: the accepted set is exactly `zh-CN`, `zh-TW`, `en-US`, the default is `zh-CN`, and the only persisted form is the non-sensitive `mystcrag_locale` cookie written together with `html lang`. `LocaleProvider` is mounted once by `apps/frontend/app/layout.tsx`, which seeds it from the validated cookie so server render and hydration agree; no page, feature or shell component may keep its own parallel language state or write that cookie directly. Shared static copy resolves through the `messages/zh-CN.ts` key set, which `zh-TW` and `en-US` must mirror.
+
+Boundaries that keep this authority narrow: the display locale is independent of the `locale` recorded on a design or Oracle session (that value is fixed when the session or design is created and is never rewritten by a switch), independent of currency (prices keep their own server-owned minor-unit rules), and independent of identity (the Authing session cookie remains the only actor source). Dynamic projections — Oracle/Tarot narrative, design names and stories, server error text — are not consumers of this dictionary and stay server-owned until their own registered tasks. Switching the display language must not navigate, reload, clear a route, or drop in-progress form, tray or edit state.
+
+Established by TASK-UX-I18N-FE-001 (FEAT-029). Retiring the Simplified-Chinese-only shell labels, including the `mobile-bottom-nav.tsx` tab labels, requires a task that names this authority and migrates the contract tests that pin those strings.
+
 ## Canonical change rule
 
 A canonical replacement needs an approved task that names the old and new authority, migrates every production consumer, updates contract/architecture tests, and records the lifecycle change here. Adding a second implementation does not make it canonical.
