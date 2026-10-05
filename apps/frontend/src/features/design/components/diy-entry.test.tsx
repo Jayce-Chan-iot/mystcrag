@@ -8,7 +8,15 @@ import type { ListMyDesignsResponse, PublicDesignV1 } from "@mystcrag/design-con
 
 import { FrontendApiError } from "../../../lib/api/frontend-api-error";
 import { mockDesignOptions } from "../fixtures/mock-design-options";
-import { DiyHistoryChoice, DiyEntryScreen, DIY_ENTRY_PATH, isContinuableDesignStatus, loadDiyEntryView, toDiyHistoryItems } from "./diy-entry";
+import {
+  DiyEntryScreen,
+  DiyHistoryChoice,
+  DIY_ENTRY_PATH,
+  isContinuableDesignStatus,
+  loadDiyEntryView,
+  resolveDiyEntryScreen,
+  toDiyHistoryItems
+} from "./diy-entry";
 
 function designAt(index: number, designId: string): PublicDesignV1 {
   const candidate = structuredClone(mockDesignOptions[index % mockDesignOptions.length]!);
@@ -62,6 +70,7 @@ function screenMarkup(view: Parameters<typeof DiyEntryScreen>[0]["view"]): strin
     <DiyEntryScreen
       view={view}
       navigate={() => undefined}
+      onBackToHistory={() => undefined}
       onNewDesign={() => undefined}
       onRetry={() => undefined}
       onDismissAuthRequired={() => undefined}
@@ -217,4 +226,82 @@ test("a stranger's deep link recovers back to the owner-scoped entry", () => {
   assert.match(editorSource, /data-diy-deep-link-recovery="true"/);
   assert.match(editorSource, /href: "\/diy"/);
   assert.doesNotMatch(editorSource, /design-diy-private/);
+});
+
+
+// Review repair (2026-10-05): choosing 新建设计 used to override every later
+// entry state, so a 401 or any other failure of the history re-read was hidden
+// behind the empty tray.
+const historyView = {
+  kind: "history" as const,
+  items: toDiyHistoryItems(historyResponse([savedEntry]))
+};
+
+test("the explicit new-design choice only replaces a successful history read", () => {
+  assert.deepEqual(resolveDiyEntryScreen({ view: historyView, preferEmptyTray: true }), { kind: "empty-tray" });
+  assert.deepEqual(
+    resolveDiyEntryScreen({ view: { kind: "empty-tray" }, preferEmptyTray: true }),
+    { kind: "empty-tray" }
+  );
+  assert.deepEqual(resolveDiyEntryScreen({ view: historyView, preferEmptyTray: false }), historyView);
+});
+
+test("a failed history re-read is never masked by the empty tray", () => {
+  for (const code of ["UNAUTHORIZED", "FORBIDDEN", "NETWORK_ERROR"] as const) {
+    const view = { kind: "error" as const, code };
+    assert.deepEqual(
+      resolveDiyEntryScreen({ view, preferEmptyTray: true }),
+      view,
+      "the tray must not swallow an authentication or read failure"
+    );
+  }
+  assert.deepEqual(
+    resolveDiyEntryScreen({ view: { kind: "loading" }, preferEmptyTray: true }),
+    { kind: "loading" },
+    "a re-read in flight stays a re-read"
+  );
+});
+
+test("the masked combination renders the login gate, not a creatable tray", () => {
+  const markup = renderToStaticMarkup(
+    <DiyEntryScreen
+      view={{ kind: "error", code: "UNAUTHORIZED" }}
+      navigate={() => undefined}
+      onBackToHistory={() => undefined}
+      onDismissAuthRequired={() => undefined}
+      onNewDesign={() => undefined}
+      onRetry={() => undefined}
+    />
+  );
+  assert.match(markup, /data-auth-required-dialog="true"/);
+  assert.doesNotMatch(markup, /data-diy-empty-tray/);
+  assert.doesNotMatch(markup, /data-first-bead-product/);
+});
+
+test("a tray reached from history can go back, a tray without history cannot", () => {
+  const withHistory = renderToStaticMarkup(
+    <DiyEntryScreen
+      view={{ kind: "empty-tray" }}
+      historyAvailable
+      navigate={() => undefined}
+      onBackToHistory={() => undefined}
+      onDismissAuthRequired={() => undefined}
+      onNewDesign={() => undefined}
+      onRetry={() => undefined}
+    />
+  );
+  assert.match(withHistory, /data-diy-back-to-history="true"/);
+  assert.match(withHistory, /data-diy-empty-tray="true"/);
+
+  const withoutHistory = renderToStaticMarkup(
+    <DiyEntryScreen
+      view={{ kind: "empty-tray" }}
+      navigate={() => undefined}
+      onBackToHistory={() => undefined}
+      onDismissAuthRequired={() => undefined}
+      onNewDesign={() => undefined}
+      onRetry={() => undefined}
+    />
+  );
+  assert.doesNotMatch(withoutHistory, /data-diy-back-to-history/, "there is nothing to go back to without history");
 });

@@ -7,6 +7,7 @@ import type {
   CreateDiyFirstBeadRequest,
   CreateDiyFirstBeadResponse,
   Currency,
+  ListCatalogMaterialsResponse,
   Locale
 } from "@mystcrag/design-contract";
 
@@ -31,6 +32,8 @@ export const DIY_EMPTY_TRAY_REQUEST_PREFIX = "first-bead";
 export const DIY_EMPTY_TRAY_WORKING_SIZE_MM = 155;
 
 const DIY_EMPTY_TRAY_DEFAULT_MATERIAL: DisplayTrayMaterial = "BONE_CHINA";
+
+const DIY_EMPTY_TRAY_DEFAULT_CURRENCY: Currency = "CNY";
 
 const DIY_EMPTY_TRAY_SELECTIONS: Array<{ locale: Locale; currency: Currency; label: string }> = [
   { locale: "zh-CN", currency: "CNY", label: "人民币 ¥" },
@@ -65,6 +68,90 @@ export function selectPurchasableMaterials(
   materials: readonly CatalogMaterialProduct[]
 ): CatalogMaterialProduct[] {
   return materials.filter((material) => material.availableQuantity > 0);
+}
+
+/**
+ * Every catalog read outcome is its own state: a read in flight, a catalog with
+ * sellable beads, a catalog that genuinely has nothing to offer, a failed read and
+ * an unauthenticated read. Collapsing them into one "loading" line would promise a
+ * result that is never coming and hide the retry or login action the customer needs.
+ */
+export type DiyCatalogStatus = "loading" | "ready" | "empty" | "failed" | "unauthorized";
+
+export type DiyCatalogState = {
+  status: DiyCatalogStatus;
+  currency: Currency;
+  generation: number;
+  materials: CatalogMaterialProduct[];
+  noticeCode: FrontendErrorCode | null;
+};
+
+export type DiyCatalogAttempt = { currency: Currency; generation: number };
+
+export function createDiyCatalogState(currency: Currency): DiyCatalogState {
+  return { status: "loading", currency, generation: 0, materials: [], noticeCode: null };
+}
+
+/**
+ * Beginning a read always drops the beads of the previous currency: a bead priced
+ * in another currency must never stay clickable while the new read is running.
+ */
+export function beginDiyCatalogLoad(state: DiyCatalogState, currency: Currency): DiyCatalogState {
+  return { status: "loading", currency, generation: state.generation + 1, materials: [], noticeCode: null };
+}
+
+function isCurrentCatalogAttempt(state: DiyCatalogState, attempt: DiyCatalogAttempt): boolean {
+  return state.generation === attempt.generation && state.currency === attempt.currency;
+}
+
+export function resolveDiyCatalog(
+  state: DiyCatalogState,
+  attempt: DiyCatalogAttempt,
+  materials: readonly CatalogMaterialProduct[]
+): DiyCatalogState {
+  if (!isCurrentCatalogAttempt(state, attempt)) return state;
+  const purchasable = selectPurchasableMaterials(materials);
+  return {
+    status: purchasable.length > 0 ? "ready" : "empty",
+    currency: state.currency,
+    generation: state.generation,
+    materials: purchasable,
+    noticeCode: null
+  };
+}
+
+export function failDiyCatalog(
+  state: DiyCatalogState,
+  attempt: DiyCatalogAttempt,
+  code: FrontendErrorCode
+): DiyCatalogState {
+  if (!isCurrentCatalogAttempt(state, attempt)) return state;
+  return {
+    status: code === "UNAUTHORIZED" ? "unauthorized" : "failed",
+    currency: state.currency,
+    generation: state.generation,
+    materials: [],
+    noticeCode: code
+  };
+}
+
+export type DiyCatalogLoadDeps = {
+  materials(currency: Currency): Promise<ListCatalogMaterialsResponse>;
+  getState(): DiyCatalogState;
+  setState(next: DiyCatalogState): void;
+};
+
+/** One catalog read, invalidated by currency and by any newer attempt. */
+export async function runDiyCatalogLoad(deps: DiyCatalogLoadDeps, currency?: Currency): Promise<void> {
+  const started = beginDiyCatalogLoad(deps.getState(), currency ?? deps.getState().currency);
+  deps.setState(started);
+  const attempt: DiyCatalogAttempt = { currency: started.currency, generation: started.generation };
+  try {
+    const response = await deps.materials(attempt.currency);
+    deps.setState(resolveDiyCatalog(deps.getState(), attempt, response.materials));
+  } catch (error) {
+    deps.setState(failDiyCatalog(deps.getState(), attempt, toFrontendApiError(error).code));
+  }
 }
 
 function sameIntent(left: DiyFirstBeadIntent, right: DiyFirstBeadIntent): boolean {
@@ -168,12 +255,13 @@ function useFirstBeadFlow(flow: FirstBeadFlow): DiyFirstBeadWorkbenchState {
 }
 
 export type DiyEmptyTrayFrameProps = {
-  materials: readonly CatalogMaterialProduct[];
+  catalog: DiyCatalogState;
   selection: DiyEmptySelection;
   status: DiyFirstBeadWorkbenchState;
   onSelectionChange(selection: DiyEmptySelection): void;
   onPickBead(beadProductId: string): void;
   onRetry(): void;
+  onCatalogRetry(): void;
   onDismissNotice?(): void;
 };
 
@@ -183,15 +271,17 @@ export type DiyEmptyTrayFrameProps = {
  * zero price and no design identity until the first bead is accepted.
  */
 export function DiyEmptyTrayFrame({
-  materials,
+  catalog,
   selection,
   status,
   onSelectionChange,
   onPickBead,
   onRetry,
+  onCatalogRetry,
   onDismissNotice
 }: DiyEmptyTrayFrameProps) {
   const creating = status.status === "CREATING";
+  const materials = catalog.materials;
   const trayMaterial = DIY_EMPTY_TRAY_DEFAULT_MATERIAL;
 
   return (
@@ -291,18 +381,64 @@ export function DiyEmptyTrayFrame({
       <section
         className="mt-4 rounded-3xl border border-[var(--border)] bg-white/90 p-4"
         data-diy-empty-catalog="true"
+        data-diy-empty-catalog-state={catalog.status}
       >
         <div className="flex items-baseline justify-between gap-2">
           <h2 className="text-sm font-medium text-[var(--foreground)]">选择第一颗珠子</h2>
-          <p className="text-xs text-[var(--muted)]" data-diy-empty-catalog-count="true">
-            {materials.length} 款在售目录珠可选
-          </p>
+          {catalog.status === "ready" || catalog.status === "empty" ? (
+            <p className="text-xs text-[var(--muted)]" data-diy-empty-catalog-count="true">
+              {catalog.materials.length} 款在售目录珠可选
+            </p>
+          ) : null}
         </div>
-        {materials.length === 0 ? (
+
+        {catalog.status === "loading" ? (
           <p className="mt-3 text-xs text-[var(--muted)]" data-diy-empty-catalog-loading="true">
             正在读取当前目录，确认后可以点选第一颗珠子。
           </p>
-        ) : (
+        ) : null}
+
+        {catalog.status === "unauthorized" ? (
+          <div className="mt-3" data-diy-empty-catalog-auth="true">
+            <FlowNotice code="UNAUTHORIZED" onDismissAuthRequired={onDismissNotice} />
+          </div>
+        ) : null}
+
+        {catalog.status === "failed" && catalog.noticeCode ? (
+          <div className="mt-3">
+            <FlowNotice
+              code={catalog.noticeCode}
+              action={{ kind: "button", label: "重新读取目录", onAction: onCatalogRetry }}
+              onDismissAuthRequired={onDismissNotice}
+            />
+            <button
+              className="mt-3 flex min-h-11 items-center rounded-full border border-[var(--border)] bg-white px-4 text-xs text-[var(--muted)]"
+              data-diy-empty-catalog-retry="true"
+              onClick={onCatalogRetry}
+              type="button"
+            >
+              重新读取目录，托盘在成功前保持为空
+            </button>
+          </div>
+        ) : null}
+
+        {catalog.status === "empty" ? (
+          <div className="mt-3">
+            <p className="text-xs text-[var(--muted)]" data-diy-empty-catalog-none="true">
+              当前币种没有可售的目录珠，可以换一种币种或稍后再试；托盘仍保持为空，不会预放任何珠子。
+            </p>
+            <button
+              className="mt-3 flex min-h-11 items-center rounded-full border border-[var(--border)] bg-white px-4 text-xs text-[var(--muted)]"
+              data-diy-empty-catalog-retry="true"
+              onClick={onCatalogRetry}
+              type="button"
+            >
+              重新读取目录
+            </button>
+          </div>
+        ) : null}
+
+        {catalog.status === "ready" ? (
           <ul className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
             {materials.map((material) => (
               <li key={material.beadProductId}>
@@ -327,7 +463,7 @@ export function DiyEmptyTrayFrame({
               </li>
             ))}
           </ul>
-        )}
+        ) : null}
       </section>
     </main>
   );
@@ -346,40 +482,54 @@ export function DiyEmptyWorkbench({ navigate, api = designApi }: DiyEmptyWorkben
       navigate,
       createRequestId: () =>
         `${DIY_EMPTY_TRAY_REQUEST_PREFIX}-${typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}`}`,
-      initialSelection: { locale: "zh-CN", currency: "CNY" }
+      initialSelection: { locale: "zh-CN", currency: DIY_EMPTY_TRAY_DEFAULT_CURRENCY }
     })
   );
   const status = useFirstBeadFlow(flow);
-  const [catalog, setCatalog] = React.useState<CatalogMaterialProduct[]>([]);
-  const { currency } = flow.selection;
+  const [catalog, setCatalog] = React.useState<DiyCatalogState>(() =>
+    createDiyCatalogState(DIY_EMPTY_TRAY_DEFAULT_CURRENCY)
+  );
+  // A ref mirror keeps every in-flight read honest about the newest attempt even
+  // when a currency switch lands before the previous response resolves.
+  const catalogRef = React.useRef(catalog);
+  const writeCatalog = React.useCallback((next: DiyCatalogState) => {
+    catalogRef.current = next;
+    setCatalog(next);
+  }, []);
+  const catalogDeps = React.useMemo<DiyCatalogLoadDeps>(
+    () => ({
+      materials: (currency) => api.materials(currency),
+      getState: () => catalogRef.current,
+      setState: writeCatalog
+    }),
+    [api, writeCatalog]
+  );
 
   React.useEffect(() => {
-    let active = true;
-    void api
-      .materials(currency)
-      .then((response) => {
-        if (active) setCatalog(selectPurchasableMaterials(response.materials));
-      })
-      .catch(() => {
-        // The tray stays empty and truthful: a catalog that cannot be read must not
-        // invent selectable beads, and it never creates a design either.
-        if (active) setCatalog([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, [api, currency]);
+    void runDiyCatalogLoad(catalogDeps);
+  }, [catalogDeps]);
+
+  const changeSelection = (next: DiyEmptySelection) => {
+    const currencyChanged = next.currency !== flow.selection.currency;
+    flow.setSelection(next);
+    // Invalidating inside the handler means the previous currency's beads are gone
+    // in this same commit, not after a deferred effect.
+    if (currencyChanged) void runDiyCatalogLoad(catalogDeps, next.currency);
+  };
 
   return (
     <DiyEmptyTrayFrame
-      materials={catalog}
+      catalog={catalog}
       onPickBead={(beadProductId) => {
         void flow.pickBead(beadProductId);
       }}
       onRetry={() => {
         void flow.retry();
       }}
-      onSelectionChange={(selection) => flow.setSelection(selection)}
+      onCatalogRetry={() => {
+        void runDiyCatalogLoad(catalogDeps);
+      }}
+      onSelectionChange={changeSelection}
       onDismissNotice={() => flow.dismiss()}
       selection={flow.selection}
       status={status}

@@ -40,6 +40,23 @@ export type DiyEntryView =
   | { kind: "empty-tray" }
   | { kind: "history"; items: DiyHistoryItem[] };
 
+/**
+ * The explicit 新建设计 choice may only replace a history read that succeeded.
+ * A re-read that is in flight, unauthenticated or otherwise rejected must stay
+ * visible: hiding it behind the empty tray would let the page offer to create a
+ * design that this visitor is not allowed to create yet.
+ */
+export function resolveDiyEntryScreen({
+  view,
+  preferEmptyTray
+}: {
+  view: DiyEntryView;
+  preferEmptyTray: boolean;
+}): DiyEntryView {
+  if (view.kind === "loading" || view.kind === "error") return view;
+  return preferEmptyTray ? { kind: "empty-tray" } : view;
+}
+
 export function isContinuableDesignStatus(status: string): boolean {
   return status !== "ARCHIVED";
 }
@@ -124,8 +141,10 @@ export type DiyEntryScreenProps = {
   navigate(href: string): void;
   onNewDesign(): void;
   onRetry(): void;
+  onBackToHistory(): void;
   onDismissAuthRequired(): void;
   authDismissed?: boolean;
+  historyAvailable?: boolean;
 };
 
 export function DiyEntryScreen({
@@ -133,8 +152,10 @@ export function DiyEntryScreen({
   navigate,
   onNewDesign,
   onRetry,
+  onBackToHistory,
   onDismissAuthRequired,
-  authDismissed = false
+  authDismissed = false,
+  historyAvailable = false
 }: DiyEntryScreenProps) {
   if (view.kind === "loading") {
     return (
@@ -182,6 +203,18 @@ export function DiyEntryScreen({
   if (view.kind === "empty-tray") {
     return (
       <div data-diy-entry="empty-tray">
+        {historyAvailable ? (
+          <div className="mx-auto w-full max-w-[70rem] px-4 pt-4 sm:px-5">
+            <button
+              className="flex min-h-11 items-center rounded-full border border-[var(--border)] bg-white px-4 text-xs text-[var(--muted)]"
+              data-diy-back-to-history="true"
+              onClick={onBackToHistory}
+              type="button"
+            >
+              返回我的设计
+            </button>
+          </div>
+        ) : null}
         <DiyEmptyWorkbench navigate={navigate} />
       </div>
     );
@@ -214,16 +247,24 @@ export function DiyEntry() {
 
   const navigate = React.useCallback((href: string) => router.push(href), [router]);
 
-  const screenView: DiyEntryView = preferEmptyTray && view.kind !== "loading" ? { kind: "empty-tray" } : view;
+  const screenView = resolveDiyEntryScreen({ view, preferEmptyTray });
 
   return (
     <DiyEntryScreen
       authDismissed={authDismissed}
+      historyAvailable={view.kind === "history"}
       navigate={navigate}
+      onBackToHistory={() => {
+        setPreferEmptyTray(false);
+        setAuthDismissed(false);
+        setView({ kind: "loading" });
+        setReloadToken((current) => current + 1);
+      }}
       onDismissAuthRequired={() => setAuthDismissed(true)}
       onNewDesign={() => setPreferEmptyTray(true)}
       onRetry={() => {
         setAuthDismissed(false);
+        setView({ kind: "loading" });
         setReloadToken((current) => current + 1);
       }}
       view={screenView}
