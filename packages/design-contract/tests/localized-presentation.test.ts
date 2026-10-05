@@ -129,6 +129,56 @@ test("Oracle presentation is a strict three-locale read-only projection", () => 
   assert.deepEqual(Object.keys(parsed.cards[0]!).sort(), ["description", "designId", "title"]);
 });
 
+test("Oracle presentation allows a cast-only projection with no cards or materials", () => {
+  assert.equal(
+    OraclePresentationResponseSchema.safeParse({ ...oraclePresentation, cards: [], materials: [] }).success,
+    true
+  );
+  assert.equal(
+    OraclePresentationResponseSchema.safeParse({ ...oraclePresentation, cards: [] }).success,
+    true
+  );
+  assert.equal(
+    OraclePresentationResponseSchema.safeParse({ ...oraclePresentation, materials: [] }).success,
+    true
+  );
+});
+
+test("Oracle presentation accepts exactly three recommendation cards and rejects one or two", () => {
+  const threeCards = oraclePresentation.cards;
+  assert.equal(threeCards.length, 3);
+
+  for (const count of [1, 2]) {
+    assert.equal(
+      OraclePresentationResponseSchema.safeParse({
+        ...oraclePresentation,
+        cards: threeCards.slice(0, count)
+      }).success,
+      false
+    );
+  }
+  assert.equal(
+    OraclePresentationResponseSchema.safeParse({
+      ...oraclePresentation,
+      cards: [...threeCards, threeCards[0]]
+    }).success,
+    false
+  );
+});
+
+test("Oracle presentation never fabricates a material SKU when nothing is displayable", () => {
+  const empty = OraclePresentationResponseSchema.parse({ ...oraclePresentation, materials: [] });
+  assert.deepEqual(empty.materials, []);
+
+  assert.equal(
+    OraclePresentationResponseSchema.safeParse({
+      ...oraclePresentation,
+      materials: [{ beadProductId: "", role: "PRIMARY", label: "虚构材质" }]
+    }).success,
+    false
+  );
+});
+
 test("Design presentation exposes labels only and rejects authority copies", () => {
   assert.equal(DesignPresentationResponseSchema.safeParse(designPresentation).success, true);
   assert.equal(

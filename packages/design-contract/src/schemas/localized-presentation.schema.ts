@@ -36,16 +36,26 @@ export const OraclePresentationCardSchema = z.strictObject({
   description: PresentationDescriptionSchema
 });
 
-export const OraclePresentationResponseSchema = z.strictObject({
-  sessionId: IdentifierSchema,
-  sourceRevision: PositiveSafeIntegerSchema,
-  locale: PresentationLocaleSchema,
-  headline: PresentationHeadlineSchema,
-  summary: PresentationSummarySchema,
-  cues: z.array(OraclePresentationCueSchema).min(1).max(12),
-  materials: z.array(OraclePresentationMaterialSchema).min(1).max(24),
-  cards: z.array(OraclePresentationCardSchema).min(1).max(3)
-});
+export const OraclePresentationResponseSchema = z
+  .strictObject({
+    sessionId: IdentifierSchema,
+    sourceRevision: PositiveSafeIntegerSchema,
+    locale: PresentationLocaleSchema,
+    headline: PresentationHeadlineSchema,
+    summary: PresentationSummarySchema,
+    cues: z.array(OraclePresentationCueSchema).min(1).max(12),
+    materials: z.array(OraclePresentationMaterialSchema).max(24),
+    cards: z.array(OraclePresentationCardSchema).max(3)
+  })
+  .superRefine((presentation, context) => {
+    if (presentation.cards.length > 0 && presentation.cards.length !== 3) {
+      context.addIssue({
+        code: "custom",
+        path: ["cards"],
+        message: "cards must be empty for a cast-only projection or contain exactly three recommended designs"
+      });
+    }
+  });
 
 export const DesignPresentationMaterialLabelSchema = z.strictObject({
   beadProductId: IdentifierSchema,
