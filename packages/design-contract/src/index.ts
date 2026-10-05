@@ -23,6 +23,7 @@ export * from "./schemas/design.schema";
 export * from "./schemas/json.schema";
 export * from "./schemas/knowledge.schema";
 export * from "./schemas/knowledge-admin-api.schema";
+export * from "./schemas/localized-presentation.schema";
 export * from "./schemas/metadata.schema";
 export * from "./schemas/order-snapshot.schema";
 export * from "./schemas/order-fulfillment.schema";

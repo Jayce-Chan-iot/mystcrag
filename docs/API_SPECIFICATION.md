@@ -590,6 +590,22 @@ Oracle design signals are soft preferences only. Recommendation must revalidate 
 
 Stable failures reuse the existing envelope: disabled create `NOT_IMPLEMENTED`, missing/cross-owner session `FORBIDDEN`, stale revision/idempotency/transition reuse `CONFLICT`, and authority failures `PRICE_CHANGED`, `INVENTORY_CHANGED`, or `COMPLIANCE_BLOCKED`.
 
+## Localized Presentation API
+
+Three read-only projection routes return display copy for `zh-CN`, `zh-TW`, and `en-US` without creating, re-casting, re-drawing, re-pricing, or persisting anything. Their executable DTOs live in [the strict localized presentation contract source](../packages/design-contract/src/schemas/localized-presentation.schema.ts). This section specifies the wire contract only; Backend registration is owned by the dependent AI, Backend, and Tarot tasks, so the routes are not yet registered by current startup.
+
+| Route | Request DTO | Response DTO | Behavior |
+| --- | --- | --- | --- |
+| `GET /api/oracle/sessions/:sessionId/presentation?locale=...` | `LocalizedPresentationRequestSchema` | `OraclePresentationResponseSchema` | Projects the owner-scoped cast's stable facts into headline, summary, `COLOR`/`RHYTHM`/`ACCENT` cues, material labels, and design-card titles/descriptions. It consumes no entropy, never re-casts, and never regenerates recommendations. |
+| `GET /api/design/:id/presentation?locale=...` | `LocalizedPresentationRequestSchema` | `DesignPresentationResponseSchema` | Projects one owner-scoped design's title, story, and per-bead material labels from the saved design and reviewed templates. It does not return pricing, inventory, or a second authoritative design. |
+| `GET /api/tarot/sessions/:sessionId/presentation?locale=...` | `LocalizedPresentationRequestSchema` | `TarotPresentationResponseSchema` | Projects the owner-scoped drawn spread into headline, summary, per-slot card reflections, color story, design rationale, and disclaimer. It never re-draws cards or re-runs recommendations. |
+
+The locale query is required and strict: only `zh-CN`, `zh-TW`, and `en-US` are accepted, and a missing, unknown, or non-approved locale is a `VALIDATION_ERROR`. Every request and response is a strict object, so unknown fields are rejected at the boundary.
+
+Presentation responses are display-only projections. They carry `sourceRevision` to bind copy to the current authoritative revision but never a new revision, price, stock, currency authority, raw question, or a duplicate cast/hexagram/draw. Materials and cards are referenced by identifier only (`beadProductId`, `designId`) with human-readable labels; the authoritative design, SKU, and price stay in the existing Design, Oracle, and Tarot responses. Rendering these routes changes no persisted snapshot and does not alter the original cast, spread, design, price, or revision.
+
+All three routes require verified bearer authentication and owner-scoped access. Missing and differently owned resources use the generic `FORBIDDEN` response, and unauthenticated requests use `401 UNAUTHORIZED`.
+
 ## Community API
 
 GET /api/community/designs

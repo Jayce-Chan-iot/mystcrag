@@ -198,6 +198,16 @@ The package also exports strict Star Oracle DTOs from `schemas/oracle.schema.ts`
 
 Oracle routes reuse the established strict error envelope. Stable Backend mappings remain `NOT_IMPLEMENTED` for disabled creation, generic `FORBIDDEN` for missing/cross-owner sessions, `CONFLICT` for revision/idempotency/transition conflicts, and the existing `PRICE_CHANGED`, `INVENTORY_CHANGED`, and `COMPLIANCE_BLOCKED` authority codes. Contract schemas define wire shape; they do not create entropy, persist sessions, choose inventory, or interpret cultural meaning.
 
+## Localized presentation projections
+
+The package also exports a strict, read-only display-projection family from `schemas/localized-presentation.schema.ts`. `PresentationLocaleSchema` is the closed enum `zh-CN | zh-TW | en-US`, and `LocalizedPresentationRequestSchema` accepts only that `locale`; a fourth language or any unknown field is rejected. These projections are display copy, not a second authority: they carry `sourceRevision` to bind copy to the current authoritative revision but never a new revision, price, stock, or currency, and never a duplicate cast, hexagram, or draw.
+
+- `OraclePresentationResponseSchema` returns `{ sessionId, sourceRevision, locale, headline, summary, cues, materials, cards }`. Each cue has a `COLOR`, `RHYTHM`, or `ACCENT` kind; each material carries only `beadProductId`, `role`, and `label`; each card carries only `designId`, `title`, and `description`. No cast, question, SKU, price, or full design is returned.
+- `DesignPresentationResponseSchema` returns `{ designId, sourceRevision, locale, title, story, materialLabels }`, where each label carries only `beadProductId` and `label`. Pricing, inventory, and the authoritative design remain in the existing Design responses.
+- `TarotPresentationResponseSchema` returns `{ sessionId, sourceRevision, locale, headline, summary, cardReflections, colorStory, designRationale, disclaimer }`, where each reflection carries a canonical Tarot `slot` and text. No revealed card identity, orientation, deck order, or recommendation is duplicated.
+
+Every field is a strict object, so unknown fields — including price, inventory, and duplicated design or draw payloads — are rejected at the boundary. These schemas define wire shape only; owner-scoped access, reviewed templates, and the decision not to re-cast, re-draw, or persist remain Backend responsibilities.
+
 These DTOs define data shape only. Authentication, authorization, catalog lookup, inventory checks, pricing execution, persistence, HTTP status, and application error mapping remain Backend responsibilities.
 
 ## Version and migration policy
