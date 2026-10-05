@@ -1,5 +1,7 @@
 import {
   CloneDesignResponseSchema,
+  CreateDiyFirstBeadRequestSchema,
+  CreateDiyFirstBeadResponseSchema,
   CreateOrderFromDesignRequestSchema,
   CreateOrderFromDesignResponseSchema,
   DeleteDesignResponseSchema,
@@ -22,6 +24,8 @@ import {
   UpdateDesignRequestSchema,
   UpdateDesignResponseSchema,
   type CloneDesignResponse,
+  type CreateDiyFirstBeadRequest,
+  type CreateDiyFirstBeadResponse,
   type CreateOrderFromDesignRequest,
   type CreateOrderFromDesignResponse,
   type CatalogMaterialProduct,
@@ -149,6 +153,20 @@ export function createDesignApiClient({
         return GenerateDesignResponseSchema.parse(response);
       }
       return callApi("/api/design/generate", GenerateDesignResponseSchema, { body: request }, fetcher);
+    },
+
+    /**
+     * Turns the empty DIY tray into the caller's own one-bead design. The client
+     * only names which real catalog bead was picked plus the request key, locale
+     * and currency; owner, price, stock, revision and the bead object itself are
+     * server-authoritative and the strict contract rejects anything else.
+     */
+    async createDiyFirstBead(input: CreateDiyFirstBeadRequest): Promise<CreateDiyFirstBeadResponse> {
+      const request = CreateDiyFirstBeadRequestSchema.parse(input);
+      if (useMock) {
+        throw new FrontendApiError("VALIDATION_ERROR", "Mock mode does not fabricate a first-bead DIY design.");
+      }
+      return callApi("/api/design/diy-first-bead", CreateDiyFirstBeadResponseSchema, { body: request }, fetcher);
     },
 
     async get(designId: string): Promise<PublicDesignV1> {
