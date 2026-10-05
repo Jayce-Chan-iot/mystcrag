@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { resolveMobileNavigationLabels } from "../../components/mobile-bottom-nav";
 import {
   DEFAULT_DISPLAY_LOCALE,
   DISPLAY_LOCALES,
@@ -283,4 +285,103 @@ test("the locale controller rejects a forged target before writing anything", ()
 
   assert.equal(result.locale, "zh-CN");
   assert.deepEqual(document.cookieWrites, [], "an unapproved value must not reach html lang or the cookie");
+});
+// Review repair (2026-10-05): a browser that refuses the preference cookie must
+// not strand the customer on the old copy, and the phone tab bar has to follow the
+// same language authority as the desktop header.
+
+function blockedCookieDocument(appliedLangs: string[]) {
+  return {
+    documentElement: {
+      get lang() {
+        return "zh-CN";
+      },
+      set lang(value: string) {
+        appliedLangs.push(value);
+      }
+    },
+    get cookie() {
+      return "";
+    },
+    set cookie(_value: string) {
+      throw new Error("this browser blocks every cookie write");
+    }
+  };
+}
+
+test("a refused cookie write still applies the language for the current session", () => {
+  const appliedLangs: string[] = [];
+
+  const result = applyDisplayLocale("en-US", { document: blockedCookieDocument(appliedLangs) as never });
+
+  assert.deepEqual(appliedLangs, ["en-US"], "html lang is set before the cookie is attempted");
+  assert.equal(result.htmlLang, "en-US");
+  assert.equal(result.cookie, serializeDisplayLocaleCookie("en-US"));
+  assert.equal(result.persisted, false, "the caller needs to know the choice is session-only");
+});
+
+test("the controller separates the applied language from persistence", () => {
+  const appliedLangs: string[] = [];
+  const controller = createDisplayLocaleController("zh-CN", {
+    document: blockedCookieDocument(appliedLangs) as never
+  });
+
+  const result = controller.set("en-US");
+
+  assert.equal(result.locale, "en-US", "the language still changes for this session");
+  assert.equal(result.changed, true);
+  assert.equal(result.persisted, false);
+  assert.deepEqual(appliedLangs, ["en-US"]);
+});
+
+test("the provider publishes the language even when persistence is refused", () => {
+  const source = readFileSync(new URL("./locale-provider.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /setLocaleState\(result\.locale\)/);
+  assert.doesNotMatch(
+    source,
+    /if \(result\.applied\) setLocaleState|if \(result\.persisted\) setLocaleState|result\.persisted && setLocaleState/,
+    "a blocked cookie must not leave the shell rendering the previous language"
+  );
+});
+
+test("the mobile bottom nav resolves every tab label through the language authority", () => {
+  assert.deepEqual(resolveMobileNavigationLabels("zh-CN"), {
+    home: "首页",
+    oracle: "星台问卦",
+    diy: "DIY 创作",
+    gallery: "作品画廊",
+    profile: "我的"
+  });
+  assert.deepEqual(resolveMobileNavigationLabels("zh-TW"), {
+    home: "首頁",
+    oracle: "星台問卦",
+    diy: "DIY 創作",
+    gallery: "作品畫廊",
+    profile: "我的"
+  });
+  assert.deepEqual(resolveMobileNavigationLabels("en-US"), {
+    home: "Home",
+    oracle: "Oracle",
+    diy: "DIY",
+    gallery: "Gallery",
+    profile: "Profile"
+  });
+  assert.deepEqual(
+    resolveMobileNavigationLabels("de-DE" as never),
+    resolveMobileNavigationLabels("zh-CN"),
+    "a forged locale never reaches the tab bar"
+  );
+});
+
+test("the phone tab bar consumes the resolver and localizes its accessible names", () => {
+  const source = readFileSync(new URL("../../components/mobile-bottom-nav.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /resolveMobileNavigationLabels\(/);
+  assert.doesNotMatch(source, /aria-label="移动端主导航"/, "the nav name must follow the language too");
+  assert.match(source, /shell\.mobileNavigation/);
+  assert.match(source, /aria-label=\{label\}/);
+  for (const fallback of ["首页", "DIY", "作品画廊", "我的"]) {
+    assert.match(source, new RegExp(fallback), "the Simplified Chinese fallback stays declared in the tab table");
+  }
 });

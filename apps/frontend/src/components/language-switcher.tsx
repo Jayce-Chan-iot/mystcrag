@@ -180,12 +180,12 @@ export function LanguageMenuFrame({
   onKey
 }: LanguageMenuFrameProps) {
   return (
-    <div className="relative shrink-0" data-language-switcher-root="true">
+    <div className="relative min-w-0 shrink" data-language-switcher-root="true">
       <button
         aria-expanded={menu.open}
         aria-haspopup="menu"
         aria-label={label}
-        className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-[var(--border)] bg-white/85 px-3 text-xs text-[var(--muted)] transition-colors duration-300 hover:border-[var(--accent)] motion-reduce:transition-none"
+        className="inline-flex min-h-11 max-w-full min-w-0 items-center gap-1.5 rounded-full border border-[var(--border)] bg-white/85 px-3 text-xs text-[var(--muted)] transition-colors duration-300 hover:border-[var(--accent)] motion-reduce:transition-none"
         data-language-switcher="true"
         onClick={onToggle}
         onKeyDown={(event) => {
@@ -195,7 +195,7 @@ export function LanguageMenuFrame({
         ref={triggerRef}
         type="button"
       >
-        <span>{label}</span>
+        <span className="truncate">{label}</span>
         <span data-language-current-label="true" className="hidden text-[var(--foreground)] sm:inline">
           {currentNativeLabel}
         </span>
@@ -207,7 +207,7 @@ export function LanguageMenuFrame({
       {menu.open ? (
         <div
           aria-label={menuLabel ?? label}
-          className="absolute right-0 top-[calc(100%+0.35rem)] z-[60] flex min-w-[9.5rem] flex-col gap-1 rounded-2xl border border-[var(--border)] bg-white/97 p-2 shadow-[0_18px_40px_rgb(28_22_40/0.16)]"
+          className="absolute right-0 top-[calc(100%+0.35rem)] z-[60] flex w-[9.5rem] min-w-0 max-w-[calc(100vw-1.5rem)] flex-col gap-1 rounded-2xl border border-[var(--border)] bg-white/97 p-2 shadow-[0_18px_40px_rgb(28_22_40/0.16)]"
           data-language-menu="true"
           onKeyDown={(event) => {
             if (["ArrowDown", "ArrowUp", "Home", "End", "Enter", " ", "Escape"].includes(event.key)) {

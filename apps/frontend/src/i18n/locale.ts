@@ -74,7 +74,16 @@ export type DisplayLocaleWriteTargets = {
   sessionStorage?: StorageLike;
 };
 
-export type AppliedDisplayLocale = { htmlLang: DisplayLocale; cookie: string };
+export type AppliedDisplayLocale = {
+  htmlLang: DisplayLocale;
+  cookie: string;
+  /**
+   * `false` when the browser refused the write (private mode, blocked storage,
+   * a sandboxed frame). The language is still applied for this session, so the
+   * caller must publish it to React state regardless of this flag.
+   */
+  persisted: boolean;
+};
 
 export function applyDisplayLocale(
   locale: DisplayLocale,
@@ -83,10 +92,17 @@ export function applyDisplayLocale(
   const cookie = serializeDisplayLocaleCookie(locale);
   const document = targets.document;
   if (document) {
+    // `html lang` first and unconditionally: an unreadable cookie must never leave
+    // the document claiming the previous language.
     if (document.documentElement) document.documentElement.lang = locale;
-    document.cookie = cookie;
+    try {
+      document.cookie = cookie;
+      return { htmlLang: locale, cookie, persisted: true };
+    } catch {
+      return { htmlLang: locale, cookie, persisted: false };
+    }
   }
-  return { htmlLang: locale, cookie };
+  return { htmlLang: locale, cookie, persisted: false };
 }
 
 function lookup(dictionary: MessageDictionary, key: string): string | undefined {

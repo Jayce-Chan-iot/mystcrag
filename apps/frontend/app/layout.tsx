@@ -70,7 +70,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
                   );
                 })}
               </div>
-              <div className="flex shrink-0 items-center gap-2" data-header-actions="true">
+              <div className="flex min-w-0 shrink items-center justify-end gap-2" data-header-actions="true">
                 <LanguageSwitcher />
                 <AuthStatus />
               </div>

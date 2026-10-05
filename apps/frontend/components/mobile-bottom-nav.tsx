@@ -4,9 +4,34 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import * as React from "react";
 
+import { parseDisplayLocale, translate } from "../src/i18n/locale";
+import { useDisplayLocale } from "../src/i18n/locale-provider";
+
+export type MobileNavigationKey = "home" | "oracle" | "diy" | "gallery" | "profile";
+
+export type MobileNavigationLabels = Readonly<Record<MobileNavigationKey, string>>;
+
+/**
+ * The tab bar reads its visible labels and accessible names from the same display
+ * language authority as the desktop header, so a switch changes the phone
+ * navigation too. A forged locale can never reach the tab bar.
+ */
+export function resolveMobileNavigationLabels(locale: string): MobileNavigationLabels {
+  const resolved = parseDisplayLocale(locale);
+  return {
+    home: translate(resolved, "nav.home"),
+    oracle: translate(resolved, "nav.oracle"),
+    diy: translate(resolved, "nav.diy"),
+    gallery: translate(resolved, "nav.gallery"),
+    profile: translate(resolved, "nav.profile")
+  };
+}
+
 type MobileNavItem = {
   href: string;
+  /** Simplified Chinese identity, used as the visible fallback for this tab. */
   label: string;
+  navigationKey: MobileNavigationKey;
   match: (pathname: string) => boolean;
   icon: React.ReactNode;
   oracleOnly?: boolean;
@@ -64,17 +89,18 @@ function ProfileIcon() {
 }
 
 const MOBILE_NAV_ITEMS: MobileNavItem[] = [
-  { href: "/", label: "首页", match: (pathname) => pathname === "/", icon: <HomeIcon /> },
+  { href: "/", label: "首页", navigationKey: "home", match: (pathname) => pathname === "/", icon: <HomeIcon /> },
   {
     href: "/oracle",
     label: "星台问卦",
+    navigationKey: "oracle",
     match: (pathname) => pathname === "/oracle" || pathname.startsWith("/oracle/"),
     icon: <OracleIcon />,
     oracleOnly: true
   },
-  { href: "/diy", label: "DIY", match: (pathname) => pathname === "/diy" || pathname.startsWith("/diy/"), icon: <DiyIcon /> },
-  { href: "/gallery", label: "作品画廊", match: (pathname) => pathname === "/gallery", icon: <GalleryIcon /> },
-  { href: "/profile", label: "我的", match: (pathname) => pathname === "/profile", icon: <ProfileIcon /> }
+  { href: "/diy", label: "DIY", navigationKey: "diy", match: (pathname) => pathname === "/diy" || pathname.startsWith("/diy/"), icon: <DiyIcon /> },
+  { href: "/gallery", label: "作品画廊", navigationKey: "gallery", match: (pathname) => pathname === "/gallery", icon: <GalleryIcon /> },
+  { href: "/profile", label: "我的", navigationKey: "profile", match: (pathname) => pathname === "/profile", icon: <ProfileIcon /> }
 ];
 
 function subscribeOracleNav(onChange: () => void): () => void {
@@ -93,6 +119,7 @@ function getOracleNavEnabled(): boolean {
 
 export function MobileBottomNav() {
   const pathname = usePathname() ?? "/";
+  const { locale, t } = useDisplayLocale();
   const oracleEnabled = React.useSyncExternalStore(
     subscribeOracleNav,
     getOracleNavEnabled,
@@ -100,10 +127,12 @@ export function MobileBottomNav() {
   );
 
   const items = MOBILE_NAV_ITEMS.filter((item) => item.oracleOnly !== true || oracleEnabled);
+  const labels = resolveMobileNavigationLabels(locale);
+  const navigationLabel = t("shell.mobileNavigation") || "移动端主导航";
 
   return (
     <nav
-      aria-label="移动端主导航"
+      aria-label={navigationLabel}
       className="fixed inset-x-0 bottom-0 z-50 border-t border-[var(--border)] bg-white/97 backdrop-blur-xl lg:hidden"
       data-mobile-bottom-nav="true"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
@@ -114,10 +143,12 @@ export function MobileBottomNav() {
       >
         {items.map((item) => {
           const active = item.match(pathname);
+          const label = labels[item.navigationKey] || item.label;
           return (
             <li key={item.href}>
               <Link
                 aria-current={active ? "page" : undefined}
+                aria-label={label}
                 className="relative flex min-h-[3.4rem] flex-col items-center justify-center gap-0.5 px-1 text-[0.62rem] transition-colors"
                 data-nav-active={active ? "true" : "false"}
                 href={item.href}
@@ -129,7 +160,7 @@ export function MobileBottomNav() {
                   style={{ background: "var(--accent-deep)", opacity: active ? 1 : 0 }}
                 />
                 {item.icon}
-                <span className="max-w-full truncate">{item.label}</span>
+                <span className="max-w-full truncate">{label}</span>
               </Link>
             </li>
           );

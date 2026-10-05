@@ -18,9 +18,17 @@ import {
  * tested directly, which is how a switch is proven not to disturb the currency
  * choice, form input or the empty DIY tray.
  */
+export type DisplayLocaleChange = {
+  locale: DisplayLocale;
+  changed: boolean;
+  /** False when nothing was written (unchanged) or the browser refused the cookie. */
+  persisted: boolean;
+  applied: AppliedDisplayLocale | null;
+};
+
 export type DisplayLocaleController = {
   readonly locale: DisplayLocale;
-  set(next: DisplayLocale, targets?: DisplayLocaleWriteTargets): { locale: DisplayLocale; applied: AppliedDisplayLocale | null };
+  set(next: DisplayLocale, targets?: DisplayLocaleWriteTargets): DisplayLocaleChange;
 };
 
 export function createDisplayLocaleController(
@@ -36,8 +44,9 @@ export function createDisplayLocaleController(
       const resolved = parseDisplayLocale(next);
       const changed = resolved !== locale;
       locale = resolved;
-      if (!changed) return { locale: resolved, applied: null };
-      return { locale: resolved, applied: applyDisplayLocale(resolved, targets ?? defaultTargets) };
+      if (!changed) return { locale: resolved, changed, persisted: true, applied: null };
+      const applied = applyDisplayLocale(resolved, targets ?? defaultTargets);
+      return { locale: resolved, changed, persisted: applied.persisted, applied };
     }
   };
 }
@@ -72,7 +81,9 @@ export function LocaleProvider({ initialLocale, children }: LocaleProviderProps)
       locale,
       setLocale: (next) => {
         const result = controller.set(next);
-        if (result.applied) setLocaleState(result.locale);
+        // The language is a session fact first and a cookie second: a browser that
+        // refuses the write still gets the new copy and the new html lang.
+        if (result.changed) setLocaleState(result.locale);
       },
       t: (key) => translate(locale, key)
     }),

@@ -63,7 +63,11 @@ DesignV1
 
 Boundaries that keep this authority narrow: the display locale is independent of the `locale` recorded on a design or Oracle session (that value is fixed when the session or design is created and is never rewritten by a switch), independent of currency (prices keep their own server-owned minor-unit rules), and independent of identity (the Authing session cookie remains the only actor source). Dynamic projections — Oracle/Tarot narrative, design names and stories, server error text — are not consumers of this dictionary and stay server-owned until their own registered tasks. Switching the display language must not navigate, reload, clear a route, or drop in-progress form, tray or edit state.
 
-Established by TASK-UX-I18N-FE-001 (FEAT-029). Retiring the Simplified-Chinese-only shell labels, including the `mobile-bottom-nav.tsx` tab labels, requires a task that names this authority and migrates the contract tests that pin those strings.
+The shell is fully behind this authority: `apps/frontend/app/navigation.ts` resolves the desktop header links and `apps/frontend/components/mobile-bottom-nav.tsx` resolves the phone tab bar's visible labels and accessible names through `resolveMobileNavigationLabels()`. The Simplified Chinese strings that remain in those two files are declared fallbacks for the tab and link tables, not a second locale.
+
+When the browser refuses the preference cookie (private mode, blocked storage, sandboxed frame) the switch is still applied for the current session: `applyDisplayLocale` sets `html lang` first, reports `persisted: false`, and `LocaleProvider` publishes the new language to React regardless, so copy, `html lang` and state stay consistent even when only the next server render cannot remember the choice.
+
+Established by TASK-UX-I18N-FE-001 (FEAT-029).
 
 ## Canonical change rule
 

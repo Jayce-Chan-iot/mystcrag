@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+
 import test from "node:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -224,4 +225,37 @@ test("the frame wires its real handlers, not decorative markup", () => {
 
   const chineseOption = hostElement(element, "data-language-option", "zh-CN");
   assert.equal(chineseOption?.props["aria-checked"], true);
+});
+
+test("the open menu is addressable and capped to the viewport", () => {
+  const markup = frameMarkup({ menu: { open: true, activeIndex: 0 } });
+  assert.match(markup, /data-language-menu="true"/);
+  assert.match(markup, /w-\[9\.5rem\]/);
+  assert.match(markup, /max-w-\[calc\(100vw-1\.5rem\)\]/);
+  assert.doesNotMatch(
+    markup,
+    /min-w-\[9\.5rem\]/,
+    "an unshrinkable min-width would win over max-width and overflow the page at 200% zoom"
+  );
+
+  const css = readFileSync(new URL("../../app/styles/star-shell.css", import.meta.url), "utf8");
+  assert.match(
+    css,
+    /\[data-star-header\] \[data-language-menu="true"\][\s\S]*?max-width:\s*min\(15rem,\s*calc\(100vw - 1\.5rem\)\)/,
+    "the popover can never be wider than a 320px viewport"
+  );
+});
+
+test("the header row shrinks instead of overflowing a narrow viewport", () => {
+  const closed = frameMarkup();
+  assert.match(closed, /class="relative min-w-0 shrink" data-language-switcher-root="true"/);
+  assert.match(closed, /class="truncate"/);
+
+  const layoutSource = readFileSync(new URL("../../app/layout.tsx", import.meta.url), "utf8");
+  assert.match(
+    layoutSource,
+    /className="flex min-w-0 shrink items-center justify-end gap-2" data-header-actions="true"/,
+    "the header action row must be allowed to shrink at 320px"
+  );
+  assert.doesNotMatch(layoutSource, /className="flex shrink-0 items-center gap-2" data-header-actions="true"/);
 });
