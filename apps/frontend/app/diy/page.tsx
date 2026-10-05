@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { DiyEntry } from "../../src/features/design/components/diy-entry";
 
 export default function DiyPage() {
-  redirect("/diy/design-diy-private");
+  return <DiyEntry />;
 }

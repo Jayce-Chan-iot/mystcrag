@@ -11,7 +11,7 @@ import NextImage from "next/image";
 import Link from "next/link";
 import * as React from "react";
 
-import { FlowNotice, type NoticeButtonAction } from "../../../components/flow-notice";
+import { FlowNotice, type NoticeAction, type NoticeButtonAction } from "../../../components/flow-notice";
 import {
   createAddRequest,
   createOperationsRequest,
@@ -85,6 +85,22 @@ export function diyNoticeAction(code: FrontendErrorCode, handlers: DiyNoticeHand
     return { kind: "button", label: "同步最新设计", onAction: handlers.synchronize };
   }
   return { kind: "button", label: "知道了", onAction: handlers.dismiss };
+}
+
+/**
+ * Recovery for a `/diy/[id]` deep link that could not open. A 404/403 stays
+ * owner-safe: the same wording is used whether the design does not exist or
+ * belongs to someone else, and the only exit is the owner-scoped `/diy` entry,
+ * which re-reads the signed-in caller's own history instead of guessing an id.
+ */
+export function diyDeepLinkRecovery(
+  code: FrontendErrorCode | null,
+  onReload: () => void
+): NoticeAction {
+  if (code === "NETWORK_ERROR" || code === "INTERNAL_ERROR") {
+    return { kind: "button", label: "重新加载", onAction: onReload };
+  }
+  return { kind: "link", label: "返回 DIY 入口选择我的设计", href: "/diy" };
 }
 
 export function SyncStatusBanner({
@@ -311,7 +327,7 @@ export function DiyEditor({ designId }: { designId: string }) {
     return <main className="mx-auto min-h-[70vh] max-w-7xl px-5 py-16" aria-live="polite" data-diy-editor-page="true">正在从 Backend 加载设计…</main>;
   }
   if (!design || !optimistic) {
-    return <main className="mx-auto min-h-[70vh] max-w-7xl px-5 py-16" data-diy-editor-page="true"><FlowNotice code={notice ?? "EMPTY_STATE"} action={notice && notice !== "EMPTY_STATE" ? { kind: "button", label: "重新加载", onAction: () => { setIsLoading(true); void loadDesign(); } } : { kind: "link", label: "开始 AI 设计", href: "/ai-design" }} onDismissAuthRequired={() => setNotice(null)} /></main>;
+    return <main className="mx-auto min-h-[70vh] max-w-7xl px-5 py-16" data-diy-deep-link-recovery="true" data-diy-editor-page="true"><FlowNotice action={diyDeepLinkRecovery(notice, () => { setIsLoading(true); void loadDesign(); })} code={notice ?? "EMPTY_STATE"} onDismissAuthRequired={() => setNotice(null)} /></main>;
   }
 
   const selectedComponentId = design.beads.some((bead) => bead.componentId === rawSelectedComponentId)

@@ -5,6 +5,7 @@ import test from "node:test";
 import type {
   CatalogMaterialProduct,
   ListCatalogMaterialsResponse,
+  ListMyDesignsResponse,
   PublicDesignV1
 } from "@mystcrag/design-contract";
 import * as React from "react";
@@ -17,7 +18,9 @@ import {
   createLibraryLoadAttempts,
   INITIAL_LIBRARY_PAGE_STATE,
   LibraryDesignUnavailableNotice,
+  LibraryNoCurrentDesignNotice,
   loadFavorites,
+  pickContinuableLibraryDesign,
   reduceLibraryPage,
   runDesignLoad,
   runLibraryLoad,
@@ -63,6 +66,15 @@ const STALE_CATALOG: ListCatalogMaterialsResponse = {
 
 const DESIGN = mockDesignOptions[0] as PublicDesignV1;
 
+// TASK-UX-DIY-FE-001: the library's optional "current design" panel is now the
+// signed-in caller's own newest continuable design, read through GET /api/designs.
+// No fixed demo design id may be requested here any more.
+function ownHistory(design: PublicDesignV1 = DESIGN, status = "SAVED"): ListMyDesignsResponse {
+  return { designs: [{ design, status: status as ListMyDesignsResponse["designs"][number]["status"], updatedAt: "2026-10-03T08:00:00.000Z" }] };
+}
+
+const OWN_HISTORY = ownHistory();
+
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void };
 
 function defer<T>(): Deferred<T> {
@@ -87,7 +99,7 @@ test("catalog resolution alone exits loading and renders materials while design 
   const events: LibraryPageEvent[] = [];
   runLibraryLoad(
     {
-      get: () => new Promise<PublicDesignV1>(() => undefined),
+      listDesigns: () => new Promise<ListMyDesignsResponse>(() => undefined),
       materials: async () => CATALOG
     },
     (event) => events.push(event),
@@ -102,14 +114,15 @@ test("catalog resolution alone exits loading and renders materials while design 
   );
   assert.equal(state.design, null);
   assert.equal(state.designNotice, null);
+  assert.equal(state.noCurrentDesign, false, "an unsettled list is not an announced empty history");
 });
 
-test("fixed design 404 degrades to a design notice while the catalog stays ready", async () => {
+test("a rejected own-design list degrades to a design notice while the catalog stays ready", async () => {
   const events: LibraryPageEvent[] = [];
   runLibraryLoad(
     {
-      get: async () => {
-        throw new FrontendApiError("NOT_FOUND", "design-diy-private is absent in a fresh database");
+      listDesigns: async () => {
+        throw new FrontendApiError("NETWORK_ERROR", "own designs unreachable");
       },
       materials: async () => CATALOG
     },
@@ -120,8 +133,52 @@ test("fixed design 404 degrades to a design notice while the catalog stays ready
   const state = replay(events);
   assert.equal(state.status, "ready");
   assert.equal(state.design, null);
-  assert.equal(state.designNotice, "NOT_FOUND");
+  assert.equal(state.designNotice, "NETWORK_ERROR");
+  assert.equal(state.noCurrentDesign, false, "a failure must never read as an empty history");
   assert.equal(state.catalogNotice, null);
+  assert.equal(state.materials.length, 2);
+});
+
+test("an own history without a continuable design announces the empty state, not a failure", async () => {
+  const events: LibraryPageEvent[] = [];
+  const calls: unknown[][] = [];
+  runLibraryLoad(
+    {
+      listDesigns: async (...args: unknown[]) => {
+        calls.push(args);
+        return { designs: [] };
+      },
+      materials: async () => CATALOG
+    },
+    (event) => events.push(event),
+    createLibraryLoadAttempts()
+  );
+  await settle();
+  const state = replay(events);
+  assert.equal(state.status, "ready");
+  assert.equal(state.design, null);
+  assert.equal(state.designNotice, null);
+  assert.equal(state.noCurrentDesign, true);
+  assert.deepEqual(calls, [[]], "the own-design list is read without naming any design id");
+});
+
+test("an unauthenticated own-design list keeps the catalog ready and reports UNAUTHORIZED", async () => {
+  const events: LibraryPageEvent[] = [];
+  runLibraryLoad(
+    {
+      listDesigns: async () => {
+        throw new FrontendApiError("UNAUTHORIZED", "Authentication is required.");
+      },
+      materials: async () => CATALOG
+    },
+    (event) => events.push(event),
+    createLibraryLoadAttempts()
+  );
+  await settle();
+  const state = replay(events);
+  assert.equal(state.status, "ready");
+  assert.equal(state.designNotice, "UNAUTHORIZED");
+  assert.equal(state.noCurrentDesign, false, "a signed-out visitor is not told they have no designs");
   assert.equal(state.materials.length, 2);
 });
 
@@ -129,7 +186,7 @@ test("catalog failure keeps the full-page error even when the design loaded", as
   const events: LibraryPageEvent[] = [];
   runLibraryLoad(
     {
-      get: async () => DESIGN,
+      listDesigns: async () => OWN_HISTORY,
       materials: async () => {
         throw new FrontendApiError("NETWORK_ERROR", "catalog unreachable");
       }
@@ -205,7 +262,7 @@ test("a stale attempt cannot override the newest catalog result", async () => {
   const attempts = createLibraryLoadAttempts();
 
   const api = {
-    get: async () => DESIGN,
+    listDesigns: async () => OWN_HISTORY,
     materials: () => {
       materialsCall += 1;
       return materialsCall === 1 ? firstCatalog.promise : secondCatalog.promise;
@@ -272,15 +329,15 @@ test("favorites toggle and persist through localStorage without regression", () 
   assert.deepEqual([...loadFavorites()], []);
 });
 
-test("design-only retry re-fetches the design without re-requesting or clearing the ready catalog", async () => {
+test("design-only retry re-fetches the own design without re-requesting or clearing the ready catalog", async () => {
   const events: LibraryPageEvent[] = [];
   const attempts = createLibraryLoadAttempts();
   let materialsCalls = 0;
   let designSucceeds = false;
   const api = {
-    get: async () => {
-      if (designSucceeds) return DESIGN;
-      throw new FrontendApiError("NOT_FOUND", "design absent in a fresh database");
+    listDesigns: async () => {
+      if (designSucceeds) return OWN_HISTORY;
+      throw new FrontendApiError("NETWORK_ERROR", "own designs unreachable");
     },
     materials: async () => {
       materialsCalls += 1;
@@ -303,6 +360,7 @@ test("design-only retry re-fetches the design without re-requesting or clearing 
   assert.equal(state.status, "ready");
   assert.equal(state.design, DESIGN);
   assert.equal(state.designNotice, null);
+  assert.equal(state.noCurrentDesign, false);
   assert.equal(state.catalogNotice, null);
   assert.deepEqual(
     state.materials.map((item) => item.crystalId),
@@ -314,8 +372,8 @@ test("design-only retry failure keeps the ready catalog and stays a design-only 
   const events: LibraryPageEvent[] = [];
   const attempts = createLibraryLoadAttempts();
   const api = {
-    get: async () => {
-      throw new FrontendApiError("NETWORK_ERROR", "design unreachable");
+    listDesigns: async () => {
+      throw new FrontendApiError("NETWORK_ERROR", "own designs unreachable");
     },
     materials: async () => CATALOG
   };
@@ -334,27 +392,68 @@ test("design-only retry failure keeps the ready catalog and stays a design-only 
 });
 
 test("a stale design result cannot override the newest design attempt", async () => {
-  const firstDesign = defer<PublicDesignV1>();
-  const retryDesign = defer<PublicDesignV1>();
-  let getCall = 0;
+  const firstDesign = defer<ListMyDesignsResponse>();
+  const retryDesign = defer<ListMyDesignsResponse>();
+  let listCall = 0;
   const events: LibraryPageEvent[] = [];
   const attempts = createLibraryLoadAttempts();
   const api = {
-    get: () => {
-      getCall += 1;
-      return getCall === 1 ? firstDesign.promise : retryDesign.promise;
+    listDesigns: () => {
+      listCall += 1;
+      return listCall === 1 ? firstDesign.promise : retryDesign.promise;
     },
     materials: async () => CATALOG
   };
 
   runLibraryLoad(api, (event) => events.push(event), attempts);
   runDesignLoad(api, (event) => events.push(event), attempts);
-  retryDesign.resolve(DESIGN);
-  firstDesign.resolve({ ...DESIGN, designId: "stale-design" });
+  retryDesign.resolve(OWN_HISTORY);
+  firstDesign.resolve(ownHistory({ ...DESIGN, designId: "stale-design" }));
   await settle();
 
   assert.equal(events.filter((event) => event.type === "design-resolved").length, 1);
   assert.equal(replay(events).design, DESIGN);
+});
+
+test("only the caller's newest continuable design becomes the current design", () => {
+  const older = { ...DESIGN, designId: "design-older" };
+  const newest = { ...DESIGN, designId: "design-newest" };
+  const archived = { ...DESIGN, designId: "design-archived" };
+
+  assert.equal(
+    pickContinuableLibraryDesign({
+      designs: [
+        { design: older, status: "SAVED", updatedAt: "2026-09-01T08:00:00.000Z" },
+        { design: newest, status: "DRAFT", updatedAt: "2026-10-04T08:00:00.000Z" }
+      ]
+    }),
+    newest
+  );
+  assert.equal(
+    pickContinuableLibraryDesign({
+      designs: [{ design: archived, status: "ARCHIVED", updatedAt: "2026-10-05T08:00:00.000Z" }]
+    }),
+    null,
+    "an archived design is not an editable current design"
+  );
+  assert.equal(pickContinuableLibraryDesign({ designs: [] }), null);
+});
+
+test("the no-current-design notice sends the visitor to /diy without pretending a design exists", () => {
+  const markup = renderToStaticMarkup(<LibraryNoCurrentDesignNotice />);
+  assert.match(markup, /data-library-design-notice="none"/);
+  assert.match(markup, /href="\/diy"/);
+  assert.match(markup, /还没有可编辑的设计/);
+  assert.doesNotMatch(markup, /重新加载设计/, "there is nothing to re-fetch when the history is genuinely empty");
+});
+
+test("the library reads only the owner-scoped list and never the retired demo design", () => {
+  const source = readFileSync(new URL("./crystal-library-page.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /design-diy-private/);
+  assert.doesNotMatch(source, /LIBRARY_DESIGN_ID/);
+  assert.doesNotMatch(source, /api\.get\(|designApi\.get\(/, "the library must not fetch a design by id");
+  assert.match(source, /api\.listDesigns\(\)/);
+  assert.match(source, /runLibraryLoad\(designApi, dispatcher\.dispatch, attempts\)/);
 });
 
 test("dispatch is inert once unmounted and side effects only run while mounted", () => {

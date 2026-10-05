@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { toOrderSnapshot } from "@mystcrag/design-contract";
+import {
+  PublicDesignV1Schema,
+  toOrderSnapshot,
+  type PublicDesignV1
+} from "@mystcrag/design-contract";
 
 import { mockDesignOptions } from "../../features/design/fixtures/mock-design-options";
 import { getBudgetStatus } from "../../features/design/components/design-results";
@@ -252,4 +256,159 @@ test("missing session cookie results in 401 from BFF proxy", async () => {
 test("invalid Backend success payload is rejected instead of displayed", async () => {
   const client = createDesignApiClient({ useMock: false, fetcher: (async () => jsonResponse({ designId: "forged" })) as typeof fetch });
   await assert.rejects(client.get(design.designId), (error: unknown) => error instanceof FrontendApiError && error.code === "INTERNAL_ERROR");
+});
+
+// TASK-UX-DIY-FE-001: the empty tray becomes a real design only through the
+// server-authoritative first-bead route, so the client may send the four public
+// request fields and must reject any response that is not one private
+// DIY_CREATED revision-1 bead.
+function oneBeadDiyDesign(
+  designId = "design-diy-first-bead",
+  options: { accessory?: boolean } = {}
+): PublicDesignV1 {
+  const created = structuredClone(design);
+  const beads = created.beads.slice(0, 1).map((bead, index) => ({ ...bead, positionIndex: index }));
+  const accessories = options.accessory ? structuredClone(design.accessories) : [];
+  const materialSubtotalMinor = beads.reduce((total, bead) => total + bead.unitPriceMinor * bead.quantity, 0);
+  const accessorySubtotalMinor = accessories.reduce((total, item) => total + item.unitPriceMinor * item.quantity, 0);
+  created.designId = designId;
+  created.designName = "首珠草稿";
+  created.designMode = "DIY_CREATED";
+  created.revision = 1;
+  created.beads = beads;
+  created.accessories = accessories;
+  created.bracelet.totalBeadCount = beads.length;
+  created.pricing.materialSubtotalMinor = materialSubtotalMinor;
+  created.pricing.accessorySubtotalMinor = accessorySubtotalMinor;
+  created.pricing.totalPriceMinor =
+    materialSubtotalMinor +
+    accessorySubtotalMinor +
+    created.pricing.laborFeeMinor +
+    created.pricing.designFeeMinor +
+    created.pricing.packagingFeeMinor +
+    created.pricing.platformFeeEstimateMinor +
+    created.pricing.logisticsFeeEstimateMinor -
+    created.pricing.discountMinor;
+  created.production.billOfMaterials = beads.map((bead) => ({
+    productId: bead.beadProductId,
+    specification: `${bead.shape} ${bead.diameterMm}mm`,
+    quantity: 1,
+    sourceComponentIds: [bead.componentId]
+  }));
+  created.production.componentSequence = beads.map((bead) => bead.componentId);
+  created.production.anchoredComponents = options.accessory
+    ? structuredClone(design.production.anchoredComponents)
+    : [];
+  created.community.visibility = "PRIVATE";
+  return PublicDesignV1Schema.parse(created);
+}
+
+const firstBeadRequest = {
+  requestId: "first-bead-intent-1",
+  beadProductId: "product-aquamarine-round-8",
+  locale: "zh-CN",
+  currency: "CNY"
+} as const;
+
+test("first-bead creation posts only the four public fields to the protected route", async () => {
+  const oneBead = oneBeadDiyDesign();
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  const client = createDesignApiClient({
+    useMock: false,
+    fetcher: successFetch({ requestId: firstBeadRequest.requestId, design: oneBead, warnings: [] }, calls)
+  });
+  const response = await client.createDiyFirstBead(firstBeadRequest);
+
+  assert.equal(calls[0]?.input, "/api/design/diy-first-bead");
+  assert.equal(calls[0]?.init?.method, "POST");
+  const sent = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(sent).sort(), ["beadProductId", "currency", "locale", "requestId"]);
+  assert.equal(sent.requestId, firstBeadRequest.requestId);
+  assert.equal(sent.beadProductId, firstBeadRequest.beadProductId);
+  assert.equal(Object.hasOwn(sent, "actorId"), false, "owner identity is never sent by the client");
+  assert.equal(Object.hasOwn(sent, "unitPriceMinor"), false, "price is never sent by the client");
+  assert.equal(response.design.beads.length, 1);
+  assert.equal(response.design.designId, oneBead.designId);
+  assert.equal(Object.hasOwn(calls[0]?.init?.headers as object, "authorization"), false);
+});
+
+for (const forged of [
+  { actorId: "user-victim" },
+  { unitPriceMinor: 1 },
+  { availableQuantity: 999 },
+  { revision: 7 },
+  { design: oneBeadDiyDesign("design-forged") }
+]) {
+  test(`first-bead request rejects the forged field ${Object.keys(forged)[0]}`, async () => {
+    const calls: Array<{ input: string; init?: RequestInit }> = [];
+    const client = createDesignApiClient({
+      useMock: false,
+      fetcher: successFetch({ requestId: firstBeadRequest.requestId, design: oneBeadDiyDesign(), warnings: [] }, calls)
+    });
+    await assert.rejects(
+      client.createDiyFirstBead({ ...firstBeadRequest, ...forged } as never),
+      (error: unknown) => (error as { name?: string }).name === "ZodError"
+    );
+    assert.equal(calls.length, 0, "a forged first-bead request must never reach the network");
+  });
+}
+
+const firstBeadResponseTampering: Array<[string, (oneBead: PublicDesignV1) => PublicDesignV1]> = [
+  ["zero beads", (oneBead) => ({ ...oneBead, beads: [], production: { ...oneBead.production, componentSequence: [] } })],
+  ["two beads", (oneBead) => {
+    const tampered = structuredClone(oneBead);
+    const second = { ...tampered.beads[0]!, componentId: "component-second", positionIndex: 1 };
+    tampered.beads = [...tampered.beads, second];
+    tampered.production.componentSequence = tampered.beads.map((bead) => bead.componentId);
+    return tampered;
+  }],
+  ["an accessory", () => {
+    const withAccessory = oneBeadDiyDesign("design-diy-first-bead", { accessory: true });
+    assert.equal(withAccessory.accessories.length, 1, "fixture must carry an accessory to prove the guard");
+    return withAccessory;
+  }],
+  ["a non-DIY mode", (oneBead) => ({ ...oneBead, designMode: "AI_GENERATED" as PublicDesignV1["designMode"] })],
+  ["a later revision", (oneBead) => ({ ...oneBead, revision: 2 })],
+  ["a shared visibility", (oneBead) => ({ ...oneBead, community: { ...oneBead.community, visibility: "PUBLIC" as const } })]
+];
+
+for (const [label, tamper] of firstBeadResponseTampering) {
+  test(`a first-bead response with ${label} is rejected instead of opened in the editor`, async () => {
+    const tampered = tamper(oneBeadDiyDesign());
+    const client = createDesignApiClient({
+      useMock: false,
+      fetcher: successFetch({ requestId: firstBeadRequest.requestId, design: tampered, warnings: [] }, [])
+    });
+    await assert.rejects(
+      client.createDiyFirstBead(firstBeadRequest),
+      (error: unknown) => error instanceof FrontendApiError && error.code === "INTERNAL_ERROR"
+    );
+  });
+}
+
+test("first-bead network failure keeps a retryable Frontend error state", async () => {
+  const client = createDesignApiClient({
+    useMock: false,
+    fetcher: (async () => jsonResponse({ error: { code: "INVENTORY_CHANGED", message: "sold out", requestId: "req-stock" } }, 409)) as typeof fetch
+  });
+  await assert.rejects(
+    client.createDiyFirstBead(firstBeadRequest),
+    (error: unknown) => error instanceof FrontendApiError && error.code === "INVENTORY_CHANGED"
+  );
+});
+
+test("mock mode refuses to fabricate a first-bead design", async () => {
+  let fetchCalls = 0;
+  const client = createDesignApiClient({
+    useMock: true,
+    fetcher: (async () => {
+      fetchCalls += 1;
+      throw new Error("mock mode must not call fetch");
+    }) as typeof fetch
+  });
+  await assert.rejects(
+    client.createDiyFirstBead(firstBeadRequest),
+    (error: unknown) => error instanceof FrontendApiError && error.code === "VALIDATION_ERROR"
+  );
+  assert.equal(fetchCalls, 0);
 });

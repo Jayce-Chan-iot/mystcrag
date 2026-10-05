@@ -372,7 +372,11 @@ test("bracelet circumference keeps size advisories without blocking completion",
 test("DIY entry bypasses the AI questionnaire and the mobile questionnaire uses direct touch buttons", () => {
   const diyRoute = readFileSync(new URL("../../../app/diy/page.tsx", import.meta.url), "utf8");
   const questionnaire = readFileSync(new URL("../questionnaire/components/questionnaire-wizard.tsx", import.meta.url), "utf8");
-  assert.match(diyRoute, /redirect\("\/diy\/design-diy-private"\)/);
+  // TASK-UX-DIY-FE-001 test-only migration: /diy no longer redirects to the retired
+  // fixed demo design. It renders the owner-scoped entry (own history or an empty tray).
+  assert.match(diyRoute, /<DiyEntry \/>/);
+  assert.doesNotMatch(diyRoute, /design-diy-private/);
+  assert.doesNotMatch(diyRoute, /redirect\(/);
   assert.doesNotMatch(diyRoute, /redirect\("\/ai-design"\)/);
   assert.match(questionnaire, /touch-manipulation/);
   assert.match(questionnaire, /role="radio"/);

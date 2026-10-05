@@ -4,6 +4,7 @@ import type {
   AccessoryV1,
   CatalogAccessoryProduct,
   CatalogMaterialProduct,
+  ListMyDesignsResponse,
   PublicDesignV1
 } from "@mystcrag/design-contract";
 import Link from "next/link";
@@ -35,7 +36,6 @@ import {
   type LibraryStockFilter
 } from "../model/library-model";
 
-const LIBRARY_DESIGN_ID = "design-diy-private";
 const FAVORITES_STORAGE_KEY = "mystcrag:library-favorites";
 const MATERIAL_LIST_COLLAPSED_COUNT = 9;
 const PANEL_THUMBNAIL_LIMIT = 14;
@@ -90,7 +90,10 @@ function toVariantSelection(current: Record<string, string>, materials: readonly
   return next;
 }
 
-export type LibraryPageApi = Pick<typeof designApi, "get" | "materials">;
+// The library's optional "current design" panel is the signed-in caller's own
+// newest continuable design, read through GET /api/designs. No design id is ever
+// named here, so a fresh account cannot leak — or be pointed at — a demo design.
+export type LibraryPageApi = Pick<typeof designApi, "listDesigns" | "materials">;
 
 export type LibraryPageStatus = "loading" | "catalog-error" | "ready";
 
@@ -99,6 +102,7 @@ export type LibraryPageState = {
   catalogNotice: FrontendErrorCode | null;
   design: PublicDesignV1 | null;
   designNotice: FrontendErrorCode | null;
+  noCurrentDesign: boolean;
   materials: CatalogMaterialProduct[];
   accessories: CatalogAccessoryProduct[];
   operationNotice: FrontendErrorCode | null;
@@ -109,6 +113,7 @@ export const INITIAL_LIBRARY_PAGE_STATE: LibraryPageState = {
   catalogNotice: null,
   design: null,
   designNotice: null,
+  noCurrentDesign: false,
   materials: [],
   accessories: [],
   operationNotice: null
@@ -119,11 +124,20 @@ export type LibraryPageEvent =
   | { type: "catalog-resolved"; materials: CatalogMaterialProduct[]; accessories: CatalogAccessoryProduct[] }
   | { type: "catalog-failed"; code: FrontendErrorCode }
   | { type: "design-resolved"; design: PublicDesignV1 }
+  | { type: "design-absent" }
   | { type: "design-failed"; code: FrontendErrorCode }
   | { type: "operation-started" }
   | { type: "operation-failed"; code: FrontendErrorCode }
   | { type: "operation-notice-dismissed" }
   | { type: "catalog-notice-dismissed" };
+
+/** The newest own design the caller may still edit; archived records are not editable. */
+export function pickContinuableLibraryDesign(response: ListMyDesignsResponse): PublicDesignV1 | null {
+  const continuable = response.designs
+    .filter((entry) => entry.status !== "ARCHIVED")
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return continuable[0]?.design ?? null;
+}
 
 export function reduceLibraryPage(state: LibraryPageState, event: LibraryPageEvent): LibraryPageState {
   switch (event.type) {
@@ -134,9 +148,11 @@ export function reduceLibraryPage(state: LibraryPageState, event: LibraryPageEve
     case "catalog-failed":
       return { ...state, status: "catalog-error", catalogNotice: event.code };
     case "design-resolved":
-      return { ...state, design: event.design, designNotice: null };
+      return { ...state, design: event.design, designNotice: null, noCurrentDesign: false };
+    case "design-absent":
+      return { ...state, design: null, designNotice: null, noCurrentDesign: true };
     case "design-failed":
-      return { ...state, design: null, designNotice: event.code };
+      return { ...state, design: null, designNotice: event.code, noCurrentDesign: false };
     case "operation-started":
       return { ...state, operationNotice: null };
     case "operation-failed":
@@ -206,8 +222,7 @@ export function createLibraryDispatch(
 export function runLibraryLoad(
   api: LibraryPageApi,
   dispatch: (event: LibraryPageEvent) => void,
-  attempts: LibraryLoadAttempts,
-  designId = LIBRARY_DESIGN_ID
+  attempts: LibraryLoadAttempts
 ): void {
   const catalogAttempt = attempts.beginCatalog();
   const designAttempt = attempts.beginDesign();
@@ -222,10 +237,11 @@ export function runLibraryLoad(
       dispatch({ type: "catalog-failed", code: toFrontendApiError(error).code });
     }
   );
-  void api.get(designId).then(
-    (design) => {
+  void api.listDesigns().then(
+    (response) => {
       if (!designAttempt.isCurrent()) return;
-      dispatch({ type: "design-resolved", design });
+      const design = pickContinuableLibraryDesign(response);
+      dispatch(design ? { type: "design-resolved", design } : { type: "design-absent" });
     },
     (error: unknown) => {
       if (!designAttempt.isCurrent()) return;
@@ -242,14 +258,14 @@ export function runLibraryLoad(
 export function runDesignLoad(
   api: LibraryPageApi,
   dispatch: (event: LibraryPageEvent) => void,
-  attempts: LibraryLoadAttempts,
-  designId = LIBRARY_DESIGN_ID
+  attempts: LibraryLoadAttempts
 ): void {
   const attempt = attempts.beginDesign();
-  void api.get(designId).then(
-    (design) => {
+  void api.listDesigns().then(
+    (response) => {
       if (!attempt.isCurrent()) return;
-      dispatch({ type: "design-resolved", design });
+      const design = pickContinuableLibraryDesign(response);
+      dispatch(design ? { type: "design-resolved", design } : { type: "design-absent" });
     },
     (error: unknown) => {
       if (!attempt.isCurrent()) return;
@@ -278,6 +294,29 @@ export function LibraryDesignUnavailableNotice({
   >
         重新加载设计
       </button>
+    </div>
+  );
+}
+
+/**
+ * A signed-in customer with nothing editable simply has no current design: the
+ * honest next step is the `/diy` entry, which starts from an empty tray. There is
+ * no design to re-fetch, so this notice offers no reload control.
+ */
+export function LibraryNoCurrentDesignNotice() {
+  return (
+    <div className="rounded-2xl border border-[var(--border)] bg-white p-4" data-library-design-notice="none" role="status">
+      <h2 className="text-sm font-medium">当前设计</h2>
+      <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+        你还没有可编辑的设计。矿石目录不受影响，可以先浏览与收藏；从 DIY 入口开始一副新的手串吧。
+      </p>
+      <Link
+        className="mt-3 flex min-h-10 w-full items-center justify-center rounded-xl bg-[var(--accent-deep)] text-xs text-white"
+        data-library-start-diy="true"
+        href="/diy"
+      >
+        去 DIY 开始新设计
+      </Link>
     </div>
   );
 }
@@ -331,7 +370,7 @@ export function CrystalLibraryPage() {
   const [variantSelection, setVariantSelection] = React.useState<Record<string, string>>({});
   const [favorites, setFavorites] = React.useState<Set<string>>(() => new Set());
 
-  const { design, materials, accessories, designNotice } = state;
+  const { design, materials, accessories, designNotice, noCurrentDesign } = state;
 
   // Lazily created once: the reducer dispatch and setters are stable, so the
   // dispatcher identity never changes and never re-triggers the load effect.
@@ -975,7 +1014,7 @@ export function CrystalLibraryPage() {
 
             {!design ? (
               <div className="mt-4 lg:hidden" data-library-design-notice="mobile">
-                <LibraryDesignUnavailableNotice designNotice={designNotice} onRetry={retryDesign} />
+                {noCurrentDesign ? <LibraryNoCurrentDesignNotice /> : <LibraryDesignUnavailableNotice designNotice={designNotice} onRetry={retryDesign} />}
               </div>
             ) : null}
 
@@ -1060,7 +1099,7 @@ export function CrystalLibraryPage() {
             </div>
             ) : (
               <div className="sticky top-[4.5rem]">
-                <LibraryDesignUnavailableNotice designNotice={designNotice} onRetry={retryDesign} />
+                {noCurrentDesign ? <LibraryNoCurrentDesignNotice /> : <LibraryDesignUnavailableNotice designNotice={designNotice} onRetry={retryDesign} />}
               </div>
             )}
           </aside>
