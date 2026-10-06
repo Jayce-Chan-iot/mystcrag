@@ -293,7 +293,12 @@ test("the header gives the action group its own row instead of forcing one line"
   );
   assert.match(
     css,
-    /@media \(max-width: 639px\)[\s\S]*?\[data-star-header\][^{]*\{[^}]*max-height:\s*1(?:0[0-9]|1[0-9])px/,
-    "the phone header gets a two-row budget rather than clipping"
+    /@media \(max-width: 639px\)[\s\S]*?\[data-star-header\][^{]*\{[^}]*max-height:\s*none;/,
+    "the phone header must grow with its content instead of stopping at a fixed budget"
+  );
+  assert.doesNotMatch(
+    css,
+    /@media \(max-width: 639px\)[\s\S]*?\[data-star-header\][^{]*\{[^}]*max-height:\s*\d+px/,
+    "a pixel cap on the phone header let the identity row cross its bottom edge"
   );
 });

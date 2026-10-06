@@ -121,17 +121,16 @@
 
 /* Phone header rows (TASK-UX-I18N-FE-001 review).
  * The brand and the action group are allowed to take two readable rows at 320 px
- * instead of hiding intrinsic width or ellipsising the language name. The desktop
- * header keeps its 80px budget. */
+ * instead of hiding intrinsic width or ellipsising the language name. The header
+ * then grows with that content: a phone-side pixel cap used to leave the identity
+ * row crossing the header's bottom edge and overlapping the page body. Only the
+ * desktop header keeps the 80px budget. */
 [data-desktop-navigation] {
   max-height: 80px;
 }
 
 @media (max-width: 639px) {
-  [data-star-header] {
-    max-height: 112px;
-  }
-
+  [data-star-header],
   [data-star-header] nav {
     max-height: none;
   }
