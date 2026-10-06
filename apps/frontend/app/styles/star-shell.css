@@ -118,3 +118,21 @@
     transition: none;
   }
 }
+
+/* Phone header rows (TASK-UX-I18N-FE-001 review).
+ * The brand and the action group are allowed to take two readable rows at 320 px
+ * instead of hiding intrinsic width or ellipsising the language name. The desktop
+ * header keeps its 80px budget. */
+[data-desktop-navigation] {
+  max-height: 80px;
+}
+
+@media (max-width: 639px) {
+  [data-star-header] {
+    max-height: 112px;
+  }
+
+  [data-star-header] nav {
+    max-height: none;
+  }
+}

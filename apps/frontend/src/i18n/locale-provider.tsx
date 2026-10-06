@@ -112,3 +112,22 @@ export function LocalizedText({ messageKey, fallback }: LocalizedTextProps) {
   const value = t(messageKey);
   return <>{value.length > 0 ? value : fallback}</>;
 }
+
+export type LocalizedNavigationProps = {
+  messageKey: MessageKey;
+  fallback: string;
+  className?: string;
+  children: React.ReactNode;
+};
+
+/**
+ * A navigation landmark whose accessible name follows the client language. A
+ * server-rendered `aria-label` would keep the previous language after a switch,
+ * leaving translated visible copy inside an untranslated landmark name; `nav`
+ * keeps its implicit role here on purpose.
+ */
+export function LocalizedNavigation({ messageKey, fallback, className, children }: LocalizedNavigationProps) {
+  const { t } = useDisplayLocale();
+  const label = t(messageKey);
+  return <nav aria-label={label.length > 0 ? label : fallback} className={className}>{children}</nav>;
+}

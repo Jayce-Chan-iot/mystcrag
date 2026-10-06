@@ -17,7 +17,7 @@ import {
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { LocaleProvider, LocalizedText, createDisplayLocaleController, useDisplayLocale } from "./locale-provider";
+import { LocaleProvider, LocalizedNavigation, LocalizedText, createDisplayLocaleController, useDisplayLocale } from "./locale-provider";
 import { zhCN } from "./messages/zh-CN";
 import { zhTW } from "./messages/zh-TW";
 import { enUS } from "./messages/en-US";
@@ -384,4 +384,58 @@ test("the phone tab bar consumes the resolver and localizes its accessible names
   for (const fallback of ["首页", "DIY", "作品画廊", "我的"]) {
     assert.match(source, new RegExp(fallback), "the Simplified Chinese fallback stays declared in the tab table");
   }
+});
+// Review repair (2026-10-05): the desktop navigation used to take its accessible
+// name from a one-time server render, so switching language on the client left the
+// visible copy translated while the landmark name stayed 简体中文.
+
+test("the navigation landmark announces itself in the client language", () => {
+  const english = renderToStaticMarkup(
+    <LocaleProvider initialLocale="en-US">
+      <LocalizedNavigation className="nav-classes" fallback="主导航" messageKey="shell.mainNavigation">
+        <span>DIY</span>
+      </LocalizedNavigation>
+    </LocaleProvider>
+  );
+  assert.match(english, /<nav aria-label="Main navigation" class="nav-classes">/);
+  assert.doesNotMatch(english, /role="navigation"/, "nav keeps its implicit role instead of a redundant attribute");
+
+  const traditional = renderToStaticMarkup(
+    <LocaleProvider initialLocale="zh-TW">
+      <LocalizedNavigation className="nav-classes" fallback="主导航" messageKey="shell.mainNavigation">
+        <span>DIY 創作</span>
+      </LocalizedNavigation>
+    </LocaleProvider>
+  );
+  assert.match(traditional, /<nav aria-label="主導覽"/);
+
+  const simplified = renderToStaticMarkup(
+    <LocaleProvider initialLocale="zh-CN">
+      <LocalizedNavigation className="nav-classes" fallback="主导航" messageKey="shell.mainNavigation">
+        <span>DIY 创作</span>
+      </LocalizedNavigation>
+    </LocaleProvider>
+  );
+  assert.match(simplified, /<nav aria-label="主导航"/);
+});
+
+test("the navigation name falls back visibly instead of going unnamed", () => {
+  const markup = renderToStaticMarkup(
+    <LocaleProvider initialLocale="en-US">
+      <LocalizedNavigation className="n" fallback="回退名称" messageKey={"shell.not-a-key" as never}>
+        <span>home</span>
+      </LocalizedNavigation>
+    </LocaleProvider>
+  );
+  assert.match(markup, /<nav aria-label="回退名称"/);
+});
+
+test("the shell binds the navigation name to the language authority", () => {
+  const layoutSource = readFileSync(new URL("../../app/layout.tsx", import.meta.url), "utf8");
+  assert.match(layoutSource, /<LocalizedNavigation/);
+  assert.doesNotMatch(
+    layoutSource,
+    /aria-label=\{translate\(locale, "shell\.mainNavigation"\)\}/,
+    "a server-only aria-label cannot follow a client language switch"
+  );
 });

@@ -15,22 +15,26 @@ import {
 
 const options = DISPLAY_LOCALE_OPTIONS;
 
+function frameProps(
+  props: Partial<Parameters<typeof LanguageMenuFrame>[0]> = {}
+): Parameters<typeof LanguageMenuFrame>[0] {
+  return {
+    currentNativeLabel: "简体中文",
+    label: "语言",
+    locale: "zh-CN",
+    menu: INITIAL_LANGUAGE_MENU_STATE,
+    onKey: () => undefined,
+    onSelect: () => undefined,
+    onToggle: () => undefined,
+    options,
+    ...props
+  };
+}
+
 function frameMarkup(
   props: Partial<Parameters<typeof LanguageMenuFrame>[0]> = {}
 ): string {
-  return renderToStaticMarkup(
-    <LanguageMenuFrame
-      currentNativeLabel="简体中文"
-      label="语言"
-      locale="zh-CN"
-      menu={INITIAL_LANGUAGE_MENU_STATE}
-      onKey={() => undefined}
-      onSelect={() => undefined}
-      onToggle={() => undefined}
-      options={options}
-      {...props}
-    />
-  );
+  return renderToStaticMarkup(<LanguageMenuFrame {...frameProps(props)} />);
 }
 
 function hostElement(
@@ -84,7 +88,7 @@ test("the open menu lists all three languages in their own script", () => {
 test("the trigger stays reachable on a 320px header without a duplicate hamburger", () => {
   const markup = frameMarkup();
 
-  assert.match(markup, /data-language-current-label="true"[^>]*class="hidden[^"]*sm:inline"/);
+  assert.match(markup, /data-language-current-label="true"/);
   assert.doesNotMatch(markup, /hamburger|menu-toggle|data-menu-button/i);
   assert.doesNotMatch(markup, /whitespace-nowrap[^"]*min-w-\[\d{3,}px\]/, "no unbreakable width that could overflow");
 });
@@ -249,13 +253,47 @@ test("the open menu is addressable and capped to the viewport", () => {
 test("the header row shrinks instead of overflowing a narrow viewport", () => {
   const closed = frameMarkup();
   assert.match(closed, /class="relative min-w-0 shrink" data-language-switcher-root="true"/);
-  assert.match(closed, /class="truncate"/);
 
   const layoutSource = readFileSync(new URL("../../app/layout.tsx", import.meta.url), "utf8");
   assert.match(
     layoutSource,
-    /className="flex min-w-0 shrink items-center justify-end gap-2" data-header-actions="true"/,
-    "the header action row must be allowed to shrink at 320px"
+    /className="ml-auto flex flex-wrap items-center justify-end gap-2" data-header-actions="true"/,
+    "the header action row must be able to take its own row at 320px"
   );
   assert.doesNotMatch(layoutSource, /className="flex shrink-0 items-center gap-2" data-header-actions="true"/);
+});
+
+test("the language control keeps a readable name at phone width instead of hiding or truncating it", () => {
+  const closed = frameMarkup();
+
+  assert.doesNotMatch(closed, /class="truncate"/, "an ellipsised language name is not a fix for a narrow header");
+  const currentLabel = hostElement(LanguageMenuFrame(frameProps()), "data-language-current-label");
+  assert.ok(currentLabel, "the current language name must be rendered");
+  assert.doesNotMatch(
+    String(currentLabel.props.className),
+    /(^|\s)hidden(\s|$)/,
+    "hiding the current language name leaves a phone user without an understandable label"
+  );
+});
+
+test("the header gives the action group its own row instead of forcing one line", () => {
+  const layoutSource = readFileSync(new URL("../../app/layout.tsx", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../../app/styles/star-shell.css", import.meta.url), "utf8");
+  const actionsClass = layoutSource.match(/className="([^"]*)" data-header-actions="true"/)?.[1] ?? "";
+
+  assert.ok(actionsClass.length > 0, "the header action group must be identifiable");
+  assert.ok(actionsClass.includes("flex-wrap"), "the action group has to wrap onto its own row at 320px");
+  assert.ok(actionsClass.includes("ml-auto"), "the wrapped action row stays aligned to the trailing edge");
+  assert.ok(!actionsClass.includes("shrink-0"), "a refusal to shrink is what forced the header past the viewport");
+
+  assert.match(
+    css,
+    /\[data-desktop-navigation\][^{]*\{[^}]*max-height:\s*80px/,
+    "the desktop header keeps its 80px budget"
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 639px\)[\s\S]*?\[data-star-header\][^{]*\{[^}]*max-height:\s*1(?:0[0-9]|1[0-9])px/,
+    "the phone header gets a two-row budget rather than clipping"
+  );
 });

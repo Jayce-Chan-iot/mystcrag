@@ -6,8 +6,8 @@ import type { ReactNode } from "react";
 import { DevelopmentModeBadge } from "../src/components/development-mode-badge";
 import { LanguageSwitcher } from "../src/components/language-switcher";
 import { AuthStatus } from "../src/features/auth/components/auth-status";
-import { readDisplayLocale, translate } from "../src/i18n/locale";
-import { LocaleProvider, LocalizedText } from "../src/i18n/locale-provider";
+import { readDisplayLocale } from "../src/i18n/locale";
+import { LocaleProvider, LocalizedNavigation, LocalizedText } from "../src/i18n/locale-provider";
 import { isOracleFeatureEnabled, isTarotFeatureEnabled } from "../src/lib/api/api-runtime";
 import { MobileBottomNav } from "../components/mobile-bottom-nav";
 import "./globals.css";
@@ -49,7 +49,11 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
             data-atelier-header="true"
             data-star-header="true"
           >
-            <nav className="mx-auto flex h-[3.4rem] max-w-7xl items-center justify-between gap-3 px-4 sm:h-[3.75rem] sm:px-8" aria-label={translate(locale, "shell.mainNavigation")}>
+            <LocalizedNavigation
+              className="mx-auto flex h-auto min-h-[3.4rem] max-w-7xl flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-1 sm:flex-nowrap sm:h-[3.75rem] sm:px-8 sm:py-0"
+              fallback="主导航"
+              messageKey="shell.mainNavigation"
+            >
               <Link className="inline-flex min-h-11 items-center whitespace-nowrap font-serif text-lg tracking-[0.18em] sm:text-xl" href="/" aria-label="玄矶 Mystcrag 首页">
                 玄矶 <span className="text-[0.68em] tracking-[0.24em] text-[var(--muted)]">MYSTCRAG</span>
               </Link>
@@ -70,11 +74,11 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
                   );
                 })}
               </div>
-              <div className="flex min-w-0 shrink items-center justify-end gap-2" data-header-actions="true">
+              <div className="ml-auto flex flex-wrap items-center justify-end gap-2" data-header-actions="true">
                 <LanguageSwitcher />
                 <AuthStatus />
               </div>
-            </nav>
+            </LocalizedNavigation>
           </header>
           <div className="pb-[3.4rem] lg:pb-0" data-content-shell="true" data-star-surface="shell">
             {children}

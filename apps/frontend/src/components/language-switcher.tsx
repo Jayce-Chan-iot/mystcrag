@@ -195,8 +195,8 @@ export function LanguageMenuFrame({
         ref={triggerRef}
         type="button"
       >
-        <span className="truncate">{label}</span>
-        <span data-language-current-label="true" className="hidden text-[var(--foreground)] sm:inline">
+        <span>{label}</span>
+        <span data-language-current-label="true" className="text-[var(--foreground)]">
           {currentNativeLabel}
         </span>
         <span aria-hidden="true" className="text-[0.62rem]">
