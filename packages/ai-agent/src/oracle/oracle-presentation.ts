@@ -116,8 +116,8 @@ export function projectOraclePresentation(
     sessionId: source.sessionId,
     sourceRevision: source.revision,
     locale: targetLocale,
-    headline: oracleHeadline(targetLocale, source.cast.primaryHexagram.number),
-    summary: oracleSummary(targetLocale, movingLines.length > 0),
+    headline: oracleHeadline(targetLocale),
+    summary: oracleSummary(targetLocale, movingLines.length > 0, primaryLabels, rhythmLabel),
     cues,
     materials: collectMaterials(targetLocale, source.recommendations, catalog),
     cards

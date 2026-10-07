@@ -1,5 +1,7 @@
 import type { CatalogMaterialProduct, OraclePresentationResponse } from "@mystcrag/design-contract";
 
+import { hasProhibitedOracleClaim } from "./oracle-copy.service.js";
+
 /**
  * Reviewed, versioned display templates for the read-only Oracle presentation projection.
  * Every string here is original Mystcrag copy written for one display locale; nothing is
@@ -14,7 +16,6 @@ export type OraclePresentationDirection = "BALANCED" | "CONTRAST" | "NEUTRAL_LED
 type LocaleCopy = Record<OraclePresentationLocale, string>;
 
 const LIST_SEPARATOR: LocaleCopy = { "zh-CN": "、", "zh-TW": "、", "en-US": ", " };
-const POSITION_SEPARATOR: LocaleCopy = { "zh-CN": "、", "zh-TW": "、", "en-US": ", " };
 
 const COLOR_LABELS: Record<string, LocaleCopy> = {
   "color:white": { "zh-CN": "月白", "zh-TW": "月白", "en-US": "moon white" },
@@ -52,24 +53,42 @@ const GENERIC_COLOR_CUE: LocaleCopy = {
   "en-US": "Observe the palette and spacing as the overall visual cue."
 };
 
-const HEADLINE: Record<OraclePresentationLocale, (hexagramNumber: number) => string> = {
-  "zh-CN": (hexagramNumber) => `第${hexagramNumber}卦的设计线索`,
-  "zh-TW": (hexagramNumber) => `第${hexagramNumber}卦的設計線索`,
-  "en-US": (hexagramNumber) => `Hexagram ${hexagramNumber} as a design cue`
+/**
+ * Customer-facing headline. It names the three things a reader can actually see on the piece —
+ * lead color, rhythm, and accent — and never exposes cast structure such as hexagram numbers,
+ * moving-line positions, or the algorithm name.
+ */
+const HEADLINE: LocaleCopy = {
+  "zh-CN": "主色、节奏与点睛：这组设计的观察线索",
+  "zh-TW": "主色、節奏與點睛：這組設計的觀察線索",
+  "en-US": "Lead color, rhythm, and accent: a design cue"
 };
 
-const SUMMARY_MOVING: LocaleCopy = {
-  "zh-CN": "从本卦到变卦的变化仅作为构图提示：先建立稳定主序，再在动爻位置加入轻重转折。",
-  "zh-TW": "從本卦到變卦的變化僅作為構圖提示：先建立穩定主序，再在動爻位置加入輕重轉折。",
-  "en-US":
-    "Use the shift from the primary to the transformed structure only as a composition cue: establish a calm base, then mark the moving positions with measured contrast."
+type SummaryTemplate = Record<OraclePresentationLocale, (primary: string, rhythm: string) => string>;
+
+const SUMMARY_MOVING: SummaryTemplate = {
+  "zh-CN": (primary, rhythm) => `这组设计以${primary}为主色，节奏${rhythm}，仅在点睛处作轻微转折。`,
+  "zh-TW": (primary, rhythm) => `這組設計以${primary}為主色，節奏${rhythm}，僅在點睛處作輕微轉折。`,
+  "en-US": (primary, rhythm) =>
+    `This design leads with ${primary} and keeps ${rhythm}, reserving only a light accent.`
 };
 
-const SUMMARY_STATIC: LocaleCopy = {
-  "zh-CN": "此卦可作为观察当前节奏的一个角度：以稳定秩序展开色彩与材质，不预设任何现实结果。",
-  "zh-TW": "此卦可作為觀察當下節奏的一個角度：以穩定秩序展開色彩與材質，不預設任何現實結果。",
-  "en-US":
-    "Use this structure as one way to observe the present rhythm: build color and material with steady order, without predicting an outcome."
+const SUMMARY_STATIC: SummaryTemplate = {
+  "zh-CN": (primary, rhythm) => `这组设计以${primary}为主色，节奏${rhythm}，保持整体平静。`,
+  "zh-TW": (primary, rhythm) => `這組設計以${primary}為主色，節奏${rhythm}，保持整體平靜。`,
+  "en-US": (primary, rhythm) => `This design leads with ${primary} and keeps ${rhythm} in a calm overall balance.`
+};
+
+const SUMMARY_FALLBACK_PRIMARY: LocaleCopy = {
+  "zh-CN": "稳定配色",
+  "zh-TW": "穩定配色",
+  "en-US": "a calm palette"
+};
+
+const SUMMARY_FALLBACK_RHYTHM: LocaleCopy = {
+  "zh-CN": "稳定",
+  "zh-TW": "穩定",
+  "en-US": "a steady rhythm"
 };
 
 const CARD_TITLE: Record<OraclePresentationDirection, LocaleCopy> = {
@@ -110,12 +129,20 @@ export function oracleRhythmLabel(locale: OraclePresentationLocale, tag: string)
   return RHYTHM_LABELS[tag]?.[locale];
 }
 
-export function oracleHeadline(locale: OraclePresentationLocale, hexagramNumber: number): string {
-  return bounded(HEADLINE[locale](hexagramNumber), 48);
+export function oracleHeadline(locale: OraclePresentationLocale): string {
+  return bounded(HEADLINE[locale], 48);
 }
 
-export function oracleSummary(locale: OraclePresentationLocale, moving: boolean): string {
-  return bounded(moving ? SUMMARY_MOVING[locale] : SUMMARY_STATIC[locale], 240);
+export function oracleSummary(
+  locale: OraclePresentationLocale,
+  moving: boolean,
+  primaryLabels: readonly string[],
+  rhythmLabel: string | undefined
+): string {
+  const primary =
+    primaryLabels.length > 0 ? primaryLabels.join(LIST_SEPARATOR[locale]) : SUMMARY_FALLBACK_PRIMARY[locale];
+  const rhythm = rhythmLabel ?? SUMMARY_FALLBACK_RHYTHM[locale];
+  return bounded((moving ? SUMMARY_MOVING : SUMMARY_STATIC)[locale](primary, rhythm), 240);
 }
 
 export function oracleGenericColorCue(locale: OraclePresentationLocale): string {
@@ -164,15 +191,19 @@ export function oracleRhythmCue(locale: OraclePresentationLocale, rhythmLabel: s
   return bounded(`节奏以${rhythmLabel}展开，让珠序保持稳定层次。`, 120);
 }
 
+/**
+ * Accent cue. The moving-line positions are a structural fact used only to count the accents;
+ * the positions themselves, the moving-line concept, and any cast structure stay out of the copy.
+ */
 export function oracleAccentCue(locale: OraclePresentationLocale, positions: readonly number[]): string {
-  const joined = positions.join(POSITION_SEPARATOR[locale]);
+  const count = positions.length;
   if (locale === "en-US") {
-    return bounded(`Moving lines at positions ${joined} mark restrained accent points only.`, 120);
+    return bounded(`Close the overall rhythm with ${count} restrained accent points.`, 120);
   }
   if (locale === "zh-TW") {
-    return bounded(`動爻位於第${joined}爻，僅作為克制的點睛位置。`, 120);
+    return bounded(`以${count}處克制的點睛收束整體節奏。`, 120);
   }
-  return bounded(`动爻位于第${joined}爻，仅作为克制的点睛位置。`, 120);
+  return bounded(`以${count}处克制的点睛收束整体节奏。`, 120);
 }
 
 export function oracleCardTitle(
@@ -190,11 +221,64 @@ export function oracleCardDescription(
   return bounded(CARD_DESCRIPTION[direction][locale](beadCount), 240);
 }
 
+/**
+ * Human-reviewed Traditional Chinese crystal names, keyed by the stable catalog `crystalId`.
+ * A `zh-TW` reader must never be shown the simplified `crystalNameCn` verbatim, so only names a
+ * reviewer has confirmed for Traditional Chinese are listed here. This is a hand-checked display
+ * map, not a runtime script conversion.
+ */
+const REVIEWED_TRADITIONAL_MATERIAL_NAMES: Record<string, string> = {
+  "crystal-agate": "瑪瑙",
+  "crystal-amethyst": "紫水晶",
+  "crystal-aquamarine": "海藍寶",
+  "crystal-citrine": "黃水晶",
+  "crystal-clear-quartz": "白水晶",
+  "crystal-garnet": "石榴石",
+  "crystal-gold": "黃金",
+  "crystal-labradorite": "拉長石",
+  "crystal-lapis-lazuli": "青金石",
+  "crystal-moonstone": "月光石",
+  "crystal-nephrite": "和田玉",
+  "crystal-obsidian": "黑曜石",
+  "crystal-rhodonite": "薔薇輝石",
+  "crystal-rose-quartz": "粉晶",
+  "crystal-rutilated-quartz": "髮晶",
+  "crystal-smoky-quartz": "煙晶",
+  "crystal-sterling-silver": "純銀",
+  "crystal-tourmaline": "碧璽"
+};
+
+/**
+ * Material label for one catalog product.
+ *
+ * Fallback strategy, in order:
+ * 1. `en-US` shows the catalog's English name; `zh-CN` shows the catalog's simplified name.
+ * 2. `zh-TW` shows a reviewed Traditional name when the `crystalId` is covered.
+ * 3. A `zh-TW` name with no reviewed entry falls back to the catalog's authoritative English
+ *    `crystalNameEn` — an explicit, safe substitute that never guesses a conversion and never
+ *    invents a product identity.
+ * 4. If the resolved name still trips the shared prohibited-claim detector, the name is dropped and
+ *    only the factual shape and diameter are shown, so no efficacy claim reaches any locale while
+ *    the real `beadProductId` is preserved.
+ */
 export function oracleMaterialLabel(
   locale: OraclePresentationLocale,
-  product: Pick<CatalogMaterialProduct, "crystalNameCn" | "crystalNameEn" | "shape" | "diameterMm">
+  product: Pick<
+    CatalogMaterialProduct,
+    "crystalId" | "crystalNameCn" | "crystalNameEn" | "shape" | "diameterMm"
+  >
 ): string {
-  const name = locale === "en-US" ? product.crystalNameEn : product.crystalNameCn;
+  const candidateName =
+    locale === "en-US"
+      ? product.crystalNameEn
+      : locale === "zh-TW"
+        ? (REVIEWED_TRADITIONAL_MATERIAL_NAMES[product.crystalId] ?? product.crystalNameEn)
+        : product.crystalNameCn;
+
+  const name = hasProhibitedOracleClaim(candidateName) ? undefined : candidateName;
   const shape = SHAPE_LABELS[product.shape]?.[locale] ?? "";
-  return bounded([name, shape, `${product.diameterMm}mm`].filter((part) => part.length > 0).join(" "), 160);
+  const parts = [name, shape, `${product.diameterMm}mm`].filter(
+    (part): part is string => typeof part === "string" && part.length > 0
+  );
+  return bounded(parts.join(" "), 160);
 }

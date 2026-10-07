@@ -222,8 +222,8 @@ test("an old single-language session projects into every locale without mutation
   const traditional = projectOraclePresentation(recommendedSession, "zh-TW", availableCatalog);
   const simplified = projectOraclePresentation(recommendedSession, "zh-CN", availableCatalog);
   assert.notEqual(traditional.headline, simplified.headline);
-  assert.match(traditional.headline, /設計線索/u);
-  assert.match(simplified.headline, /设计线索/u);
+  assert.match(traditional.headline, /主色、節奏與點睛/u);
+  assert.match(simplified.headline, /主色、节奏与点睛/u);
   assert.equal(traditional.cards[1]!.title, "明暗對比");
   assert.equal(simplified.cards[1]!.title, "明暗对比");
 });
@@ -330,4 +330,112 @@ test("projection is deterministic and rejects an unsupported display locale", ()
 
 test("the projection is exported from the bounded oracle module", () => {
   assert.equal(typeof projectOraclePresentation, "function");
+});
+
+const withSubstitutedBeadProduct = (
+  session: OraclePublicSession,
+  recommendationIndex: number,
+  beadProductId: string
+): OraclePublicSession => {
+  const clone = structuredClone(session);
+  clone.recommendations![recommendationIndex]!.design.beads[0]!.beadProductId = beadProductId;
+  return clone;
+};
+
+const STRUCTURAL_JARGON = /卦|爻|THREE_COIN|three-coin|算法|algorithm|\b(?:39|31|47|60)\b/u;
+
+test("customer-facing headline, summary, and accent cue hide structural jargon", () => {
+  const expectedPrimary = { "zh-CN": "墨黑", "zh-TW": "墨黑", "en-US": "ink black" } as const;
+  const expectedRhythm = {
+    "zh-CN": "均衡留白",
+    "zh-TW": "均衡留白",
+    "en-US": "measured spacing"
+  } as const;
+
+  for (const locale of LOCALES) {
+    const projection = projectOraclePresentation(recommendedSession, locale, availableCatalog);
+    const accent = projection.cues.find((cue) => cue.kind === "ACCENT");
+    assert.ok(accent, `${locale} moving cast keeps an accent cue`);
+
+    const exposed = [projection.headline, projection.summary, accent.text].join(" ");
+    assert.equal(STRUCTURAL_JARGON.test(exposed), false, `${locale}: ${exposed}`);
+
+    assert.match(projection.summary, new RegExp(expectedPrimary[locale], "u"));
+    assert.match(projection.summary, new RegExp(expectedRhythm[locale], "u"));
+  }
+});
+
+test("a CAST projection also hides structural jargon and keeps no accent cue", () => {
+  for (const locale of LOCALES) {
+    const projection = projectOraclePresentation(staticCastSession, locale, availableCatalog);
+    const exposed = [projection.headline, projection.summary, ...projection.cues.map((cue) => cue.text)].join(" ");
+    assert.equal(STRUCTURAL_JARGON.test(exposed), false, `${locale}: ${exposed}`);
+    assert.equal(projection.cues.some((cue) => cue.kind === "ACCENT"), false);
+  }
+});
+
+test("traditional material labels use reviewed names instead of simplified catalog text", () => {
+  const zhTw = projectOraclePresentation(recommendedSession, "zh-TW", availableCatalog);
+  const zhCn = projectOraclePresentation(recommendedSession, "zh-CN", availableCatalog);
+
+  const twAquamarine = zhTw.materials.find((entry) => entry.beadProductId === "product-aquamarine-round-8");
+  const cnAquamarine = zhCn.materials.find((entry) => entry.beadProductId === "product-aquamarine-round-8");
+  assert.ok(twAquamarine);
+  assert.ok(cnAquamarine);
+
+  assert.match(twAquamarine.label, /海藍寶/u);
+  assert.equal(twAquamarine.label.includes("海蓝宝"), false);
+  assert.match(cnAquamarine.label, /海蓝宝/u);
+  assert.notEqual(twAquamarine.label, cnAquamarine.label);
+});
+
+test("unmapped crystal names fall back safely without reusing simplified script", () => {
+  const marsProduct = material({
+    beadProductId: "product-mars-round-6",
+    sku: "SKU-MARS-6",
+    crystalId: "crystal-mars",
+    crystalNameCn: "火星石",
+    crystalNameEn: "Mars stone",
+    materialKey: "mars-stone-v1",
+    diameterMm: 6,
+    availableQuantity: 3
+  });
+
+  const session = withSubstitutedBeadProduct(recommendedSession, 0, "product-mars-round-6");
+  const zhTw = projectOraclePresentation(session, "zh-TW", [...availableCatalog, marsProduct]);
+  const entry = zhTw.materials.find((item) => item.beadProductId === "product-mars-round-6");
+  assert.ok(entry);
+
+  assert.equal(entry.label.includes("火星石"), false, "must not reuse the simplified catalog name");
+  assert.match(entry.label, /Mars stone/u, "documented fallback is the authoritative English catalog name");
+});
+
+test("prohibited claims in catalog names never reach any locale projection", () => {
+  const badProduct = material({
+    beadProductId: "product-bad-round-8",
+    sku: "SKU-BAD-8",
+    crystalId: "crystal-bad",
+    crystalNameCn: "招财水晶",
+    crystalNameEn: "Healing crystal",
+    materialKey: "bad-crystal-v1",
+    availableQuantity: 5
+  });
+
+  const session = withSubstitutedBeadProduct(recommendedSession, 0, "product-bad-round-8");
+  const catalog = [...availableCatalog, badProduct];
+
+  for (const locale of LOCALES) {
+    const projection = projectOraclePresentation(session, locale, catalog);
+    const text = projectionTexts(projection).join(" ");
+    assert.equal(text.includes("招财"), false, `${locale} leaked a Chinese efficacy claim`);
+    assert.equal(/heal/iu.test(text), false, `${locale} leaked an English efficacy claim`);
+
+    const entry = projection.materials.find((item) => item.beadProductId === "product-bad-round-8");
+    assert.ok(entry, `${locale} still references the real product without fabricating identity`);
+
+    const serialized = JSON.stringify(projection);
+    assert.equal(serialized.includes("SKU-"), false);
+    assert.equal(serialized.includes("unitPriceMinor"), false);
+    assert.equal(serialized.includes("availableQuantity"), false);
+  }
 });
