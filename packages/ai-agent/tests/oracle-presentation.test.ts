@@ -439,3 +439,79 @@ test("prohibited claims in catalog names never reach any locale projection", () 
     assert.equal(serialized.includes("availableQuantity"), false);
   }
 });
+
+/**
+ * The twenty crystals currently seeded by `packages/database/prisma/seed.ts` (seed-2026-08-v2),
+ * each with the reviewed Traditional Chinese name its `zh-TW` label must use. Future or unreviewed
+ * `crystalId`s are allowed to fall back to the English catalog name, but none of these twenty may.
+ */
+const SEED_CRYSTALS: readonly {
+  crystalId: string;
+  crystalNameCn: string;
+  crystalNameEn: string;
+  zhTw: string;
+}[] = [
+  { crystalId: "crystal-aquamarine", crystalNameCn: "海蓝宝", crystalNameEn: "Aquamarine", zhTw: "海藍寶" },
+  { crystalId: "crystal-moonstone", crystalNameCn: "月光石", crystalNameEn: "Moonstone", zhTw: "月光石" },
+  { crystalId: "crystal-clear-quartz", crystalNameCn: "白水晶", crystalNameEn: "Clear Quartz", zhTw: "白水晶" },
+  { crystalId: "crystal-amethyst", crystalNameCn: "紫水晶", crystalNameEn: "Amethyst", zhTw: "紫水晶" },
+  { crystalId: "crystal-rose-quartz", crystalNameCn: "粉水晶", crystalNameEn: "Rose Quartz", zhTw: "粉晶" },
+  { crystalId: "crystal-citrine", crystalNameCn: "黄水晶", crystalNameEn: "Citrine", zhTw: "黃水晶" },
+  {
+    crystalId: "crystal-green-aventurine",
+    crystalNameCn: "绿东陵石",
+    crystalNameEn: "Green Aventurine",
+    zhTw: "綠東陵石"
+  },
+  { crystalId: "crystal-tiger-eye", crystalNameCn: "虎眼石", crystalNameEn: "Tiger Eye", zhTw: "虎眼石" },
+  { crystalId: "crystal-lapis-lazuli", crystalNameCn: "青金石", crystalNameEn: "Lapis Lazuli", zhTw: "青金石" },
+  { crystalId: "crystal-garnet", crystalNameCn: "石榴石", crystalNameEn: "Garnet", zhTw: "石榴石" },
+  { crystalId: "crystal-labradorite", crystalNameCn: "拉长石", crystalNameEn: "Labradorite", zhTw: "拉長石" },
+  { crystalId: "crystal-black-onyx", crystalNameCn: "黑玛瑙", crystalNameEn: "Black Onyx", zhTw: "黑瑪瑙" },
+  { crystalId: "crystal-smoky-quartz", crystalNameCn: "烟晶", crystalNameEn: "Smoky Quartz", zhTw: "煙晶" },
+  { crystalId: "crystal-sunstone", crystalNameCn: "日光石", crystalNameEn: "Sunstone", zhTw: "日光石" },
+  { crystalId: "crystal-amazonite", crystalNameCn: "天河石", crystalNameEn: "Amazonite", zhTw: "天河石" },
+  { crystalId: "crystal-fluorite", crystalNameCn: "萤石", crystalNameEn: "Fluorite", zhTw: "螢石" },
+  { crystalId: "crystal-red-agate", crystalNameCn: "红玛瑙", crystalNameEn: "Red Agate", zhTw: "紅瑪瑙" },
+  { crystalId: "crystal-rhodonite", crystalNameCn: "蔷薇辉石", crystalNameEn: "Rhodonite", zhTw: "薔薇輝石" },
+  { crystalId: "crystal-obsidian", crystalNameCn: "黑曜石", crystalNameEn: "Obsidian", zhTw: "黑曜石" },
+  { crystalId: "crystal-prehnite", crystalNameCn: "葡萄石", crystalNameEn: "Prehnite", zhTw: "葡萄石" }
+];
+
+const seedProductId = (crystalId: string): string => `product-${crystalId.slice("crystal-".length)}-round-8`;
+
+test("every seeded crystal projects a reviewed Traditional label instead of an English fallback", () => {
+  assert.equal(SEED_CRYSTALS.length, 20, "the seed catalog currently holds twenty crystals");
+
+  const catalog: readonly CatalogMaterialProduct[] = SEED_CRYSTALS.map((crystal) =>
+    material({
+      beadProductId: seedProductId(crystal.crystalId),
+      sku: `SKU-${crystal.crystalId}`,
+      crystalId: crystal.crystalId,
+      crystalNameCn: crystal.crystalNameCn,
+      crystalNameEn: crystal.crystalNameEn
+    })
+  );
+
+  for (const crystal of SEED_CRYSTALS) {
+    const beadProductId = seedProductId(crystal.crystalId);
+    const session = withSubstitutedBeadProduct(recommendedSession, 0, beadProductId);
+    const projection = projectOraclePresentation(session, "zh-TW", catalog);
+    const entry = projection.materials.find((item) => item.beadProductId === beadProductId);
+
+    assert.ok(entry, `${crystal.crystalId} must stay a real referenced product`);
+    assert.match(entry.label, new RegExp(crystal.zhTw, "u"), crystal.crystalId);
+    assert.equal(
+      entry.label.includes(crystal.crystalNameEn),
+      false,
+      `${crystal.crystalId} fell back to the English catalog name`
+    );
+    if (crystal.zhTw !== crystal.crystalNameCn) {
+      assert.equal(
+        entry.label.includes(crystal.crystalNameCn),
+        false,
+        `${crystal.crystalId} leaked the simplified catalog name`
+      );
+    }
+  }
+});

@@ -225,26 +225,36 @@ export function oracleCardDescription(
  * Human-reviewed Traditional Chinese crystal names, keyed by the stable catalog `crystalId`.
  * A `zh-TW` reader must never be shown the simplified `crystalNameCn` verbatim, so only names a
  * reviewer has confirmed for Traditional Chinese are listed here. This is a hand-checked display
- * map, not a runtime script conversion.
+ * map, not a runtime script conversion. It covers every crystal currently seeded by
+ * `packages/database/prisma/seed.ts`; any future or unreviewed `crystalId` falls back to the
+ * catalog's authoritative English name.
  */
 const REVIEWED_TRADITIONAL_MATERIAL_NAMES: Record<string, string> = {
   "crystal-agate": "瑪瑙",
+  "crystal-amazonite": "天河石",
   "crystal-amethyst": "紫水晶",
   "crystal-aquamarine": "海藍寶",
+  "crystal-black-onyx": "黑瑪瑙",
   "crystal-citrine": "黃水晶",
   "crystal-clear-quartz": "白水晶",
+  "crystal-fluorite": "螢石",
   "crystal-garnet": "石榴石",
   "crystal-gold": "黃金",
+  "crystal-green-aventurine": "綠東陵石",
   "crystal-labradorite": "拉長石",
   "crystal-lapis-lazuli": "青金石",
   "crystal-moonstone": "月光石",
   "crystal-nephrite": "和田玉",
   "crystal-obsidian": "黑曜石",
+  "crystal-prehnite": "葡萄石",
+  "crystal-red-agate": "紅瑪瑙",
   "crystal-rhodonite": "薔薇輝石",
   "crystal-rose-quartz": "粉晶",
   "crystal-rutilated-quartz": "髮晶",
   "crystal-smoky-quartz": "煙晶",
   "crystal-sterling-silver": "純銀",
+  "crystal-sunstone": "日光石",
+  "crystal-tiger-eye": "虎眼石",
   "crystal-tourmaline": "碧璽"
 };
 
