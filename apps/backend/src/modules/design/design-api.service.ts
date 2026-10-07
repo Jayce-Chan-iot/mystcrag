@@ -29,12 +29,14 @@ import {
   type CreateOrderFromDesignResponse,
   type DeleteDesignRequest,
   type DeleteDesignResponse,
+  type DesignPresentationResponse,
   type DesignV1,
   type GenerateDesignRequest,
   type GenerateDesignResponse,
   type ListCatalogMaterialsResponse,
   type ListMyDesignsResponse,
   type ListMyOrdersResponse,
+  type PresentationLocale,
   type PriceDesignRequest,
   type PriceDesignResponse,
   type PublishDesignRequest,
@@ -54,6 +56,10 @@ import {
   type KnowledgeUsageEvent,
   type KnowledgeUsageRecorder
 } from "../../observability/knowledge-usage-recorder.js";
+import {
+  projectDesignPresentation,
+  type DesignPresentationCatalogProduct
+} from "./design-presentation.js";
 
 export type CatalogProduct = {
   id: string;
@@ -329,6 +335,11 @@ export interface DesignApiService {
   delete(actorId: string, request: DeleteDesignRequest): Promise<DeleteDesignResponse>;
   cloneDesign(actorId: string, request: CloneDesignRequest): Promise<CloneDesignResponse>;
   get(actorId: string, designId: string): Promise<ReturnType<typeof toPublicDesign>>;
+  presentation(
+    actorId: string,
+    designId: string,
+    locale: PresentationLocale
+  ): Promise<DesignPresentationResponse>;
   materials(actorId: string, currency: "CNY" | "TWD"): Promise<ListCatalogMaterialsResponse>;
   revisions(actorId: string, designId: string): Promise<RevisionListResponse>;
   listDesigns(actorId: string): Promise<ListMyDesignsResponse>;
@@ -1378,6 +1389,27 @@ export class DesignApplicationService implements DesignApiService {
 
   async get(actorId: string, designId: string): Promise<ReturnType<typeof toPublicDesign>> {
     return toPublicDesign((await this.dependencies.designs.getDesign(actorId, designId)).snapshot);
+  }
+
+  async presentation(
+    actorId: string,
+    designId: string,
+    locale: PresentationLocale
+  ): Promise<DesignPresentationResponse> {
+    const stored = await this.dependencies.designs.getDesign(actorId, designId);
+    const catalog = await this.dependencies.catalog.listAvailableCatalogMaterialProducts(
+      stored.snapshot.currency
+    );
+    const products: DesignPresentationCatalogProduct[] = catalog.map((product) => ({
+      beadProductId: product.id,
+      crystalId: product.crystalId,
+      crystalNameCn: product.crystalNameCn,
+      crystalNameEn: product.crystalNameEn,
+      shape: product.shape,
+      diameterMm: product.diameterMm,
+      availableQuantity: product.availableQuantity
+    }));
+    return projectDesignPresentation(toPublicDesign(stored.snapshot), locale, products);
   }
 
   async listDesigns(actorId: string): Promise<ListMyDesignsResponse> {

@@ -8,6 +8,8 @@ import type {
   GenerateOracleRecommendationsRequest,
   GenerateOracleRecommendationsResponse,
   GetOracleSessionResponse,
+  OraclePresentationResponse,
+  PresentationLocale,
   SaveOracleSessionRequest,
   SaveOracleSessionResponse
 } from "@mystcrag/design-contract";
@@ -45,6 +47,11 @@ export interface OracleApiService {
     input: GenerateOracleRecommendationsRequest
   ): Promise<GenerateOracleRecommendationsResponse>;
   get(actorId: string, sessionId: string): Promise<GetOracleSessionResponse>;
+  presentation(
+    actorId: string,
+    sessionId: string,
+    locale: PresentationLocale
+  ): Promise<OraclePresentationResponse>;
   save(
     actorId: string,
     sessionId: string,

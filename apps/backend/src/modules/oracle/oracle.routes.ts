@@ -4,6 +4,8 @@ import {
   GenerateOracleRecommendationsRequestSchema,
   GenerateOracleRecommendationsResponseSchema,
   GetOracleSessionResponseSchema,
+  LocalizedPresentationRequestSchema,
+  OraclePresentationResponseSchema,
   SaveOracleSessionRequestSchema,
   SaveOracleSessionResponseSchema
 } from "@mystcrag/design-contract";
@@ -110,6 +112,21 @@ export function registerOracleRoutes(
       return reply.status(domain.statusCode).send(toApiErrorEnvelope(domain, request.id));
     }
   });
+  app.get<{ Params: { sessionId: string }; Querystring: { locale?: string } }>(
+    "/api/oracle/sessions/:sessionId/presentation",
+    protectedRoute,
+    async (request, reply) => {
+      try {
+        const actorId = actorIdFromVerifiedContext(request);
+        const query = validateRequest(LocalizedPresentationRequestSchema, request.query);
+        const output = await service.presentation(actorId, request.params.sessionId, query.locale);
+        return reply.status(200).send(validateResponse(OraclePresentationResponseSchema, output));
+      } catch (error) {
+        const domain = mapOracleError(error, true);
+        return reply.status(domain.statusCode).send(toApiErrorEnvelope(domain, request.id));
+      }
+    }
+  );
   app.post<{ Params: { id: string } }>("/api/oracle/sessions/:id/save", protectedRoute, (request, reply) =>
     handlePost(request, reply, SaveOracleSessionRequestSchema, SaveOracleSessionResponseSchema,
       (actorId, input) => service.save(actorId, request.params.id, input), { ownerScoped: true }));
