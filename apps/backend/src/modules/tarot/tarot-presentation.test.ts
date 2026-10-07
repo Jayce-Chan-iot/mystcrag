@@ -16,6 +16,18 @@ const LOCALES = ["zh-CN", "zh-TW", "en-US"] as const;
 const CREATED_AT = "2026-08-20T12:00:00.000Z";
 const UPDATED_AT = "2026-08-20T12:05:00.000Z";
 
+const PENDING_MARKER: Record<(typeof LOCALES)[number], RegExp> = {
+  "zh-CN": /尚未揭牌/u,
+  "zh-TW": /尚未揭牌/u,
+  "en-US": /not revealed/iu
+};
+
+const COMPLETION_CLAIM: Record<(typeof LOCALES)[number], RegExp> = {
+  "zh-CN": /已完成/u,
+  "zh-TW": /已完成/u,
+  "en-US": /completed/iu
+};
+
 const tarotDesign = (rank: number) =>
   DesignV1Schema.parse({
     ...structuredClone(standardAiDesignFixture),
@@ -69,33 +81,33 @@ const recommendedSession: TarotPublicSession = TarotPublicSessionSchema.parse({
     {
       slot: "PAST",
       displayedPosition: 3,
-      cardId: "the-hermit",
+      cardId: "09-the-hermit",
       number: 9,
       nameZh: "隐者",
       nameEn: "The Hermit",
-      assetFile: "TheHermit.png",
+      assetFile: "09-TheHermit.png",
       orientation: "UPRIGHT",
       keywords: ["reflection"]
     },
     {
       slot: "PRESENT",
       displayedPosition: 11,
-      cardId: "wheel-of-fortune",
+      cardId: "10-wheel-of-fortune",
       number: 10,
       nameZh: "命运之轮",
       nameEn: "Wheel of Fortune",
-      assetFile: "WheelOfFortune.png",
+      assetFile: "10-WheelOfFortune.png",
       orientation: "REVERSED",
       keywords: ["change"]
     },
     {
       slot: "FUTURE",
       displayedPosition: 27,
-      cardId: "the-star",
+      cardId: "17-the-star",
       number: 17,
       nameZh: "星星",
       nameEn: "The Star",
-      assetFile: "TheStar.png",
+      assetFile: "17-TheStar.png",
       orientation: "UPRIGHT",
       keywords: ["hope"]
     }
@@ -111,6 +123,51 @@ const recommendedSession: TarotPublicSession = TarotPublicSessionSchema.parse({
   updatedAt: UPDATED_AT
 });
 
+/** Same spread, palette, and materials as the recommended session, but a different past card. */
+const swappedPastCardSession: TarotPublicSession = TarotPublicSessionSchema.parse({
+  ...structuredClone(recommendedSession),
+  revealedCards: recommendedSession.revealedCards!.map((card) =>
+    card.slot === "PAST"
+      ? {
+          slot: "PAST",
+          displayedPosition: card.displayedPosition,
+          cardId: "18-the-moon",
+          number: 18,
+          nameZh: "月亮",
+          nameEn: "The Moon",
+          assetFile: "18-TheMoon.png",
+          orientation: "UPRIGHT",
+          keywords: ["intuition"]
+        }
+      : card
+  )
+});
+
+/** Same spread and materials, but a different persisted palette. */
+const warmPaletteSession: TarotPublicSession = TarotPublicSessionSchema.parse({
+  ...structuredClone(recommendedSession),
+  colorStory: {
+    primaryColor: "#C0504D",
+    supportColor: "#F7E7CE",
+    accentColor: "#3B5B7A",
+    rationale: "stored color rationale that must never be echoed"
+  }
+});
+
+/** Same spread and palette, but a different persisted material recommendation. */
+const redMaterialSession: TarotPublicSession = TarotPublicSessionSchema.parse({
+  ...structuredClone(recommendedSession),
+  materialRecommendations: [
+    {
+      beadProductId: "product-garnet-round-8",
+      displayName: "Garnet round bead",
+      crystalName: "Garnet",
+      colorTags: ["red"],
+      reason: "stored material reason that must never be echoed"
+    }
+  ]
+});
+
 const drawnSingleSession: TarotPublicSession = TarotPublicSessionSchema.parse({
   sessionId: "tarot-session-drawn-single",
   spreadType: "SINGLE",
@@ -123,11 +180,11 @@ const drawnSingleSession: TarotPublicSession = TarotPublicSessionSchema.parse({
     {
       slot: "GUIDANCE",
       displayedPosition: 12,
-      cardId: "the-hermit",
+      cardId: "09-the-hermit",
       number: 9,
       nameZh: "隐者",
       nameEn: "The Hermit",
-      assetFile: "TheHermit.png",
+      assetFile: "09-TheHermit.png",
       orientation: "UPRIGHT",
       keywords: ["reflection"]
     }
@@ -180,21 +237,85 @@ test("a recommended spread projects into all three display locales with distinct
   assert.equal(headlines.size, 3, "each locale must render distinct reviewed copy");
 });
 
-test("card reflections stay in canonical slot order and never expose a second draw", () => {
+test("different revealed cards never share the same per-card reflection", () => {
+  for (const locale of LOCALES) {
+    const hermit = projectTarotPresentation(recommendedSession, locale).cardReflections[0]!.text;
+    const moon = projectTarotPresentation(swappedPastCardSession, locale).cardReflections[0]!.text;
+
+    assert.notEqual(
+      hermit,
+      moon,
+      `${locale}: a different revealed card must not reuse the same reflection`
+    );
+  }
+});
+
+test("each revealed card in one spread gets its own reflection", () => {
+  for (const locale of LOCALES) {
+    const texts = projectTarotPresentation(recommendedSession, locale).cardReflections.map(
+      (reflection) => reflection.text
+    );
+
+    assert.equal(new Set(texts).size, texts.length, `${locale}: reflections must be distinct per card`);
+  }
+});
+
+test("different persisted palettes never share the same color story", () => {
+  for (const locale of LOCALES) {
+    const cool = projectTarotPresentation(recommendedSession, locale).colorStory;
+    const warm = projectTarotPresentation(warmPaletteSession, locale).colorStory;
+
+    assert.notEqual(cool, warm, `${locale}: a different palette must not reuse the same color story`);
+    assert.equal(warm.includes("#C0504D"), true, `${locale}: the real primary color must be named`);
+  }
+});
+
+test("different persisted materials never share the same design rationale", () => {
+  for (const locale of LOCALES) {
+    const blue = projectTarotPresentation(recommendedSession, locale).designRationale;
+    const red = projectTarotPresentation(redMaterialSession, locale).designRationale;
+
+    assert.notEqual(blue, red, `${locale}: different materials must not reuse the same rationale`);
+  }
+});
+
+test("an un-revealed session is never written as a completed reading", () => {
+  for (const locale of LOCALES) {
+    const projection = projectTarotPresentation(historicalDrawingSession, locale);
+
+    assert.equal(projection.cardReflections.length, historicalDrawingSession.slots.length);
+    for (const reflection of projection.cardReflections) {
+      assert.match(reflection.text, PENDING_MARKER[locale], `${locale}: ${reflection.text}`);
+      assert.doesNotMatch(reflection.text, COMPLETION_CLAIM[locale], `${locale}: ${reflection.text}`);
+    }
+    assert.match(projection.designRationale, PENDING_MARKER[locale]);
+    assert.doesNotMatch(projection.designRationale, COMPLETION_CLAIM[locale]);
+    assert.doesNotMatch(projection.summary, COMPLETION_CLAIM[locale]);
+    assert.doesNotMatch(projection.colorStory, COMPLETION_CLAIM[locale]);
+  }
+});
+
+test("card reflections stay in canonical slot order and never expose raw draw internals", () => {
   const projection = projectTarotPresentation(recommendedSession, "zh-TW");
 
   assert.deepEqual(
     projection.cardReflections.map((reflection) => reflection.slot),
     ["PAST", "PRESENT", "FUTURE"]
   );
+  assert.match(projection.cardReflections[0]!.text, /隱者/u);
 
   const serialized = JSON.stringify(projection);
-  assert.equal(serialized.includes("revealedCards"), false);
-  assert.equal(serialized.includes("cardId"), false);
-  assert.equal(serialized.includes("the-hermit"), false);
-  assert.equal(serialized.includes("Wheel of Fortune"), false);
-  assert.equal(serialized.includes("keywords"), false);
-  assert.equal(serialized.includes("displayedPosition"), false);
+  for (const forbidden of [
+    "revealedCards",
+    "cardId",
+    "the-hermit",
+    "Wheel of Fortune",
+    "keywords",
+    "displayedPosition",
+    "operationId"
+  ]) {
+    assert.equal(serialized.includes(forbidden), false, forbidden);
+  }
 });
 
 test("the projection is deterministic, read-only, and never reuses stored free text", () => {
@@ -207,12 +328,23 @@ test("the projection is deterministic, read-only, and never reuses stored free t
   assert.deepEqual(recommendedSession, sessionSnapshot, "the source session must never be mutated");
   assert.deepEqual(recommendedSession.interpretation, sessionSnapshot.interpretation);
 
+  const storedSummary = recommendedSession.interpretation!.summary;
+  const storedDesignRationale = recommendedSession.interpretation!.designRationale;
+  const storedColorRationale = recommendedSession.colorStory!.rationale;
+  const storedMaterialReason = recommendedSession.materialRecommendations![0]!.reason;
+
   for (const locale of LOCALES) {
     const projection = projectTarotPresentation(recommendedSession, locale);
-    assert.notEqual(projection.summary, recommendedSession.interpretation!.summary);
-    assert.notEqual(projection.designRationale, recommendedSession.interpretation!.designRationale);
-    assert.notEqual(projection.colorStory, recommendedSession.colorStory!.rationale);
-    assert.equal(projectionTexts(projection).includes(recommendedSession.interpretation!.summary), false);
+    assert.notEqual(projection.summary, storedSummary);
+    assert.notEqual(projection.designRationale, storedDesignRationale);
+    assert.notEqual(projection.colorStory, storedColorRationale);
+
+    for (const text of projectionTexts(projection)) {
+      assert.equal(text.includes(storedSummary), false, `${locale}: ${text}`);
+      assert.equal(text.includes(storedDesignRationale), false, `${locale}: ${text}`);
+      assert.equal(text.includes(storedColorRationale), false, `${locale}: ${text}`);
+      assert.equal(text.includes(storedMaterialReason), false, `${locale}: ${text}`);
+    }
   }
 });
 
@@ -270,9 +402,11 @@ test("simplified and traditional reflections use distinct reviewed scripts", () 
   const traditional = projectTarotPresentation(recommendedSession, "zh-TW");
 
   assert.notEqual(traditional.headline, simplified.headline);
-  assert.match(traditional.cardReflections[0]!.text, /過去/u);
-  assert.match(simplified.cardReflections[0]!.text, /过去/u);
-  assert.equal(traditional.cardReflections[0]!.text.includes("过去"), false);
+  assert.match(traditional.cardReflections[0]!.text, /隱者/u);
+  assert.match(simplified.cardReflections[0]!.text, /隐者/u);
+  assert.equal(traditional.cardReflections[0]!.text.includes("隐者"), false);
+  assert.match(traditional.cardReflections[0]!.text, /經驗/u);
+  assert.match(simplified.cardReflections[0]!.text, /经验/u);
 });
 
 test("an unsupported display locale is rejected before any projection", () => {
