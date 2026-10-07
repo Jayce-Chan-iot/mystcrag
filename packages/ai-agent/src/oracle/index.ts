@@ -19,3 +19,5 @@ export {
   hasProhibitedOracleClaim
 } from "./oracle-copy.service.js";
 export type { OracleCopyProvider } from "./oracle-copy.service.js";
+export { projectOraclePresentation } from "./oracle-presentation.js";
+export { ORACLE_PRESENTATION_CONTENT_VERSION } from "./oracle-presentation.templates.js";
