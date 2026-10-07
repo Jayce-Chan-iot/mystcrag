@@ -7,12 +7,14 @@ import type {
   GenerateTarotRecommendationsRequest,
   GenerateTarotRecommendationsResponse,
   GetTarotSessionResponse,
+  PresentationLocale,
   RevealTarotSessionRequest,
   RevealTarotSessionResponse,
   SaveTarotSessionRequest,
   SaveTarotSessionResponse,
   SelectTarotCardRequest,
   SelectTarotCardResponse,
+  TarotPresentationResponse,
   TarotTheme
 } from "@mystcrag/design-contract";
 import type {
@@ -99,6 +101,11 @@ export interface TarotApiService {
     input: GenerateTarotRecommendationsRequest
   ): Promise<GenerateTarotRecommendationsResponse>;
   get(actorId: string, sessionId: string): Promise<GetTarotSessionResponse>;
+  presentation(
+    actorId: string,
+    sessionId: string,
+    locale: PresentationLocale
+  ): Promise<TarotPresentationResponse>;
   save(
     actorId: string,
     sessionId: string,

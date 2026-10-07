@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   DesignV1Schema,
   GenerateTarotRecommendationsResponseSchema,
+  TarotPresentationResponseSchema,
   type DesignV1
 } from "@mystcrag/design-contract";
 import { standardAiDesignFixture } from "@mystcrag/design-contract/fixtures";
@@ -204,7 +205,8 @@ test("Tarot routes preserve stable inventory and price conflict codes", async ()
       reveal: unavailable,
       recommendations: unavailable,
       get: unavailable,
-      save: unavailable
+      save: unavailable,
+      presentation: unavailable
     };
     const app = createApp({ tarotService, authProvider, tarotEnabled: true, logger: false });
     const response = await app.inject({
@@ -557,4 +559,137 @@ test("createApp rejects protected Tarot registration without authentication", ()
     () => createApp({ tarotService, tarotEnabled: true, logger: false }),
     /authentication provider/i
   );
+});
+
+test("Tarot presentation route serves owner-scoped three-locale copy without mutating the session", async () => {
+  const repository = new InMemoryTarotRepository();
+  const designs = [1, 2, 3].map(routeTarotDesign);
+  const tarotService = new TarotService({
+    repository,
+    random: new ZeroRandomSource(),
+    designReader: {
+      async getOwnedDesign(ownerId: string, designId: string) {
+        if (ownerId !== actorId) throw new PersistenceError("NOT_FOUND", "Design not found");
+        const design = designs.find((candidate) => candidate.designId === designId);
+        if (!design) throw new PersistenceError("NOT_FOUND", "Design not found");
+        return structuredClone(design);
+      }
+    }
+  });
+  const created = await tarotService.create(actorId, {
+    requestId: "presentation-create",
+    spreadType: "SINGLE",
+    theme: "SELF_GROWTH"
+  });
+  const sessionId = created.session.sessionId;
+  await tarotService.select(actorId, sessionId, {
+    requestId: "presentation-select",
+    slot: "GUIDANCE",
+    displayedPosition: 0,
+    expectedRevision: 1,
+    operationId: "presentation-select"
+  });
+  const revealed = await tarotService.reveal(actorId, sessionId, {
+    requestId: "presentation-reveal",
+    expectedRevision: 2
+  });
+  await repository.saveRecommendations({
+    ownerId: actorId,
+    sessionId,
+    expectedRevision: revealed.session.revision,
+    recommendationSnapshot: routeRecommendationSnapshot,
+    recommendations: designs.map((design, index) => ({
+      rank: index + 1,
+      designId: design.designId
+    }))
+  });
+  const authoritative = repository.readPrivate(sessionId);
+  const app = createApp({ tarotService, authProvider, tarotEnabled: true, logger: false });
+
+  const headlines = new Set<string>();
+  for (const locale of ["zh-CN", "zh-TW", "en-US"] as const) {
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/tarot/sessions/${sessionId}/presentation?locale=${locale}`,
+      headers: ownerHeaders
+    });
+    assert.equal(response.statusCode, 200);
+    const body = TarotPresentationResponseSchema.parse(response.json());
+    assert.equal(body.sessionId, sessionId);
+    assert.equal(body.sourceRevision, authoritative.stateRevision);
+    assert.equal(body.locale, locale);
+    assert.equal(body.cardReflections.length, 1);
+    assert.equal(body.cardReflections[0]!.slot, "GUIDANCE");
+    assert.equal(JSON.stringify(body).includes("designId"), false);
+    assert.equal(JSON.stringify(body).includes("route-tarot-design-1"), false);
+    headlines.add(body.headline);
+  }
+  assert.equal(headlines.size, 3, "each locale must render distinct reviewed copy");
+
+  const repeat = await app.inject({
+    method: "GET",
+    url: `/api/tarot/sessions/${sessionId}/presentation?locale=zh-CN`,
+    headers: ownerHeaders
+  });
+  const again = await app.inject({
+    method: "GET",
+    url: `/api/tarot/sessions/${sessionId}/presentation?locale=zh-CN`,
+    headers: ownerHeaders
+  });
+  assert.deepEqual(again.json(), repeat.json());
+  assert.deepEqual(repository.readPrivate(sessionId), authoritative, "presentation must not write");
+
+  const unauthenticated = await app.inject({
+    method: "GET",
+    url: `/api/tarot/sessions/${sessionId}/presentation?locale=zh-CN`
+  });
+  assert.equal(unauthenticated.statusCode, 401);
+
+  const missingLocale = await app.inject({
+    method: "GET",
+    url: `/api/tarot/sessions/${sessionId}/presentation`,
+    headers: ownerHeaders
+  });
+  assert.equal(missingLocale.statusCode, 400);
+  assert.equal(missingLocale.json().error.code, "VALIDATION_ERROR");
+
+  const invalidLocale = await app.inject({
+    method: "GET",
+    url: `/api/tarot/sessions/${sessionId}/presentation?locale=ja-JP`,
+    headers: ownerHeaders
+  });
+  assert.equal(invalidLocale.statusCode, 400);
+  assert.equal(invalidLocale.json().error.code, "VALIDATION_ERROR");
+
+  const crossOwner = await app.inject({
+    method: "GET",
+    url: `/api/tarot/sessions/${sessionId}/presentation?locale=zh-CN`,
+    headers: { authorization: "Bearer valid-other-route-token" }
+  });
+  assert.equal(crossOwner.statusCode, 403);
+  assert.equal(crossOwner.json().error.code, "FORBIDDEN");
+
+  const missingSession = await app.inject({
+    method: "GET",
+    url: "/api/tarot/sessions/tarot-missing/presentation?locale=zh-CN",
+    headers: ownerHeaders
+  });
+  assert.equal(missingSession.statusCode, 403);
+  assert.equal(missingSession.json().error.code, "FORBIDDEN");
+
+  const historical = await tarotService.create(actorId, {
+    requestId: "presentation-historical",
+    spreadType: "PAST_PRESENT_FUTURE",
+    theme: "NEW_BEGINNINGS"
+  });
+  const historicalResponse = await app.inject({
+    method: "GET",
+    url: `/api/tarot/sessions/${historical.session.sessionId}/presentation?locale=en-US`,
+    headers: ownerHeaders
+  });
+  assert.equal(historicalResponse.statusCode, 200);
+  assert.equal(historicalResponse.json().cardReflections.length, 3);
+  assert.equal(historicalResponse.json().sourceRevision, historical.session.revision);
+
+  await app.close();
 });

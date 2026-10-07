@@ -7,6 +7,7 @@ import {
   RevealTarotSessionResponseSchema,
   SaveTarotSessionResponseSchema,
   SelectTarotCardResponseSchema,
+  TarotPresentationResponseSchema,
   DesignV1Schema,
   type DesignV1
 } from "@mystcrag/design-contract";
@@ -638,4 +639,50 @@ test("saveQuestion fails closed before catalog, generation, or persistence", asy
   const stored = harness.repository.readPrivate(sessionId);
   assert.equal(stored.status, "DRAWN");
   assert.equal(stored.questionCiphertext, null);
+});
+
+test("presentation projects an owner-scoped session without writing or re-drawing", async () => {
+  const { repository, service, designs } = createHarness();
+  const created = await createSingle(service, "create-for-presentation");
+  const sessionId = created.session.sessionId;
+  await service.select(actorId, sessionId, {
+    requestId: "select-for-presentation",
+    slot: "GUIDANCE",
+    displayedPosition: 0,
+    expectedRevision: 1,
+    operationId: "select-for-presentation"
+  });
+  const revealed = await service.reveal(actorId, sessionId, {
+    requestId: "reveal-for-presentation",
+    expectedRevision: 2
+  });
+  const recommended = await repository.saveRecommendations({
+    ownerId: actorId,
+    sessionId,
+    expectedRevision: revealed.session.revision,
+    recommendationSnapshot,
+    recommendations: designs.map((design, index) => ({
+      rank: index + 1,
+      designId: design.designId
+    }))
+  });
+  const before = repository.readPrivate(sessionId);
+
+  const projection = await service.presentation(actorId, sessionId, "zh-TW");
+  assert.equal(TarotPresentationResponseSchema.safeParse(projection).success, true);
+  assert.equal(projection.sessionId, sessionId);
+  assert.equal(projection.sourceRevision, recommended.stateRevision);
+  assert.equal(projection.locale, "zh-TW");
+  assert.equal(projection.cardReflections.length, 1);
+  assert.equal(projection.cardReflections[0]!.slot, "GUIDANCE");
+  assert.deepEqual(
+    repository.readPrivate(sessionId),
+    before,
+    "presentation must not write or advance the session"
+  );
+
+  await assert.rejects(
+    () => service.presentation(otherActorId, sessionId, "zh-CN"),
+    (error: unknown) => error instanceof PersistenceError && error.code === "NOT_FOUND"
+  );
 });
