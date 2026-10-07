@@ -592,7 +592,7 @@ Stable failures reuse the existing envelope: disabled create `NOT_IMPLEMENTED`, 
 
 ## Localized Presentation API
 
-Three read-only projection routes return display copy for `zh-CN`, `zh-TW`, and `en-US` without creating, re-casting, re-drawing, re-pricing, or persisting anything. Their executable DTOs live in [the strict localized presentation contract source](../packages/design-contract/src/schemas/localized-presentation.schema.ts). This section specifies the wire contract only; Backend registration is owned by the dependent AI, Backend, and Tarot tasks, so the routes are not yet registered by current startup.
+Three read-only projection routes return display copy for `zh-CN`, `zh-TW`, and `en-US` without creating, re-casting, re-drawing, re-pricing, or persisting anything. Their executable DTOs live in [the strict localized presentation contract source](../packages/design-contract/src/schemas/localized-presentation.schema.ts). The Oracle session and Design presentation routes are registered by Backend startup: the Oracle route calls the accepted AI `projectOraclePresentation` over the validated owner-owned session and real available catalog, and the Design route projects the owner-owned saved `PublicDesignV1` with reviewed zh-CN/zh-TW/en-US templates. The Tarot presentation route remains unregistered and its Backend registration is owned by the dependent Tarot task.
 
 | Route | Request DTO | Response DTO | Behavior |
 | --- | --- | --- | --- |

@@ -1046,6 +1046,85 @@ test("GET design and revision history return owner-scoped public DTOs", async ()
   await app.close();
 });
 
+test("GET design presentation serves three reviewed locales from a saved design without writes", async () => {
+  const harness = createHarness();
+  const design = cloneDesign();
+  harness.seed(design);
+  const app = createApp({ designService: harness.service, authProvider });
+
+  const titles = new Set<string>();
+  for (const locale of ["zh-CN", "zh-TW", "en-US"] as const) {
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/design/${design.designId}/presentation?locale=${locale}`,
+      headers: requestHeaders()
+    });
+    assert.equal(response.statusCode, 200);
+    const body = response.json();
+    assert.equal(body.designId, design.designId);
+    assert.equal(body.sourceRevision, design.revision);
+    assert.equal(body.locale, locale);
+    assert.equal(body.materialLabels.length, design.beads.length);
+    assert.equal(JSON.stringify(body).includes("availableQuantity"), false);
+    assert.equal(JSON.stringify(body).includes("unitPriceMinor"), false);
+    assert.equal(JSON.stringify(body).includes("totalPriceMinor"), false);
+    titles.add(body.title);
+  }
+  assert.equal(titles.size, 3, "each locale must render distinct reviewed copy");
+
+  const before = structuredClone(harness.current.get(design.designId));
+  const repeat = await app.inject({
+    method: "GET",
+    url: `/api/design/${design.designId}/presentation?locale=zh-CN`,
+    headers: requestHeaders()
+  });
+  const again = await app.inject({
+    method: "GET",
+    url: `/api/design/${design.designId}/presentation?locale=zh-CN`,
+    headers: requestHeaders()
+  });
+  assert.deepEqual(again.json(), repeat.json());
+  assert.deepEqual(harness.current.get(design.designId), before, "presentation must not write");
+
+  const unauthenticated = await app.inject({
+    method: "GET",
+    url: `/api/design/${design.designId}/presentation?locale=zh-CN`
+  });
+  assert.equal(unauthenticated.statusCode, 401);
+
+  const missingLocale = await app.inject({
+    method: "GET",
+    url: `/api/design/${design.designId}/presentation`,
+    headers: requestHeaders()
+  });
+  assert.equal(missingLocale.statusCode, 400);
+  assert.equal(missingLocale.json().error.code, "VALIDATION_ERROR");
+
+  const invalidLocale = await app.inject({
+    method: "GET",
+    url: `/api/design/${design.designId}/presentation?locale=ja-JP`,
+    headers: requestHeaders()
+  });
+  assert.equal(invalidLocale.statusCode, 400);
+
+  const crossOwner = await app.inject({
+    method: "GET",
+    url: `/api/design/${design.designId}/presentation?locale=zh-CN`,
+    headers: requestHeaders("different-actor")
+  });
+  assert.equal(crossOwner.statusCode, 403);
+  assert.equal(crossOwner.json().error.code, "FORBIDDEN");
+
+  const missingDesign = await app.inject({
+    method: "GET",
+    url: "/api/design/design-missing/presentation?locale=zh-CN",
+    headers: requestHeaders()
+  });
+  assert.equal(missingDesign.statusCode, 403);
+  assert.equal(missingDesign.json().error.code, "FORBIDDEN");
+  await app.close();
+});
+
 test("GET material catalog returns active public products without commercial costs", async () => {
   const harness = createHarness();
   const app = createApp({ designService: harness.service, authProvider });

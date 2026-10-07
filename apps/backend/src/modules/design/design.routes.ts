@@ -28,6 +28,7 @@ import {
   handleDesignGet,
   handleCatalogMaterialsGet,
   handleDesignPost,
+  handleDesignPresentationGet,
   handleMyDesignsGet,
   handleMyOrdersGet
 } from "./design.controller.js";
@@ -146,6 +147,11 @@ export function registerDesignContractRoutes(
     "/api/design/:id/revisions",
     protectedRoute,
     (request, reply) => handleDesignGet(request, reply, service, true)
+  );
+  app.get<{ Params: { id: string }; Querystring: { locale?: string } }>(
+    "/api/design/:id/presentation",
+    protectedRoute,
+    (request, reply) => handleDesignPresentationGet(request, reply, service)
   );
   app.get<{ Querystring: { currency?: string } }>(
     "/api/catalog/materials",

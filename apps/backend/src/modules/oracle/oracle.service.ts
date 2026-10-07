@@ -1,13 +1,17 @@
-import { OracleCopyService } from "@mystcrag/ai-agent/oracle";
+import { OracleCopyService, projectOraclePresentation } from "@mystcrag/ai-agent/oracle";
 import {
+  CatalogMaterialProductSchema,
   GenerateDesignRequestSchema,
   GenerateDesignResponseSchema,
   OracleCastDtoSchema,
+  type CatalogMaterialProduct,
   type CreateOracleSessionRequest,
   type CreateOracleSessionResponse,
   type GenerateOracleRecommendationsRequest,
   type GenerateOracleRecommendationsResponse,
   type GetOracleSessionResponse,
+  type OraclePresentationResponse,
+  type PresentationLocale,
   type SaveOracleSessionRequest,
   type SaveOracleSessionResponse
 } from "@mystcrag/design-contract";
@@ -24,7 +28,8 @@ import {
   mapCreateOracleResponse,
   mapGetOracleResponse,
   mapRecommendationsOracleResponse,
-  mapSaveOracleResponse
+  mapSaveOracleResponse,
+  sessionFromRecord
 } from "./oracle.public-mapper.js";
 import type {
   OracleApiService,
@@ -139,6 +144,40 @@ function toDomainError(error: unknown): never {
   throw error;
 }
 
+/**
+ * Maps a real catalog row into the strict contract material DTO used for display labeling.
+ * Rows missing required display assets or fields that fail contract validation are dropped rather
+ * than guessed, so the projection can never invent a product identity.
+ */
+function toPresentationCatalogProduct(
+  product: import("@mystcrag/database").AvailableCatalogMaterialProduct
+): CatalogMaterialProduct | undefined {
+  if (product.modelAssetKey === null || product.textureAssetKey === null) return undefined;
+  const parsed = CatalogMaterialProductSchema.safeParse({
+    beadProductId: product.id,
+    sku: product.sku,
+    displayName: product.name,
+    crystalId: product.crystalId,
+    crystalNameCn: product.crystalNameCn,
+    crystalNameEn: product.crystalNameEn,
+    mineralName: product.mineralName,
+    colorTags: product.colorTags,
+    visualTags: product.visualTags,
+    styleTags: product.styleTags,
+    emotionTags: product.emotionTags,
+    cultureTags: product.cultureTags,
+    materialKey: product.materialKey,
+    shape: product.shape,
+    diameterMm: product.diameterMm,
+    modelAssetKey: product.modelAssetKey,
+    textureAssetKey: product.textureAssetKey,
+    currency: product.currency,
+    unitPriceMinor: product.unitPriceMinor,
+    availableQuantity: product.availableQuantity
+  });
+  return parsed.success ? parsed.data : undefined;
+}
+
 export class OracleService implements OracleApiService {
   constructor(private readonly dependencies: {
     readonly repository: OracleSessionRepository;
@@ -203,6 +242,27 @@ export class OracleService implements OracleApiService {
     try {
       const record = await this.dependencies.repository.getOwned(actorId, sessionId);
       return await mapGetOracleResponse(actorId, `restore-${record.id}`, record, this.dependencies.designReader);
+    } catch (error) {
+      toDomainError(error);
+    }
+  }
+
+  async presentation(
+    actorId: string,
+    sessionId: string,
+    locale: PresentationLocale
+  ): Promise<OraclePresentationResponse> {
+    try {
+      const record = await this.dependencies.repository.getOwned(actorId, sessionId);
+      const session = await sessionFromRecord(actorId, record, this.dependencies.designReader);
+      const catalog = this.dependencies.catalog
+        ? await this.dependencies.catalog.listActiveCatalogProducts(record.currency)
+        : [];
+      const products = catalog.flatMap((product) => {
+        const mapped = toPresentationCatalogProduct(product);
+        return mapped === undefined ? [] : [mapped];
+      });
+      return projectOraclePresentation(session, locale, products);
     } catch (error) {
       toDomainError(error);
     }

@@ -1,10 +1,12 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";
 import {
+  DesignPresentationResponseSchema,
   ListCatalogMaterialsQuerySchema,
   ListCatalogMaterialsResponseSchema,
   ListMyDesignsResponseSchema,
-  ListMyOrdersResponseSchema
+  ListMyOrdersResponseSchema,
+  LocalizedPresentationRequestSchema
 } from "@mystcrag/design-contract";
 
 import { actorIdFromVerifiedContext } from "../../auth/auth-provider.js";
@@ -119,6 +121,24 @@ export async function handleDesignGet(
       ? await service.revisions(actorId, request.params.id)
       : await service.get(actorId, request.params.id);
     return reply.status(200).send(output);
+  } catch (error) {
+    const domainError = mapError(error, true);
+    return reply
+      .status(domainError.statusCode)
+      .send(toApiErrorEnvelope(domainError, request.id));
+  }
+}
+
+export async function handleDesignPresentationGet(
+  request: FastifyRequest<{ Params: { id: string }; Querystring: { locale?: string } }>,
+  reply: FastifyReply,
+  service: DesignApiService
+) {
+  try {
+    const actorId = actorIdFromVerifiedContext(request);
+    const query = validateRequest(LocalizedPresentationRequestSchema, request.query);
+    const output = await service.presentation(actorId, request.params.id, query.locale);
+    return reply.status(200).send(validateResponse(DesignPresentationResponseSchema, output));
   } catch (error) {
     const domainError = mapError(error, true);
     return reply

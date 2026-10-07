@@ -6,6 +6,7 @@ import {
   DesignV1Schema,
   GenerateOracleRecommendationsResponseSchema,
   GetOracleSessionResponseSchema,
+  OraclePresentationResponseSchema,
   SaveOracleSessionResponseSchema,
   toPublicDesign,
   type DesignV1
@@ -436,6 +437,7 @@ function createOracleHarness(catalog: readonly AvailableCatalogMaterialProduct[]
   const repository = new InMemoryOracleRepository();
   const coins = new CountingCoinSource(Array(54).fill(2));
   const copyInputs: unknown[] = [];
+  let activeCatalog = catalog;
   const copy: OracleCopyPort = {
     async createInterpretation(input) {
       copyInputs.push(structuredClone(input));
@@ -490,11 +492,19 @@ function createOracleHarness(catalog: readonly AvailableCatalogMaterialProduct[]
     repository,
     coins,
     copy,
-    catalog: { async listActiveCatalogProducts() { return structuredClone(catalog); } },
+    catalog: { async listActiveCatalogProducts() { return structuredClone(activeCatalog); } },
     designGenerator,
     designReader
   });
-  return { service, repository, coins, copyInputs };
+  return {
+    service,
+    repository,
+    coins,
+    copyInputs,
+    setCatalog(rows: readonly AvailableCatalogMaterialProduct[]) {
+      activeCatalog = rows;
+    }
+  };
 }
 
 const isConflict = (error: unknown): boolean =>
@@ -790,4 +800,104 @@ test("cross-owner duplicate operation id does not leak another owner's cast", as
   assert.deepEqual(replay.session, first.session);
   assert.equal(coins.reads, 36);
   assert.equal(copyInputs.length, 2);
+});
+
+test("presentation projects an owner-scoped CAST session into three locales without entropy or writes", async () => {
+  const repository = new InMemoryOracleRepository();
+  const coins = new CountingCoinSource(Array(18).fill(2));
+  const service = new OracleService({
+    repository,
+    coins,
+    catalog: { async listActiveCatalogProducts() { return []; } }
+  });
+  const created = await service.create("oracle-owner", {
+    requestId: "present-cast-create",
+    operationId: "present-cast-operation",
+    locale: "zh-CN",
+    currency: "CNY"
+  });
+  const sessionId = created.session.sessionId;
+  const readsAfterCreate = coins.reads;
+  const before = await repository.getOwned("oracle-owner", sessionId);
+
+  const headlines = new Set<string>();
+  for (const locale of ["zh-CN", "zh-TW", "en-US"] as const) {
+    const projection = await service.presentation("oracle-owner", sessionId, locale);
+    assert.deepEqual(OraclePresentationResponseSchema.parse(projection), projection);
+    assert.equal(projection.sessionId, sessionId);
+    assert.equal(projection.sourceRevision, created.session.revision);
+    assert.equal(projection.locale, locale);
+    assert.equal(projection.cards.length, 0);
+    assert.equal(projection.materials.length, 0);
+    headlines.add(projection.headline);
+  }
+  assert.equal(headlines.size, 3, "each locale must render distinct reviewed copy");
+  assert.equal(coins.reads, readsAfterCreate, "presentation must not re-cast");
+  assert.deepEqual(await repository.getOwned("oracle-owner", sessionId), before, "presentation must not write");
+
+  await assert.rejects(
+    () => service.presentation("other-owner", sessionId, "zh-CN"),
+    (error: unknown) => error instanceof DomainApiError && error.code === "NOT_FOUND"
+  );
+});
+
+test("presentation reuses persisted recommendations and real stock without recasting or rewriting", async () => {
+  const { service, repository, coins } = createOracleHarness();
+  const created = await service.create("oracle-owner", {
+    requestId: "present-recommended-create",
+    operationId: "present-recommended-create-operation",
+    locale: "zh-CN",
+    currency: "CNY",
+    wristCircumferenceMm: 155
+  });
+  const sessionId = created.session.sessionId;
+  const recommended = await service.recommendations("oracle-owner", sessionId, {
+    requestId: "present-recommended-1",
+    operationId: "present-recommended-operation",
+    expectedRevision: 1
+  });
+  const readsAfterRecommend = coins.reads;
+  const before = await repository.getOwned("oracle-owner", sessionId);
+
+  const projection = await service.presentation("oracle-owner", sessionId, "en-US");
+  assert.deepEqual(OraclePresentationResponseSchema.parse(projection), projection);
+  assert.equal(projection.sourceRevision, recommended.session.revision);
+  assert.equal(projection.cards.length, 3);
+  assert.deepEqual(
+    projection.cards.map((card) => card.designId),
+    recommended.session.recommendations!.map((item) => item.design.designId)
+  );
+  assert.equal(coins.reads, readsAfterRecommend, "presentation must not re-recommend");
+  assert.deepEqual(await repository.getOwned("oracle-owner", sessionId), before, "presentation must not write");
+  const serialized = JSON.stringify(projection);
+  assert.equal(serialized.includes("unitPriceMinor"), false);
+  assert.equal(serialized.includes("availableQuantity"), false);
+});
+
+test("presentation omits zero-stock materials while preserving the saved recommendations", async () => {
+  const { service, repository, coins, setCatalog } = createOracleHarness();
+  const created = await service.create("oracle-owner", {
+    requestId: "present-zero-create",
+    operationId: "present-zero-create-operation",
+    locale: "zh-CN",
+    currency: "CNY",
+    wristCircumferenceMm: 155
+  });
+  const sessionId = created.session.sessionId;
+  const recommended = await service.recommendations("oracle-owner", sessionId, {
+    requestId: "present-zero-1",
+    operationId: "present-zero-operation",
+    expectedRevision: 1
+  });
+  const readsAfterRecommend = coins.reads;
+  const before = await repository.getOwned("oracle-owner", sessionId);
+  setCatalog(recommendationCatalog().map((product) => ({ ...product, availableQuantity: 0 })));
+
+  const projection = await service.presentation("oracle-owner", sessionId, "zh-CN");
+  assert.deepEqual(OraclePresentationResponseSchema.parse(projection), projection);
+  assert.equal(projection.materials.length, 0, "zero-stock materials must not be advertised");
+  assert.equal(projection.cards.length, 3);
+  assert.equal(projection.sourceRevision, recommended.session.revision);
+  assert.equal(coins.reads, readsAfterRecommend);
+  assert.deepEqual(await repository.getOwned("oracle-owner", sessionId), before, "presentation must not write");
 });

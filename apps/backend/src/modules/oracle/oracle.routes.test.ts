@@ -110,6 +110,7 @@ test("Oracle routes preserve stable lifecycle error codes", async () => {
       async create(): Promise<never> { throw lifecycleError; },
       async recommendations(): Promise<never> { throw lifecycleError; },
       async get(): Promise<never> { throw lifecycleError; },
+      async presentation(): Promise<never> { throw lifecycleError; },
       async save(): Promise<never> { throw lifecycleError; }
     };
     const app = createApp({ oracleService: service, oracleEnabled: true, authProvider, logger: false });
@@ -123,6 +124,83 @@ test("Oracle routes preserve stable lifecycle error codes", async () => {
     assert.equal(response.statusCode, expectedCode === "COMPLIANCE_BLOCKED" ? 403 : 409);
     await app.close();
   }
+});
+
+test("Oracle presentation route serves owner-scoped three-locale copy without mutating the session", async () => {
+  const repository = new InMemoryOracleRepository();
+  const service = new OracleService({ repository, coins: new RepeatingCoins() });
+  const created = await service.create("oracle-owner", createBody);
+  const sessionId = created.session.sessionId;
+  const app = createApp({ oracleService: service, oracleEnabled: true, authProvider, logger: false });
+
+  const before = await repository.getOwned("oracle-owner", sessionId);
+  const headlines = new Set<string>();
+  for (const locale of ["zh-CN", "zh-TW", "en-US"] as const) {
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/oracle/sessions/${sessionId}/presentation?locale=${locale}`,
+      headers: ownerHeaders
+    });
+    assert.equal(response.statusCode, 200);
+    const body = response.json();
+    assert.equal(body.sessionId, sessionId);
+    assert.equal(body.sourceRevision, created.session.revision);
+    assert.equal(body.locale, locale);
+    headlines.add(body.headline);
+  }
+  assert.equal(headlines.size, 3, "each locale must render distinct reviewed copy");
+
+  const repeat = await app.inject({
+    method: "GET",
+    url: `/api/oracle/sessions/${sessionId}/presentation?locale=zh-CN`,
+    headers: ownerHeaders
+  });
+  const again = await app.inject({
+    method: "GET",
+    url: `/api/oracle/sessions/${sessionId}/presentation?locale=zh-CN`,
+    headers: ownerHeaders
+  });
+  assert.deepEqual(again.json(), repeat.json());
+  assert.deepEqual(await repository.getOwned("oracle-owner", sessionId), before, "presentation must not write");
+
+  const unauthenticated = await app.inject({
+    method: "GET",
+    url: `/api/oracle/sessions/${sessionId}/presentation?locale=zh-CN`
+  });
+  assert.equal(unauthenticated.statusCode, 401);
+
+  const missingLocale = await app.inject({
+    method: "GET",
+    url: `/api/oracle/sessions/${sessionId}/presentation`,
+    headers: ownerHeaders
+  });
+  assert.equal(missingLocale.statusCode, 400);
+  assert.equal(missingLocale.json().error.code, "VALIDATION_ERROR");
+
+  const invalidLocale = await app.inject({
+    method: "GET",
+    url: `/api/oracle/sessions/${sessionId}/presentation?locale=ja-JP`,
+    headers: ownerHeaders
+  });
+  assert.equal(invalidLocale.statusCode, 400);
+
+  const crossOwner = await app.inject({
+    method: "GET",
+    url: `/api/oracle/sessions/${sessionId}/presentation?locale=zh-CN`,
+    headers: { authorization: "Bearer other-token" }
+  });
+  assert.equal(crossOwner.statusCode, 403);
+  assert.equal(crossOwner.json().error.code, "FORBIDDEN");
+
+  const missingSession = await app.inject({
+    method: "GET",
+    url: "/api/oracle/sessions/oracle-missing/presentation?locale=zh-CN",
+    headers: ownerHeaders
+  });
+  assert.equal(missingSession.statusCode, 403);
+  assert.equal(missingSession.json().error.code, "FORBIDDEN");
+
+  await app.close();
 });
 
 test("Oracle request bodies and bearer credentials are redacted from logs", async () => {
