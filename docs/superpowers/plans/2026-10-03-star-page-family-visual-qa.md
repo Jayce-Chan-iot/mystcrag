@@ -75,6 +75,18 @@
 - [ ] 在前端工作区运行 `pnpm --filter @mystcrag/frontend exec tsx --test <本行列出的测试文件>` 确认红因，按顺序仅改该族；图片加载保留稳定比例，产品影像不着色。
 - [ ] 每族重跑相邻测试、前端 typecheck/lint，浏览器检查 320×568、390×844、768×1024、1440×900、1440×560；按族提交。
 
+### 任务 3A：并行 QA 探针准备（拟登记 `TASK-UX-QA-PREP-001`；DeepSeek V4.1 Flash / `QA`；可与前端页面实施并行）
+
+**交付：** 在既有 `capture_star_platform.py` 的 73 项矩阵上增加可独立自测的三语、视口和状态探针，但不把未完成的页面判作通过，也不提前替代任务 4 的真实双用户浏览器验收。一个任务内分三次阶段交付，每阶段给出可复现测试结果；只有最终整体通过后交审。
+
+**文件：** 修改 `scripts/ui-qa/capture_star_platform.py`，新增 `scripts/ui-qa/test_capture_star_platform.py`，修改 `docs/INTERACTION_TEST_PLAN.md` 中星台 QA 章节。生成证据仅写入已忽略的 `output/playwright/task-ux-qa-prep-001/`。不得编辑页面、组件、API、契约、其他测试或任务注册表。
+
+- [ ] 阶段 A（红测与基线）：记录现有 73 项矩阵和入口；先用 `python3 -m unittest discover -s scripts/ui-qa -p 'test_capture_star_platform.py'` 证明新断言在旧探针上失败，覆盖低对比、按钮越界、三语长文案裁切及真实业务失败不能静默降为 SKIP。现有路线与判定不删减。
+- [ ] 阶段 B（探针实现）：三语 `zh-CN`/`zh-TW`/`en-US`、320×568/390×844/768×1024/1440×900/1440×560 和 200% 的截图/测量使用稳定命名；为页面加载失败、未登录、功能关闭和基础设施不可用分别记录可解释状态。低对比、主 CTA 越界和语言切换触发额外 create/recommend/save POST 必须报 FAIL，不可伪装 PASS/SKIP。模拟故障自测必须能把探针变红。
+- [ ] 阶段 C（独立收口）：运行上述 unittest、`python3 -m py_compile scripts/ui-qa/capture_star_platform.py scripts/ui-qa/test_capture_star_platform.py`、`node --test tests/architecture.test.mjs`、`CI=1 pnpm validate`、`git diff --check`。可访问真实本地环境时运行新增浏览器矩阵，保留准确 PASS/FAIL/BLOCKED 数量；环境缺失则记录未执行，绝不声称真实页面通过。提交 Conventional Commit 与阶段证据。
+
+**后续关系：** 任务 4 在页面全部合入后沿用这些探针，仍必须完成真实两用户、商品/价格/修订、问卦幂等、图片人工核收与完整浏览器复验。任务 3A 不接收任何前端实现路径锁。
+
 ### 任务 4：跨页面真实浏览器验收（拟登记 `TASK-UX-QA-001`；DeepSeek V4.1 Flash / `QA`，待全部实现任务完成后执行；GPT 独立复核）
 
 **文件：** 扩展 `scripts/ui-qa/capture_star_platform.py`、`docs/INTERACTION_TEST_PLAN.md`、`docs/USER_ACCEPTANCE_CHECKLIST.md`；新增或更新同目录自检与跨工作区测试。QA 证据遵循 `docs/governance/QA_EVIDENCE_RETENTION.md`，不得把生成截图提交到源码目录。
