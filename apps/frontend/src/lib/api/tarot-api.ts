@@ -4,23 +4,27 @@ import {
   GenerateTarotRecommendationsRequestSchema,
   GenerateTarotRecommendationsResponseSchema,
   GetTarotSessionResponseSchema,
+  LocalizedPresentationRequestSchema,
   RevealTarotSessionRequestSchema,
   RevealTarotSessionResponseSchema,
   SaveTarotSessionRequestSchema,
   SaveTarotSessionResponseSchema,
   SelectTarotCardRequestSchema,
   SelectTarotCardResponseSchema,
+  TarotPresentationResponseSchema,
   type CreateTarotSessionRequest,
   type CreateTarotSessionResponse,
   type GenerateTarotRecommendationsRequest,
   type GenerateTarotRecommendationsResponse,
   type GetTarotSessionResponse,
+  type PresentationLocale,
   type RevealTarotSessionRequest,
   type RevealTarotSessionResponse,
   type SaveTarotSessionRequest,
   type SaveTarotSessionResponse,
   type SelectTarotCardRequest,
-  type SelectTarotCardResponse
+  type SelectTarotCardResponse,
+  type TarotPresentationResponse
 } from "@mystcrag/design-contract";
 
 import { FrontendApiError, type FrontendErrorCode } from "./frontend-api-error";
@@ -122,6 +126,7 @@ export interface TarotApiClient {
     input: GenerateTarotRecommendationsRequest
   ): Promise<GenerateTarotRecommendationsResponse>;
   get(sessionId: string): Promise<GetTarotSessionResponse>;
+  presentation(sessionId: string, locale: PresentationLocale): Promise<TarotPresentationResponse>;
   save(sessionId: string, input: SaveTarotSessionRequest): Promise<SaveTarotSessionResponse>;
 }
 
@@ -180,6 +185,16 @@ export function createTarotApiClient({
       return callApi(
         sessionPath(sessionId),
         GetTarotSessionResponseSchema,
+        { method: "GET" },
+        fetcher
+      );
+    },
+
+    async presentation(sessionId, locale) {
+      const request = LocalizedPresentationRequestSchema.parse({ locale });
+      return callApi(
+        `${sessionPath(sessionId)}/presentation?locale=${encodeURIComponent(request.locale)}`,
+        TarotPresentationResponseSchema,
         { method: "GET" },
         fetcher
       );

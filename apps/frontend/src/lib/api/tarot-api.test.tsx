@@ -306,3 +306,127 @@ test("Frontend Tarot rollout uses the same exact true matrix as Backend", () => 
     assert.equal(resolveTarotFeatureEnabled(value), expected);
   }
 });
+
+// TASK-UX-I18N-FE-API-001: Tarot's localized presentation is a read-only GET on the
+// caller's own session, gated by the same strict three-locale request contract.
+const tarotSessionId = "tarot/session 1";
+
+function tarotPresentation(locale: "zh-CN" | "zh-TW" | "en-US") {
+  return {
+    sessionId: tarotSessionId,
+    sourceRevision: 6,
+    locale,
+    headline: locale === "en-US" ? "A quieter next step" : locale === "zh-TW" ? "更從容的下一步" : "更从容的下一步",
+    summary: locale === "en-US" ? "Display projection only." : locale === "zh-TW" ? "僅供展示。" : "仅供展示。",
+    cardReflections: [{ slot: "PAST", text: locale === "en-US" ? "What already passed." : locale === "zh-TW" ? "已經過去的部分。" : "已经过去的部分。" }],
+    colorStory: locale === "en-US" ? "Soft blues and warm whites." : locale === "zh-TW" ? "柔藍與暖白。" : "柔蓝与暖白。",
+    designRationale: locale === "en-US" ? "Balance first." : locale === "zh-TW" ? "先求平衡。" : "先求平衡。",
+    disclaimer: locale === "en-US" ? "Design inspiration only." : locale === "zh-TW" ? "僅為設計靈感。" : "仅为设计灵感。"
+  };
+}
+
+function tarotRecordingFetcher(payloads: Array<{ body: unknown; status?: number }>) {
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  const queue = [...payloads];
+  const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push({ input: String(input), ...(init ? { init } : {}) });
+    const next = queue.shift() ?? { body: {} };
+    return jsonResponse(next.body, next.status ?? 200);
+  }) as typeof fetch;
+  return { calls, fetcher };
+}
+
+test("tarot presentation reads one encoded GET per locale with no body", async () => {
+  for (const locale of ["zh-CN", "zh-TW", "en-US"] as const) {
+    const { calls, fetcher } = tarotRecordingFetcher([{ body: tarotPresentation(locale) }]);
+    const client = createTarotApiClient({ fetcher });
+
+    const response = await client.presentation(tarotSessionId, locale);
+
+    assert.equal(
+      calls[0]?.input,
+      `/api/tarot/sessions/${encodeURIComponent(tarotSessionId)}/presentation?locale=${locale}`
+    );
+    assert.equal(calls[0]?.init?.method, "GET");
+    assert.equal(calls[0]?.init?.cache, "no-store");
+    assert.equal(calls[0]?.init?.body, undefined);
+    assert.equal(response.locale, locale);
+    assert.equal(response.sourceRevision, 6);
+  }
+});
+
+test("tarot presentation rejects an unapproved or missing locale before any request", async () => {
+  for (const locale of ["en", "zh-TW ", "zh_TW", "de-DE", "", undefined, null, {}, 7] as const) {
+    const { calls, fetcher } = tarotRecordingFetcher([{ body: tarotPresentation("zh-CN") }]);
+    await assert.rejects(
+      createTarotApiClient({ fetcher }).presentation(tarotSessionId, locale as never),
+      (error: unknown) => (error as { name?: string }).name === "ZodError",
+      `locale ${JSON.stringify(locale)} must be refused`
+    );
+    assert.deepEqual(calls, []);
+  }
+});
+
+test("tarot presentation maps the BFF error envelope for 401, 403 and 404", async () => {
+  for (const [code, status] of [["UNAUTHORIZED", 401], ["FORBIDDEN", 403], ["NOT_FOUND", 404]] as const) {
+    const { calls, fetcher } = tarotRecordingFetcher([
+      { body: { error: { code, message: "No.", requestId: `req-${code}` } }, status }
+    ]);
+    await assert.rejects(
+      createTarotApiClient({ fetcher }).presentation(tarotSessionId, "zh-CN"),
+      (error: unknown) =>
+        error instanceof FrontendApiError && error.code === code && error.requestId === `req-${code}`
+    );
+    assert.equal(calls.length, 1);
+  }
+});
+
+test("tarot presentation turns network and malformed bodies into explicit errors", async () => {
+  await assert.rejects(
+    createTarotApiClient({
+      fetcher: (async () => {
+        throw new TypeError("offline");
+      }) as typeof fetch
+    }).presentation(tarotSessionId, "zh-CN"),
+    (error: unknown) => error instanceof FrontendApiError && error.code === "NETWORK_ERROR"
+  );
+
+  await assert.rejects(
+    createTarotApiClient({ fetcher: (async () => new Response("nope", { status: 200 })) as typeof fetch })
+      .presentation(tarotSessionId, "zh-CN"),
+    (error: unknown) => error instanceof FrontendApiError && error.code === "INTERNAL_ERROR"
+  );
+
+  for (const broken of [
+    { ...tarotPresentation("zh-CN"), cardReflections: [] },
+    { ...tarotPresentation("zh-CN"), disclaimer: "" },
+    { ...tarotPresentation("zh-CN"), locale: "en" },
+    { ...tarotPresentation("zh-CN"), sessionToken: "leak" }
+  ]) {
+    const { fetcher } = tarotRecordingFetcher([{ body: broken }]);
+    await assert.rejects(
+      createTarotApiClient({ fetcher }).presentation(tarotSessionId, "zh-CN"),
+      (error: unknown) => error instanceof FrontendApiError && error.code === "INTERNAL_ERROR"
+    );
+  }
+});
+
+test("repeated tarot presentation reads never reach a mutation route", async () => {
+  const { calls, fetcher } = tarotRecordingFetcher([
+    { body: tarotPresentation("en-US") },
+    { body: tarotPresentation("en-US") }
+  ]);
+  const client = createTarotApiClient({ fetcher });
+
+  await client.presentation(tarotSessionId, "en-US");
+  await client.presentation(tarotSessionId, "en-US");
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(
+    [...new Set(calls.map((call) => call.init?.method))],
+    ["GET"],
+    "the projection is read-only"
+  );
+  assert.ok(calls.every((call) => call.init?.body === undefined));
+  assert.ok(!calls.some((call) => /\/select|\/reveal|\/recommendations|\/save/.test(call.input)));
+});

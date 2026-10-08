@@ -4,6 +4,8 @@ import {
   GenerateOracleRecommendationsRequestSchema,
   GenerateOracleRecommendationsResponseSchema,
   GetOracleSessionResponseSchema,
+  LocalizedPresentationRequestSchema,
+  OraclePresentationResponseSchema,
   SaveOracleSessionRequestSchema,
   SaveOracleSessionResponseSchema,
   type CreateOracleSessionRequest,
@@ -11,6 +13,8 @@ import {
   type GenerateOracleRecommendationsRequest,
   type GenerateOracleRecommendationsResponse,
   type GetOracleSessionResponse,
+  type OraclePresentationResponse,
+  type PresentationLocale,
   type SaveOracleSessionRequest,
   type SaveOracleSessionResponse
 } from "@mystcrag/design-contract";
@@ -112,6 +116,7 @@ export interface OracleApiClient {
     input: GenerateOracleRecommendationsRequest
   ): Promise<GenerateOracleRecommendationsResponse>;
   get(sessionId: string): Promise<GetOracleSessionResponse>;
+  presentation(sessionId: string, locale: PresentationLocale): Promise<OraclePresentationResponse>;
   save(sessionId: string, input: SaveOracleSessionRequest): Promise<SaveOracleSessionResponse>;
 }
 
@@ -146,6 +151,16 @@ export function createOracleApiClient({ fetcher = fetch }: OracleApiClientOption
 
     async get(sessionId) {
       return callApi(sessionPath(sessionId), GetOracleSessionResponseSchema, { method: "GET" }, fetcher);
+    },
+
+    async presentation(sessionId, locale) {
+      const request = LocalizedPresentationRequestSchema.parse({ locale });
+      return callApi(
+        `${sessionPath(sessionId)}/presentation?locale=${encodeURIComponent(request.locale)}`,
+        OraclePresentationResponseSchema,
+        { method: "GET" },
+        fetcher
+      );
     },
 
     async save(sessionId, input) {
