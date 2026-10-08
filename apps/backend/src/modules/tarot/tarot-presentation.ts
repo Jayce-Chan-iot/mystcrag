@@ -64,6 +64,9 @@ export function projectTarotPresentation(
   const materialColorTags = (source.materialRecommendations ?? []).flatMap(
     (material) => material.colorTags
   );
+  const materialNames = (source.materialRecommendations ?? []).map(
+    (material) => material.crystalName
+  );
 
   return TarotPresentationResponseSchema.parse({
     sessionId: source.sessionId,
@@ -86,7 +89,8 @@ export function projectTarotPresentation(
       directionCount,
       beadCount,
       revealed: source.revealedCards !== undefined,
-      materialColorTags
+      materialColorTags,
+      materialNames
     }),
     disclaimer: tarotDisclaimer(targetLocale)
   });

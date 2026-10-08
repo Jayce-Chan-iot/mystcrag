@@ -1,3 +1,4 @@
+import { hasProhibitedOracleClaim } from "@mystcrag/ai-agent/oracle";
 import type { TarotPresentationResponse, TarotSlot } from "@mystcrag/design-contract";
 
 /**
@@ -12,7 +13,7 @@ import type { TarotPresentationResponse, TarotSlot } from "@mystcrag/design-cont
  * card, and the palette composition only and never assert an outcome, efficacy, fortune, price,
  * stock, or a second authoritative design.
  */
-export const TAROT_PRESENTATION_CONTENT_VERSION = "mystcrag-tarot-presentation-v2";
+export const TAROT_PRESENTATION_CONTENT_VERSION = "mystcrag-tarot-presentation-v3";
 
 export type TarotPresentationLocale = TarotPresentationResponse["locale"];
 export type TarotPresentationOrientation = "UPRIGHT" | "REVERSED";
@@ -40,6 +41,7 @@ export interface TarotPresentationDesignFacts {
   readonly beadCount: number;
   readonly revealed: boolean;
   readonly materialColorTags: readonly string[];
+  readonly materialNames: readonly string[];
 }
 
 const HEADLINE: LocaleCopy = {
@@ -113,15 +115,31 @@ const COLOR_STORY_PENDING: LocaleCopy = {
   "en-US": "No palette has been generated yet; start from the card imagery as visual inspiration."
 };
 
-type ToneTemplate = Record<TarotPresentationLocale, (directionCount: number, beadCount: number, tones: string) => string>;
+type DetailsTemplate = Record<
+  TarotPresentationLocale,
+  (directionCount: number, beadCount: number, details: string) => string
+>;
 
-const DESIGN_RATIONALE_WITH_TONES: ToneTemplate = {
-  "zh-CN": (directionCount, beadCount, tones) =>
-    `以${directionCount}个方向展开，共${beadCount}颗珠子，材质色调为${tones}，沿用原推荐设计，仅作观察与搭配参考。`,
-  "zh-TW": (directionCount, beadCount, tones) =>
-    `以${directionCount}個方向展開，共${beadCount}顆珠子，材質色調為${tones}，沿用原推薦設計，僅作觀察與搭配參考。`,
-  "en-US": (directionCount, beadCount, tones) =>
-    `Follows the ${directionCount} original directions with ${beadCount} beads; the material tones are ${tones}, as an observation cue only.`
+const DESIGN_RATIONALE_WITH_DETAILS: DetailsTemplate = {
+  "zh-CN": (directionCount, beadCount, details) =>
+    `以${directionCount}个方向展开，共${beadCount}颗珠子，${details}，沿用原推荐设计，仅作观察与搭配参考。`,
+  "zh-TW": (directionCount, beadCount, details) =>
+    `以${directionCount}個方向展開，共${beadCount}顆珠子，${details}，沿用原推薦設計，僅作觀察與搭配參考。`,
+  "en-US": (directionCount, beadCount, details) =>
+    `Follows the ${directionCount} original directions with ${beadCount} beads; ${details}, as an observation cue only.`
+};
+
+/** Names the real persisted materials; the stored free-text reason is never used. */
+const MATERIAL_CLAUSE: Record<TarotPresentationLocale, (materials: string) => string> = {
+  "zh-CN": (materials) => `真实材质为${materials}`,
+  "zh-TW": (materials) => `真實材質為${materials}`,
+  "en-US": (materials) => `the materials are ${materials}`
+};
+
+const TONE_CLAUSE: Record<TarotPresentationLocale, (tones: string) => string> = {
+  "zh-CN": (tones) => `色调为${tones}`,
+  "zh-TW": (tones) => `色調為${tones}`,
+  "en-US": (tones) => `the tones are ${tones}`
 };
 
 const DESIGN_RATIONALE_WITH_DIRECTIONS: CountTemplate = {
@@ -156,6 +174,25 @@ const DISCLAIMER: LocaleCopy = {
 };
 
 const LIST_SEPARATOR: LocaleCopy = { "zh-CN": "、", "zh-TW": "、", "en-US": ", " };
+const CLAUSE_SEPARATOR: LocaleCopy = { "zh-CN": "，", "zh-TW": "，", "en-US": ", " };
+
+/**
+ * Reviewed readable names for the established palette hexes the recommendation pipeline persists
+ * (`amber`, `blue`, `ink`, `ivory`, `rose`, `violet`). Keys are lowercase hex; a historical session
+ * whose persisted color is outside this established set keeps its raw hex as a safe fallback rather
+ * than being assigned an invented name.
+ */
+const PALETTE_COLOR_NAMES: Record<string, LocaleCopy> = {
+  "#c8954c": { "zh-CN": "琥珀", "zh-TW": "琥珀", "en-US": "amber" },
+  "#6f95b5": { "zh-CN": "雾蓝", "zh-TW": "霧藍", "en-US": "soft blue" },
+  "#31343b": { "zh-CN": "墨色", "zh-TW": "墨色", "en-US": "ink" },
+  "#f2eee5": { "zh-CN": "象牙白", "zh-TW": "象牙白", "en-US": "ivory" },
+  "#c98c99": { "zh-CN": "玫瑰粉", "zh-TW": "玫瑰粉", "en-US": "rose" },
+  "#7562a8": { "zh-CN": "紫罗兰", "zh-TW": "紫羅蘭", "en-US": "violet" }
+};
+
+const paletteColorWord = (locale: TarotPresentationLocale, hex: string): string =>
+  PALETTE_COLOR_NAMES[hex.toLowerCase()]?.[locale] ?? hex;
 
 /** Reviewed display words for the catalog's persisted material color tags. */
 const MATERIAL_TONE_LABELS: Record<string, LocaleCopy> = {
@@ -272,6 +309,23 @@ const materialToneWords = (
   return words;
 };
 
+/**
+ * Real persisted material names, in persisted order. The name is the catalog fact the recommendation
+ * stored, so it is echoed verbatim rather than translated or invented; a name that trips the shared
+ * prohibited-claim detector is dropped so no efficacy claim reaches any locale.
+ */
+const materialNameWords = (names: readonly string[]): string[] => {
+  const seen = new Set<string>();
+  const words: string[] = [];
+  for (const raw of names) {
+    const name = raw.trim();
+    if (name.length === 0 || seen.has(name) || hasProhibitedOracleClaim(name)) continue;
+    seen.add(name);
+    words.push(name);
+  }
+  return words;
+};
+
 export function tarotPresentationHeadline(locale: TarotPresentationLocale): string {
   return bounded(HEADLINE[locale], 48);
 }
@@ -311,7 +365,9 @@ export function tarotCardReflection(
 
 /**
  * Palette observation built from the persisted `colorStory` colors. The stored rationale free text
- * is never read; the real hex colors are the facts, so two different palettes always differ.
+ * is never read; the real hex colors are the facts. An established palette color is shown as its
+ * reviewed readable name, and any historical color outside that set keeps its raw hex, so two
+ * different palettes always differ and no color is ever given an invented name.
  */
 export function tarotColorStory(
   locale: TarotPresentationLocale,
@@ -319,45 +375,58 @@ export function tarotColorStory(
 ): string {
   if (palette === undefined) return bounded(COLOR_STORY_PENDING[locale], 240);
 
-  const { primaryColor, supportColor, accentColor } = palette;
+  const primary = paletteColorWord(locale, palette.primaryColor);
+  const support = paletteColorWord(locale, palette.supportColor);
+  const accent = paletteColorWord(locale, palette.accentColor);
   if (locale === "en-US") {
     return bounded(
-      `A three-layer palette of lead ${primaryColor}, support ${supportColor}, and accent ${accentColor} forms the visual cue.`,
+      `A three-layer palette of lead ${primary}, support ${support}, and accent ${accent} forms the visual cue.`,
       240
     );
   }
   if (locale === "zh-TW") {
     return bounded(
-      `以主色 ${primaryColor}、輔色 ${supportColor} 與點睛色 ${accentColor} 構成三層配色，作為整體視覺的觀察線索。`,
+      `以主色 ${primary}、輔色 ${support} 與點睛色 ${accent} 構成三層配色，作為整體視覺的觀察線索。`,
       240
     );
   }
   return bounded(
-    `以主色 ${primaryColor}、辅色 ${supportColor} 与点睛色 ${accentColor} 构成三层配色，作为整体视觉的观察线索。`,
+    `以主色 ${primary}、辅色 ${support} 与点睛色 ${accent} 构成三层配色，作为整体视觉的观察线索。`,
     240
   );
 }
 
 /**
  * Design observation built from the persisted recommendation and material facts. The stored design
- * rationale free text is never read; direction count, bead count, and the real material color tags
- * are the facts, so different recommendations or materials always differ.
+ * rationale free text is never read; direction count, bead count, the real persisted material names,
+ * and the real material color tags are the facts. Naming the material keeps the same tone from two
+ * different materials from collapsing onto the same sentence, and a material set with no readable
+ * name falls back to the tone-only wording.
  */
 export function tarotDesignRationale(
   locale: TarotPresentationLocale,
   facts: TarotPresentationDesignFacts
 ): string {
-  const { directionCount, beadCount, revealed, materialColorTags } = facts;
+  const { directionCount, beadCount, revealed, materialColorTags, materialNames } = facts;
   if (directionCount === 0) {
     return bounded((revealed ? DESIGN_RATIONALE_AWAITING : DESIGN_RATIONALE_UNREVEALED)[locale], 240);
   }
 
+  const materials = materialNameWords(materialNames);
   const tones = materialToneWords(locale, materialColorTags);
-  if (tones.length === 0) {
+  const clauses: string[] = [];
+  if (materials.length > 0) {
+    clauses.push(MATERIAL_CLAUSE[locale](materials.join(LIST_SEPARATOR[locale])));
+  }
+  if (tones.length > 0) {
+    clauses.push(TONE_CLAUSE[locale](tones.join(LIST_SEPARATOR[locale])));
+  }
+
+  if (clauses.length === 0) {
     return bounded(DESIGN_RATIONALE_WITH_DIRECTIONS[locale](directionCount, beadCount), 240);
   }
   return bounded(
-    DESIGN_RATIONALE_WITH_TONES[locale](directionCount, beadCount, tones.join(LIST_SEPARATOR[locale])),
+    DESIGN_RATIONALE_WITH_DETAILS[locale](directionCount, beadCount, clauses.join(CLAUSE_SEPARATOR[locale])),
     240
   );
 }

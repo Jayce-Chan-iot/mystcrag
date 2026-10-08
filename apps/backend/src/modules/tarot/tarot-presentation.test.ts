@@ -28,6 +28,13 @@ const COMPLETION_CLAIM: Record<(typeof LOCALES)[number], RegExp> = {
   "en-US": /completed/iu
 };
 
+/** Reviewed readable names for the established palette used by the recommended session fixture. */
+const REVIEWED_PALETTE_NAMES: Record<(typeof LOCALES)[number], readonly string[]> = {
+  "zh-CN": ["雾蓝", "象牙白", "琥珀"],
+  "zh-TW": ["霧藍", "象牙白", "琥珀"],
+  "en-US": ["soft blue", "ivory", "amber"]
+};
+
 const tarotDesign = (rank: number) =>
   DesignV1Schema.parse({
     ...structuredClone(standardAiDesignFixture),
@@ -168,6 +175,20 @@ const redMaterialSession: TarotPublicSession = TarotPublicSessionSchema.parse({
   ]
 });
 
+/** Same palette and the same `blue` color tag as the recommended session, but a different real material. */
+const sameColorMaterialSession: TarotPublicSession = TarotPublicSessionSchema.parse({
+  ...structuredClone(recommendedSession),
+  materialRecommendations: [
+    {
+      beadProductId: "product-blue-lace-agate-round-8",
+      displayName: "Blue lace agate round bead",
+      crystalName: "Blue Lace Agate",
+      colorTags: ["blue"],
+      reason: "stored material reason that must never be echoed"
+    }
+  ]
+});
+
 const drawnSingleSession: TarotPublicSession = TarotPublicSessionSchema.parse({
   sessionId: "tarot-session-drawn-single",
   spreadType: "SINGLE",
@@ -276,6 +297,75 @@ test("different persisted materials never share the same design rationale", () =
     const red = projectTarotPresentation(redMaterialSession, locale).designRationale;
 
     assert.notEqual(blue, red, `${locale}: different materials must not reuse the same rationale`);
+  }
+});
+
+test("the same color from a different real material never shares the same design rationale", () => {
+  for (const locale of LOCALES) {
+    const aquamarine = projectTarotPresentation(recommendedSession, locale).designRationale;
+    const agate = projectTarotPresentation(sameColorMaterialSession, locale).designRationale;
+
+    assert.notEqual(
+      aquamarine,
+      agate,
+      `${locale}: the same tone from a different material must not reuse the same rationale`
+    );
+  }
+});
+
+test("the design rationale names the real persisted material and invents no name", () => {
+  for (const locale of LOCALES) {
+    const projection = projectTarotPresentation(recommendedSession, locale);
+
+    assert.equal(
+      projection.designRationale.includes("Aquamarine"),
+      true,
+      `${locale}: the persisted material name must appear in ${projection.designRationale}`
+    );
+    assert.equal(
+      projection.designRationale.includes("product-aquamarine-round-8"),
+      false,
+      `${locale}: an internal product id must not stand in for a material name`
+    );
+    assert.equal(
+      projection.designRationale.includes(recommendedSession.materialRecommendations![0]!.reason),
+      false,
+      `${locale}: the stored material reason must never be echoed`
+    );
+  }
+});
+
+test("the established palette renders reviewed three-language color names", () => {
+  for (const locale of LOCALES) {
+    const colorStory = projectTarotPresentation(recommendedSession, locale).colorStory;
+
+    for (const word of REVIEWED_PALETTE_NAMES[locale]) {
+      assert.equal(colorStory.includes(word), true, `${locale}: expected ${word} in ${colorStory}`);
+    }
+    for (const hex of ["#6F95B5", "#F2EEE5", "#C8954C"]) {
+      assert.equal(
+        colorStory.includes(hex),
+        false,
+        `${locale}: a known palette color must be named, not shown as ${hex}`
+      );
+    }
+  }
+});
+
+test("an unknown historical color value falls back to its raw hex without borrowing a name", () => {
+  for (const locale of LOCALES) {
+    const colorStory = projectTarotPresentation(warmPaletteSession, locale).colorStory;
+
+    for (const hex of ["#C0504D", "#F7E7CE", "#3B5B7A"]) {
+      assert.equal(colorStory.includes(hex), true, `${locale}: unknown color must fall back to ${hex}`);
+    }
+    for (const word of REVIEWED_PALETTE_NAMES[locale]) {
+      assert.equal(
+        colorStory.includes(word),
+        false,
+        `${locale}: an unknown color must not borrow the reviewed name ${word}`
+      );
+    }
   }
 });
 
