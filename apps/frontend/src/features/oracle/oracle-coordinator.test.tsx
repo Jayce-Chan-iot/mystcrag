@@ -133,6 +133,9 @@ function makeApi(handlers: Partial<OracleApiClient> = {}) {
       calls.get.push(id);
       return handlers.get ? handlers.get(id) : { requestId: "request-oracle-get-1", session: recommendedSession };
     },
+    async presentation(sessionId, locale) {
+      throw new Error(`Oracle coordinator must not read a display projection (${sessionId}/${locale}).`);
+    },
     async save(id, input) {
       calls.save.push({ sessionId: id, input });
       return handlers.save ? handlers.save(id, input) : { requestId: input.requestId, session: savedSession };

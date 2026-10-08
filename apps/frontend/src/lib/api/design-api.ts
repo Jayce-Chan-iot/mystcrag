@@ -5,12 +5,14 @@ import {
   CreateOrderFromDesignRequestSchema,
   CreateOrderFromDesignResponseSchema,
   DeleteDesignResponseSchema,
+  DesignPresentationResponseSchema,
   EvaluateDesignResponseSchema,
   ListCatalogMaterialsResponseSchema,
   ListMyDesignsResponseSchema,
   ListMyOrdersResponseSchema,
   GenerateDesignRequestSchema,
   GenerateDesignResponseSchema,
+  LocalizedPresentationRequestSchema,
   MaterialSuggestResponseSchema,
   OptimizeDesignRequestSchema,
   OptimizeDesignResponseSchema,
@@ -30,6 +32,7 @@ import {
   type CreateOrderFromDesignResponse,
   type CatalogMaterialProduct,
   type DeleteDesignResponse,
+  type DesignPresentationResponse,
   type EvaluateDesignResponse,
   type GenerateDesignRequest,
   type GenerateDesignResponse,
@@ -38,6 +41,7 @@ import {
   type OptimizeDesignResponse,
   type ListMyDesignsResponse,
   type ListMyOrdersResponse,
+  type PresentationLocale,
   type PublicDesignV1,
   type RecommendDesignRequest,
   type RecommendDesignResponse,
@@ -127,7 +131,12 @@ async function callApi<T>(
     throw new FrontendApiError("NETWORK_ERROR", error instanceof Error ? error.message : "Backend is unavailable.");
   }
   if (!response.ok) throw await parseError(response);
-  const payload: unknown = await response.json();
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new FrontendApiError("INTERNAL_ERROR", "Backend returned an unreadable Design response.");
+  }
   const parsed = schema.safeParse(payload);
   if (!parsed.success) {
     throw new FrontendApiError("INTERNAL_ERROR", "Backend response did not match the public Design contract.");
@@ -176,6 +185,22 @@ export function createDesignApiClient({
         return PublicDesignV1Schema.parse(design);
       }
       return callApi(`/api/design/${encodeURIComponent(designId)}`, PublicDesignV1Schema, { method: "GET" }, fetcher);
+    },
+
+    async presentation(
+      designId: string,
+      locale: PresentationLocale
+    ): Promise<DesignPresentationResponse> {
+      const request = LocalizedPresentationRequestSchema.parse({ locale });
+      if (useMock) {
+        throw new FrontendApiError("VALIDATION_ERROR", "Mock mode does not fabricate a server presentation projection.");
+      }
+      return callApi(
+        `/api/design/${encodeURIComponent(designId)}/presentation?locale=${encodeURIComponent(request.locale)}`,
+        DesignPresentationResponseSchema,
+        { method: "GET" },
+        fetcher
+      );
     },
 
     async materials(currency: PublicDesignV1["currency"]): Promise<ListCatalogMaterialsResponse> {

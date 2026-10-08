@@ -348,3 +348,152 @@ test("the Oracle rollout flag is server-only and matches the exact Backend matri
     else process.env.NEXT_PUBLIC_MYSTCRAG_ORACLE_ENABLED = originalPublicFlag;
   }
 });
+
+// TASK-UX-I18N-FE-API-001: the localized presentation projection is a read-only
+// GET on the caller's own session. It may never create, recommend or save, and the
+// three-locale requirement is enforced by the shared strict request contract before
+// anything reaches the network.
+function oraclePresentation(locale: "zh-CN" | "zh-TW" | "en-US") {
+  return {
+    sessionId,
+    sourceRevision: 3,
+    locale,
+    headline: locale === "en-US" ? "A steadier direction" : locale === "zh-TW" ? "更穩定的方向" : "更稳定的方向",
+    summary: locale === "en-US" ? "Read-only display projection." : locale === "zh-TW" ? "只讀展示投影。" : "只读展示投影。",
+    cues: [{ kind: "COLOR", text: locale === "en-US" ? "Deep blue lead" : locale === "zh-TW" ? "深藍領頭" : "深蓝领头" }],
+    materials: [],
+    cards: []
+  };
+}
+
+function recordingFetcher(responses: Array<{ payload: unknown; status?: number }>) {
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  const queue = [...responses];
+  const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push({ input: String(input), ...(init ? { init } : {}) });
+    const next = queue.shift() ?? { payload: {} };
+    return jsonResponse(next.payload, next.status ?? 200);
+  }) as typeof fetch;
+  return { calls, fetcher };
+}
+
+test("presentation reads one encoded GET per locale and sends no body", async () => {
+  for (const locale of ["zh-CN", "zh-TW", "en-US"] as const) {
+    const { calls, fetcher } = recordingFetcher([{ payload: oraclePresentation(locale) }]);
+    const client = createOracleApiClient({ fetcher });
+
+    const response = await client.presentation(sessionId, locale);
+
+    assert.equal(
+      calls[0]?.input,
+      `/api/oracle/sessions/${encodeURIComponent(sessionId)}/presentation?locale=${locale}`
+    );
+    assert.equal(calls[0]?.init?.method, "GET");
+    assert.equal(calls[0]?.init?.cache, "no-store");
+    assert.equal(calls[0]?.init?.body, undefined, "a read must not carry a mutation body");
+    assert.equal(Object.hasOwn(calls[0]?.init?.headers as object, "content-type"), false);
+    assert.equal(Object.hasOwn(calls[0]?.init?.headers as object, "authorization"), false, "the BFF owns the session header");
+    assert.equal(response.locale, locale);
+    assert.equal(response.sourceRevision, 3);
+  }
+});
+
+test("presentation rejects an unapproved or missing locale before any request", async () => {
+  for (const locale of ["en", "zh", "zh_CN", "fr-FR", "", "  ", undefined, null, 42, ["zh-CN"]] as const) {
+    const { calls, fetcher } = recordingFetcher([{ payload: oraclePresentation("zh-CN") }]);
+    const client = createOracleApiClient({ fetcher });
+
+    await assert.rejects(
+      client.presentation(sessionId, locale as never),
+      (error: unknown) => (error as { name?: string }).name === "ZodError",
+      `locale ${String(locale)} must not be accepted`
+    );
+    assert.deepEqual(calls, [], "an invalid locale never reaches the network");
+  }
+});
+
+test("presentation keeps 401 and 403 as distinct Frontend states without leaking ownership", async () => {
+  const unauthorized = recordingFetcher([
+    { payload: { error: { code: "UNAUTHORIZED", message: "Authentication is required.", requestId: "req-auth" } }, status: 401 }
+  ]);
+  await assert.rejects(
+    createOracleApiClient({ fetcher: unauthorized.fetcher }).presentation(sessionId, "zh-CN"),
+    (error: unknown) =>
+      error instanceof FrontendApiError && error.code === "UNAUTHORIZED" && error.requestId === "req-auth"
+  );
+
+  const forbidden = recordingFetcher([
+    { payload: { error: { code: "FORBIDDEN", message: "Not allowed.", requestId: "req-forbidden" } }, status: 403 }
+  ]);
+  await assert.rejects(
+    createOracleApiClient({ fetcher: forbidden.fetcher }).presentation(sessionId, "zh-CN"),
+    (error: unknown) => error instanceof FrontendApiError && error.code === "FORBIDDEN" && error.requestId === "req-forbidden"
+  );
+
+  const notFound = recordingFetcher([
+    { payload: { error: { code: "NOT_FOUND", message: "Not found.", requestId: "req-missing" } }, status: 404 }
+  ]);
+  await assert.rejects(
+    createOracleApiClient({ fetcher: notFound.fetcher }).presentation(sessionId, "zh-CN"),
+    (error: unknown) => error instanceof FrontendApiError && error.code === "NOT_FOUND"
+  );
+});
+
+test("a network failure and an unreadable or contract-breaking body stay explicit errors", async () => {
+  await assert.rejects(
+    createOracleApiClient({
+      fetcher: (async () => {
+        throw new TypeError("offline");
+      }) as typeof fetch
+    }).presentation(sessionId, "zh-CN"),
+    (error: unknown) => error instanceof FrontendApiError && error.code === "NETWORK_ERROR"
+  );
+
+  const unreadable = createOracleApiClient({
+    fetcher: (async () => new Response("not json", { status: 200 })) as typeof fetch
+  });
+  await assert.rejects(
+    unreadable.presentation(sessionId, "zh-CN"),
+    (error: unknown) => error instanceof FrontendApiError && error.code === "INTERNAL_ERROR"
+  );
+
+  for (const broken of [
+    { ...oraclePresentation("zh-CN"), cues: [] },
+    { ...oraclePresentation("zh-CN"), locale: "en" },
+    { ...oraclePresentation("zh-CN"), sourceRevision: 0 },
+    { ...oraclePresentation("zh-CN"), projectionVersion: "unapproved-extra" },
+    { ...oraclePresentation("zh-CN"), cards: [{ designId: "d1", title: "t", description: "d" }] }
+  ]) {
+    const { calls, fetcher } = recordingFetcher([{ payload: broken }]);
+    await assert.rejects(
+      createOracleApiClient({ fetcher }).presentation(sessionId, "zh-CN"),
+      (error: unknown) => error instanceof FrontendApiError && error.code === "INTERNAL_ERROR",
+      "a malformed projection is never rendered as a success"
+    );
+    assert.equal(calls.length, 1, "the request itself stays a single GET");
+  }
+});
+
+test("repeated presentation reads are idempotent GETs and never touch create, recommend or save", async () => {
+  const { calls, fetcher } = recordingFetcher([
+    { payload: oraclePresentation("zh-TW") },
+    { payload: oraclePresentation("zh-TW") }
+  ]);
+  const client = createOracleApiClient({ fetcher });
+
+  await client.presentation(sessionId, "zh-TW");
+  await client.presentation(sessionId, "zh-TW");
+
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    assert.equal(call.input, `/api/oracle/sessions/${encodeURIComponent(sessionId)}/presentation?locale=zh-TW`);
+    assert.equal(call.init?.method, "GET");
+    assert.equal(call.init?.body, undefined);
+  }
+  const methods = new Set(calls.map((call) => call.init?.method));
+  assert.deepEqual([...methods], ["GET"], "the projection route is read-only");
+  assert.ok(
+    !calls.some((call) => /\/create|\/recommendations|\/save|\/reveal|\/select/.test(call.input)),
+    "no mutation endpoint was contacted"
+  );
+});

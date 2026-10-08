@@ -412,3 +412,140 @@ test("mock mode refuses to fabricate a first-bead design", async () => {
   );
   assert.equal(fetchCalls, 0);
 });
+
+// TASK-UX-I18N-FE-API-001: Design's localized presentation is a read-only GET on a
+// design the caller owns. Mock mode may not invent a server projection.
+const designPresentationId = "design/needs encoding";
+
+function designPresentation(locale: "zh-CN" | "zh-TW" | "en-US") {
+  return {
+    designId: designPresentationId,
+    sourceRevision: 4,
+    locale,
+    title: locale === "en-US" ? "Quiet tide" : locale === "zh-TW" ? "靜潮" : "静潮",
+    story: locale === "en-US" ? "A display-only retelling of the saved design." : locale === "zh-TW" ? "對已存設計的展示性重述。" : "对已存设计的展示性重述。",
+    materialLabels: [{ beadProductId: design.beads[0]!.beadProductId, label: locale === "en-US" ? "Aquamarine 8mm" : locale === "zh-TW" ? "海藍寶 8mm" : "海蓝宝 8mm" }]
+  };
+}
+
+function presentationFetcher(responses: Array<{ body: unknown; status?: number }>) {
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  const queue = [...responses];
+  const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push({ input: String(input), ...(init ? { init } : {}) });
+    const next = queue.shift() ?? { body: {} };
+    return jsonResponse(next.body, next.status ?? 200);
+  }) as typeof fetch;
+  return { calls, fetcher };
+}
+
+test("design presentation reads one encoded GET per locale and sends no body", async () => {
+  for (const locale of ["zh-CN", "zh-TW", "en-US"] as const) {
+    const { calls, fetcher } = presentationFetcher([{ body: designPresentation(locale) }]);
+    const client = createDesignApiClient({ useMock: false, fetcher });
+
+    const response = await client.presentation(designPresentationId, locale);
+
+    assert.equal(
+      calls[0]?.input,
+      `/api/design/${encodeURIComponent(designPresentationId)}/presentation?locale=${locale}`
+    );
+    assert.equal(calls[0]?.init?.method, "GET");
+    assert.equal(calls[0]?.init?.cache, "no-store");
+    assert.equal(calls[0]?.init?.body, undefined);
+    assert.equal(response.locale, locale);
+    assert.equal(response.materialLabels.length, 1);
+  }
+});
+
+test("design presentation rejects an unapproved or missing locale before any request", async () => {
+  for (const locale of ["en", "zh-Hans", "zh-CN-oxford", "", undefined, null, 3, []] as const) {
+    const { calls, fetcher } = presentationFetcher([{ body: designPresentation("zh-CN") }]);
+    await assert.rejects(
+      createDesignApiClient({ useMock: false, fetcher }).presentation(designPresentationId, locale as never),
+      (error: unknown) => (error as { name?: string }).name === "ZodError",
+      `locale ${JSON.stringify(locale)} must be refused`
+    );
+    assert.deepEqual(calls, []);
+  }
+});
+
+test("design presentation maps the BFF error envelope for 401, 403 and 404", async () => {
+  for (const [code, status] of [["UNAUTHORIZED", 401], ["FORBIDDEN", 403], ["NOT_FOUND", 404]] as const) {
+    const { calls, fetcher } = presentationFetcher([
+      { body: { error: { code, message: "No.", requestId: `design-${code}` } }, status }
+    ]);
+    await assert.rejects(
+      createDesignApiClient({ useMock: false, fetcher }).presentation(designPresentationId, "zh-CN"),
+      (error: unknown) =>
+        error instanceof FrontendApiError && error.code === code && error.requestId === `design-${code}`
+    );
+    assert.equal(calls.length, 1);
+  }
+});
+
+test("design presentation turns network and malformed bodies into explicit errors", async () => {
+  await assert.rejects(
+    createDesignApiClient({
+      useMock: false,
+      fetcher: (async () => {
+        throw new TypeError("offline");
+      }) as typeof fetch
+    }).presentation(designPresentationId, "zh-CN"),
+    (error: unknown) => error instanceof FrontendApiError && error.code === "NETWORK_ERROR"
+  );
+
+  await assert.rejects(
+    createDesignApiClient({
+      useMock: false,
+      fetcher: (async () => new Response("not json", { status: 200 })) as typeof fetch
+    }).presentation(designPresentationId, "zh-CN"),
+    (error: unknown) => error instanceof FrontendApiError && error.code === "INTERNAL_ERROR"
+  );
+
+  for (const broken of [
+    { ...designPresentation("zh-CN"), materialLabels: [] },
+    { ...designPresentation("zh-CN"), story: "" },
+    { ...designPresentation("zh-CN"), sourceRevision: 0 },
+    { ...designPresentation("zh-CN"), ownerId: "someone-else" }
+  ]) {
+    const { fetcher } = presentationFetcher([{ body: broken }]);
+    await assert.rejects(
+      createDesignApiClient({ useMock: false, fetcher }).presentation(designPresentationId, "zh-CN"),
+      (error: unknown) => error instanceof FrontendApiError && error.code === "INTERNAL_ERROR"
+    );
+  }
+});
+
+test("mock mode refuses to fabricate a server design projection", async () => {
+  let fetchCalls = 0;
+  const client = createDesignApiClient({
+    useMock: true,
+    fetcher: (async () => {
+      fetchCalls += 1;
+      throw new Error("mock mode must not call fetch");
+    }) as typeof fetch
+  });
+
+  await assert.rejects(
+    client.presentation(designPresentationId, "zh-TW"),
+    (error: unknown) => error instanceof FrontendApiError && error.code === "VALIDATION_ERROR"
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("repeated design presentation reads never reach a mutation route", async () => {
+  const { calls, fetcher } = presentationFetcher([
+    { body: designPresentation("en-US") },
+    { body: designPresentation("en-US") }
+  ]);
+  const client = createDesignApiClient({ useMock: false, fetcher });
+
+  await client.presentation(designPresentationId, "en-US");
+  await client.presentation(designPresentationId, "en-US");
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual([...new Set(calls.map((call) => call.init?.method))], ["GET"]);
+  assert.ok(calls.every((call) => call.init?.body === undefined));
+  assert.ok(!calls.some((call) => /\/generate|\/recommend|\/save|\/update|\/price|diy-first-bead|\/clone|\/delete/.test(call.input)));
+});
