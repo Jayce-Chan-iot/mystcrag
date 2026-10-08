@@ -31,8 +31,11 @@ Modes:
                   NOT_EXECUTED states. Evidence is written to
                   `output/playwright/task-ux-qa-prep-001/` (git-ignored).
 
-Exit codes: 0 when every executed check passes, 1 when at least one check FAILs,
-2 when the matrix could not execute at all (no reachable frontend origin).
+Exit codes: 0 only when every check PASSes; 1 when at least one check FAILs; 2
+when the locale matrix could not execute at all (no reachable frontend origin);
+3 when nothing FAILed but some checks were BLOCKED, SKIP, NOT_EXECUTED or
+NOT_MEASURED. A matrix that did not fully execute is never reported with the
+acceptance exit code 0.
 """
 
 from __future__ import annotations
@@ -618,11 +621,26 @@ FAIL = "FAIL"
 SKIP = "SKIP"
 BLOCKED = "BLOCKED"
 NOT_EXECUTED = "NOT_EXECUTED"
+# A route that genuinely declares no primary CTA is recorded as NOT_MEASURED: an
+# explicit non-measurement, never a fabricated PASS.
+NOT_MEASURED = "NOT_MEASURED"
+
+# Every status that must not end the run with the acceptance exit code 0.
+NON_ACCEPTANCE_STATUSES = frozenset({FAIL, SKIP, BLOCKED, NOT_EXECUTED, NOT_MEASURED})
 
 # Mirrors `apps/frontend/src/i18n/locale.ts`: the cookie name and the three
 # supported display tags are the contract, so the probe must not invent others.
 DISPLAY_LOCALES: list[str] = ["zh-CN", "zh-TW", "en-US"]
 DISPLAY_LOCALE_COOKIE = "mystcrag_locale"
+
+# The native spelling each option shows for itself, mirrored from
+# `DISPLAY_LOCALE_OPTIONS` in `apps/frontend/src/i18n/locale.ts`. After a switch
+# the header must display the selected language's own name.
+DISPLAY_LOCALE_NATIVE_LABELS: dict[str, str] = {
+    "zh-CN": "简体中文",
+    "zh-TW": "繁體中文",
+    "en-US": "English",
+}
 
 # The viewports the plan names for the locale probes. The original capture matrix
 # keeps its own `VIEWPORTS` so the documented 85-screenshot count is untouched.
@@ -661,6 +679,66 @@ MUTATION_ENDPOINTS: dict[str, tuple[str, ...]] = {
         "/api/design/update",
     ),
 }
+
+# Per-route declaration of the primary call to action. Each value is an ordered
+# list of candidate selectors (the first *rendered* match wins) grounded in a real
+# marker in the owning component, or None when the route genuinely has no primary
+# CTA. A route that declares a CTA and does not render it is a FAIL, never a
+# silent PASS; a route declared None is recorded as NOT_MEASURED.
+#
+# The legacy `--validate` matrix keeps its own shared `CTA_PROBE`, so this map is
+# only consulted by the `--locales` matrix and the original 73 checks are intact.
+ROUTE_PRIMARY_CTA: dict[str, tuple[str, ...] | None] = {
+    # app/page.tsx: the creation-path entry card links are the home page's actions.
+    "home": ("a.home-reference-card-link",),
+    # questionnaire-wizard.tsx: the advance/generate button (`bg-[var(--foreground)]`
+    # is used nowhere else in the app, so it names exactly this primary control).
+    "ai-design": ('button[class*="bg-[var(--foreground)]"]',),
+    # oracle/components/oracle-setup.tsx: the one-click cast button.
+    "oracle-setup": ("button.oraclePrimaryAction",),
+    # tarot/components/tarot-setup.tsx: the spread submit button.
+    "tarot-setup": ('[data-tarot-setup-submit="true"]',),
+    # diy-editor.tsx: the desktop "完成设计" inside `data-star-workbench-complete`,
+    # and the mobile "完成设计" in the action row (both `bg-[var(--accent-deep)]`).
+    "diy-workbench": (
+        '[data-star-workbench-complete] button[class*="bg-[var(--accent-deep)]"]',
+        '[data-diy-editor-page] div.grid button[class*="bg-[var(--accent-deep)]"]',
+    ),
+    # crystal-library-page.tsx: the "进入 DIY" panel link, or the no-design
+    # "去 DIY 开始新设计" link when there is nothing editable yet.
+    "crystal-library": (
+        '[data-current-design-panel] a[href^="/diy/"]',
+        '[data-library-start-diy="true"]',
+    ),
+    # gallery-page.tsx: the header create link.
+    "gallery": ('[data-gallery-action="create"]',),
+    # design-results.tsx: the sticky action-bar primary link.
+    "design-detail": ("[data-results-action-bar] a[href]",),
+    # profile-page.tsx: the "新建设计" link.
+    "profile": ('[data-profile-action="create"]',),
+}
+
+# Finds the first rendered match across the declared candidate selectors. A hidden
+# 0x0 template copy (drawers, shells) must never be mistaken for the visible CTA.
+ROUTE_CTA_PROBE = """(selectors) => {
+  for (const sel of selectors) {
+    for (const el of document.querySelectorAll(sel)) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) continue;
+      const cs = getComputedStyle(el);
+      if (cs.visibility === 'hidden' || cs.display === 'none') continue;
+      return {
+        selector: sel,
+        label: (el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 32),
+        top: Math.round(r.top), bottom: Math.round(r.bottom),
+        left: Math.round(r.left), right: Math.round(r.right),
+        width: Math.round(r.width), height: Math.round(r.height),
+        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight
+      };
+    }
+  }
+  return null;
+}"""
 
 # Explainable non-assertion states. A genuine failure is FAIL and is never
 # downgraded to SKIP; only a legitimately disabled feature is SKIP, and a missing
@@ -778,6 +856,90 @@ def locale_switch_verdict(observed: list[dict]) -> dict:
         "unexpected": unexpected,
         "detail": f"{len(unexpected)} unexpected state-changing request(s)",
     }
+
+
+def route_response_verdict(status: int | None) -> dict:
+    """A route whose document response is not a success is a FAIL, not a skip.
+
+    `None` means Playwright received no document response at all (for example a
+    client-side navigation that never produced a document), which is equally a
+    failure to load the route under test.
+    """
+    if status is None:
+        return {"status": FAIL, "detail": "no document response for the route"}
+    if status >= 400:
+        return {"status": FAIL, "detail": f"route returned HTTP {status}"}
+    return {"status": PASS, "detail": f"route returned HTTP {status}"}
+
+
+def expected_cta_verdict(probe: dict | None, expected: tuple[str, ...] | None) -> dict:
+    """Judge a route's declared primary CTA.
+
+    * a route that declares no CTA is NOT_MEASURED — never a fabricated PASS;
+    * a declared CTA that is not rendered is FAIL (the route promised it);
+    * a rendered CTA is clipped-checked like any other primary action.
+    """
+    if expected is None:
+        return {"status": NOT_MEASURED, "detail": "route declares no primary CTA"}
+    if probe is None:
+        return {
+            "status": FAIL,
+            "detail": f"declared primary CTA not found: {', '.join(expected)}",
+        }
+    return cta_clip_verdict(probe)
+
+
+def locale_landing_verdict(
+    html_lang: str | None, current_label: str | None, target: str
+) -> dict:
+    """After a switch the document must claim the target language, and say so.
+
+    Both the `html lang` attribute and the header's current-language label must
+    match the selected locale; a switch that only repaints copy but leaves the
+    document (or the label) on the previous language is a FAIL.
+    """
+    expected_label = DISPLAY_LOCALE_NATIVE_LABELS.get(target, target)
+    lang_ok = html_lang == target
+    label_ok = (current_label or "").strip() == expected_label
+    return {
+        "status": PASS if (lang_ok and label_ok) else FAIL,
+        "htmlLang": html_lang,
+        "currentLabel": current_label,
+        "expectedLang": target,
+        "expectedLabel": expected_label,
+        "detail": (
+            f"html lang {html_lang!r}, current label {current_label!r}"
+            f" (expected {target!r} / {expected_label!r})"
+        ),
+    }
+
+
+def locale_switch_check_verdict(
+    observed: list[dict], html_lang: str | None, current_label: str | None, target: str
+) -> dict:
+    """Combine the mutation guard with the language-landing assertion."""
+    mutation = locale_switch_verdict(observed)
+    landing = locale_landing_verdict(html_lang, current_label, target)
+    return {
+        "status": FAIL if FAIL in (mutation["status"], landing["status"]) else PASS,
+        "mutation": mutation,
+        "landing": landing,
+        "detail": f"{mutation['detail']}; {landing['detail']}",
+    }
+
+
+def matrix_exit_code(statuses: list[str]) -> int:
+    """0 only when every check PASSed; otherwise a non-zero, non-acceptance code.
+
+    1 signals a real FAIL; 3 signals a matrix that produced no FAIL but did not
+    fully execute (BLOCKED/SKIP/NOT_EXECUTED/NOT_MEASURED). Either way a run that
+    did not fully pass never ends with the acceptance exit code 0.
+    """
+    if FAIL in statuses:
+        return 1
+    if any(status in NON_ACCEPTANCE_STATUSES for status in statuses):
+        return 3
+    return 0
 
 
 def locale_screenshot_name(route: str, locale: str, viewport: str, zoom: str) -> str:
@@ -1210,7 +1372,7 @@ def _probe_locale_cell(
     """Measure contrast, CTA clipping and reflow for one locale/viewport/zoom cell."""
     prefix = f"{locale}:{route}:{viewport}:{zoom}"
     try:
-        page.goto(BASE + path, wait_until="networkidle", timeout=45000)
+        response = page.goto(BASE + path, wait_until="networkidle", timeout=45000)
         if factor != 1.0:
             page.add_style_tag(content=f"html {{ font-size: {int(factor * 100)}% !important; }}")
         page.wait_for_timeout(400)
@@ -1220,6 +1382,15 @@ def _probe_locale_cell(
         add(f"locale-contrast:{prefix}", status, detail)
         add(f"locale-cta:{prefix}", status, detail)
         add(f"locale-reflow:{prefix}", status, detail)
+        return
+
+    # A route that answers with a non-success HTTP status is a FAIL for every cell
+    # in that route, not a quiet pass: the page under test was never served.
+    served = route_response_verdict(response.status if response is not None else None)
+    if served["status"] != PASS:
+        add(f"locale-contrast:{prefix}", served["status"], served["detail"])
+        add(f"locale-cta:{prefix}", served["status"], served["detail"])
+        add(f"locale-reflow:{prefix}", served["status"], served["detail"])
         return
 
     state = page.evaluate(PAGE_STATE_PROBE)
@@ -1250,8 +1421,15 @@ def _probe_locale_cell(
     verdict = worst or contrast_verdict(None)
     add(f"locale-contrast:{prefix}", verdict["status"], verdict)
 
-    cta = page.evaluate(CTA_PROBE)
-    cta_verdict = cta_clip_verdict(cta)
+    # The CTA is judged against the route's own declaration: a declared CTA that is
+    # absent is FAIL, a route with no CTA is NOT_MEASURED, never a silent PASS.
+    expected_cta = ROUTE_PRIMARY_CTA.get(route)
+    cta = (
+        page.evaluate(ROUTE_CTA_PROBE, list(expected_cta))
+        if expected_cta is not None
+        else None
+    )
+    cta_verdict = expected_cta_verdict(cta, expected_cta)
     add(f"locale-cta:{prefix}", cta_verdict["status"], cta if cta else cta_verdict)
 
     shot = locale_screenshot_name(route, locale, viewport, zoom)
@@ -1259,7 +1437,12 @@ def _probe_locale_cell(
 
 
 def _probe_locale_switch(page: Page, add, locale: str, viewport: str) -> None:
-    """A display-language switch must not create, recommend or save anything."""
+    """A language switch must stay quiet and actually land on the target language.
+
+    Two things are asserted at once: the switch fires no create/recommend/save
+    POST, and the document afterwards claims the target language both in `html
+    lang` and in the header's current-language label.
+    """
     name = f"locale-switch-mutation:{locale}:{viewport}"
     observed: list[dict] = []
 
@@ -1276,12 +1459,20 @@ def _probe_locale_switch(page: Page, add, locale: str, viewport: str) -> None:
         target = next(item for item in DISPLAY_LOCALES if item != locale)
         page.locator(f'[data-language-option="{target}"]').click()
         page.wait_for_timeout(800)
+        landing = page.evaluate(
+            """() => ({
+              lang: document.documentElement.lang,
+              label: (document.querySelector('[data-language-current-label="true"]')?.textContent || '').trim()
+            })"""
+        )
     except PlaywrightError as exc:
         add(name, environment_status("page-load-failure"), str(exc).splitlines()[0])
         page.remove_listener("request", on_request)
         return
-    verdict = locale_switch_verdict(observed)
-    add(name, verdict["status"], verdict["unexpected"] or "no state-changing request")
+    verdict = locale_switch_check_verdict(
+        observed, landing.get("lang"), landing.get("label"), target
+    )
+    add(name, verdict["status"], verdict["detail"])
     page.remove_listener("request", on_request)
 
 
@@ -1349,14 +1540,18 @@ def run_locale_matrix_main() -> int:
         browser.close()
 
     _write_locale_summary(checks)
-    failed = [check for check in checks if check["status"] == FAIL]
-    not_run = [check for check in checks if check["status"] in {NOT_EXECUTED, BLOCKED}]
-    skipped = [check for check in checks if check["status"] == SKIP]
+    counts = Counter(check["status"] for check in checks)
+    failed = counts.get(FAIL, 0)
+    not_run = counts.get(NOT_EXECUTED, 0) + counts.get(BLOCKED, 0)
+    skipped = counts.get(SKIP, 0)
+    not_measured = counts.get(NOT_MEASURED, 0)
     print(
-        f"\nlocale matrix total={len(checks)} fail={len(failed)} "
-        f"blocked_or_not_executed={len(not_run)} skip={len(skipped)}"
+        f"\nlocale matrix total={len(checks)} fail={failed} "
+        f"blocked_or_not_executed={not_run} skip={skipped} not_measured={not_measured}"
     )
-    return 1 if failed else 0
+    # Only a fully-passing matrix may exit 0; BLOCKED/SKIP/NOT_EXECUTED/
+    # NOT_MEASURED all keep the run out of the acceptance exit code.
+    return matrix_exit_code([check["status"] for check in checks])
 
 
 def main() -> int:

@@ -6,15 +6,19 @@ drive the pure verdict functions that the browser probes call, inject the exact
 defects the plan requires the probes to catch, and assert the probes report FAIL
 instead of masquerading as PASS or SKIP.
 
-The three required fault classes are:
+The fault classes the probes must catch and report as FAIL (never PASS/SKIP):
 
 * low text/background contrast below the WCAG AA floor;
 * a primary CTA clipped outside the viewport;
-* a language switch that unexpectedly fires a create/recommend/save POST.
+* a declared primary CTA that the route fails to render;
+* a route that answers with a non-success HTTP status;
+* a language switch that unexpectedly fires a create/recommend/save POST;
+* a language switch that leaves `html lang` or the current-language label behind.
 
 A page that fails to load must be FAIL, and a real failure must never be silently
-downgraded to SKIP. Only a legitimately disabled feature is SKIP, and a missing
-environment is NOT_EXECUTED.
+downgraded to SKIP. Only a legitimately disabled feature is SKIP, a missing
+environment is NOT_EXECUTED, and a route with no primary CTA is NOT_MEASURED.
+A matrix that is not fully PASS must never exit with the acceptance code 0.
 
 Run with:
 
@@ -230,10 +234,109 @@ class CtaClipFaultInjectionTests(unittest.TestCase):
         )
         self.assertEqual(verdict["status"], probes.PASS)
 
-    def test_absent_cta_is_reported_without_claiming_a_measurement(self) -> None:
-        verdict = probes.cta_clip_verdict(None)
+
+class ExpectedCtaDeclarationTests(unittest.TestCase):
+    """A route's declared primary CTA must be found, or the probe is not green."""
+
+    def test_declared_cta_that_is_absent_fails(self) -> None:
+        verdict = probes.expected_cta_verdict(None, ("button.oraclePrimaryAction",))
+        self.assertEqual(verdict["status"], probes.FAIL)
+        self.assertNotIn(verdict["status"], {probes.PASS, probes.SKIP})
+
+    def test_route_without_a_cta_is_not_measured_never_pass(self) -> None:
+        verdict = probes.expected_cta_verdict(None, None)
+        self.assertEqual(verdict["status"], probes.NOT_MEASURED)
+        self.assertNotEqual(verdict["status"], probes.PASS)
+        self.assertNotEqual(verdict["status"], probes.SKIP)
+
+    def test_declared_cta_present_and_inside_passes(self) -> None:
+        verdict = probes.expected_cta_verdict(
+            {"height": 48, "left": 8, "right": 300, "viewportWidth": 390, "label": "启卦"},
+            ("button.oraclePrimaryAction",),
+        )
         self.assertEqual(verdict["status"], probes.PASS)
-        self.assertEqual(verdict["detail"], "no CTA on this route")
+
+    def test_declared_cta_present_but_clipped_fails(self) -> None:
+        verdict = probes.expected_cta_verdict(
+            {"height": 48, "left": 8, "right": 420, "viewportWidth": 390, "label": "启卦"},
+            ("button.oraclePrimaryAction",),
+        )
+        self.assertEqual(verdict["status"], probes.FAIL)
+
+    def test_every_validation_route_declares_its_cta(self) -> None:
+        declared = set(probes.ROUTE_PRIMARY_CTA)
+        routes = {route for route, _ in probes.VALIDATION_ROUTES}
+        self.assertEqual(
+            routes - declared, set(), "a route has no primary CTA declaration"
+        )
+
+    def test_declarations_are_non_empty_selector_lists_or_none(self) -> None:
+        for route, expected in probes.ROUTE_PRIMARY_CTA.items():
+            if expected is None:
+                continue
+            self.assertTrue(expected, route)
+            for selector in expected:
+                self.assertIsInstance(selector, str)
+                self.assertTrue(selector.strip(), route)
+
+
+class RouteHttpStatusTests(unittest.TestCase):
+    """A non-success document response is a FAIL, not a silent pass or a skip."""
+
+    def test_server_error_is_fail(self) -> None:
+        verdict = probes.route_response_verdict(500)
+        self.assertEqual(verdict["status"], probes.FAIL)
+
+    def test_not_found_is_fail(self) -> None:
+        self.assertEqual(probes.route_response_verdict(404)["status"], probes.FAIL)
+
+    def test_missing_response_is_fail(self) -> None:
+        self.assertEqual(probes.route_response_verdict(None)["status"], probes.FAIL)
+
+    def test_success_is_pass(self) -> None:
+        self.assertEqual(probes.route_response_verdict(200)["status"], probes.PASS)
+
+    def test_non_success_is_never_skip(self) -> None:
+        self.assertNotEqual(probes.route_response_verdict(500)["status"], probes.SKIP)
+
+
+class LocaleLandingTests(unittest.TestCase):
+    """After a switch the document and the header label must show the target."""
+
+    def test_matching_lang_and_label_pass(self) -> None:
+        verdict = probes.locale_landing_verdict("en-US", "English", "en-US")
+        self.assertEqual(verdict["status"], probes.PASS)
+
+    def test_wrong_html_lang_fails(self) -> None:
+        verdict = probes.locale_landing_verdict("zh-CN", "English", "en-US")
+        self.assertEqual(verdict["status"], probes.FAIL)
+
+    def test_wrong_current_label_fails(self) -> None:
+        verdict = probes.locale_landing_verdict("en-US", "简体中文", "en-US")
+        self.assertEqual(verdict["status"], probes.FAIL)
+
+    def test_traditional_chinese_label_is_expected(self) -> None:
+        verdict = probes.locale_landing_verdict("zh-TW", "繁體中文", "zh-TW")
+        self.assertEqual(verdict["status"], probes.PASS)
+
+    def test_switch_check_fails_on_bad_landing(self) -> None:
+        verdict = probes.locale_switch_check_verdict([], "zh-CN", "简体中文", "en-US")
+        self.assertEqual(verdict["status"], probes.FAIL)
+
+    def test_switch_check_fails_on_unexpected_mutation(self) -> None:
+        verdict = probes.locale_switch_check_verdict(
+            [{"method": "POST", "url": "/api/design/save"}], "en-US", "English", "en-US"
+        )
+        self.assertEqual(verdict["status"], probes.FAIL)
+
+    def test_quiet_switch_to_correct_language_passes(self) -> None:
+        verdict = probes.locale_switch_check_verdict(
+            [{"method": "GET", "url": "/api/catalog/materials"}],
+            "en-US",
+            "English",
+            "en-US",
+        )
+        self.assertEqual(verdict["status"], probes.PASS)
 
 
 class LocaleSwitchMutationFaultInjectionTests(unittest.TestCase):
@@ -312,13 +415,57 @@ class HonestStatusTests(unittest.TestCase):
             self.assertNotEqual(probes.environment_status(kind), probes.SKIP, kind)
 
     def test_verdict_statuses_use_the_documented_vocabulary(self) -> None:
-        allowed = {probes.PASS, probes.FAIL, probes.SKIP, probes.BLOCKED, probes.NOT_EXECUTED}
+        allowed = {
+            probes.PASS,
+            probes.FAIL,
+            probes.SKIP,
+            probes.BLOCKED,
+            probes.NOT_EXECUTED,
+            probes.NOT_MEASURED,
+        }
         for verdict in (
             probes.contrast_verdict({"ratio": 1.2, "fontSize": 12, "bold": False}),
             probes.cta_clip_verdict({"height": 48, "left": 0, "right": 900, "viewportWidth": 390}),
+            probes.expected_cta_verdict(None, None),
             probes.locale_switch_verdict([{"method": "POST", "url": "/api/design/save"}]),
+            probes.route_response_verdict(500),
+            probes.locale_landing_verdict("zh-CN", "简体中文", "en-US"),
         ):
             self.assertIn(verdict["status"], allowed)
+
+
+class MatrixExitCodeTests(unittest.TestCase):
+    """A matrix that is not fully PASS must never exit with acceptance code 0."""
+
+    def test_all_pass_is_zero(self) -> None:
+        self.assertEqual(probes.matrix_exit_code([probes.PASS, probes.PASS]), 0)
+
+    def test_a_failure_is_non_zero(self) -> None:
+        self.assertEqual(probes.matrix_exit_code([probes.PASS, probes.FAIL]), 1)
+
+    def test_blocked_alone_is_non_zero(self) -> None:
+        self.assertNotEqual(probes.matrix_exit_code([probes.PASS, probes.BLOCKED]), 0)
+
+    def test_skip_alone_is_non_zero(self) -> None:
+        self.assertNotEqual(probes.matrix_exit_code([probes.PASS, probes.SKIP]), 0)
+
+    def test_not_executed_alone_is_non_zero(self) -> None:
+        self.assertNotEqual(probes.matrix_exit_code([probes.PASS, probes.NOT_EXECUTED]), 0)
+
+    def test_not_measured_alone_is_non_zero(self) -> None:
+        self.assertNotEqual(probes.matrix_exit_code([probes.PASS, probes.NOT_MEASURED]), 0)
+
+    def test_failure_outranks_non_execution(self) -> None:
+        self.assertEqual(
+            probes.matrix_exit_code([probes.BLOCKED, probes.FAIL, probes.SKIP]), 1
+        )
+
+    def test_an_empty_matrix_is_zero(self) -> None:
+        self.assertEqual(probes.matrix_exit_code([]), 0)
+
+    def test_every_non_acceptance_status_is_non_zero(self) -> None:
+        for status in sorted(probes.NON_ACCEPTANCE_STATUSES):
+            self.assertNotEqual(probes.matrix_exit_code([status]), 0, status)
 
 
 if __name__ == "__main__":

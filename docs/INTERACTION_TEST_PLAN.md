@@ -354,22 +354,34 @@ locale/viewport. The locale probe set is 825 checks and 270 stable-named
 screenshots (`{route}-{locale}-{viewport}-{zoom}.png`); evidence is written only
 to the ignored `output/playwright/task-ux-qa-prep-001/` directory.
 
-Every probe reports one of five honest statuses:
+Every probe reports one of six honest statuses:
 
 | Status | Meaning |
 | --- | --- |
 | `PASS` | A real measurement passed. |
-| `FAIL` | A real assertion failed: low contrast below the AA floor, a primary CTA outside the viewport, an unexpected create/recommend/save POST during a language switch, or a page that did not load. |
+| `FAIL` | A real assertion failed: low contrast below the AA floor, a primary CTA outside the viewport, a declared primary CTA the route never rendered, a route that answered with a non-success HTTP status, an unexpected create/recommend/save POST during a language switch, a switch that left `html lang` or the current-language label behind, or a page that did not load. |
 | `BLOCKED` | The route needs a session that is not present (`data-auth-required-dialog`). |
 | `SKIP` | A feature is legitimately disabled (`data-oracle-disabled`); not a failure. |
 | `NOT_EXECUTED` | The frontend origin was unreachable, so nothing could be measured. |
+| `NOT_MEASURED` | A route genuinely declares no primary CTA, so no CTA claim is made either way; an explicit non-measurement, never a fabricated `PASS`. |
+
+Each route declares its expected primary CTA selector in `ROUTE_PRIMARY_CTA`; a
+declared CTA that is absent is `FAIL`, and a route that declares none is
+`NOT_MEASURED`, so no page is ever credited with a CTA it does not have. After a
+language switch the probe re-reads the document's `html lang` attribute and the
+header's current-language label and requires both to match the selected locale.
 
 A genuine failure is never downgraded to `SKIP`, and an unreachable environment
-is never reported as `PASS`. The script exits 0 when every executed check passes,
-1 when any check fails, and 2 when the matrix could not execute at all.
+is never reported as `PASS`. The script exits 0 only when every check `PASS`es;
+1 when any check `FAIL`s; and 3 when the matrix ran without a `FAIL` but did not
+fully pass (any `BLOCKED`, `SKIP`, `NOT_EXECUTED` or `NOT_MEASURED`). A preflight
+that finds the origin unhealthy still exits 2, because nothing could be measured
+at all. No run containing a `BLOCKED`, `SKIP`, `NOT_EXECUTED` or `NOT_MEASURED`
+check ever ends with the acceptance exit code 0.
 
 `scripts/ui-qa/test_capture_star_platform.py` proves the behaviour without a
-browser: it injects the low-contrast, clipped-CTA, locale-switch-mutation and
+browser: it injects the low-contrast, clipped-CTA, absent-declared-CTA,
+non-success-HTTP, locale-switch-mutation, wrong-language-landing and
 page-load-failure defects into the pure verdict functions and asserts they turn
 red, and it pins the 73-case inventory so no existing check can be dropped or
 renamed. Run it with
