@@ -550,7 +550,7 @@ Requires verified authentication and owner access. Uses `CloneDesignRequestSchem
 
 ## Tarot Guidance API
 
-All six endpoints require verified bearer authentication and owner-scoped access. Missing and differently owned sessions both map to the generic `FORBIDDEN` response at the HTTP boundary. Their executable DTOs live in the [strict Tarot contract source](../packages/design-contract/src/schemas/tarot.schema.ts); every request rejects unknown fields and every successful response is parsed before it leaves Backend.
+All six lifecycle endpoints require verified bearer authentication and owner-scoped access. Missing and differently owned sessions both map to the generic `FORBIDDEN` response at the HTTP boundary. Their executable DTOs live in the [strict Tarot contract source](../packages/design-contract/src/schemas/tarot.schema.ts); every request rejects unknown fields and every successful response is parsed before it leaves Backend. The Tarot module additionally registers the read-only `GET /api/tarot/sessions/:sessionId/presentation` projection, documented under the Localized Presentation API.
 
 | Route | Request DTO | Response DTO | Behavior |
 | --- | --- | --- | --- |
@@ -592,7 +592,7 @@ Stable failures reuse the existing envelope: disabled create `NOT_IMPLEMENTED`, 
 
 ## Localized Presentation API
 
-Three read-only projection routes return display copy for `zh-CN`, `zh-TW`, and `en-US` without creating, re-casting, re-drawing, re-pricing, or persisting anything. Their executable DTOs live in [the strict localized presentation contract source](../packages/design-contract/src/schemas/localized-presentation.schema.ts). The Oracle session and Design presentation routes are registered by Backend startup: the Oracle route calls the accepted AI `projectOraclePresentation` over the validated owner-owned session and real available catalog, and the Design route projects the owner-owned saved `PublicDesignV1` with reviewed zh-CN/zh-TW/en-US templates. The Tarot presentation route remains unregistered and its Backend registration is owned by the dependent Tarot task.
+Three read-only projection routes return display copy for `zh-CN`, `zh-TW`, and `en-US` without creating, re-casting, re-drawing, re-pricing, or persisting anything. Their executable DTOs live in [the strict localized presentation contract source](../packages/design-contract/src/schemas/localized-presentation.schema.ts). All three routes are registered by Backend startup: the Oracle route calls the accepted AI `projectOraclePresentation` over the validated owner-owned session and real available catalog, the Design route projects the owner-owned saved `PublicDesignV1` with reviewed zh-CN/zh-TW/en-US templates, and the Tarot route projects the validated owner-owned session's canonical spread slots, revealed-card orientation, and persisted recommendation facts with reviewed zh-CN/zh-TW/en-US templates. Historical sessions remain readable, and none of the routes re-draws, re-recommends, or persists a translation.
 
 | Route | Request DTO | Response DTO | Behavior |
 | --- | --- | --- | --- |

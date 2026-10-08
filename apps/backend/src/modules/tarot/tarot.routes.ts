@@ -4,12 +4,14 @@ import {
   GenerateTarotRecommendationsRequestSchema,
   GenerateTarotRecommendationsResponseSchema,
   GetTarotSessionResponseSchema,
+  LocalizedPresentationRequestSchema,
   RevealTarotSessionRequestSchema,
   RevealTarotSessionResponseSchema,
   SaveTarotSessionRequestSchema,
   SaveTarotSessionResponseSchema,
   SelectTarotCardRequestSchema,
-  SelectTarotCardResponseSchema
+  SelectTarotCardResponseSchema,
+  TarotPresentationResponseSchema
 } from "@mystcrag/design-contract";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { z } from "zod";
@@ -114,6 +116,24 @@ async function handleTarotGet(
   }
 }
 
+async function handleTarotPresentationGet(
+  request: FastifyRequest<{ Params: { sessionId: string }; Querystring: { locale?: string } }>,
+  reply: FastifyReply,
+  service: TarotApiService
+) {
+  try {
+    const actorId = actorIdFromVerifiedContext(request);
+    const query = validateRequest(LocalizedPresentationRequestSchema, request.query);
+    const output = await service.presentation(actorId, request.params.sessionId, query.locale);
+    return reply.status(200).send(validateResponse(TarotPresentationResponseSchema, output));
+  } catch (error) {
+    const domainError = mapTarotError(error, true);
+    return reply
+      .status(domainError.statusCode)
+      .send(toApiErrorEnvelope(domainError, request.id));
+  }
+}
+
 export function registerTarotRoutes(
   app: FastifyInstance,
   service: TarotApiService,
@@ -175,6 +195,11 @@ export function registerTarotRoutes(
     "/api/tarot/sessions/:id",
     protectedRoute,
     (request, reply) => handleTarotGet(request, reply, service)
+  );
+  app.get<{ Params: { sessionId: string }; Querystring: { locale?: string } }>(
+    "/api/tarot/sessions/:sessionId/presentation",
+    protectedRoute,
+    (request, reply) => handleTarotPresentationGet(request, reply, service)
   );
   app.post<{ Params: { id: string } }>(
     "/api/tarot/sessions/:id/save",

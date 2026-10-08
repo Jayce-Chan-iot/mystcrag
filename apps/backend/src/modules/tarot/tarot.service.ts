@@ -11,12 +11,14 @@ import type {
   GenerateTarotRecommendationsResponse,
   GenerateDesignResponse,
   GetTarotSessionResponse,
+  PresentationLocale,
   RevealTarotSessionRequest,
   RevealTarotSessionResponse,
   SaveTarotSessionRequest,
   SaveTarotSessionResponse,
   SelectTarotCardRequest,
-  SelectTarotCardResponse
+  SelectTarotCardResponse,
+  TarotPresentationResponse
 } from "@mystcrag/design-contract";
 import {
   GenerateDesignRequestSchema,
@@ -57,6 +59,7 @@ import {
   mapSaveTarotResponse,
   mapSelectTarotResponse
 } from "./tarot.public-mapper.js";
+import { projectTarotPresentation } from "./tarot-presentation.js";
 import type {
   TarotApiService,
   TarotCatalogPort,
@@ -604,6 +607,21 @@ export class TarotService implements TarotApiService {
       record,
       this.dependencies.designReader
     );
+  }
+
+  async presentation(
+    actorId: string,
+    sessionId: string,
+    locale: PresentationLocale
+  ): Promise<TarotPresentationResponse> {
+    const record = await this.dependencies.repository.getOwned(actorId, sessionId);
+    const { session } = await mapGetTarotResponse(
+      actorId,
+      `presentation-${record.id}`,
+      record,
+      this.dependencies.designReader
+    );
+    return projectTarotPresentation(session, locale);
   }
 
   async recommendations(
