@@ -310,7 +310,9 @@ ignored `output/playwright/task-qa-star-001/` directory. Full report:
 
 The gate is one repeatable script, `scripts/ui-qa/capture_star_platform.py`:
 `--capture` writes 85 screenshots (17 route-states × 390×844, 768×1024,
-1024×768, 1440×560, 1440×900); `--validate` runs the machine-checkable matrix.
+1024×768, 1440×560, 1440×900); `--validate` runs the machine-checkable matrix
+of 73 checks; `--locales` runs the TASK-UX-QA-PREP-001 three-locale probe matrix
+described below.
 
 | ID | Scenario | Required behavior | Status |
 | --- | --- | --- | --- |
@@ -336,3 +338,54 @@ real-device touch. The initial run recorded three page-family deviations
 DEV-1/DEV-2/DEV-3 outside `TASK-QA-STAR-001`'s writable scope; they are now
 closed by `TASK-FE-STAR-005`, and the final re-verified matrix on `8272c1f` is
 73/73 PASS (initial pre-remediation run: 64 PASS / 9 FAIL).
+
+### TASK-UX-QA-PREP-001 three-locale / viewport / zoom probes
+
+`TASK-UX-QA-PREP-001` adds the `--locales` probe set to the same script without
+changing the 73-case matrix above. It prepares the probes `TASK-UX-QA-001` will
+reuse for the real two-user browser acceptance; it does not accept any page by
+itself, and it never replaces that later live run.
+
+Matrix: three display locales (`zh-CN`, `zh-TW`, `en-US`, selected through the
+real `mystcrag_locale` cookie and Playwright `locale`), five viewports
+(320×568, 390×844, 768×1024, 1440×900, 1440×560), the nine customer routes and
+100%/200% text resize, plus one language-switch mutation check per
+locale/viewport. The locale probe set is 825 checks and 270 stable-named
+screenshots (`{route}-{locale}-{viewport}-{zoom}.png`); evidence is written only
+to the ignored `output/playwright/task-ux-qa-prep-001/` directory.
+
+Every probe reports one of six honest statuses:
+
+| Status | Meaning |
+| --- | --- |
+| `PASS` | A real measurement passed. |
+| `FAIL` | A real assertion failed: low contrast below the AA floor, a primary CTA outside the viewport, a declared primary CTA the route never rendered, a route that answered with a non-success HTTP status, an unexpected create/recommend/save POST during a language switch, a switch that left `html lang` or the current-language label behind, or a page that did not load. |
+| `BLOCKED` | The route needs a session that is not present (`data-auth-required-dialog`). |
+| `SKIP` | A feature is legitimately disabled (`data-oracle-disabled`); not a failure. |
+| `NOT_EXECUTED` | The frontend origin was unreachable, so nothing could be measured. |
+| `NOT_MEASURED` | A route genuinely declares no primary CTA, so no CTA claim is made either way; an explicit non-measurement, never a fabricated `PASS`. |
+
+Each route declares its expected primary CTA selector in `ROUTE_PRIMARY_CTA`; a
+declared CTA that is absent is `FAIL`, and a route that declares none is
+`NOT_MEASURED`, so no page is ever credited with a CTA it does not have. After a
+language switch the probe re-reads the document's `html lang` attribute and the
+header's current-language label and requires both to match the selected locale.
+
+A genuine failure is never downgraded to `SKIP`, and an unreachable environment
+is never reported as `PASS`. The script exits 0 only when a non-empty matrix has
+every check `PASS`; 1 when any check `FAIL`s; and 3 when the matrix ran without a
+`FAIL` but did not fully pass (any `BLOCKED`, `SKIP`, `NOT_EXECUTED` or
+`NOT_MEASURED`), or when the matrix is empty and therefore produced no evidence.
+An unknown status is a probe defect: `matrix_exit_code` raises instead of
+silently returning the acceptance code. A preflight that finds the origin
+unhealthy still exits 2, because nothing could be measured at all. No run
+containing a `BLOCKED`, `SKIP`, `NOT_EXECUTED` or `NOT_MEASURED` check, and no
+empty run, ever ends with the acceptance exit code 0.
+
+`scripts/ui-qa/test_capture_star_platform.py` proves the behaviour without a
+browser: it injects the low-contrast, clipped-CTA, absent-declared-CTA,
+non-success-HTTP, locale-switch-mutation, wrong-language-landing and
+page-load-failure defects into the pure verdict functions and asserts they turn
+red, and it pins the 73-case inventory so no existing check can be dropped or
+renamed. Run it with
+`python3 -m unittest discover -s scripts/ui-qa -p 'test_capture_star_platform.py'`.

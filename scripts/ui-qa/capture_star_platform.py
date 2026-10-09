@@ -20,6 +20,22 @@ Session-backed routes (`/oracle/result/...`, `/tarot/draw/...`,
 `/tarot/result/...`) are driven through their real setup flow; when the flow
 cannot complete the route is recorded as `blocked` with the reason instead of a
 fabricated image.
+
+Modes:
+
+    (default)     capture the 85-screenshot route/viewport matrix.
+    --validate    the original 73-case machine-checkable validation matrix.
+    --locales     TASK-UX-QA-PREP-001 probes: three display locales
+                  (`zh-CN`/`zh-TW`/`en-US`) across the required viewports and
+                  200% text resize, with honest PASS/FAIL/BLOCKED/SKIP/
+                  NOT_EXECUTED states. Evidence is written to
+                  `output/playwright/task-ux-qa-prep-001/` (git-ignored).
+
+Exit codes: 0 only when every check PASSes; 1 when at least one check FAILs; 2
+when the locale matrix could not execute at all (no reachable frontend origin);
+3 when nothing FAILed but some checks were BLOCKED, SKIP, NOT_EXECUTED or
+NOT_MEASURED. A matrix that did not fully execute is never reported with the
+acceptance exit code 0.
 """
 
 from __future__ import annotations
@@ -31,6 +47,7 @@ import sys
 import time
 from collections import Counter
 from pathlib import Path
+from urllib.parse import urlparse
 
 from PIL import Image
 from playwright.sync_api import Error as PlaywrightError
@@ -437,6 +454,22 @@ VALIDATION_ROUTES: list[tuple[str, str]] = [
     ("profile", "/profile"),
 ]
 
+# Route subsets used by several checks. They are named constants so the planned
+# 73-case inventory can be derived (and audited) without launching a browser.
+MOTION_ROUTES: list[tuple[str, str]] = [
+    ("home", "/"),
+    ("crystal-library", "/crystal-library"),
+]
+TOUCH_ROUTES: list[tuple[str, str]] = [
+    ("home", "/"),
+    ("crystal-library", "/crystal-library"),
+    ("oracle-setup", "/oracle"),
+]
+IMAGE_ROUTES: list[tuple[str, str]] = [
+    ("crystal-library", "/crystal-library"),
+    ("diy-workbench", "/diy/design-diy-private"),
+]
+
 # Representative text/background pairs per route for the WCAG AA contrast check.
 CONTRAST_TARGETS = [
     "h1",
@@ -573,6 +606,399 @@ KEYBOARD_PROBE = """() => {
 }"""
 
 
+# --------------------------------------------------------------------------
+# TASK-UX-QA-PREP-001 probes: three display locales, the required viewports and
+# 200% text resize, with honest status reporting.
+#
+# The verdict functions below are pure: they take an already-measured value and
+# return a status, so a fault-injection self-test can prove the probe turns red
+# without a browser. The browser runner (`--locales`) feeds them real
+# measurements.
+# --------------------------------------------------------------------------
+
+PASS = "PASS"
+FAIL = "FAIL"
+SKIP = "SKIP"
+BLOCKED = "BLOCKED"
+NOT_EXECUTED = "NOT_EXECUTED"
+# A route that genuinely declares no primary CTA is recorded as NOT_MEASURED: an
+# explicit non-measurement, never a fabricated PASS.
+NOT_MEASURED = "NOT_MEASURED"
+
+# Every status the matrix may legitimately report; an unknown one is a probe
+# defect and is raised, never silently accepted.
+KNOWN_STATUSES = frozenset({PASS, FAIL, SKIP, BLOCKED, NOT_EXECUTED, NOT_MEASURED})
+
+# Every status that must not end the run with the acceptance exit code 0.
+NON_ACCEPTANCE_STATUSES = frozenset({FAIL, SKIP, BLOCKED, NOT_EXECUTED, NOT_MEASURED})
+
+# Mirrors `apps/frontend/src/i18n/locale.ts`: the cookie name and the three
+# supported display tags are the contract, so the probe must not invent others.
+DISPLAY_LOCALES: list[str] = ["zh-CN", "zh-TW", "en-US"]
+DISPLAY_LOCALE_COOKIE = "mystcrag_locale"
+
+# The native spelling each option shows for itself, mirrored from
+# `DISPLAY_LOCALE_OPTIONS` in `apps/frontend/src/i18n/locale.ts`. After a switch
+# the header must display the selected language's own name.
+DISPLAY_LOCALE_NATIVE_LABELS: dict[str, str] = {
+    "zh-CN": "简体中文",
+    "zh-TW": "繁體中文",
+    "en-US": "English",
+}
+
+# The viewports the plan names for the locale probes. The original capture matrix
+# keeps its own `VIEWPORTS` so the documented 85-screenshot count is untouched.
+QA_VIEWPORTS: list[tuple[str, int, int]] = [
+    ("320x568", 320, 568),
+    ("390x844", 390, 844),
+    ("768x1024", 768, 1024),
+    ("1440x900", 1440, 900),
+    ("1440x560", 1440, 560),
+]
+
+QA_ZOOMS: list[tuple[str, float]] = [
+    ("zoom-100", 1.0),
+    ("zoom-200", 2.0),
+]
+
+# State-changing POSTs that a language switch must never fire. `create` covers a
+# new session/design/order, `recommend` a suggestion request, `save` a
+# persistence write. Read requests and unrelated endpoints are ignored.
+MUTATION_ENDPOINTS: dict[str, tuple[str, ...]] = {
+    "create": (
+        "/api/oracle/sessions",
+        "/api/tarot/sessions",
+        "/api/design/generate",
+        "/api/design/diy-first-bead",
+        "/api/design/clone",
+        "/api/orders/from-design",
+    ),
+    "recommend": (
+        "/recommend",
+        "/recommendations",
+        "/suggest",
+    ),
+    "save": (
+        "/api/design/save",
+        "/api/design/update",
+    ),
+}
+
+# Per-route declaration of the primary call to action. Each value is an ordered
+# list of candidate selectors (the first *rendered* match wins) grounded in a real
+# marker in the owning component, or None when the route genuinely has no primary
+# CTA. A route that declares a CTA and does not render it is a FAIL, never a
+# silent PASS; a route declared None is recorded as NOT_MEASURED.
+#
+# The legacy `--validate` matrix keeps its own shared `CTA_PROBE`, so this map is
+# only consulted by the `--locales` matrix and the original 73 checks are intact.
+ROUTE_PRIMARY_CTA: dict[str, tuple[str, ...] | None] = {
+    # app/page.tsx: the creation-path entry card links are the home page's actions.
+    "home": ("a.home-reference-card-link",),
+    # questionnaire-wizard.tsx: the advance/generate button (`bg-[var(--foreground)]`
+    # is used nowhere else in the app, so it names exactly this primary control).
+    "ai-design": ('button[class*="bg-[var(--foreground)]"]',),
+    # oracle/components/oracle-setup.tsx: the one-click cast button.
+    "oracle-setup": ("button.oraclePrimaryAction",),
+    # tarot/components/tarot-setup.tsx: the spread submit button.
+    "tarot-setup": ('[data-tarot-setup-submit="true"]',),
+    # diy-editor.tsx: the desktop "完成设计" inside `data-star-workbench-complete`,
+    # and the mobile "完成设计" action-row button (both `bg-[var(--accent-deep)]`;
+    # the mobile one is `rounded-full`, which no other accent-deep button uses, so
+    # the selector pins the control instead of a generic `div.grid` row).
+    "diy-workbench": (
+        '[data-star-workbench-complete] button[class*="bg-[var(--accent-deep)]"]',
+        '[data-diy-editor-page] button[class*="rounded-full"][class*="bg-[var(--accent-deep)]"]',
+    ),
+    # crystal-library-page.tsx: the "进入 DIY" panel link, or the no-design
+    # "去 DIY 开始新设计" link when there is nothing editable yet. The accent-deep
+    # marker skips the small "查看全部 ›" link, which is the panel's first
+    # `a[href^="/diy/"]` but not the primary CTA.
+    "crystal-library": (
+        '[data-current-design-panel] a[href^="/diy/"][class*="bg-[var(--accent-deep)]"]',
+        '[data-library-start-diy="true"]',
+    ),
+    # gallery-page.tsx: the header create link.
+    "gallery": ('[data-gallery-action="create"]',),
+    # design-results.tsx: the sticky action-bar primary link.
+    "design-detail": ("[data-results-action-bar] a[href]",),
+    # profile-page.tsx: the "新建设计" link.
+    "profile": ('[data-profile-action="create"]',),
+}
+
+# Finds the first rendered match across the declared candidate selectors. A hidden
+# 0x0 template copy (drawers, shells) must never be mistaken for the visible CTA.
+ROUTE_CTA_PROBE = """(selectors) => {
+  for (const sel of selectors) {
+    for (const el of document.querySelectorAll(sel)) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) continue;
+      const cs = getComputedStyle(el);
+      if (cs.visibility === 'hidden' || cs.display === 'none') continue;
+      return {
+        selector: sel,
+        label: (el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 32),
+        top: Math.round(r.top), bottom: Math.round(r.bottom),
+        left: Math.round(r.left), right: Math.round(r.right),
+        width: Math.round(r.width), height: Math.round(r.height),
+        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight
+      };
+    }
+  }
+  return null;
+}"""
+
+# Explainable non-assertion states. A genuine failure is FAIL and is never
+# downgraded to SKIP; only a legitimately disabled feature is SKIP, and a missing
+# environment is NOT_EXECUTED.
+ENVIRONMENT_STATUS: dict[str, str] = {
+    "page-load-failure": FAIL,
+    "low-contrast": FAIL,
+    "cta-clipped": FAIL,
+    "unexpected-mutation": FAIL,
+    "not-authenticated": BLOCKED,
+    "feature-disabled": SKIP,
+    "infrastructure-unavailable": NOT_EXECUTED,
+}
+
+# Grounded in real markers: `data-oracle-disabled` on the Oracle setup client and
+# `data-auth-required-dialog` on the auth-required dialog.
+PAGE_STATE_PROBE = """() => {
+  if (document.querySelector('[data-oracle-disabled="true"]')) return 'feature-disabled';
+  if (document.querySelector('[data-auth-required-dialog="true"]')) return 'not-authenticated';
+  return 'ready';
+}"""
+
+
+def environment_status(kind: str) -> str:
+    """Map a probe outcome kind to its honest status.
+
+    An unknown kind raises instead of defaulting, so a typo can never be
+    reported as a quiet PASS.
+    """
+    try:
+        return ENVIRONMENT_STATUS[kind]
+    except KeyError:
+        raise ValueError(f"unknown environment kind: {kind!r}") from None
+
+
+def contrast_floor(font_size: float, bold: bool) -> float:
+    """WCAG AA floor: 3.0 for large text, 4.5 otherwise."""
+    large = font_size >= 24 or (bold and font_size >= 18.66)
+    return 3.0 if large else 4.5
+
+
+def contrast_verdict(probe: dict | None) -> dict:
+    """Turn a `measure_contrast` result into an explicit PASS/FAIL verdict."""
+    if not probe:
+        return {"status": FAIL, "detail": "no measurable text target"}
+    floor = contrast_floor(probe["fontSize"], probe["bold"])
+    ratio = float(probe["ratio"])
+    return {
+        **probe,
+        "floor": floor,
+        "margin": round(ratio - floor, 3),
+        "status": PASS if ratio >= floor else FAIL,
+        "detail": f"ratio {ratio} vs floor {floor}",
+    }
+
+
+def cta_clip_verdict(probe: dict | None) -> dict:
+    """A primary CTA must be fully inside the viewport, else FAIL."""
+    if probe is None:
+        return {"status": PASS, "detail": "no CTA on this route"}
+    inside = (
+        probe["height"] > 0
+        and probe["left"] >= 0
+        and probe["right"] <= probe["viewportWidth"] + 1
+    )
+    return {
+        "status": PASS if inside else FAIL,
+        "detail": "primary CTA inside the viewport" if inside else "primary CTA outside the viewport",
+    }
+
+
+def reflow_verdict(overflow_x: float) -> bool:
+    """WCAG 1.4.10: no horizontal scrolling (1px tolerance for rounding)."""
+    return overflow_x <= 1
+
+
+def touch_verdict(targets: list[dict]) -> tuple[bool, list[dict]]:
+    """Return whether every visible target clears 44px and the offenders."""
+    offenders = [target for target in targets if target["height"] < 44]
+    return (len(offenders) == 0, offenders)
+
+
+def mutation_kind(method: str, url: str) -> str | None:
+    """Classify a request as an unexpected create/recommend/save POST, else None.
+
+    Matching is on the path suffix only, so a query string or a nested resource
+    id (`/api/oracle/sessions/<id>/recommendations`) is classified correctly
+    while an unrelated POST is never swept in.
+    """
+    if method.upper() != "POST":
+        return None
+    path = url.split("?", 1)[0]
+    for kind, suffixes in MUTATION_ENDPOINTS.items():
+        for suffix in suffixes:
+            if path.endswith(suffix):
+                return kind
+    return None
+
+
+def unexpected_mutations(requests: list[dict]) -> list[dict]:
+    """The subset of observed requests that must not have happened."""
+    out: list[dict] = []
+    for request in requests:
+        kind = mutation_kind(request.get("method", ""), request.get("url", ""))
+        if kind:
+            out.append({**request, "kind": kind})
+    return out
+
+
+def locale_switch_verdict(observed: list[dict]) -> dict:
+    """A display-language switch must not create, recommend or save anything."""
+    unexpected = unexpected_mutations(observed)
+    return {
+        "status": FAIL if unexpected else PASS,
+        "unexpected": unexpected,
+        "detail": f"{len(unexpected)} unexpected state-changing request(s)",
+    }
+
+
+def route_response_verdict(status: int | None) -> dict:
+    """A route whose document response is not a success is a FAIL, not a skip.
+
+    Success means 2xx only: a 3xx that never lands on the route under test is a
+    redirect away from it, not a quiet pass. `None` means Playwright received no
+    document response at all (for example a client-side navigation that never
+    produced a document), which is equally a failure to load the route under test.
+    """
+    if status is None:
+        return {"status": FAIL, "detail": "no document response for the route"}
+    if not 200 <= status < 300:
+        return {"status": FAIL, "detail": f"route returned HTTP {status}"}
+    return {"status": PASS, "detail": f"route returned HTTP {status}"}
+
+
+def expected_cta_verdict(probe: dict | None, expected: tuple[str, ...] | None) -> dict:
+    """Judge a route's declared primary CTA.
+
+    * a route that declares no CTA is NOT_MEASURED — never a fabricated PASS;
+    * a declared CTA that is not rendered is FAIL (the route promised it);
+    * a rendered CTA is clipped-checked like any other primary action.
+    """
+    if expected is None:
+        return {"status": NOT_MEASURED, "detail": "route declares no primary CTA"}
+    if probe is None:
+        return {
+            "status": FAIL,
+            "detail": f"declared primary CTA not found: {', '.join(expected)}",
+        }
+    return cta_clip_verdict(probe)
+
+
+def locale_landing_verdict(
+    html_lang: str | None, current_label: str | None, target: str
+) -> dict:
+    """After a switch the document must claim the target language, and say so.
+
+    Both the `html lang` attribute and the header's current-language label must
+    match the selected locale; a switch that only repaints copy but leaves the
+    document (or the label) on the previous language is a FAIL.
+    """
+    expected_label = DISPLAY_LOCALE_NATIVE_LABELS.get(target, target)
+    lang_ok = html_lang == target
+    label_ok = (current_label or "").strip() == expected_label
+    return {
+        "status": PASS if (lang_ok and label_ok) else FAIL,
+        "htmlLang": html_lang,
+        "currentLabel": current_label,
+        "expectedLang": target,
+        "expectedLabel": expected_label,
+        "detail": (
+            f"html lang {html_lang!r}, current label {current_label!r}"
+            f" (expected {target!r} / {expected_label!r})"
+        ),
+    }
+
+
+def locale_switch_check_verdict(
+    observed: list[dict], html_lang: str | None, current_label: str | None, target: str
+) -> dict:
+    """Combine the mutation guard with the language-landing assertion."""
+    mutation = locale_switch_verdict(observed)
+    landing = locale_landing_verdict(html_lang, current_label, target)
+    return {
+        "status": FAIL if FAIL in (mutation["status"], landing["status"]) else PASS,
+        "mutation": mutation,
+        "landing": landing,
+        "detail": f"{mutation['detail']}; {landing['detail']}",
+    }
+
+
+def matrix_exit_code(statuses: list[str]) -> int:
+    """0 only when a non-empty matrix is entirely PASS.
+
+    1 signals a real FAIL; 3 signals a matrix that produced no FAIL but did not
+    fully execute (BLOCKED/SKIP/NOT_EXECUTED/NOT_MEASURED). An empty matrix
+    produced no evidence, so it is treated the same way and never ends the run
+    with the acceptance exit code 0. An unknown status is a probe defect and
+    raises instead of silently defaulting to 0.
+    """
+    if not statuses:
+        return 3
+    unknown = sorted({status for status in statuses if status not in KNOWN_STATUSES})
+    if unknown:
+        raise ValueError(f"unknown matrix status: {', '.join(unknown)}")
+    if FAIL in statuses:
+        return 1
+    if any(status in NON_ACCEPTANCE_STATUSES for status in statuses):
+        return 3
+    return 0
+
+
+def locale_screenshot_name(route: str, locale: str, viewport: str, zoom: str) -> str:
+    """Stable, idempotent evidence name: route, locale, viewport and zoom."""
+    return f"screenshots/{route}-{locale}-{viewport}-{zoom}.png"
+
+
+def validation_check_inventory() -> list[str]:
+    """The planned names of the original 73-case validation matrix.
+
+    Derived from the same route constants the runner uses, so a dropped or
+    renamed check is caught by the self-test instead of only by a live run.
+    """
+    routes = [route for route, _ in VALIDATION_ROUTES]
+    names = [f"reflow-320:{route}" for route in routes]
+    names += [f"zoom-200:{route}" for route in routes]
+    names += [f"reduced-motion:{route}" for route, _ in MOTION_ROUTES]
+    names += [f"contrast-aa:{route}" for route in routes]
+    names += [f"touch-44:{route}" for route, _ in TOUCH_ROUTES]
+    names += [f"cta-visible:{route}" for route in routes]
+    names += [f"overlay-center:{route}" for route in routes]
+    names += [f"crystal-not-tinted:{route}" for route, _ in IMAGE_ROUTES]
+    names += ["capability-home-cards", "oracle-single-cast"]
+    names += [f"no-error-overlay:{route}" for route in routes]
+    names += [f"keyboard-focus:{route}" for route in routes]
+    names += ["keyboard-complete:oracle"]
+    return names
+
+
+def locale_matrix_check_names() -> list[str]:
+    """Planned names of the TASK-UX-QA-PREP-001 locale matrix."""
+    names: list[str] = []
+    for locale in DISPLAY_LOCALES:
+        for viewport, _, _ in QA_VIEWPORTS:
+            for route, _ in VALIDATION_ROUTES:
+                for zoom, _ in QA_ZOOMS:
+                    names.append(f"locale-contrast:{locale}:{route}:{viewport}:{zoom}")
+                    names.append(f"locale-cta:{locale}:{route}:{viewport}:{zoom}")
+                    names.append(f"locale-reflow:{locale}:{route}:{viewport}:{zoom}")
+            names.append(f"locale-switch-mutation:{locale}:{viewport}")
+    return names
+
+
 def _luminance(channel: float) -> float:
     c = channel / 255.0
     return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
@@ -657,7 +1083,7 @@ def run_validation_main() -> int:
                 page.goto(BASE + path, wait_until="networkidle", timeout=45000)
                 page.wait_for_timeout(400)
                 probe = page.evaluate(REFLOW_PROBE)
-                add(f"reflow-320:{route}", probe["overflowX"] <= 1, probe)
+                add(f"reflow-320:{route}", reflow_verdict(probe["overflowX"]), probe)
             except PlaywrightError as exc:
                 add(f"reflow-320:{route}", False, str(exc).splitlines()[0])
             finally:
@@ -671,14 +1097,14 @@ def run_validation_main() -> int:
                 page.add_style_tag(content="html { font-size: 200% !important; }")
                 page.wait_for_timeout(500)
                 probe = page.evaluate(REFLOW_PROBE)
-                add(f"zoom-200:{route}", probe["overflowX"] <= 1, probe)
+                add(f"zoom-200:{route}", reflow_verdict(probe["overflowX"]), probe)
             except PlaywrightError as exc:
                 add(f"zoom-200:{route}", False, str(exc).splitlines()[0])
             finally:
                 page.close()
 
         # 3. prefers-reduced-motion is honoured and nothing animates forever.
-        for route, path in [("home", "/"), ("crystal-library", "/crystal-library")]:
+        for route, path in MOTION_ROUTES:
             page = browser.new_page(viewport={"width": 1440, "height": 900})
             try:
                 page.emulate_media(reduced_motion="reduce")
@@ -706,31 +1132,30 @@ def run_validation_main() -> int:
                     probe = measure_contrast(page, sel)
                     if not probe:
                         continue
-                    large = probe["fontSize"] >= 24 or (probe["bold"] and probe["fontSize"] >= 18.66)
-                    floor = 3.0 if large else 4.5
-                    entry = {**probe, "floor": floor}
-                    if worst is None or entry["ratio"] - entry["floor"] < worst["ratio"] - worst["floor"]:
+                    entry = contrast_verdict(probe)
+                    if worst is None or entry["margin"] < worst["margin"]:
                         worst = entry
                 if worst is None:
-                    add(f"contrast-aa:{route}", False, "no measurable text target")
+                    verdict = contrast_verdict(None)
+                    add(f"contrast-aa:{route}", verdict["status"] == PASS, verdict)
                 else:
-                    add(f"contrast-aa:{route}", worst["ratio"] >= worst["floor"], worst)
+                    add(f"contrast-aa:{route}", worst["status"] == PASS, worst)
             except PlaywrightError as exc:
                 add(f"contrast-aa:{route}", False, str(exc).splitlines()[0])
             finally:
                 page.close()
 
         # 5. 44px minimum touch targets on mobile.
-        for route, path in [("home", "/"), ("crystal-library", "/crystal-library"), ("oracle-setup", "/oracle")]:
+        for route, path in TOUCH_ROUTES:
             page = browser.new_page(viewport={"width": 390, "height": 844})
             try:
                 page.goto(BASE + path, wait_until="networkidle", timeout=45000)
                 page.wait_for_timeout(400)
                 targets = page.evaluate(TOUCH_PROBE)
-                offenders = [t for t in targets if t["height"] < 44]
+                ok, offenders = touch_verdict(targets)
                 add(
                     f"touch-44:{route}",
-                    len(offenders) == 0,
+                    ok,
                     {"total": len(targets), "offenders": offenders[:8]},
                 )
             except PlaywrightError as exc:
@@ -745,15 +1170,8 @@ def run_validation_main() -> int:
                 page.goto(BASE + path, wait_until="networkidle", timeout=45000)
                 page.wait_for_timeout(400)
                 probe = page.evaluate(CTA_PROBE)
-                if probe is None:
-                    add(f"cta-visible:{route}", True, "no CTA on this route")
-                else:
-                    inside = (
-                        probe["height"] > 0
-                        and probe["left"] >= 0
-                        and probe["right"] <= probe["viewportWidth"] + 1
-                    )
-                    add(f"cta-visible:{route}", inside, probe)
+                verdict = cta_clip_verdict(probe)
+                add(f"cta-visible:{route}", verdict["status"] == PASS, probe if probe else verdict)
             except PlaywrightError as exc:
                 add(f"cta-visible:{route}", False, str(exc).splitlines()[0])
             finally:
@@ -773,7 +1191,7 @@ def run_validation_main() -> int:
                 page.close()
 
         # 8. Crystal imagery is never tinted by the star layer.
-        for route, path in [("crystal-library", "/crystal-library"), ("diy-workbench", "/diy/design-diy-private")]:
+        for route, path in IMAGE_ROUTES:
             page = browser.new_page(viewport={"width": 1440, "height": 900})
             try:
                 page.goto(BASE + path, wait_until="networkidle", timeout=45000)
@@ -910,9 +1328,253 @@ def run_validation_main() -> int:
     return 1 if failed else 0
 
 
+# --------------------------------------------------------------------------
+# TASK-UX-QA-PREP-001 locale / viewport / zoom matrix (`--locales`).
+#
+# Evidence is written to the ignored `output/playwright/task-ux-qa-prep-001/`
+# directory. The matrix only ever reports PASS when a real measurement passed;
+# a page that fails to load is FAIL, an unauthenticated route is BLOCKED, a
+# disabled feature is SKIP, and an unreachable origin is NOT_EXECUTED.
+# --------------------------------------------------------------------------
+
+LOCALE_OUT = Path(
+    os.environ.get("STAR_QA_PREP_OUT_DIR", "output/playwright/task-ux-qa-prep-001")
+)
+LOCALE_SHOTS = LOCALE_OUT / "screenshots"
+
+
+def _locale_cookie(locale: str) -> dict:
+    return {"name": DISPLAY_LOCALE_COOKIE, "value": locale, "url": BASE}
+
+
+def _write_locale_summary(checks: list[dict]) -> None:
+    LOCALE_OUT.mkdir(parents=True, exist_ok=True)
+    counts = Counter(check["status"] for check in checks)
+    (LOCALE_OUT / "locale-summary.json").write_text(
+        json.dumps(
+            {
+                "baseUrl": BASE,
+                "locales": DISPLAY_LOCALES,
+                "viewports": [name for name, _, _ in QA_VIEWPORTS],
+                "zooms": [name for name, _ in QA_ZOOMS],
+                "generatedAtUtc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "total": len(checks),
+                "counts": dict(counts),
+                "checks": checks,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    lines = ["check\tstatus\tdetail"]
+    for check in checks:
+        lines.append(
+            "\t".join(str(check.get(key, "")) for key in ("check", "status", "detail"))
+        )
+    (LOCALE_OUT / "locale-summary.tsv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _probe_locale_cell(
+    page: Page,
+    add,
+    route: str,
+    path: str,
+    locale: str,
+    viewport: str,
+    zoom: str,
+    factor: float,
+) -> None:
+    """Measure contrast, CTA clipping and reflow for one locale/viewport/zoom cell."""
+    prefix = f"{locale}:{route}:{viewport}:{zoom}"
+    try:
+        response = page.goto(BASE + path, wait_until="networkidle", timeout=45000)
+        if factor != 1.0:
+            page.add_style_tag(content=f"html {{ font-size: {int(factor * 100)}% !important; }}")
+        page.wait_for_timeout(400)
+    except PlaywrightError as exc:
+        status = environment_status("page-load-failure")
+        detail = str(exc).splitlines()[0]
+        add(f"locale-contrast:{prefix}", status, detail)
+        add(f"locale-cta:{prefix}", status, detail)
+        add(f"locale-reflow:{prefix}", status, detail)
+        return
+
+    # A route that answers with a non-success HTTP status is a FAIL for every cell
+    # in that route, not a quiet pass: the page under test was never served.
+    served = route_response_verdict(response.status if response is not None else None)
+    if served["status"] != PASS:
+        add(f"locale-contrast:{prefix}", served["status"], served["detail"])
+        add(f"locale-cta:{prefix}", served["status"], served["detail"])
+        add(f"locale-reflow:{prefix}", served["status"], served["detail"])
+        return
+
+    state = page.evaluate(PAGE_STATE_PROBE)
+    if state != "ready":
+        # not-authenticated -> BLOCKED, feature-disabled -> SKIP: explainable and
+        # never a fabricated PASS.
+        status = environment_status(state)
+        add(f"locale-contrast:{prefix}", status, state)
+        add(f"locale-cta:{prefix}", status, state)
+        add(f"locale-reflow:{prefix}", status, state)
+        return
+
+    reflow = page.evaluate(REFLOW_PROBE)
+    add(
+        f"locale-reflow:{prefix}",
+        PASS if reflow_verdict(reflow["overflowX"]) else FAIL,
+        reflow,
+    )
+
+    worst = None
+    for selector in CONTRAST_TARGETS:
+        probe = measure_contrast(page, selector)
+        if not probe:
+            continue
+        entry = contrast_verdict(probe)
+        if worst is None or entry["margin"] < worst["margin"]:
+            worst = entry
+    verdict = worst or contrast_verdict(None)
+    add(f"locale-contrast:{prefix}", verdict["status"], verdict)
+
+    # The CTA is judged against the route's own declaration: a declared CTA that is
+    # absent is FAIL, a route with no CTA is NOT_MEASURED, never a silent PASS.
+    expected_cta = ROUTE_PRIMARY_CTA.get(route)
+    cta = (
+        page.evaluate(ROUTE_CTA_PROBE, list(expected_cta))
+        if expected_cta is not None
+        else None
+    )
+    cta_verdict = expected_cta_verdict(cta, expected_cta)
+    add(f"locale-cta:{prefix}", cta_verdict["status"], cta if cta else cta_verdict)
+
+    shot = locale_screenshot_name(route, locale, viewport, zoom)
+    page.screenshot(path=str(LOCALE_OUT / shot), full_page=True)
+
+
+def _probe_locale_switch(page: Page, add, locale: str, viewport: str) -> None:
+    """A language switch must stay quiet and actually land on the target language.
+
+    Two things are asserted at once: the switch fires no create/recommend/save
+    POST, and the document afterwards claims the target language both in `html
+    lang` and in the header's current-language label.
+    """
+    name = f"locale-switch-mutation:{locale}:{viewport}"
+    observed: list[dict] = []
+
+    def on_request(request) -> None:
+        observed.append({"method": request.method, "url": request.url})
+
+    page.on("request", on_request)
+    try:
+        page.goto(BASE + "/", wait_until="networkidle", timeout=45000)
+        page.wait_for_selector('[data-language-switcher="true"]', timeout=10000)
+        # Only the requests the switch itself fires are under test.
+        observed.clear()
+        page.locator('[data-language-switcher="true"]').click()
+        target = next(item for item in DISPLAY_LOCALES if item != locale)
+        page.locator(f'[data-language-option="{target}"]').click()
+        page.wait_for_timeout(800)
+        landing = page.evaluate(
+            """() => ({
+              lang: document.documentElement.lang,
+              label: (document.querySelector('[data-language-current-label="true"]')?.textContent || '').trim()
+            })"""
+        )
+    except PlaywrightError as exc:
+        add(name, environment_status("page-load-failure"), str(exc).splitlines()[0])
+        page.remove_listener("request", on_request)
+        return
+    verdict = locale_switch_check_verdict(
+        observed, landing.get("lang"), landing.get("label"), target
+    )
+    add(name, verdict["status"], verdict["detail"])
+    page.remove_listener("request", on_request)
+
+
+def _preflight_reason(browser) -> str | None:
+    """Return a reason string when the matrix cannot run against a healthy origin.
+
+    An unreachable origin *or* a root route that answers with an error status
+    means the environment is not usable for the whole matrix (for example a dev
+    server started without the auth configuration). Reporting NOT_EXECUTED with
+    the concrete reason is honest; emitting hundreds of FAILs would misdescribe a
+    missing environment as a product defect.
+    """
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    try:
+        response = page.goto(BASE + "/", wait_until="domcontentloaded", timeout=15000)
+    except PlaywrightError as exc:
+        return f"unreachable: {str(exc).splitlines()[0]}"
+    finally:
+        page.close()
+    if response is None:
+        return "no document response from the frontend origin"
+    if response.status >= 400:
+        return f"frontend origin returned HTTP {response.status} for /"
+    return None
+
+
+def run_locale_matrix_main() -> int:
+    LOCALE_SHOTS.mkdir(parents=True, exist_ok=True)
+    checks: list[dict] = []
+
+    def add(name: str, status: str, detail: object) -> None:
+        checks.append({"check": name, "status": status, "detail": detail})
+        print(f"[{status}] {name} {detail}")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+
+        reason = _preflight_reason(browser)
+        if reason is not None:
+            browser.close()
+            status = environment_status("infrastructure-unavailable")
+            for name in locale_matrix_check_names():
+                add(name, status, reason)
+            _write_locale_summary(checks)
+            print(f"\nlocale matrix {status}: {reason}")
+            return 2
+
+        for locale in DISPLAY_LOCALES:
+            for viewport, width, height in QA_VIEWPORTS:
+                context = browser.new_context(
+                    viewport={"width": width, "height": height}, locale=locale
+                )
+                context.add_cookies([_locale_cookie(locale)])
+                try:
+                    page = context.new_page()
+                    for route, path in VALIDATION_ROUTES:
+                        for zoom, factor in QA_ZOOMS:
+                            _probe_locale_cell(
+                                page, add, route, path, locale, viewport, zoom, factor
+                            )
+                    _probe_locale_switch(page, add, locale, viewport)
+                finally:
+                    context.close()
+
+        browser.close()
+
+    _write_locale_summary(checks)
+    counts = Counter(check["status"] for check in checks)
+    failed = counts.get(FAIL, 0)
+    not_run = counts.get(NOT_EXECUTED, 0) + counts.get(BLOCKED, 0)
+    skipped = counts.get(SKIP, 0)
+    not_measured = counts.get(NOT_MEASURED, 0)
+    print(
+        f"\nlocale matrix total={len(checks)} fail={failed} "
+        f"blocked_or_not_executed={not_run} skip={skipped} not_measured={not_measured}"
+    )
+    # Only a fully-passing matrix may exit 0; BLOCKED/SKIP/NOT_EXECUTED/
+    # NOT_MEASURED all keep the run out of the acceptance exit code.
+    return matrix_exit_code([check["status"] for check in checks])
+
+
 def main() -> int:
     if "--validate" in sys.argv[1:]:
         return run_validation_main()
+    if "--locales" in sys.argv[1:]:
+        return run_locale_matrix_main()
     return run_capture_main()
 
 
