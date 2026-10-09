@@ -299,6 +299,37 @@ class RouteHttpStatusTests(unittest.TestCase):
     def test_non_success_is_never_skip(self) -> None:
         self.assertNotEqual(probes.route_response_verdict(500)["status"], probes.SKIP)
 
+    def test_redirect_is_not_a_pass(self) -> None:
+        # "Non-success" means anything outside 2xx. A 3xx that never lands on the
+        # route under test is a failure, not a quiet pass.
+        self.assertEqual(probes.route_response_verdict(302)["status"], probes.FAIL)
+
+    def test_every_non_2xx_status_is_fail(self) -> None:
+        for status in (301, 302, 304, 399, 400, 403, 404, 418, 500, 503):
+            self.assertEqual(probes.route_response_verdict(status)["status"], probes.FAIL, status)
+
+
+class RouteCtaSelectorPrecisionTests(unittest.TestCase):
+    """A declared CTA selector must pin the primary control, not a look-alike."""
+
+    def test_crystal_library_targets_the_primary_diy_cta(self) -> None:
+        # The panel's first `a[href^="/diy/"]` is the small "查看全部 ›" link; the
+        # primary "进入 DIY" CTA is the accent-deep link, so the selector must pin
+        # the primary control rather than the first matching anchor.
+        selectors = probes.ROUTE_PRIMARY_CTA["crystal-library"]
+        self.assertTrue(
+            any("bg-[var(--accent-deep)]" in selector for selector in selectors),
+            selectors,
+        )
+
+    def test_diy_workbench_does_not_use_the_generic_grid_hop(self) -> None:
+        # `div.grid` also wraps unrelated rows that carry an accent-deep button, so
+        # matching it relies on DOM order instead of a stable marker.
+        selectors = probes.ROUTE_PRIMARY_CTA["diy-workbench"]
+        self.assertFalse(
+            any("div.grid " in selector for selector in selectors), selectors
+        )
+
 
 class LocaleLandingTests(unittest.TestCase):
     """After a switch the document and the header label must show the target."""
@@ -460,8 +491,16 @@ class MatrixExitCodeTests(unittest.TestCase):
             probes.matrix_exit_code([probes.BLOCKED, probes.FAIL, probes.SKIP]), 1
         )
 
-    def test_an_empty_matrix_is_zero(self) -> None:
-        self.assertEqual(probes.matrix_exit_code([]), 0)
+    def test_an_empty_matrix_is_never_acceptance(self) -> None:
+        # An empty matrix produced no evidence at all, so it can never be an
+        # acceptance pass: it must not fall through to the exit code 0.
+        self.assertNotEqual(probes.matrix_exit_code([]), 0)
+
+    def test_an_unknown_status_is_never_acceptance(self) -> None:
+        # A status the matrix does not define (a typo or a dropped status) is a
+        # probe defect: it must raise instead of silently passing as 0.
+        with self.assertRaises(ValueError):
+            probes.matrix_exit_code(["BOGUS"])
 
     def test_every_non_acceptance_status_is_non_zero(self) -> None:
         for status in sorted(probes.NON_ACCEPTANCE_STATUSES):

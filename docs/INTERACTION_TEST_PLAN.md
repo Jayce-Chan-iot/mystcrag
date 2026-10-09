@@ -372,12 +372,15 @@ language switch the probe re-reads the document's `html lang` attribute and the
 header's current-language label and requires both to match the selected locale.
 
 A genuine failure is never downgraded to `SKIP`, and an unreachable environment
-is never reported as `PASS`. The script exits 0 only when every check `PASS`es;
-1 when any check `FAIL`s; and 3 when the matrix ran without a `FAIL` but did not
-fully pass (any `BLOCKED`, `SKIP`, `NOT_EXECUTED` or `NOT_MEASURED`). A preflight
-that finds the origin unhealthy still exits 2, because nothing could be measured
-at all. No run containing a `BLOCKED`, `SKIP`, `NOT_EXECUTED` or `NOT_MEASURED`
-check ever ends with the acceptance exit code 0.
+is never reported as `PASS`. The script exits 0 only when a non-empty matrix has
+every check `PASS`; 1 when any check `FAIL`s; and 3 when the matrix ran without a
+`FAIL` but did not fully pass (any `BLOCKED`, `SKIP`, `NOT_EXECUTED` or
+`NOT_MEASURED`), or when the matrix is empty and therefore produced no evidence.
+An unknown status is a probe defect: `matrix_exit_code` raises instead of
+silently returning the acceptance code. A preflight that finds the origin
+unhealthy still exits 2, because nothing could be measured at all. No run
+containing a `BLOCKED`, `SKIP`, `NOT_EXECUTED` or `NOT_MEASURED` check, and no
+empty run, ever ends with the acceptance exit code 0.
 
 `scripts/ui-qa/test_capture_star_platform.py` proves the behaviour without a
 browser: it injects the low-contrast, clipped-CTA, absent-declared-CTA,

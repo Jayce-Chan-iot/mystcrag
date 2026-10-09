@@ -625,6 +625,10 @@ NOT_EXECUTED = "NOT_EXECUTED"
 # explicit non-measurement, never a fabricated PASS.
 NOT_MEASURED = "NOT_MEASURED"
 
+# Every status the matrix may legitimately report; an unknown one is a probe
+# defect and is raised, never silently accepted.
+KNOWN_STATUSES = frozenset({PASS, FAIL, SKIP, BLOCKED, NOT_EXECUTED, NOT_MEASURED})
+
 # Every status that must not end the run with the acceptance exit code 0.
 NON_ACCEPTANCE_STATUSES = frozenset({FAIL, SKIP, BLOCKED, NOT_EXECUTED, NOT_MEASURED})
 
@@ -699,15 +703,19 @@ ROUTE_PRIMARY_CTA: dict[str, tuple[str, ...] | None] = {
     # tarot/components/tarot-setup.tsx: the spread submit button.
     "tarot-setup": ('[data-tarot-setup-submit="true"]',),
     # diy-editor.tsx: the desktop "完成设计" inside `data-star-workbench-complete`,
-    # and the mobile "完成设计" in the action row (both `bg-[var(--accent-deep)]`).
+    # and the mobile "完成设计" action-row button (both `bg-[var(--accent-deep)]`;
+    # the mobile one is `rounded-full`, which no other accent-deep button uses, so
+    # the selector pins the control instead of a generic `div.grid` row).
     "diy-workbench": (
         '[data-star-workbench-complete] button[class*="bg-[var(--accent-deep)]"]',
-        '[data-diy-editor-page] div.grid button[class*="bg-[var(--accent-deep)]"]',
+        '[data-diy-editor-page] button[class*="rounded-full"][class*="bg-[var(--accent-deep)]"]',
     ),
     # crystal-library-page.tsx: the "进入 DIY" panel link, or the no-design
-    # "去 DIY 开始新设计" link when there is nothing editable yet.
+    # "去 DIY 开始新设计" link when there is nothing editable yet. The accent-deep
+    # marker skips the small "查看全部 ›" link, which is the panel's first
+    # `a[href^="/diy/"]` but not the primary CTA.
     "crystal-library": (
-        '[data-current-design-panel] a[href^="/diy/"]',
+        '[data-current-design-panel] a[href^="/diy/"][class*="bg-[var(--accent-deep)]"]',
         '[data-library-start-diy="true"]',
     ),
     # gallery-page.tsx: the header create link.
@@ -861,13 +869,14 @@ def locale_switch_verdict(observed: list[dict]) -> dict:
 def route_response_verdict(status: int | None) -> dict:
     """A route whose document response is not a success is a FAIL, not a skip.
 
-    `None` means Playwright received no document response at all (for example a
-    client-side navigation that never produced a document), which is equally a
-    failure to load the route under test.
+    Success means 2xx only: a 3xx that never lands on the route under test is a
+    redirect away from it, not a quiet pass. `None` means Playwright received no
+    document response at all (for example a client-side navigation that never
+    produced a document), which is equally a failure to load the route under test.
     """
     if status is None:
         return {"status": FAIL, "detail": "no document response for the route"}
-    if status >= 400:
+    if not 200 <= status < 300:
         return {"status": FAIL, "detail": f"route returned HTTP {status}"}
     return {"status": PASS, "detail": f"route returned HTTP {status}"}
 
@@ -929,12 +938,19 @@ def locale_switch_check_verdict(
 
 
 def matrix_exit_code(statuses: list[str]) -> int:
-    """0 only when every check PASSed; otherwise a non-zero, non-acceptance code.
+    """0 only when a non-empty matrix is entirely PASS.
 
     1 signals a real FAIL; 3 signals a matrix that produced no FAIL but did not
-    fully execute (BLOCKED/SKIP/NOT_EXECUTED/NOT_MEASURED). Either way a run that
-    did not fully pass never ends with the acceptance exit code 0.
+    fully execute (BLOCKED/SKIP/NOT_EXECUTED/NOT_MEASURED). An empty matrix
+    produced no evidence, so it is treated the same way and never ends the run
+    with the acceptance exit code 0. An unknown status is a probe defect and
+    raises instead of silently defaulting to 0.
     """
+    if not statuses:
+        return 3
+    unknown = sorted({status for status in statuses if status not in KNOWN_STATUSES})
+    if unknown:
+        raise ValueError(f"unknown matrix status: {', '.join(unknown)}")
     if FAIL in statuses:
         return 1
     if any(status in NON_ACCEPTANCE_STATUSES for status in statuses):
