@@ -18,7 +18,7 @@ Repository governance entry points:
 - Consumer login prompt and desktop development identity: `superpowers/specs/2026-09-12-auth-login-prompt-desktop-auto-auth.md`, `superpowers/plans/2026-09-12-auth-login-prompt-desktop-auto-auth.md`, `AUTH_SESSION_CONTRACT.md`
 - Star Oracle and full customer UI redesign: `superpowers/specs/2026-09-26-star-oracle-crystal-design.md`, `superpowers/plans/2026-09-26-phase0-priority-ui-repairs.md`, `superpowers/plans/2026-09-26-star-oracle-integration.md`, `superpowers/plans/2026-09-26-star-platform-full-ui-redesign.md`
 - Approved Star Platform UX remediation: `superpowers/specs/2026-10-03-star-platform-ux-remediation-design.md`; two-model dispatch: `superpowers/plans/2026-10-03-star-execution-dispatch.md`; detailed plans: `superpowers/plans/2026-10-03-star-diy-entry-ownership.md`, `superpowers/plans/2026-10-03-star-three-locale-content.md`, `superpowers/plans/2026-10-03-star-oracle-result-experience.md`, `superpowers/plans/2026-10-03-star-bracelet-workbench.md`, `superpowers/plans/2026-10-03-star-page-family-visual-qa.md`
-- Approved DIY 60-bead composition policy: `superpowers/specs/2026-10-10-diy-60-bead-cap-design.md`; implementation sequence for Product Owner review: `superpowers/plans/2026-10-10-diy-60-bead-cap-implementation.md` (no runtime task claimed yet).
+- Approved DIY 60-bead composition policy: `superpowers/specs/2026-10-10-diy-60-bead-cap-design.md`; approved implementation sequence: `superpowers/plans/2026-10-10-diy-60-bead-cap-implementation.md` (Contract task claimed first; later runtime stages remain unclaimed).
 
 | Task | Controlling documents |
 | --- | --- |
