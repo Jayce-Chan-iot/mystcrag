@@ -1,4 +1,4 @@
-# 玄矶自营精选网站 OSS-first Implementation Plan（修订待审）
+# 玄矶自营精选网站 OSS-first Implementation Plan（Phase 0 已批准）
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` or `superpowers:subagent-driven-development` task-by-task. Steps use `- [ ]` checkboxes. This plan is not authorization to change production code, install dependencies, migrate data, merge, push, or deploy.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** 现有 TypeScript、Next.js 16、React 19、Fastify、Prisma/PostgreSQL 与 pnpm 11；候选为 Medusa、Vendure、Saleor，最终依赖、版本与部署拓扑必须通过选型闸门后冻结。视觉任务仍复用玄矶现有组件，按需评估 Radix/Embla；Vercel Commerce 只作店面参考，不作商品后端。
 
-**Spec:** [经本次修订、待 Product Owner 复核的中文规格](../specs/2026-10-10-curated-showroom-site-design.md)。未完成 UX 继续由[星台两模型执行计划](2026-10-03-star-execution-dispatch.md)及其详细计划控制；[DIY 60 颗上限计划](2026-10-10-diy-60-bead-cap-implementation.md)独立执行。
+**Spec:** [Product Owner 已批准的 OSS-first 中文规格](../specs/2026-10-10-curated-showroom-site-design.md)。当前只批准 Phase 0 的选型与排版对标，Phase 1 实施须选型实证及新的子计划获批。未完成 UX 继续由[星台两模型执行计划](2026-10-03-star-execution-dispatch.md)及其详细计划控制；[DIY 60 颗上限计划](2026-10-10-diy-60-bead-cap-implementation.md)独立控制自身路径。
 
 ## Global Constraints
 
