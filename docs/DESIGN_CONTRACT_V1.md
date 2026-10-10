@@ -48,6 +48,16 @@ Accessory types are `SPACER`, `PENDANT`, `METAL_PART`, and `CONNECTOR`. Placemen
 
 Beads and inline accessories form the main ring. Their positions must be unique, start at zero, and contain no gaps. Anchored accessories do not occupy a main-ring position. Component IDs are unique across every bead and accessory. `bracelet.totalBeadCount` equals `beads.length`.
 
+## DIY composition policy (additive)
+
+`src/constants/diy-policy.ts` exports the sole public DIY composition constant `DIY_MAX_BEAD_COUNT = 60`, re-exported from the package root. One editable DIY design may hold at most 60 physical beads, counted as `beads.length` (equivalently `bracelet.totalBeadCount`): each `BEAD` entry counts once, while `INLINE` spacers/connectors and `ANCHORED` pendants never count. Replacing one bead's material or diameter, moving beads, and accessory edits do not add count. This is an editing/composition rule, not wrist-fit advice, geometry, or a `DesignV1` schema limit — it does not change Bracelet Engine input guarantees.
+
+The contract deliberately adds no `.max(60)` to `DesignV1Schema` and changes no request or success DTO shape: historical or non-DIY snapshots above 60 remain valid V1 designs and keep parsing. Enforcement belongs to the dependent Backend update and order boundaries, and the Frontend consumes this same constant for immediate guidance instead of a second copy of the number.
+
+The rule applies to new beads added to a `DIY_CREATED` design (including manual adds through the shared crystal-library Update entry) and to new order creation from a DIY design: `60 -> 60` replace/move/remove-then-add stays legal, while `60 -> 61` fails. Designs already above 60 may be read, saved for recovery, moved, equally replaced, and reduced step by step, but may not gain a bead; new orders require the current snapshot at 60 or fewer, and existing order snapshots stay immutable.
+
+Over-limit rejection reuses the existing error envelope with the stable business code `DIY_BEAD_LIMIT_EXCEEDED` (HTTP 400), specified in `API_SPECIFICATION.md` and implemented by the dependent Backend, Database, and Frontend tasks; it must not degrade to `VALIDATION_ERROR` or `NETWORK_ERROR`. The Contract task ships only the constant, this policy, and its tests; it does not enforce the cap.
+
 ## Money and pricing
 
 All monetary values are safe integers. Decimal, negative, non-finite, and out-of-safe-range values are rejected unless a field explicitly permits a signed adjustment.

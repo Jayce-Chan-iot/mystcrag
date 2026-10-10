@@ -14,6 +14,8 @@ The Backend registers validated HTTP boundaries for all six design/order operati
 
 Errors use `{ error: { code, message, fieldErrors?, requestId } }`. Supported stable codes are `UNAUTHORIZED`, `FORBIDDEN`, `VALIDATION_ERROR`, `NOT_IMPLEMENTED`, `NOT_FOUND`, `CONFLICT`, `COMPLIANCE_BLOCKED`, `CONSENT_REQUIRED`, `INVENTORY_CHANGED`, `PRICE_CHANGED`, and `INTERNAL_ERROR`. Publish rejects public or unlisted requests without consent; order creation rejects a `REJECTED` design before service execution.
 
+The approved DIY 60-bead composition policy reserves one additional stable business code, `DIY_BEAD_LIMIT_EXCEEDED` (HTTP 400, existing envelope). It is specified now by this document, the shared constant `DIY_MAX_BEAD_COUNT`, and the approved design at `superpowers/specs/2026-10-10-diy-60-bead-cap-design.md`; the dependent Backend and Database tasks must extend the server error enum and the Frontend task its known-server-code handling and three-locale copy. Until those tasks land, startup does not yet emit the code, and it must never be collapsed into `VALIDATION_ERROR` or `NETWORK_ERROR`.
+
 ## Authentication and actor context
 
 The controlling production contract is [AUTH_SESSION_CONTRACT.md](AUTH_SESSION_CONTRACT.md), state `IMPLEMENTATION_COMPLETE_ACCEPTANCE_PENDING`. The browser authenticates only to the Next.js Server/BFF with its host-only HttpOnly session cookie. The BFF holds every reusable credential server-side and sends a short-lived audience-specific Access Token to Fastify. Browser code must not call Fastify with a stored Bearer token.
@@ -80,6 +82,8 @@ POST /api/design/update
 Requires verified authentication and owner access. Uses `UpdateDesignRequestSchema` and `UpdateDesignResponseSchema`.
 
 The request accepts multiple finite operations in one array. They are applied in order and persisted as one optimistic-revision transaction. Clear/reset-style editor actions must batch their removals instead of issuing one HTTP request per component. The successful Update response already contains authoritative pricing; routine editor mutations do not immediately repeat the Price endpoint.
+
+DIY composition limit: after the submitted `operations` are applied in order, a `DIY_CREATED` design that is currently at or below the cap must not exceed `DIY_MAX_BEAD_COUNT` (60) final `beads.length`; `60 -> 60` replace/move/remove-then-add stays legal, and `60 -> 61` is rejected with `DIY_BEAD_LIMIT_EXCEEDED` before any new revision, pricing, stock reservation, or usage event. Only `BEAD` entries count — `INLINE`/`ANCHORED` accessories never do, replacing one bead's material or moving a bead adds no count, and the same limit applies to manual adds through the shared crystal-library entry of this endpoint. Designs already above 60 remain readable, movable, equally replaceable, and step-by-step reducible, but any bead-add operation is rejected even when the same batch also removes one; new orders require the current snapshot at 60 or fewer, while existing order snapshots stay immutable. The limit constant is exported once from `@mystcrag/design-contract`; enforcement is delivered by the dependent Backend and Database tasks.
 
 POST /api/design/price
 
@@ -620,7 +624,7 @@ Requires verified authentication and owner access. Uses `PublishDesignRequestSch
 
 POST /api/orders/from-design
 
-Requires verified authentication and owner access. Uses `CreateOrderFromDesignRequestSchema` and `CreateOrderFromDesignResponseSchema`, with a compliance guard before service execution. The operation is idempotent for one authenticated user and one design revision: retries, refreshes, and concurrent submissions return the existing immutable order snapshot instead of creating another order.
+Requires verified authentication and owner access. Uses `CreateOrderFromDesignRequestSchema` and `CreateOrderFromDesignResponseSchema`, with a compliance guard before service execution. The operation is idempotent for one authenticated user and one design revision: retries, refreshes, and concurrent submissions return the existing immutable order snapshot instead of creating another order. New DIY orders are additionally guarded by the 60-bead composition limit on the current design snapshot (`DIY_BEAD_LIMIT_EXCEEDED`, HTTP 400); exact retries still return the existing immutable order, and existing orders are never rewritten.
 
 GET /api/orders
 

@@ -1,5 +1,6 @@
 export * from "./constants/currencies";
 export * from "./constants/disclaimers";
+export * from "./constants/diy-policy";
 export * from "./constants/versions";
 
 export * from "./migrations/legacy-initial.schema";
