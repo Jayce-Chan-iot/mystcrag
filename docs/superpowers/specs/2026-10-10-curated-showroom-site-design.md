@@ -2,7 +2,7 @@
 
 **任务：** `TASK-COMMERCE-SITE-SPEC-001`
 **基线：** 本地 `main@e634e6b`（2026-10-10）
-**状态：** 产品所有者于 2026-10-10 确认书面规格；本文件只定义设计与架构边界，运行时实施仍须按独立任务登记与[实施计划](../plans/2026-10-10-curated-showroom-site-implementation.md)审批
+**状态：** 产品所有者于 2026-10-10 确认原书面规格，并要求按“成熟开源能力优先、不重复造电商轮子”修订架构；本次 OSS-first 修订仍待产品所有者书面复核。运行时实施仍须按独立任务登记与[实施计划](../plans/2026-10-10-curated-showroom-site-implementation.md)审批。
 
 ## 1. 产品目标与授权范围
 
@@ -62,14 +62,15 @@
 | 商品详情与工艺 | [Completedworks 实际商品页](https://completedworks.com/collections/women-ss26-main/products/sequence-chalcedony-bead-and-recycled-silver-necklace)分层展示材料、尺寸、保养和系列故事；[Tom Wood 工艺说明](https://www.tomwoodproject.com/en-jp/blogs/journal/product)记录材料与制作脉络 | 对照玄矶真实商品数据和无野授权范围设计信息层级；不沿用未证实的产地、可持续性或工艺声明。 |
 | AI/问卦—DIY 入口 | [Qi Yi Crystal 官网](https://qiyicrystal.com/en)把短测、个性化建议与自由设计分成入口，并说明可继续调整设计 | 参考低门槛分流与继续创作；玄矶保持快速白话问卦和文化灵感边界，不增加冗长命盘或保证功效。 |
 | 逐珠 DIY | [Lucid Freestyle](https://www.lucidbeads.com/freestyle/)公开展示首珠入口、Save/Load/Clear 与逐珠编辑提示；[Lucid Compose](https://www.lucidbeads.com/compose/)把石材、排列、尺寸和进一步编辑分层 | 参考首珠与编辑可发现性；既有 `FlatBraceletEditor` 与 Bracelet Engine 仍是权威，不为竞品的 3D 表现重写内核。 |
-| 开源商城/UI | [Vercel Commerce](https://github.com/vercel/commerce) 为 MIT Next.js 商城模板但主要维护 Shopify 接入；[Radix Primitives](https://github.com/radix-ui/primitives) 为 MIT 无样式可访问控件；[Embla](https://www.embla-carousel.com/docs/plugins/accessibility)提供可访问滑动与减少动效做法 | 只参考公开展示、控件和可发现滑动的实现模式；先复用仓库现有组件。新增依赖须单独登记 manifests/lockfile 并审许可证、包体与现有 Next/React 兼容性。 |
+| 开源店面/UI | [Vercel Commerce](https://github.com/vercel/commerce) 是 Next.js 店面模板，官方仅积极维护 Shopify 接入，并非独立电商后端；[Radix Primitives](https://github.com/radix-ui/primitives) 与 [Embla](https://www.embla-carousel.com/) 可按需借鉴控件/滑动模式 | 保留玄矶现有 Next.js 与设计系统，逐组件复用；不能因参考模板就宣称已复用商品、价格或订单内核。新增依赖须单独登记并审许可/兼容性。 |
+| 开源电商内核候选 | [Medusa Commerce Modules](https://docs.medusajs.com/resources/commerce-modules) 含商品、价格、区域、库存、订单等能力，店面可分离；[Vendure](https://docs.vendure.io/current/core/storefront/connect-api) 与 [Saleor](https://docs.saleor.io/developer/products/overview) 可作为对照 | 先做实际适配验证，再选唯一成品商业权威。Medusa 优先试验但不预选；Vendure 社区版 GPLv3/商业双许可须审查，[Saleor](https://github.com/saleor/saleor/blob/main/LICENSE) BSD-3-Clause 但跨 Python/GraphQL 栈成本须量化；[Medusa](https://github.com/medusajs/medusa/blob/develop/LICENSE) 仓库企业版部分另有许可。 |
 | 动效灵感 | [MotionSites](https://motionsites.org/) 当前公开页面是提示词/模板展示，未在页面确认可复用代码许可证 | 只作观感线索，不能当作已授权开源库；优先轻量入场、反馈和减少动效支持。 |
 
 上述参考是起点而不是固定素材库。视觉任务开始时必须采集同视口的玄矶基线与参考页面截图，逐项记录排版的图片比例、内容宽度、文字密度、留白节奏、导航位置和移动端重排；无法访问或未亲自重放的页面须标注证据限制，不得宣称“竞品实测优于玄矶”。
 
-## 5. 推荐的商业领域边界（待独立 Contract/Database 任务冻结）
+## 5. OSS-first 商业领域边界（待选型闸门冻结）
 
-采用单一玄矶经营主体、多个可署名合作品牌/设计师的**策展目录**，而非现在就建立租户。概念关系如下：
+采用单一玄矶经营主体、多个可署名合作品牌/设计师的**策展目录**，而非现在就建立租户。下图只是业务概念，不是新增 Prisma 表、Fastify 路由或与开源内核并行的实体清单：
 
 ```text
 合作品牌 Brand ── 设计师 Designer ── 合作系列 Collection
@@ -80,12 +81,16 @@
 ```
 
 - `Brand` 与 `Designer` 是来源与署名，不是商户账户、租户或收款方；图中的连线表示合作归属，不预设一位设计师只能合作一个品牌。玄矶仍统一负责网站经营和客户服务。
-- `Product` 表达成品或明确授权的独家原款；`Variant` 表达真实规格/SKU；`Listing` 表达面向大陆或台湾的公开可见状态及**人工确认的**币种价格。它们不代替已有 `MaterialProduct`、`AccessoryProduct` 的逐珠材料权威。若将来有 DIY 材料包，也先定义其真实组合、供货与授权，再发布为商品，不由前端临时拼装成“可购买”。
+- `Product` 表达成品或明确授权的独家原款；`Variant` 表达真实规格/SKU；区域发布与**人工确认的**币种价格优先映射候选内核现有商品、价格、区域/渠道能力；`Listing` 仅为概念，不预设自建同名表。成品商业权威不得替代已有 `MaterialProduct`、`AccessoryProduct` 的逐珠材料权威。若将来有 DIY 材料包，先定义真实组合、供货与授权，不由前端拼装成“可购买”。
 - `LicenseGrant` 至少能够回答作品归属、可展示素材、销售区域、是否允许消费者调整、允许调整的部位与使用期限；未获确认时默认不可发布、不可改款。具体法律文本与权限由业务方提供，本系统只存经批准的结构化引用与版本。
 - `DesignTemplate` 目前没有授权和商品版本能力，不能直接升级为设计师原款权威。未来可作为展示/创作起点的内容投影，但原款与消费者修订关系应由新增商业合同先明确定义；不得回写或抹平旧 `DesignRevision`。
 - 成品购买、定制订单、退款、库存预留、物流与支付在后续统一订单规格中设计。当前订单模型关联设计修订且只覆盖设计快照，不得直接复用为“已完成商城交易”。
 
-合同、数据库和 API 的建议顺序是：先冻结公开商品 DTO、授权与区域发布规则；再新增表与迁移/种子导入；然后实现仅公开已发布版本的只读目录、商品、系列、设计师 API；最后由前端消费。公开 API 不泄露成本、草稿、未授权媒体或私人设计。管理员发布动作需单独授权、审计和回滚，不在本展示设计规格中假定现有后台具备该功能。
+**先复用后扩展：** 商品、规格、系列、区域定价、库存、管理界面与未来订单/履约属于成熟电商内核的默认复用范围；品牌/设计师署名、作品授权版本、媒体来源和“缺资料不公开”闸门才是玄矶特有的最小扩展候选。复用优先不等于整体迁移现有设计、材料或订单，也不等于同时拥有两套成品商品权威。任何 Fastify 公开投影、同步表或新 Prisma 实体都必须在选型后证明为何现成 API/扩展点不能满足，并写明唯一数据权威、同步/撤回、失败关闭和退出方案。
+
+**选型闸门：** DeepSeek 先对 Medusa、Vendure、Saleor 的官方文档/许可证/维护状况完成同表比较，并在仓库外隔离的抛弃式环境对优先候选验证：一件虚构样例商品及规格、CN/CNY 与 TW/TWD 人工价格、三语审校内容、无授权/缺译/缺价/撤回时服务端不公开、管理发布与独立 Next.js 读取。不得把样例写入玄矶数据库或生产目录。特别核对 [Medusa 翻译模块](https://docs.medusajs.com/resources/commerce-modules/translation) 的 beta 状态与缺译回退；内核默认回退不能代替玄矶的未审校不发布规则。记录 Node 版本、运维与数据库边界、插件/扩展点、许可证/企业版边界及未来支付接入的未知项。PoC 不通过时先说明可修复性/成本，再评估其他内核；只有三者均不适用且有可复现证据，才向产品所有者申请最小自建展示目录例外。
+
+选型结论与产品所有者审批前，不冻结公开商品 DTO、不新增成品 Prisma 表/迁移、不自建商品/价格/订单 API，也不派发依赖这些接口的前端页面实现。选定后再写 Contract/API/数据库映射和实施子计划。公开输出始终不得泄露成本、草稿、未授权媒体或私人设计；管理员发布动作须有授权、审计与撤回路径。
 
 ## 6. 大陆、台湾与三语展示
 
@@ -97,16 +102,16 @@
 
 本规格不是实施计划。产品所有者批准后另用 `superpowers:writing-plans` 拆成登记任务；下列顺序是设计约束，不预占路径锁：
 
-1. **SOL：** 对照最新 `main` 和星台执行计划，审查 `TASK-UX-BRACELET-FE-001` 等未完成项与共享路径，建立每个功能/页面族的竞品—开源对标卡；视觉效果图和页面结构需产品所有者确认。
-2. **DeepSeek V4.1 Flash：** 按 Contract → Database → Backend 的单 owner 任务定义品牌、作者、系列、商品、规格、Listing、授权与公开只读 API；不改已有材料/设计/订单快照权威，也不擅自做支付、退款或物流。
-3. **Qwen 3.8 Flash：** 在上游合同合入且星台相关文件解锁后，按页面族实现共享视觉/页眉、首页与目录、商品详情、设计师与系列页；继续完成星台计划里的问卦、手串、三语、视觉任务。桌面/手机每族单独截图和审查，共享 CSS/导航串行编辑。
-4. **独立 QA 与 SOL 复核：** 真实浏览器验证大陆/台湾公开状态、未授权不公开、三语、商品资料/价格来源、所有旧入口、DIY 权限/空托盘、Oracle/Tarot 状态、移动端与可访问性；任何失败退回原 owner 精确修复，不通过弱化测试、假内容或跳过状态验收。
+1. **SOL：** 对照最新 `main`、活跃任务和星台执行计划登记不重叠的 OSS 选型与页面对标任务；独立审查证据并请产品所有者批准单一商业内核或有证据的最小例外。
+2. **DeepSeek V4.1 Flash：** 先完成开源电商适配矩阵与隔离 PoC；仅在选型获批后按所选内核的现有 API/扩展点设计最小 Contract、授权发布闸门和集成边界，不预设自建商品表、订单或 Fastify CRUD。
+3. **Qwen 3.8 Flash：** 可独立完成真实竞品/优秀独立站与开源店面排版对标、桌面/手机视觉方向；产品所有者确认后且公开接口冻结，再按页面族实现首页、目录、详情、设计师与系列页。继续完成星台计划里的未完成任务，不并发抢写共享 CSS/导航。
+4. **独立 QA 与 SOL 复核：** 真实浏览器验证两市场、授权/撤回/缺资料不公开、三语、价格来源、原有 AI/DIY/Oracle/Tarot、移动端与可访问性；任何失败退回原 owner 精确复修。
 
 每个实现任务至少提交：当前代码路径、对标卡、红绿测试、精确 diff、授权/许可审查（如适用）、目标视口前后截图、模块窄测、架构测试和 `pnpm validate` 的真实结果。整站最终视觉由产品所有者确认；规格批准、单任务代码合并和网站可上线是三个不同门槛，不能互相代替。
 
 ## 8. 明确不采用的捷径
 
-- 不整体搬入 Shopify/Medusa 模板或建立并行商品/设计权威，只为得到商城外观。
+- 不整体搬入 Shopify/Medusa 店面模板只为得到商城外观；也不跳过成熟内核选型去自建一套商品、价格、库存、订单权威。
 - 不复制竞品的作品摄影、文案、品牌式样或未经核准的开源素材。
 - 不把矿石文化寓意写成保健、保证转运或确定性占卜结果。
 - 不用隐藏购买按钮之外的假结算、假订单或假售后流程暗示商业闭环已经完成。
