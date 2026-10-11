@@ -1,4 +1,6 @@
-# 玄矶自营精选网站 OSS-first Implementation Plan（Phase 0 已批准）
+# 玄矶自营精选网站 OSS-first Phase 0 Plan（选型阶段归档）
+
+> 2026-10-11 handoff: Product Owner selected Medusa after `TASK-COMMERCE-OSS-FIT-001@97428aa` and confirmed the restrained showroom visual direction after `TASK-COMMERCE-BENCH-001@b5c1627`. This document remains the Phase 0 evidence and constraint record. The selected-engine Phase 1 sequence is [the Medusa showroom plan](2026-10-11-medusa-showroom-phase1.md); do not dispatch historical self-built Contract/Prisma/Fastify alternatives. The cited PoC and visual report remain separate candidates until explicitly integrated.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` or `superpowers:subagent-driven-development` task-by-task. Steps use `- [ ]` checkboxes. This plan is not authorization to change production code, install dependencies, migrate data, merge, push, or deploy.
 

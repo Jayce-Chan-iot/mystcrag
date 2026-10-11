@@ -1,5 +1,21 @@
 # Dependency Decisions
 
+## DEC-COMMERCE-001 — Medusa for Phase 1 finished-goods commerce
+
+**Task:** TASK-COMMERCE-OSS-SELECT-001
+**Product Owner decision:** 2026-10-11 — approve Medusa as the sole finished-goods commerce authority for the first self-operated site
+**State:** architecture selection only; no package, runtime, schema, production service, payment provider or deployment has been added
+
+The reviewed `TASK-COMMERCE-OSS-FIT-001` report at commit `97428aa` compared Medusa, Vendure and Saleor and ran an isolated Medusa `2.21.2` PoC with a throwaway database. It verified Admin product/variant/collection entry, CN/CNY and TW/TWD manually entered region-rule prices, three-language reads, draft withdrawal and restart persistence. This fixes **Medusa `2.21.2` as the tested integration baseline**, not as an automatically installed dependency or a claim that a later release is equivalent. The first implementation task must recheck the official license, Node compatibility, exact resolved package versions and upstream security notices before pinning dependencies; any version change requires a documented compatibility probe and review.
+
+Medusa owns finished-goods Product, Variant, Collection, Price, Inventory and, only after a separately approved payment/order phase, finished-goods Order. Its Admin and Store APIs are reused. Mystcrag's existing Prisma `Crystal`/`MaterialProduct`/`AccessoryProduct`, `DesignV1`, `DesignRevision`, `DesignPublication`, DIY prices and immutable design-order snapshots remain separate, unchanged authorities. No second editable finished-goods Product/Variant/Price/Order schema is authorized in Mystcrag Prisma. Brand/designer attribution, versioned license grants and media provenance may be a minimal Medusa extension or separately owned metadata/projection; they are **not** a parallel commerce catalog.
+
+The PoC also demonstrated that Medusa's native Store response is **not** Mystcrag's public publication authority: a missing zh-TW translation falls back to source text; missing market price returns a visible product with null calculated price; missing image remains visible; license grants are not native. The Phase 1 public read boundary must fail closed for missing/expired market authorization, unapproved media, any required reviewed translation, absent manually approved market price, draft/withdrawn status and upstream errors. Lists, details, homepage features and SEO must all read that same gated projection. Direct public access to an ungated Medusa Store endpoint or publishable key must not bypass it; the implementation plan requires a network/route exposure test, not merely a hidden frontend link.
+
+One Medusa service with its **own database/schema and credentials** is the chosen isolation direction. It must not share the existing Mystcrag Prisma schema or connect to a user's development database. The exact host, migration/startup command, internal API route, credential custody and network exposure policy are implementation contracts to be proven in a separately registered task. Redis-backed production modules are an official strong recommendation in the reviewed report, not a claim of a hard local PoC prerequisite. Payment channels, tax, shipping, refunds and production topology remain unselected; no cart or checkout UI is authorized in this phase.
+
+Rollback before real content is non-destructive: stop the isolated Medusa service, remove its public-read integration from the site, and leave existing DIY/design/order data untouched. Later real-content rollback must additionally preserve approved media/license records and provide export/withdrawal evidence. The detailed execution order and acceptance gates live in [the Medusa Phase 1 plan](superpowers/plans/2026-10-11-medusa-showroom-phase1.md).
+
 No new registry runtime dependency was added in Phase 0–1. `@mystcrag/bracelet-engine` is a local workspace package using existing TypeScript/tsx tooling.
 
 The circle interaction remains on Pointer Events because dnd-kit would still require a custom physical-slot solver and circular collision layer. Zustand/zundo, TanStack Query, Motion, Radix, and Vaul remain reviewed candidates and will be installed only if their vertical slice replaces meaningful infrastructure.
