@@ -8,12 +8,20 @@
  *
  * The separation check compares the parsed PostgreSQL connection target
  * (host, port, database), not the raw string, so scheme aliases
- * (postgres/postgresql), query parameters, credentials and loopback aliases
- * cannot describe the Mystcrag user database while looking different.
+ * (postgres/postgresql), credentials and loopback aliases cannot describe the
+ * Mystcrag user database while looking different.
+ *
+ * Query parameters that the PostgreSQL driver applies on top of the URL's own
+ * target (host, port, dbname, database) are refused outright on both URLs:
+ * pg-connection-string copies them onto the client config and only then falls
+ * back to the URL hostname/port, so comparing the URL would compare something
+ * other than the real connection target.
  *
  * A local .env file that declares COMMERCE_DATABASE_URL is refused outright:
  * the Medusa CLI preloads .env before medusa-config runs, so a value loaded
  * that way cannot be attributed to its source and must fail closed instead.
+ * Detection follows dotenv's actual grammar (KEY=value and KEY: value, each
+ * with an optional "export " prefix), not one chosen spelling.
  */
 
 import { readFileSync } from "node:fs";
@@ -35,7 +43,13 @@ const KNOWN_ENVIRONMENTS = ["staging", "production", "test"] as const;
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
-const LOCAL_ENV_DECLARATION = /^\s*(?:export\s+)?COMMERCE_DATABASE_URL\s*=/m;
+// Query parameter names that pg-connection-string applies over the URL's own
+// host/port/database instead of treating them as extras.
+const TARGET_OVERRIDE_QUERY_PARAMS = new Set(["host", "port", "dbname", "database"]);
+
+// dotenv's LINE regex accepts both "KEY=value" and "KEY: value", each with an
+// optional "export " prefix; match the declaration the loader would honour.
+const LOCAL_ENV_DECLARATION = /^\s*(?:export\s+)?COMMERCE_DATABASE_URL\s*[:=]/m;
 
 function parsePostgresTarget(label: string, raw: string): PostgresTarget {
   let url: URL;
@@ -46,6 +60,15 @@ function parsePostgresTarget(label: string, raw: string): PostgresTarget {
   }
   if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
     throw new Error(`${label} must be a PostgreSQL URL; received protocol "${url.protocol}".`);
+  }
+
+  for (const name of url.searchParams.keys()) {
+    if (TARGET_OVERRIDE_QUERY_PARAMS.has(name.toLowerCase())) {
+      throw new Error(
+        `${label} must not set the "${name}" query parameter: the PostgreSQL driver applies it on top of the URL's own ` +
+          "host, port and database, so the isolation comparison would not see the real connection target."
+      );
+    }
   }
 
   let hostname = url.hostname.trim().toLowerCase();

@@ -9,8 +9,9 @@
 ## 隔离契约
 
 - 数据库只读 `COMMERCE_DATABASE_URL`；缺失、空白或与 `DATABASE_URL` 相同时**失败关闭**（`src/isolation/env.ts`），绝不回退到玄矶用户库。
-- 隔离比较按数据库**实际目标**（解析后的 host/port/database）进行：`postgres`/`postgresql` 别名、查询参数、凭据差异、`localhost`/`127.0.0.1`/`::1` 回环别名、缺省端口、尾斜杠都不能绕过与 `DATABASE_URL` 的隔离检查；非 PostgreSQL 协议或非法 URL 一律失败关闭。数据库用户/角色也与用户库相互独立。
-- 本地 `.env` 若声明 `COMMERCE_DATABASE_URL` 会被 `medusa-config.ts` 直接拒绝：Medusa CLI 会先加载 `.env`，值来源不可辨别；该变量必须经进程环境变量（如 shell `export`）提供。
+- 隔离比较按数据库**实际目标**（解析后的 host/port/database）进行：`postgres`/`postgresql` 别名、凭据差异、`localhost`/`127.0.0.1`/`::1` 回环别名、缺省端口、尾斜杠都不能绕过与 `DATABASE_URL` 的隔离检查；非 PostgreSQL 协议或非法 URL 一律失败关闭。数据库用户/角色也与用户库相互独立。
+- 会用查询参数**覆盖连接目标**的 URL（`host`/`port`/`dbname`/`database`，pg-connection-string 会在 URL 自身目标之上应用它们）在两条 URL 上都被直接拒绝；`sslmode`、`schema` 等不改变目标的参数不受影响。
+- 本地 `.env` 若声明 `COMMERCE_DATABASE_URL` 会被 `medusa-config.ts` 直接拒绝：Medusa CLI 会先加载 `.env`，值来源不可辨别；该变量必须经进程环境变量（如 shell `export`）提供。识别按 dotenv 实际语法（`KEY=value` 与 `KEY: value`，可带 `export` 前缀）而非某一种写法。
 - 开发启动入口 `medusa:dev` 固定 `--host 127.0.0.1`，默认只监听本机回环；隔离探针通过**同一入口**启动，并实测非回环接口无法访问 Store/Admin（不能仅靠 CORS）。
 - CORS 默认只含 loopback 来源；本阶段不向玄矶公众域名暴露 Medusa 原生 Store/Admin 路径（无任何前端/后端代理路由，`tests/isolation.test.ts` 持续断言）。
 - 翻译模块已按 PoC 实测写法开启（`modules: ['@medusajs/medusa/translation']` + `featureFlags.translation`），公开读取闸门属 Task 3。
@@ -30,7 +31,7 @@ pnpm --filter @mystcrag/commerce medusa:dev       # develop，默认 :9000，只
 pnpm --filter @mystcrag/commerce probe:isolation  # 冷启动/重启隔离探针（需本机 PostgreSQL 工具链）
 ```
 
-`probe:isolation` 在系统临时目录创建抛弃式 PostgreSQL 集群：一个集群超级用户 + 每个数据库一个独立登录角色（commerce 库与 canary 用户库互无 CONNECT 权限、归属各自角色），外加一个 decoy 数据库用于本地 `.env` 回归。用虚构数据验证：缺失/共享（含别名、查询参数、凭据差异、尾斜杠变体）/非法 URL 与本地 `.env` 声明的失败关闭（decoy 库零表）、经 `pnpm run medusa:dev` 冷启动且监听套接字只有 127.0.0.1（非回环接口对同一组 Store/Admin 路径实测 TCP 拒绝）、隔离库迁移归属 commerce 角色、重启持久化、商品/规格/系列与 CN/CNY、TW/TWD 人工 region 价格，并断言 canary 用户库零表/零会话。日志写入 `output/playwright/task-commerce-medusa-base-001/`（被 gitignore）。
+`probe:isolation` 在系统临时目录创建抛弃式 PostgreSQL 集群：一个集群超级用户 + 每个数据库一个独立登录角色（commerce 库与 canary 用户库互无 CONNECT 权限、归属各自角色），外加一个 decoy 数据库用于本地 `.env` 回归。用虚构数据验证：缺失/共享（含别名、凭据差异、尾斜杠变体）/非法 URL 与本地 `.env` 声明（`=` 与 `:` 两种加载语法）的失败关闭（decoy 库零表）、覆盖连接目标的查询参数被拒（先用 Medusa 实际解析到的 pg 解析器证明该 URL 真会连到 canary，再断言守卫拒绝且 canary 零会话）、经 `pnpm run medusa:dev` 冷启动且监听套接字只有 127.0.0.1（非回环接口对同一组 Store/Admin 路径实测 TCP 拒绝）、隔离库迁移归属 commerce 角色、重启持久化、商品/规格/系列与 CN/CNY、TW/TWD 人工 region 价格，并断言 canary 用户库零表/零会话。日志写入 `output/playwright/task-commerce-medusa-base-001/`（被 gitignore）。
 
 ## 回滚
 

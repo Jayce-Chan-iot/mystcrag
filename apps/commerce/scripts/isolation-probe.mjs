@@ -12,11 +12,15 @@
  * connect, so the two sides cannot reach each other's database.
  *
  * It then proves, with fictional data only:
- *   1. missing, shared, alias-spelled and invalid COMMERCE_DATABASE_URL values
- *      fail closed before any connect
+ *   1. missing, shared, alias-spelled, target-overriding and invalid
+ *      COMMERCE_DATABASE_URL values fail closed before any connect; for the
+ *      target-override case the installed driver chain itself is asked what it
+ *      would connect to, so the refusal is proven against the real target
  *   2. a stray local .env that declares COMMERCE_DATABASE_URL is refused and
  *      therefore never becomes the migration target, even though the Medusa CLI
- *      preloads .env before the config guard runs
+ *      preloads .env before the config guard runs; checked for both spellings
+ *      the loader accepts (KEY=value and KEY: value), using the loader's own
+ *      parse as the grammar evidence
  *   3. official migrations run against the isolated database only and are owned
  *      by the dedicated commerce role
  *   4. cold start through the package's own dev script (pnpm run medusa:dev,
@@ -46,6 +50,34 @@ const evidenceDir =
   process.env.COMMERCE_PROBE_EVIDENCE_DIR ?? path.join(repoRoot, "output", "playwright", "task-commerce-medusa-base-001");
 const evidenceFile = path.join(evidenceDir, "probe-isolation.log");
 const localEnvPath = path.join(packageRoot, ".env");
+
+/**
+ * The guards are only as good as the loaders they shadow, so two steps below
+ * interrogate the installed Medusa dependency chain instead of trusting a
+ * reading of its documentation:
+ *   - DOTENV_GRAMMAR_SCRIPT asks the dotenv build the Medusa CLI resolves to
+ *     what it parses out of one exact .env declaration line
+ *   - DRIVER_TARGET_SCRIPT asks the pg / pg-connection-string build Medusa's
+ *     MikroORM driver resolves to what host/port/database it would connect to
+ */
+const DOTENV_GRAMMAR_SCRIPT = [
+  'const { createRequire } = require("node:module");',
+  'const cli = createRequire(process.cwd() + "/index.js").resolve("@medusajs/cli");',
+  'const dotenv = createRequire(cli)("dotenv");',
+  'process.stdout.write(dotenv.parse(process.argv[1]).COMMERCE_DATABASE_URL ?? "NOT-PARSED");'
+].join(" ");
+
+const DRIVER_TARGET_SCRIPT = [
+  'const { createRequire } = require("node:module");',
+  'const from = (base, name) => createRequire(base).resolve(name);',
+  'const framework = from(process.cwd() + "/index.js", "@medusajs/framework/utils");',
+  'const orm = from(framework, "@mikro-orm/postgresql");',
+  'const pg = from(orm, "pg");',
+  'const pcs = from(pg, "pg-connection-string");',
+  'const parse = createRequire(pcs)("pg-connection-string").parse;',
+  'const connection = parse(process.argv[1]);',
+  'process.stdout.write([connection.host, connection.port, connection.database].join("|"));'
+].join(" ");
 
 mkdirSync(evidenceDir, { recursive: true });
 
@@ -380,6 +412,70 @@ async function main() {
     );
     canarySessions("canary user database sessions after the local .env guard");
 
+    // Regression: the loader also honours the "KEY: value" separator, so the
+    // guard must match that grammar. The loader's own build is asked to parse
+    // the exact declaration line first, then the same migration is attempted
+    // and the decoy database must stay empty.
+    const colonDeclaration = `COMMERCE_DATABASE_URL: ${decoyDatabaseUrl}`;
+    const dotenvEvidence = run(
+      pnpm.command,
+      [...pnpm.prefix, "exec", "node", "-e", DOTENV_GRAMMAR_SCRIPT, colonDeclaration],
+      { cwd: packageRoot }
+    );
+    assertEqual(
+      dotenvEvidence.stdout.trim(),
+      decoyDatabaseUrl,
+      "Medusa's own dotenv build parses the colon-spelled declaration (the guard must match that grammar)"
+    );
+    writeFileSync(
+      localEnvPath,
+      ["# synthetic probe fixture: colon separator spelling must be refused as well", colonDeclaration, ""].join("\n")
+    );
+    try {
+      const colonRun = runMedusaScript("medusa:migrate", missingUrlEnv, "fail-closed local .env colon syntax");
+      assertTrue(colonRun.status !== 0, "a colon-spelled local .env declaration aborts migration with a non-zero exit");
+      assertTrue(
+        `${colonRun.stdout}${colonRun.stderr}`.includes("must be provided through the process environment"),
+        "the colon-spelled local .env declaration reports the source-attribution guard message"
+      );
+    } finally {
+      rmSync(localEnvPath, { force: true });
+    }
+    assertEqual(
+      psql(decoyDatabase, "select count(*) from pg_tables where schemaname not in ('pg_catalog', 'information_schema')", "decoy tables after the colon declaration"),
+      "0",
+      "the decoy .env database received zero tables with the colon spelling (the guard refused the file)"
+    );
+    canarySessions("canary user database sessions after the colon-syntax local .env guard");
+
+    // Regression: pg-connection-string applies "?host=&port=" over the URL's
+    // own target, so a URL can aim the migration at the canary user database
+    // while looking like a different target. The installed driver chain is
+    // asked what it would really connect to, then the guard must refuse the
+    // same URL and the canary must stay untouched.
+    const overrideUrl = `postgres://${commerceRole}@isolated.invalid:1/${canaryDatabase}?host=127.0.0.1&port=${pgPort}`;
+    const driverTarget = run(
+      pnpm.command,
+      [...pnpm.prefix, "exec", "node", "-e", DRIVER_TARGET_SCRIPT, overrideUrl],
+      { cwd: packageRoot }
+    );
+    assertEqual(
+      driverTarget.stdout.trim(),
+      `127.0.0.1|${pgPort}|${canaryDatabase}`,
+      "the installed driver chain resolves the override URL to the canary user database (the bypass the guard must refuse)"
+    );
+    const overrideRun = runMedusaScript(
+      "medusa:migrate",
+      { ...childEnv, COMMERCE_DATABASE_URL: overrideUrl },
+      "fail-closed target-override query parameter"
+    );
+    assertTrue(overrideRun.status !== 0, "a query parameter that overrides the connection target aborts migration with a non-zero exit");
+    assertTrue(
+      `${overrideRun.stdout}${overrideRun.stderr}`.includes('must not set the "host" query parameter'),
+      "the target-override URL reports the connection-target override guard message"
+    );
+    canarySessions("canary user database sessions after the target-override guard");
+
     const sharedVariants = [
       { label: "postgresql alias with a query parameter", url: `${canaryDatabaseUrl.replace(/^postgres:/, "postgresql:")}?sslmode=disable` },
       { label: "different credentials for the same target", url: `postgres://someone_else:quoted@127.0.0.1:${pgPort}/${canaryDatabase}` },
@@ -656,7 +752,8 @@ async function main() {
     );
 
     log(
-      "ISOLATION PROBE PASSED: fail-closed guards (missing/shared/aliased/invalid URL and local .env), role-separated databases, "
+      "ISOLATION PROBE PASSED: fail-closed guards (missing/shared/aliased/target-override/invalid URL, local .env in both loader spellings), "
+        + "driver and loader semantics checked against the installed builds, role-separated databases, "
         + "isolated migration under the dedicated role, cold start through pnpm run medusa:dev bound to 127.0.0.1 only with every "
         + "non-loopback interface refused, CN/CNY + TW/TWD manual region prices, restart persistence, canary user database untouched"
     );

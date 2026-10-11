@@ -159,6 +159,51 @@ test("equivalent COMMERCE_DATABASE_URL spellings cannot bypass the separation ch
   }
 });
 
+test("query parameters that override the effective connection target are refused outright", () => {
+  // pg-connection-string (the parser pg uses) copies every query parameter onto
+  // the client config first and only then falls back to the URL's own
+  // hostname/port, so "?host=...&port=..." silently replaces the target the
+  // separation check just compared. Such URLs must not pass the guard at all.
+  const overrides = [
+    "postgres://someone@isolated.invalid:55432/mystcrag?host=127.0.0.1",
+    "postgres://someone@isolated.invalid:55432/mystcrag?port=5432",
+    "postgres://someone@isolated.invalid:55432/mystcrag?host=127.0.0.1&port=5432",
+    "postgres://someone@isolated.invalid:55432/mystcrag?dbname=mystcrag",
+    "postgres://someone@isolated.invalid:55432/mystcrag?database=mystcrag"
+  ];
+  for (const value of overrides) {
+    assert.throws(
+      () => resolveCommerceDatabaseUrl({ COMMERCE_DATABASE_URL: value, DATABASE_URL: userDatabaseUrl }),
+      /COMMERCE_DATABASE_URL must not set the "(?:host|port|dbname|database)" query parameter/,
+      `a query parameter that overrides the connection target must be refused: ${value}`
+    );
+  }
+  assert.throws(
+    () =>
+      resolveCommerceDatabaseUrl({
+        COMMERCE_DATABASE_URL: isolatedDatabaseUrl,
+        DATABASE_URL: `${userDatabaseUrl}&host=isolated.invalid`
+      }),
+    /DATABASE_URL must not set the "host" query parameter/,
+    "the same override rule applies to the Mystcrag user database URL"
+  );
+});
+
+test("query parameters that do not change the connection target stay allowed", () => {
+  const allowed = [
+    "postgres://commerce:commerce@127.0.0.1:55432/mystcrag_commerce_isolation_test?sslmode=disable",
+    "postgres://commerce:commerce@127.0.0.1:55432/mystcrag_commerce_isolation_test?schema=commerce&application_name=mystcrag-commerce",
+    "postgres://commerce:commerce@127.0.0.1:55432/mystcrag_commerce_isolation_test?ssl=true&connection_limit=2"
+  ];
+  for (const value of allowed) {
+    assert.equal(
+      resolveCommerceDatabaseUrl({ COMMERCE_DATABASE_URL: value, DATABASE_URL: userDatabaseUrl }),
+      value,
+      `a non-target query parameter must not be refused: ${value}`
+    );
+  }
+});
+
 test("invalid PostgreSQL URL values fail closed before any comparison", () => {
   const invalid = [
     "not-a-url",
@@ -234,6 +279,33 @@ test("a local .env declaring COMMERCE_DATABASE_URL is refused before Medusa can 
       () => assertCommerceDatabaseUrlNotDeclaredInLocalEnv(directory, "development"),
       /must be provided through the process environment/
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the local env guard recognises both separator syntaxes dotenv actually loads", async () => {
+  // dotenv's LINE regex accepts "KEY=value" and "KEY: value" (and the export
+  // prefix for both), so the guard must refuse either spelling; a colon-only
+  // detection would let Medusa's own preload decide the migration target.
+  const directory = await mkdtemp(path.join(os.tmpdir(), "commerce-env-guard-"));
+  try {
+    for (const declaration of [
+      "COMMERCE_DATABASE_URL: postgres://decoy:decoy@127.0.0.1:5432/decoy_db",
+      "export COMMERCE_DATABASE_URL: postgres://decoy:decoy@127.0.0.1:5432/decoy_db"
+    ]) {
+      await writeFile(path.join(directory, ".env"), ["# synthetic regression fixture", declaration, ""].join("\n"));
+      assert.equal(
+        findLocalEnvFileDeclaringCommerceDatabaseUrl(directory, "development"),
+        ".env",
+        `colon spelling must be detected: ${declaration}`
+      );
+      assert.throws(
+        () => assertCommerceDatabaseUrlNotDeclaredInLocalEnv(directory, "development"),
+        /must be provided through the process environment/,
+        `colon spelling must be refused: ${declaration}`
+      );
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
