@@ -1,0 +1,334 @@
+/* showroom.css — 玄矶精选展示组件的版式层 (TASK-COMMERCE-FE-VISUAL-001, Phase 1 Task 4)
+ *
+ * Scope: the presentation components in src/features/showroom/components only.
+ * Nothing here is a global token: every value is composed from the single-source
+ * `--star-*` vocabulary in app/styles/star-tokens.css, and the card / status /
+ * button *skins* stay the shared `@mystcrag/ui` primitive rules in
+ * app/styles/star-components.css. This file adds the reading geometry the curated
+ * showroom needs (display slots, ratio-locked image frames, three-locale copy) and
+ * deliberately defines no third card surface and no new radius or shadow step.
+ *
+ * Typography direction is taken from the approved benchmark
+ * docs/superpowers/benchmarks/2026-10-10-curated-showroom.md §5 (two grounds only,
+ * metal as detail, images locked to a ratio container, key labels >= 13px).
+ */
+
+/* ------------------------------------------------------------------ work card */
+
+[data-showroom-card] {
+  /* Local composition of existing star tokens for AA text on the paper ground.
+   * --muted is reserved for pure --star-paper panels (benchmark §5.2), so the
+   * secondary lines use a deeper 78% ink mix measured at ~8:1. */
+  --showroom-secondary: color-mix(in srgb, var(--star-ink) 78%, var(--star-paper));
+
+  position: relative;
+  display: grid;
+  padding: 0;
+  overflow: hidden;
+}
+
+.showroom-card__link {
+  display: grid;
+  /* A single shrinkable column: without minmax(0,1fr) an aspect-ratio child
+   * resolves its automatic minimum size against the text column and pushes the
+   * card ~18px past its track with maximum-length approved copy (measured 1440). */
+  grid-template-columns: minmax(0, 1fr);
+  min-height: var(--star-target-min);
+  color: inherit;
+  transition: color var(--star-motion-fast) var(--star-motion-ease);
+}
+
+/* The card is one semantic link, so the focus ring must frame the whole card and
+ * stay inside the clipped surface instead of being cut off by the rounded corner. */
+.showroom-card__link:focus-visible {
+  outline-offset: -3px;
+}
+
+.showroom-card__link:hover .showroom-card__name {
+  color: var(--star-brass-ink);
+}
+
+.showroom-card__frame {
+  position: relative;
+  width: 100%;
+  /* One locked 4:5 container at every width: no top/bottom paper band like the
+   * current hero (benchmark §2.2), and never the 73px thumb of the ore library. */
+  aspect-ratio: 4 / 5;
+}
+
+.showroom-card__frame img {
+  object-fit: cover;
+  object-position: center;
+}
+
+/* Absent approved photography: a labelled outline region, never a filled block
+ * that could pass as product imagery. */
+.showroom-card__visual-note {
+  position: absolute;
+  inset: var(--star-space-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: var(--star-space-3);
+  border: 1px solid var(--star-line);
+  border-radius: var(--star-radius-sm);
+  color: var(--showroom-secondary);
+  font-size: 0.8125rem;
+  letter-spacing: 0.04em;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.showroom-card__body {
+  display: grid;
+  align-content: start;
+  gap: var(--star-space-2);
+  padding: var(--star-space-4);
+}
+
+.showroom-card__body p {
+  margin: 0;
+}
+
+.showroom-card__name,
+.showroom-card__body p,
+.showroom-card__visual-note {
+  overflow-wrap: break-word;
+}
+
+.showroom-card__name {
+  color: var(--star-ink);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.4;
+  text-wrap: balance;
+}
+
+.showroom-card__credit,
+.showroom-card__material {
+  color: var(--showroom-secondary);
+  font-size: 0.8125rem;
+  letter-spacing: 0.01em;
+  line-height: 1.6;
+}
+
+.showroom-card__price {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--star-space-2);
+  margin-top: var(--star-space-1);
+}
+
+/* A price must never break mid-value, and the market note stays on one line so the
+ * 320px card cannot wrap it into an unreadable fragment (benchmark §4.2). */
+[data-showroom-card-price] {
+  color: var(--star-ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.showroom-card__market {
+  color: var(--star-brass-ink);
+  font-size: 0.8125rem;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.showroom-card__availability {
+  margin-top: var(--star-space-1);
+  padding-top: var(--star-space-2);
+  border-top: 1px solid var(--star-line);
+  color: var(--showroom-secondary);
+  font-size: 0.8125rem;
+  letter-spacing: 0.01em;
+  line-height: 1.6;
+}
+
+/* 320px keeps the image dominant: benchmark §5.3 asks for >= 68% image height at
+ * <= 390px, and §4.2 keeps all six display lines. The frame ratio stays the
+ * sanctioned 4:5, so the rhythm tightens instead of dropping information. */
+@media (max-width: 360px) {
+  .showroom-card__body {
+    gap: var(--star-space-1);
+    padding: var(--star-space-3);
+  }
+
+  .showroom-card__price {
+    margin-top: 0;
+  }
+
+  .showroom-card__availability {
+    margin-top: 0;
+    padding-top: var(--star-space-1);
+  }
+}
+
+/* ------------------------------------------------------------- card sequence */
+
+[data-showroom-card-region] {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--star-space-4);
+}
+
+@media (min-width: 640px) {
+  [data-showroom-card-region] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--star-space-5);
+  }
+}
+
+@media (min-width: 1280px) {
+  [data-showroom-card-region] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* ------------------------------------------------------ editorial content区 */
+
+[data-showroom-editorial-section] {
+  display: grid;
+  gap: var(--star-space-5);
+  padding: var(--star-space-6) var(--star-space-4);
+}
+
+@media (min-width: 640px) {
+  [data-showroom-editorial-section] {
+    gap: var(--star-space-6);
+    padding: var(--star-space-7) var(--star-space-6);
+  }
+}
+
+.showroom-editorial__eyebrow {
+  margin: 0;
+  color: var(--star-brass);
+  font-size: 0.8125rem;
+  letter-spacing: 0.18em;
+  line-height: 1.6;
+}
+
+.showroom-editorial__title {
+  margin: 0;
+  max-width: 28ch;
+  color: var(--star-paper);
+  font-family: var(--star-font-display, "Songti SC", "Noto Serif SC", serif);
+  font-size: clamp(1.375rem, 1.05rem + 1.3vw, 2.25rem);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.28;
+  overflow-wrap: break-word;
+  text-wrap: balance;
+}
+
+.showroom-editorial__lede {
+  margin: 0;
+  max-width: 44rem;
+  color: var(--star-moon);
+  font-size: 0.9375rem;
+  line-height: 1.85;
+  overflow-wrap: break-word;
+}
+
+.showroom-editorial__blocks {
+  display: grid;
+  gap: var(--star-space-5);
+}
+
+@media (min-width: 640px) {
+  .showroom-editorial__blocks {
+    gap: var(--star-space-6);
+  }
+}
+
+/* Work imagery and person/craft evidence lead a row; prose follows as a measured
+ * text column. The two kinds are deliberately different shapes so the region never
+ * reads as a stack of same-size cards (spec §3.1, benchmark §4.4). */
+.showroom-editorial__figure {
+  display: grid;
+  gap: var(--star-space-2);
+  margin: 0;
+  max-width: 46rem;
+}
+
+.showroom-editorial__figure-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+}
+
+@media (min-width: 640px) {
+  .showroom-editorial__figure-frame {
+    aspect-ratio: 1 / 1;
+  }
+}
+
+/* Editorial rhythm: at desktop widths the imagery sits on the opposite side from
+ * the measured prose column, so the region reads as alternating passages rather
+ * than one ragged edge (benchmark §4.4, Pippa Small 分段交替). */
+@media (min-width: 1024px) {
+  .showroom-editorial__figure {
+    margin-inline-start: auto;
+  }
+}
+
+.showroom-editorial__figure-frame img {
+  object-fit: cover;
+  object-position: center;
+}
+
+.showroom-editorial__caption {
+  color: var(--star-moon);
+  font-size: 0.8125rem;
+  letter-spacing: 0.02em;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+
+.showroom-editorial__prose {
+  display: grid;
+  gap: var(--star-space-2);
+  max-width: 42rem;
+}
+
+.showroom-editorial__prose-heading {
+  margin: 0;
+  color: var(--star-paper);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+
+.showroom-editorial__prose-body {
+  margin: 0;
+  color: var(--star-paper);
+  font-size: 0.9375rem;
+  line-height: 1.9;
+  overflow-wrap: break-word;
+}
+
+.showroom-editorial__action {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+/* Metal stays a detail: on the ink ground the shared secondary instrument button
+ * would carry --star-brass-ink (measured ~2.9:1 on dark), which benchmark §5.2
+ * reserves for light grounds. The label switches to the dark-ground metal token. */
+[data-showroom-editorial-section] [data-star-instrument-button="secondary"] {
+  color: var(--star-brass);
+}
+
+/* ------------------------------------------------------------------ motion */
+
+@media (prefers-reduced-motion: reduce) {
+  .showroom-card__link {
+    transition: none;
+  }
+}
