@@ -6,9 +6,13 @@ overrides:
   jose: 6.2.10
 
 allowBuilds:
+  "@medusajs/telemetry": false
   "@prisma/engines": true
+  "@swc/core": false
   esbuild: true
+  msgpackr-extract: false
   prisma: true
+  protobufjs: false
   sharp: true
   unrs-resolver: true
 minimumReleaseAgeExclude:
