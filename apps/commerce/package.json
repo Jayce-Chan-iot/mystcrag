@@ -8,7 +8,7 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"tests/**/*.test.ts\"",
-    "medusa:dev": "medusa develop --no-lint",
+    "medusa:dev": "medusa develop --no-lint --host 127.0.0.1",
     "medusa:migrate": "medusa db:migrate",
     "probe:isolation": "node scripts/isolation-probe.mjs"
   },

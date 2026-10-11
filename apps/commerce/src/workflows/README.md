@@ -41,7 +41,7 @@ const helloWorldWorkflow = createWorkflow(
   (input: WorkflowInput) => {
     const greeting1 = step1()
     const greeting2 = step2(input)
-    
+
     return new WorkflowResponse({
       message1: greeting1,
       message2: greeting2

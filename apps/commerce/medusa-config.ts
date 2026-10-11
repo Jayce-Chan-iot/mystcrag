@@ -1,12 +1,20 @@
 import { defineConfig, loadEnv } from '@medusajs/framework/utils'
 
 import {
+  assertCommerceDatabaseUrlNotDeclaredInLocalEnv,
   resolveCommerceCorsUrl,
   resolveCommerceDatabaseUrl,
   resolveCommerceSecret,
 } from './src/isolation/env'
 
-loadEnv(process.env.NODE_ENV || 'development', process.cwd())
+const environment = process.env.NODE_ENV || 'development'
+
+loadEnv(environment, process.cwd())
+
+// The Medusa CLI preloads .env before this config is evaluated, so a local
+// declaration of COMMERCE_DATABASE_URL could otherwise decide the migration
+// target without being attributable; refuse it instead of trusting it.
+assertCommerceDatabaseUrlNotDeclaredInLocalEnv(process.cwd(), environment)
 
 // The database comes from COMMERCE_DATABASE_URL only (see src/isolation/env.ts).
 // DATABASE_URL belongs to the Mystcrag user database and is never a fallback.
