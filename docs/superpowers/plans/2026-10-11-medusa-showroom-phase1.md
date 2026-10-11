@@ -1,6 +1,6 @@
 # 玄矶 Medusa 精选展示网站 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` or `superpowers:subagent-driven-development` task-by-task. Steps use `- [ ]` checkboxes. This document is a Product Owner review candidate; a worker may edit only after its own row is registered and `IN_PROGRESS` in `docs/tasks/TASK_REGISTRY.md`.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` or `superpowers:subagent-driven-development` task-by-task. Steps use `- [ ]` checkboxes. Product Owner approved this Phase 1 plan on 2026-10-11; a worker may edit only after its own row is registered and `IN_PROGRESS` in `docs/tasks/TASK_REGISTRY.md`.
 
 **Goal:** 复用 Medusa 的成品商业内核，建设中国大陆与台湾地区的玄矶精选展示、设计师与系列页面，并保留全部现有 AI、DIY、塔罗、Oracle 与知识库体验；本阶段不启用购买。
 
