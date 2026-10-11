@@ -39,7 +39,8 @@
 
 - 视口：桌面 `1440×900` dpr 1；手机 `390×844` dpr 2；窄屏 `320×568` dpr 2。手机与窄屏**不使用** `isMobile`／UA 移动伪装，避免布局视口跟随真实窗口宽度。每次采集都回读自检值：`innerWidth === clientWidth === documentElement.scrollWidth === visualViewport.width === 目标宽度`，全部通过（例：320 采集 5 个路由均为 `iw=320 cw=320 scrollW=320 vvW=320 dpr=2`）。
 - 采集前：`load` → `networkidle` → `document.fonts.ready` → 稳定等待 2.2–3 s → **逐屏滚动一遍再回到顶部**（触发懒加载图），再测。
-- 图片占整页 = 可见 `<img>` 渲染面积和 ÷（视口宽 × 文档高）；图片占首屏 = 落在首屏内的部分 ÷ 首屏面积；文字密度 = `body.innerText` 去空白字符数 ÷ 文档面积 × 1000。
+- **图片元素面积求和指标（不是像素覆盖率）。** 两项都只把**可见 `<img>` 元素的几何盒子面积相加**再除以基准面积：`／整页` ÷（视口宽 × 文档高）；`／首屏` ÷（视口宽 × 首屏高），其中每个元素先按首屏上下边界裁剪。**它不是实际像素覆盖率**，因为：① 相互重叠、堆叠或被上层不透明元素遮挡的图片会被重复计入；② 溢出视口外的部分仍按裁剪后的可见高度计入；③ `object-fit: contain` 的留白仍算在元素盒内，而 `cover` 的裁切不计；④ 背景图、`<video>`、CSS 渐变与 canvas 完全不计入。因此该指标**可以超过 100%**（本表里 SBB 首页 390 为 104%、Qi Yi 390 为 107.2%），超过 100% 只说明"存在多张互相重叠或超出首屏的图片元素"，**不能据此推断首屏被图片铺满**，也不能与另一页做"谁更满"的定量比较。本稿只用它做同页内的相对趋势与"是否存在图片盒"的定性判断；所有涉及真实像素覆盖率的结论一律标注为未测量。
+- 文字密度 = `body.innerText` 去空白字符数 ÷ 文档面积 × 1000。
 - 触控：对 `a, button, input, select, summary, [role=button|link|tab], label` 取 `getBoundingClientRect`，`w<44 || h<44` 记为未达；1×1 的 `sr-only` 标签与隐藏字段单独说明，不混入结论。
 - 对比度：`getComputedStyle` 的前景色与沿祖先链合成的背景色，**统一经 canvas 归一化**（Tailwind v4 产物是 `oklch()`／`color(srgb …)`，按 0–255 直接解析会得到全错数字——本稿第一版就因此废弃重测）；WCAG 相对亮度比，正文要求 4.5、大字（≥24 px 或 ≥18.66 px 且 ≥700）要求 3。文字落在背景图／渐变上时记为"无法判定"而不是猜一个底色。
 - 每页同时存"首屏"与"整页"截图；整页截图里 `position:fixed` 元素可能被重绘在文档中段，不能据此判断吸底行为。
@@ -47,7 +48,7 @@
 ### 1.3 已知证据限制
 
 - Sophie Bille Brahe 首次采集返回纯白画面：该站先用"Select your country"模态门控并压暗底层，脚本 UA 下不绘制。改用桌面 Chrome UA 后取到构图（`desktop-1440x900__sbb-home__fold.png`），但其度量取自弹层之下的真实 DOM。
-- Completedworks 系列列表在两个视口都只测到 2 张图、文档高 1472／1822 px，滚动后仍未展开商品网格（同样受国家门控／懒加载影响）。**因此不对该页图片占比下结论**，只用其商品详情页与首页导航作证据。
+- Completedworks 系列列表在两个视口都只测到 2 个 `<img>`、文档高 1472／1822 px，滚动后仍未展开商品网格（同样受国家门控／懒加载影响）。**因此不对该页的图片元素面积和指标下结论**，只用其商品详情页与首页导航作证据。
 - Qi Yi Crystal、Radix、shadcn 等页面大量文字落在渐变或图片上，"无法判定"计数高达 109–110 与 22–24，其 AA 未达数只反映可判定子集。
 - 未登录态、真实 Authing 身份、真实支付与物流、真实无野素材均**不在**本环境内，本稿不对其作任何视觉或流程断言。
 - 竞品页面只作排版观察，未重放其购物流程；凡未亲自操作的流程，本文一律不写"实测更优"。
@@ -81,7 +82,7 @@
 | 指标 | 1440×900 | 390×844 | 320×568 |
 | --- | --- | --- | --- |
 | 文档高 | 1230 | 1955 | 1975 |
-| 图片占整页／首屏 | 45.2%／55.2% | 52.5%／52% | 48.4%／26.6% |
+| 图片元素面积和：整页／首屏 | 45.2%／55.2% | 52.5%／52% | 48.4%／26.6% |
 | 文字密度（字/1000 px²） | 0.2 | 0.4 | 0.4 |
 | 全页字符数 | 398 | 269 | 269 |
 | `<44 px` 控件 | 0／11 | 0／11 | 0／11 |
@@ -105,7 +106,7 @@
 | 指标 | 1440×900 | 390×844 | 320×568 |
 | --- | --- | --- | --- |
 | 文档高 | 1562 | 2302 | 2230 |
-| 图片占整页／首屏 | 2.3%／4% | 7.7%／6.1% | 5.2%／0% |
+| 图片元素面积和：整页／首屏 | 2.3%／4% | 7.7%／6.1% | 5.2%／0% |
 | 珠图渲染尺寸 | 86×86 | 100×100 | 73×73 |
 | 控件／`<44 px` | 74／5 | 47／2 | 47／2 |
 | AA 未达／抽样 | 10／109 | 8／78 | 8／78 |
@@ -138,7 +139,7 @@ mock 夹具下的实测几何（`metrics-diy-workbench-mockdesign.json`、`metri
 | 页面模式 | 现状 | 差距 |
 | --- | --- | --- |
 | 品牌叙事／Persuade | 首页有真实星台氛围面与 4 条创作路径，文字极少（398 字） | 无"精选作品／设计师"第二路径；首屏无主动作、下一区不可发现；主图上下空带；h1 孤字；手机页眉过高 |
-| 商品判断／Read + Decide | 只有材料目录（矿石库） | 无成品列表／详情／系列／设计师；卡片图占比过低（2.3%–7.7%）；选中态与价格对比度不足；320 下商品图过小 |
+| 商品判断／Read + Decide | 只有材料目录（矿石库） | 无成品列表／详情／系列／设计师；图片元素面积和／整页仅 2.3%–7.7%，商品图盒太小而卡片底色留白太大；选中态与价格对比度不足；320 下商品图过小 |
 | 任务操作／Operate | DIY／AI／Oracle／Tarot 完整，44 px 下限由 CSS 兜住 | 与商业展示的衔接点未定义；表单 label／复选框命中高度不足（oracle 2、tarot 6） |
 
 ## 3. 参考对象逐项对标
@@ -147,7 +148,7 @@ mock 夹具下的实测几何（`metrics-diy-workbench-mockdesign.json`、`metri
 
 ### 3.0 汇总度量（同一脚本、同一口径）
 
-| 页面 | 视口 | 文档高 | 图片占整页 | 图片占首屏 | 字/1000 px² | 图 | 区块 | `<44 px` | AA 未达／抽样 | 无法判定 |
+| 页面 | 视口 | 文档高 | 图片元素面积和／整页 | 图片元素面积和／首屏（可 >100%） | 字/1000 px² | 图 | 区块 | `<44 px` | AA 未达／抽样 | 无法判定 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | **玄矶 首页（现状）** | 1440×900 | 1230 | 45.2% | 55.2% | 0.2 | 5 | 6 | 0/11 | 1/34 | 15 |
 | **玄矶 首页（现状）** | 390×844 | 1955 | 52.5% | 52% | 0.4 | 5 | 6 | 0/11 | 1/28 | 15 |
@@ -178,15 +179,15 @@ mock 夹具下的实测几何（`metrics-diy-workbench-mockdesign.json`、`metri
 
 **Sophie Bille Brahe — <https://sophiebillebrahe.com/>、`/collections`**
 
-- 观察：一级导航只有 `Shop / High Jewellery / Universe / Boutiques` 四项 + 右侧 4 个图标；字标居中宽字距；首屏是两联大幅作品图（珍珠项链与戒指）而非文案；进入前先弹"Select your country — Country: Italy (EUR)"要求 `CONFIRM COUNTRY`，全站价格随该市场决定。系列列表 30 张图、图片占整页 63.1%、AA 抽样 142 项 0 未达。
-- **采用：市场先确认、语言后切换的顺序。** 这正是规格 §6"语言不是区域或币种开关"的成熟做法；玄矶用服务端发布的市场投影实现同一语义，不做前端隐藏。
+- 观察（界面事实）：一级导航只有 `Shop / High Jewellery / Universe / Boutiques` 四项 + 右侧 4 个图标；字标居中宽字距；首屏是两联大幅作品图（珍珠项链与戒指）而非文案；进入前先弹"Select your country — Country: Italy (EUR)"并要求 `CONFIRM COUNTRY`。系列列表 30 个 `<img>`、图片元素面积和／整页 63.1%（求和口径）、AA 抽样 142 项 0 未达。**未验证：** 该弹窗之后价格如何产生（人工区域定价、自动换算还是 GeoIP 默认）无法从截图判断，本文不作断言。
+- **采用（仅作交互形态参考）：** "市场是一个需要显式确认的独立决定，而不是界面语言的副作用"这一形态。玄矶坚持区域与语言分离的**依据是已批准规格 §6 与 §2 的语言权威**，不是对竞品内部定价机制的推测；实现上走服务端发布投影，不做前端隐藏。
 - **采用：一级导航按"买什么／品牌世界"分层，而不是把新页面追加到旧菜单尾部。**
 - **调整：** 其首页文档高 5769 px、390 下文字密度 2.4（远高于玄矶 0.4），说明它靠长滚动叙事；玄矶首页要在首屏内并列两条路径，不能照搬这种长度。
 - **拒绝：** 国家门控弹窗与"Gift with Purchase / COMPLIMENTARY SHIPPING OVER €250"促销条——玄矶首期无购买与物流，出现任何运费／赠品类承诺都是虚假闭环；居中宽字距字标与整页构图属其品牌识别，不复制。
 
 **Completedworks — 商品详情 `…/products/sequence-chalcedony-bead-and-recycled-silver-necklace`**
 
-- 观察：左信息栏顺序为 `[Recycled Silver]` 材质标签 → 名称 `Sequence` → 斜体副题 → 价格 `NT$8,404` → 一段 3 行描述 → `Add to Bag` → 交付说明 → 三个折叠组 `Details of the Piece / Sustainability & Collection Influences / Delivery & returns`；右侧是产品平铺图与佩戴图并排的多图廊；图片占整页 78.3%、27 张图。价格以 NT$ 呈现，说明其按市场给价而非按界面语言换算。
+- 观察：左信息栏顺序为 `[Recycled Silver]` 材质标签 → 名称 `Sequence` → 斜体副题 → 价格 `NT$8,404` → 一段 3 行描述 → `Add to Bag` → 交付说明 → 三个折叠组 `Details of the Piece / Sustainability & Collection Influences / Delivery & returns`；右侧是产品平铺图与佩戴图并排的多图廊；图片元素面积和／整页 78.3%（求和口径）、27 个 `<img>`。**观察到的只是界面状态：** 页面显示 `NT$8,404`；该价是人工区域定价、自动换算还是别的来源，**未验证**，本文不据此推断其内部机制。
 - **采用：这套信息顺序与"折叠组收纳次级信息"的做法**，正是规格 §3.1"先真实多角度图、名称、设计师、材料／规格与明确的展示价格／区域，再展开故事、养护与授权允许的定制入口"的可执行版本。
 - **采用：** 产品平铺图与佩戴图并列，避免只有悬浮白底图。
 - **调整：** `Add to Bag` 位置换成"可展示区域 + 咨询／暂未开放状态 + 授权允许时的进 DIY"；材质标签 `[Recycled Silver]` 换成玄矶自己的"设计师署名 · 系列名"。
@@ -194,24 +195,24 @@ mock 夹具下的实测几何（`metrics-diy-workbench-mockdesign.json`、`metri
 
 **Tom Wood — <https://www.tomwoodproject.com/en-jp>**
 
-- 观察：图片占整页 78.5%、占首屏 96.7%、文字密度 0.2（全表最低之一）、文档高 9139 px；但 AA 未达 25/99（1440）与 15/88（390）。
+- 观察：图片元素面积和／整页 78.5%、／首屏 96.7%（求和口径见 §1.2，不是像素覆盖率；两者接近只说明图片盒在纵向几乎铺满整页长度），文字密度 0.2（全表最低之一）、文档高 9139 px；但 AA 未达 25/99（1440）与 15/88（390）。
 - **采用：** "影像先建立焦点、文字退到最小必要量"的密度上限，用来校准玄矶精选系列页。
 - **拒绝：** 其小字低对比灰（实测跌破 AA）；不做"以氛围换可读性"的取舍。
 
 **Pippa Small — <https://www.pippasmall.com/>**
 
-- 观察：40 个区块（全表最多）、图片占整页 31.4%、首屏 78%；叙事段落交替使用作品图、人物／工艺证据与短文字，而不是同尺寸卡片堆叠。
+- 观察：40 个区块（全表最多）、图片元素面积和／整页 31.4%、／首屏 78%（求和口径，见 §1.2）；叙事段落交替使用作品图、人物／工艺证据与短文字，而不是同尺寸卡片堆叠。
 - **采用：** 这种"分段交替"节奏直接对应规格 §3.1"系列／设计师段落交替使用作品图、人物/工艺证据和简短文字，不堆叠同尺寸卡片"，是设计师主页的主要排版依据。
 - **调整：** 其 390 文档高 12338 px、69/127 控件 `<44 px`、19 项 AA 未达——移动端交互不可作为基准，段落数需压缩到 3–4 段。
 
 **Astrid & Miyu — <https://www.astridandmiyu.com/>**
 
-- 观察：首屏是视频（图片占首屏仅 0.2%）、文字密度 0.7、移动端 113/166 控件 `<44 px`、24 项 AA 未达、文档高 8870 px。
-- **拒绝（整组）：** 大促型 DTC 密度与常驻视频首屏，与"克制、整洁、精密的东方当代珠宝感"相反；也违反"避免常驻动画"。仅记录其"筛选条与商品计数同行"的紧凑做法（与 Saleor 一致，取 Saleor 版本）。
+- 观察：首屏是一张以**非 `<img>` 方式**绘制的大幅促销影像（背景图还是视频未验证），因此图片元素面积和／首屏只有 0.2%——该指标不计背景图与视频（§1.2），**不能反推"首屏没有视觉内容"**。截图另见：顶部免运费进度提示条、两行页眉（品牌行 + 11 项品类行）、`SAVE UP TO 55% OFF` 与 `SILVER 24 DAY IS SOLD OUT!` 圆形贴纸。文字密度 0.7、移动端 113/166 控件 `<44 px`、24 项 AA 未达、文档高 8870 px。
+- **拒绝（整组）：** 大促型 DTC 密度与以非 `<img>` 方式绘制的大幅促销首屏（含免运费进度提示条与"55% OFF"贴纸），与"克制、整洁、精密的东方当代珠宝感"相反；也违反"避免常驻动画"（该首屏是否真的动过未验证，此处只按规格对常驻氛围动效的禁令拒绝照搬）。仅记录其"筛选条与商品计数同行"的紧凑做法（与 Saleor 一致，取 Saleor 版本）。
 
 **Qi Yi Crystal — <https://qiyicrystal.com/en>**
 
-- 观察：文档高 22272 px（390 下 29274）、101 张图、30 区块、首屏图片占 98.2% 但整页仅 17.3%（后半段全是长文字与商品堆叠）、AA 未达 85/400、71/181 控件 `<44 px`。
+- 观察：文档高 22272 px（390 下 29274）、101 个 `<img>`、30 区块；图片元素面积和／首屏 98.2%（1440）与 107.2%（390）——求和口径可超过 100%，只说明首屏叠放或溢出了多个图片盒，**不等于首屏像素被铺满**；而／整页只有 17.3% 与 19.7%，说明后半段以长文字与商品堆叠为主。AA 未达 85/400、71/181 控件 `<44 px`。
 - **采用：** 规格 §4 已认可的"短测／个性化建议／自由设计三入口分流"，用于说明"看作品"与"开始创作"可以并列而不互相稀释。
 - **拒绝：** 其整页密度与长度。它是"同类竞品"但不是排版基准——这条区分是本稿最重要的负面结论，防止后续以"竞品都这样"为由把首页堆满。
 
@@ -219,12 +220,13 @@ mock 夹具下的实测几何（`metrics-diy-workbench-mockdesign.json`、`metri
 
 **Saleor Storefront（开源）— <https://storefront.saleor.io/en/default>、`/en/default/categories/apparel`**
 
-- 许可与维护：仓库 `saleor/storefront` 活跃（pushed 2026-10-09，1625 stars），LICENSE 原文是 **Functional Source License 1.1, ALv2 Future License**——不是 OSI 认可的开源许可，生产使用在转换期前受限。`saleor/saleor` 本体为 BSD-3-Clause。
-- 观察（PLP）：面包屑 `Home > Apparel` → 大号 H1 → 单行 `Color / Size / Price` 下拉 + `15 products` + `Sort` → 3 列近正方形图卡，角标 `Sale`／`Bestseller`；文字密度 0.1、图片占整页 45.1%、`<44 px` 仅 33/57。
+- 许可与维护：仓库 `saleor/storefront` 活跃（pushed 2026-10-09，1625 stars）。`LICENSE` 原文（2026-10-11 经 GitHub API 取 base64 逐段读）是 **Functional Source License 1.1, ALv2 Future License（FSL-1.1-ALv2）**，准确读法是四条：① 它**不是 OSI 认可的开源许可**；② 授权"为任何 Permitted Purpose 使用、复制、修改、创作衍生作品、公开表演、公开展示与再分发"，而 Permitted Purpose 定义为**除 Competing Use 之外的一切目的**——Competing Use 指把软件作为替代该软件本身、替代许可方以该软件提供的其他产品／服务，或提供实质相同功能的产品／服务，**在商业产品或服务中提供给他人**；条款并把"内部使用与访问"明确列为 Permitted Purpose；③ 每个版本自许可方提供之日起**满两周年**后，额外不可撤销地按 **Apache-2.0** 授权；④ 再分发须附本条款且不得移除版权声明。**因此不能笼统写成"转换期前生产使用受限或被禁止"**：玄矶以自营独立站展示商品是否构成 Competing Use，取决于具体用法与条款解释，属**待法律／许可复核**事项，本稿不下结论。`saleor/saleor` 本体为 BSD-3-Clause。
+- 观察（PLP）：面包屑 `Home > Apparel` → 大号 H1 → 单行 `Color / Size / Price` 下拉 + `15 products` + `Sort` → 3 列近正方形图卡，角标 `Sale`／`Bestseller`；文字密度 0.1、图片元素面积和／整页 45.1%（求和口径）、`<44 px` 仅 33/57。
 - **采用：** PLP 的四段结构与"筛选／计数／排序同一行"的密度；卡片以图为主、文字不超过 3 行。
 - **采用：** 其移动端子集（390 下 23/47 未达、密度 0.5）说明单列大图 + 底部筛选抽屉是可达的。
 - **调整：** 卡内层级改为"作品图 → 名称 → 设计师·系列 → 材质一行 → 区域价一行 → 可展示状态一行"，比其"图 + 名 + 价"多两行，因为署名与授权状态是玄矶的必需信息；角标 `Sale` 一律不做（无促销权威）。
-- **拒绝：** 引入其代码或组件（FSL 许可 + 玄矶已有 `packages/ui` 共享 primitive 权威）；其标题上方约 300 px 的装饰性波浪空带——正是规格禁止的"突兀空带"。
+- **拒绝（设计决定，与许可风险分开陈述）：** 不引入其代码或组件。**首要理由是权威归属，不依赖许可结论**——`CANONICAL_COMPONENTS.md` 已把共享 UI primitive 的唯一权威定在 `packages/ui`（`StarSurface`／`InstrumentButton`／`StatusPanel`，44 px 交互下限），星台样式入口顺序与 `[data-star-surface]` 作用域也已冻结，再引入一套组件系统会形成并行权威。**许可层面另记为待复核**：若将来真要复用其任何代码，须由登记任务按上面四条 FSL 条款做 Competing Use 判断与再分发义务核查，而不是默认"挂着仓库就是开源可用"。
+- **拒绝：** 其分类页 H1 上方约 300 px 的装饰性波浪空带——正是规格 §3.1 禁止的"突兀空带"。
 
 **Vercel Commerce — <https://github.com/vercel/commerce>**
 
@@ -246,7 +248,7 @@ mock 夹具下的实测几何（`metrics-diy-workbench-mockdesign.json`、`metri
 
 **Lucid Beads Freestyle — <https://www.lucidbeads.com/freestyle/>**
 
-- 观察：右侧面板标题 `DESIGN YOUR BRACELET`，空态卡片写 `Start your bracelet here / Open the bead library to begin building your bracelet bead by bead` + 明确命名的 `Add First Bead` 按钮；下方 `SIZE __"` 与 `PRICE $29.99` 两列，各带 `How sizing works`／`How pricing works` 解释链接；`Add to Cart` 以禁用态常驻；舞台左下有 `Save / Load / Clear`；页面底部三枚信任徽章（Natural Gemstones／Handmade to Order／Hypoallergenic）。图片占整页 1.5%、文字密度 0.2、`<44 px` 26/31。
+- 观察：右侧面板标题 `DESIGN YOUR BRACELET`，空态卡片写 `Start your bracelet here / Open the bead library to begin building your bracelet bead by bead` + 明确命名的 `Add First Bead` 按钮；下方 `SIZE __"` 与 `PRICE $29.99` 两列，各带 `How sizing works`／`How pricing works` 解释链接；`Add to Cart` 以禁用态常驻；舞台左下有 `Save / Load / Clear`；页面底部三枚信任徽章（Natural Gemstones／Handmade to Order／Hypoallergenic）。图片元素面积和／整页 1.5%（求和口径）、文字密度 0.2、`<44 px` 26/31。
 - **采用：** 首珠入口的**可发现性**（空态里给一个命名动作）与 `How sizing works` 这类"把规则解释放在数字旁边"的做法——对应玄矶"常见建议范围 13.0–20.0 cm，不影响完成设计"的说明位。
 - **调整：** 玄矶的空托盘已有真实托盘摄影与"托盘现在是空的。先选择第一颗珠子，之后才会创建你的设计。"，不需要其近乎不可见的椭圆线框；命名动作放在材料库首屏而不是右侧面板。
 - **拒绝：** 禁用态的 `Add to Cart`。玄矶首期没有购物车与支付，连"禁用按钮"都不出现——禁用按钮本身就是"稍后能买"的暗示，违反规格 §8；其 26 个 `<44 px` 控件与 12 项 AA 未达也不作交互基准。
@@ -384,7 +386,7 @@ Radix 概览页自身 AA 未达 217/400、`<44 px` 59/81，shadcn blocks 74/74 �
 1. **素材事实：** `apps/frontend/public/` 无任何成品摄影或品牌素材（§2.5）；仓库内也没有每张图／每个作品版本／展示区域／期限的可核验授权记录。因此本阶段**没有任何一个真实商品位可以被填上内容**。
 2. **允许出现的状态：** 「系列筹备中」「本页作品仍在准备中」「暂未开放线上购买」「该区域暂不可展示」＋ `SystemState` 的返回首页／去创作动作；商品位用**区域骨架＋文字说明**，不用假图、不用灰块冒充摄影。
 3. **禁止出现：** 商品卡占位假图、假价格、假库存／"现货"、加入购物车、立即支付、支付成功、物流时效、售后承诺、假咨询表单（若没有真实可达的咨询渠道，就只写"暂未开放"，不放按钮）。
-4. **价格与币种：** 只有人工确认过的 CNY／TWD 数字才能出现；**语言切换不得换市场、不得换算汇率、不得把 CNY 数字改标 NT$**。参考站证据：Sophie Bille Brahe 以"确认国家"决定币种、Completedworks 按市场显示 NT$——都说明市场是独立于语言的显式决定。现有 DIY 的 `人民币 ¥／新台币 NT$` 切换是**材料报价**权威（`/api/catalog/materials?currency=`），不能被成品目录复用为汇率开关。
+4. **价格与币种：** 依据是已批准规格 §6 与 §2 的语言权威——`zh-CN`／`zh-TW`／`en-US` 只是显示语言，不是收货区域或币种开关；只有人工确认过的 CNY／TWD 数字才能出现；**语言切换不得换市场、不得换算汇率、不得把 CNY 数字改标 NT$**；缺某区域授权或价格时该区不发布该 Listing（服务端约束，不靠前端隐藏）。竞品侧只作**界面观察记录、不作根据**：Sophie Bille Brahe 出现"Select your country — Italy (EUR)"确认弹窗、Completedworks 商品页显示 `NT$8,404`；单凭截图**无法证明**这些价格是人工区域定价而非自动换算（**未验证**），故玄矶的区域／语言分离规则不以竞品内部机制为依据。现有 DIY 的 `人民币 ¥／新台币 NT$` 切换是**材料报价**权威（`/api/catalog/materials?currency=`），不能被成品目录复用为汇率开关。
 5. **缺项即不公开：** 缺译、缺授权、缺图、缺价、撤回，列表与详情必须一致地不可见（服务端闸门，不靠前端隐藏）；这条与 0A 的选型闸门是同一约束，本稿只提排版侧要求：闸门失败时页面落到 §6.2 的空态，而不是渲染半张卡。
 6. **署名与来源：** 每张作品图、每段文案要能追溯到"经确认的授权 + 素材来源"记录；本稿不引入任何外部图片，竞品截图只留在忽略目录作证据，不进入仓库或运行时资源。
 
@@ -462,7 +464,7 @@ Radix 概览页自身 AA 未达 217/400、`<44 px` 59/81，shadcn blocks 74/74 �
 - 参考站：`{desktop-1440x900,mobile-390x844}__{sbb-home,sbb-collections,cw-collections,cw-pdp,tomwood-home,qiyi-home,lucid-freestyle,lucid-compose,pippa-home,astrid-shop,saleor-store-home,saleor-store-category,shadcn-blocks,radix-primitives}__{fold,full}.png`
 - 度量：`metrics-mystcrag.json`、`metrics-narrow320.json`、`metrics-mock.json`、`metrics-reference-final.json`、`metrics-sbb-ua.json`、`metrics-motion.json`、`metrics-diy-workbench*.json`
 - 脚本：`capture.mjs`、`motion-probe.mjs`、`diy-workbench-probe.mjs`、`hero-probe.mjs`、`probe-urls.mjs`、`analyze.mjs`、`table.mjs`、`check-doc-links.mjs`、`{ref,mock,narrow,sbb}-profile.json`
-- 已废弃的中间产物（保留以免误用，但**不得引用**）：`metrics-reference-noscroll.json`——该轮未做懒加载滚动（图片占比与文档高偏低），且把 `oklch()`／`color(srgb …)` 计算值按 0–255 解析，**对比度数字全部失真**。`metrics-reference.json` 是最后一次运行的落盘文件（内容等于 SBB 重采），引用时一律用带后缀的快照名。
+- 已废弃的中间产物（保留以免误用，但**不得引用**）：`metrics-reference-noscroll.json`——该轮未做懒加载滚动（图片元素面积和与文档高偏低），且把 `oklch()`／`color(srgb …)` 计算值按 0–255 解析，**对比度数字全部失真**。`metrics-reference.json` 是最后一次运行的落盘文件（内容等于 SBB 重采），引用时一律用带后缀的快照名。
 
 复现前提：本地 PostgreSQL 演示库在跑、`@mystcrag/backend` 起在 4100、按 §1.1 签发 signed-test token、`next dev` 起在 3000。**已知缺口：** 演示库缺 `20261004120000_add_design_creation_idempotency`，需 owner 自行执行 `pnpm db:migrate`（本任务未执行）后才能复现真实 DIY／画廊内容；取证脚本本身在忽略目录，本文不声称仓库当前具备可独立运行的浏览器 smoke。
 
@@ -477,8 +479,12 @@ Radix 概览页自身 AA 未达 217/400、`<44 px` 59/81，shadcn blocks 74/74 �
 | 5 | 三条既有可访问性缺陷的归属 | 归星台页面族 QA／前端，另登记任务，不由本研究稿修 |
 | 6 | 本地演示库迁移缺口 | owner 执行 `pnpm db:migrate` 后由 QA 复采真实 DIY／画廊基线 |
 | 7 | Dawn／Medusa starter 的参考缺口是否需补 | 不需要：Dawn 无演示可测、Medusa starter 已归档，均不作排版基准 |
+| 8 | 若将来要复用 FSL-1.1-ALv2 代码（如 Saleor storefront），是否发起法律／许可复核 | 本稿已按"不引入第二套 UI 权威"的架构理由拒绝，因此**无需**为排版目的发起复核；只有该决定被改变、要复用其任何代码时，才另登记许可复核任务判 Competing Use 与再分发义务 |
+| 9 | Node 版本导致的 validate 结果差异（见 §11.3）由谁定性 | 交回 SOL／QA：本任务不修改 `tests/`；若要求钉住的 Node 22 下稳定 exit 0，需单独登记的测试环境任务 |
 
-## 11. 交付门禁结果（2026-10-11 本机实测，逐条如实）
+## 11. 交付门禁记录（按时间顺序，不改写历史结论）
+
+### 11.1 首轮交付取证（2026-10-11，提交 `09b00f5`）
 
 | 检查 | 命令 | 结果 |
 | --- | --- | --- |
@@ -490,4 +496,21 @@ Radix 概览页自身 AA 未达 217/400、`<44 px` 59/81，shadcn blocks 74/74 �
 | 空白与冲突标记 | `git diff --check` | **通过（无输出）** |
 | 工作树范围 | `git status --short` | 仅新增 `docs/superpowers/benchmarks/2026-10-10-curated-showroom.md`；取证脚本与截图在未提交的忽略目录 `output/playwright/task-commerce-bench-001/`。`apps/frontend/next-env.d.ts` 曾被本任务的 `next dev` 改写，随后 `next build` 将其恢复为与 HEAD 一致，最终未留在 diff 中 |
 
-判定：`CI=1 pnpm validate` 的 exit 1 完全由两处**既有、在路径之外**的环境性失败构成（根测试 6 条 `cancelledByParent`、asset-worker 仓库根发现假设），本任务未新增任何失败项，也未削弱任何断言。提交 SHA 由 SOL 在复审后写入任务登记表（本任务不可写 `docs/tasks/TASK_REGISTRY.md`）。
+首轮判定：`CI=1 pnpm validate` 的 exit 1 由两处**既有、在路径之外**的环境性失败构成（根测试 6 条 `cancelledByParent`、asset-worker 仓库根发现假设），本次改动为单个新增文档，未新增失败项，也未削弱任何断言。提交 SHA 由 SOL 在复审后写入任务登记表（本任务不可写 `docs/tasks/TASK_REGISTRY.md`）。
+
+### 11.2 SOL 同分支复审记录（据复审意见补记，非本代理自测）
+
+SOL 在同一分支复审时记录：架构测试 **23/23**、文档链接 **7/7**、`CI=1 pnpm validate` **exit 0**。本代理在 11.3 的复跑中未能复现该 exit 0；按要求原样保留该记录，不做倒改。
+
+### 11.3 本次修订后复跑（末次全量复跑于 2026-10-11 09:50:40–09:50:49 +0800，PATH 上的 Node v22.22.3）
+
+| 检查 | 结果 |
+| --- | --- |
+| `node --test tests/architecture.test.mjs` | **23/23 通过**，0 失败，0 取消 |
+| 内部文档路径检查（`check-doc-links.mjs`） | 相对链接 **7/7 解析，0 缺失** |
+| `CI=1 pnpm validate` | **exit 1**：lint 18/18、typecheck 18/18（36 项 cache hit），根测试 82 条 **76 pass／0 fail／6 cancelled**，形态与 11.1 一致 |
+| `git diff --check` | **通过（无输出）**；`git status --short` 只有本文一个改动 |
+
+**11.2 与 11.3 差异的定位（新增事实，不改历史）：** 单跑 `tests/backend-production-bundle.test.mjs`——用 `~/.local/node/bin/node` **v22.22.3**（与仓库 `.nvmrc` 的 `22` 一致）得 **4 pass／0 fail／6 cancelled**；用 `/opt/homebrew/bin/node` **v26.0.0** 得 **10 pass／0 fail／0 cancelled**。同一分支、同一文件，唯一变量是 Node 版本，因此两次 validate 结果都可能真实，差别在各自 shell 解析到的 Node。本任务不修改 `tests/`（不在可写范围），只把差异交回 SOL／QA 定性（见 §10 第 9 项）。
+
+**修订过程自身的取证说明（诚实记录）：** 本轮 §6.4 的一次脚本改写中，替换文本里的 `NT$\`` 被 JavaScript 的 `String.replace` 当成 `$\``（"匹配点之前的全部文本"）特殊序列，导致文档前部被二次插入、文件一度从 493 行膨胀到 883 行。发现后已 `git checkout` 回到 `09b00f5` 的 493 行版本，并改用逐条字面替换重做全部修订；最终文件以"`grep -c '^# 玄矶精选独立站'` = 1、章节 0–11 各出现一次、行数回到 493 量级"为验收条件。该事故未进入任何已提交版本。
