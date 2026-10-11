@@ -9,13 +9,18 @@
  * The separation check compares the parsed PostgreSQL connection target
  * (host, port, database), not the raw string, so scheme aliases
  * (postgres/postgresql), credentials and loopback aliases cannot describe the
- * Mystcrag user database while looking different.
+ * Mystcrag user database while looking different. Decoding follows the
+ * installed pg-connection-string semantics exactly: the database name comes
+ * from decodeURI of the URL path (reserved characters like "?" stay encoded,
+ * so "foo%253F" and "foo%3F" are the same database) and the host from
+ * decodeURIComponent (so "127%2E0%2E0%2E1" is loopback). A malformed
+ * percent-escape cannot be resolved by the driver and fails closed.
  *
- * Query parameters that the PostgreSQL driver applies on top of the URL's own
- * target (host, port, dbname, database) are refused outright on both URLs:
- * pg-connection-string copies them onto the client config and only then falls
- * back to the URL hostname/port, so comparing the URL would compare something
- * other than the real connection target.
+ * Query parameters that could influence the connection target are refused
+ * outright on both URLs: "host" and "port" provably replace the URL's own
+ * host/port in pg-connection-string, and "dbname"/"database" are refused
+ * conservatively even though the installed build overwrites both from the URL
+ * path, so the comparison never depends on one driver build's behaviour.
  *
  * A local .env file that declares COMMERCE_DATABASE_URL is refused outright:
  * the Medusa CLI preloads .env before medusa-config runs, so a value loaded
@@ -43,9 +48,15 @@ const KNOWN_ENVIRONMENTS = ["staging", "production", "test"] as const;
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
-// Query parameter names that pg-connection-string applies over the URL's own
-// host/port/database instead of treating them as extras.
-const TARGET_OVERRIDE_QUERY_PARAMS = new Set(["host", "port", "dbname", "database"]);
+// Query parameters pg-connection-string applies over the URL's own host/port
+// (verified against the installed build: "?host=...&port=..." wins over the
+// URL's own values).
+const PROVEN_OVERRIDE_QUERY_PARAMS = new Set(["host", "port"]);
+
+// Database-name parameters are refused conservatively: the installed build
+// overwrites both from the URL path, but the guard must not depend on one
+// driver build's behaviour for its separation proof.
+const CONSERVATIVELY_REFUSED_QUERY_PARAMS = new Set(["dbname", "database"]);
 
 // dotenv's LINE regex accepts both "KEY=value" and "KEY: value", each with an
 // optional "export " prefix; match the declaration the loader would honour.
@@ -63,15 +74,31 @@ function parsePostgresTarget(label: string, raw: string): PostgresTarget {
   }
 
   for (const name of url.searchParams.keys()) {
-    if (TARGET_OVERRIDE_QUERY_PARAMS.has(name.toLowerCase())) {
+    const parameter = name.toLowerCase();
+    if (PROVEN_OVERRIDE_QUERY_PARAMS.has(parameter)) {
       throw new Error(
-        `${label} must not set the "${name}" query parameter: the PostgreSQL driver applies it on top of the URL's own ` +
-          "host, port and database, so the isolation comparison would not see the real connection target."
+        `${label} must not set the "${name}" query parameter: the PostgreSQL driver applies it over the URL's own ` +
+          "host and port, so the isolation comparison would not see the real connection target."
+      );
+    }
+    if (CONSERVATIVELY_REFUSED_QUERY_PARAMS.has(parameter)) {
+      throw new Error(
+        `${label} must not set the "${name}" query parameter: the isolation guard compares the URL's own database ` +
+          "path and refuses database-name parameters outright rather than depend on driver-version behaviour."
       );
     }
   }
 
-  let hostname = url.hostname.trim().toLowerCase();
+  let hostname: string;
+  try {
+    // pg-connection-string decodes the hostname with decodeURIComponent, so an
+    // encoded spelling like "127%2E0%2E0%2E1" reaches the driver as 127.0.0.1
+    // and must compare as the same host here as well; a malformed escape fails
+    // closed because the driver could not resolve it either.
+    hostname = decodeURIComponent(url.hostname).trim().toLowerCase();
+  } catch {
+    throw new Error(`${label} must include a database host with valid percent-encoding.`);
+  }
   if (hostname.startsWith("[") && hostname.endsWith("]")) {
     hostname = hostname.slice(1, -1);
   }
@@ -81,7 +108,10 @@ function parsePostgresTarget(label: string, raw: string): PostgresTarget {
 
   let database: string;
   try {
-    database = decodeURIComponent(url.pathname).replace(/^\/+|\/+$/g, "");
+    // pg-connection-string resolves the database with decodeURI, which keeps
+    // reserved characters (like "?" and "/") encoded; two spellings the driver
+    // maps to the same name ("foo%253F" and "foo%3F") must compare equal here.
+    database = decodeURI(url.pathname).replace(/^\/+|\/+$/g, "");
   } catch {
     throw new Error(`${label} must name exactly one database in its URL path.`);
   }

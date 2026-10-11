@@ -159,6 +159,47 @@ test("equivalent COMMERCE_DATABASE_URL spellings cannot bypass the separation ch
   }
 });
 
+test("percent-encoded database spellings that resolve to one driver target are refused", () => {
+  // pg-connection-string resolves the database with decodeURI, which keeps
+  // reserved characters encoded: /foo%253F and /foo%3F both reach PostgreSQL as
+  // the literal database name "foo%3F", and /a%252Fb and /a%2Fb as "a%2Fb".
+  // The guard must compare those driver targets, not the raw spellings.
+  for (const [userUrl, commerceUrl] of [
+    ["postgres://someone@127.0.0.1:5432/foo%253F", "postgres://other@127.0.0.1:5432/foo%3F"],
+    ["postgres://someone@127.0.0.1:5432/foo%3F", "postgres://other@127.0.0.1:5432/foo%253F"],
+    ["postgres://someone@127.0.0.1:5432/a%252Fb", "postgres://other@127.0.0.1:5432/a%2Fb"],
+    ["postgres://someone@127.0.0.1:5432/a%2Fb", "postgres://other@127.0.0.1:5432/a%252Fb"]
+  ]) {
+    assert.throws(
+      () => resolveCommerceDatabaseUrl({ DATABASE_URL: userUrl, COMMERCE_DATABASE_URL: commerceUrl }),
+      /separate/,
+      `one driver target spelled two ways must not bypass the separation check: ${userUrl} vs ${commerceUrl}`
+    );
+  }
+  const encodedSlash = "postgres://someone@127.0.0.1:5432/a%2Fb";
+  assert.equal(
+    resolveCommerceDatabaseUrl({ COMMERCE_DATABASE_URL: encodedSlash, DATABASE_URL: userDatabaseUrl }),
+    encodedSlash,
+    "the driver keeps %2F encoded, so this is a legitimate single-segment database name"
+  );
+});
+
+test("percent-encoded host spellings cannot bypass the separation check", () => {
+  // pg-connection-string decodes the hostname with decodeURIComponent, so
+  // 127%2E0%2E0%2E1 reaches the driver as 127.0.0.1 and must compare as loopback.
+  const encodedLoopback = "postgres://someone@127%2E0%2E0%2E1:5432/mystcrag";
+  assert.throws(
+    () => resolveCommerceDatabaseUrl({ COMMERCE_DATABASE_URL: encodedLoopback, DATABASE_URL: userDatabaseUrl }),
+    /separate/,
+    "an encoded loopback host must not describe the user database as a different target"
+  );
+  assert.throws(
+    () => resolveCommerceDatabaseUrl({ COMMERCE_DATABASE_URL: userDatabaseUrl, DATABASE_URL: encodedLoopback }),
+    /separate/,
+    "the same host decoding applies to the Mystcrag user database URL"
+  );
+});
+
 test("query parameters that override the effective connection target are refused outright", () => {
   // pg-connection-string (the parser pg uses) copies every query parameter onto
   // the client config first and only then falls back to the URL's own
@@ -213,13 +254,29 @@ test("invalid PostgreSQL URL values fail closed before any comparison", () => {
     "postgres://mystcrag:mystcrag@127.0.0.1:abc/mystcrag",
     "postgres://mystcrag:mystcrag@127.0.0.1:5432/",
     "postgres://mystcrag:mystcrag@127.0.0.1:5432/a/b",
-    "postgres://mystcrag:mystcrag@127.0.0.1:5432/a%2Fb"
+    // "/a%2Fb" is not in this list: the driver keeps %2F encoded, so it is a
+    // legitimate single-segment name and is covered by the encoded-spelling
+    // tests above; a lone "%" really is unresolvable for the driver.
+    "postgres://mystcrag:mystcrag@127.0.0.1:5432/%"
   ];
   for (const value of invalid) {
     assert.throws(
       () => resolveCommerceDatabaseUrl({ COMMERCE_DATABASE_URL: value, DATABASE_URL: userDatabaseUrl }),
       /COMMERCE_DATABASE_URL/,
       `invalid COMMERCE_DATABASE_URL must fail closed: ${value}`
+    );
+  }
+});
+
+test("a malformed percent-escape in the host fails closed", () => {
+  // WHATWG parsing accepts these host strings, but the driver's
+  // decodeURIComponent would throw while resolving them, so the guard must
+  // refuse them outright instead of comparing an unresolvable host.
+  for (const value of ["postgres://127%2:5432/mystcrag", "postgres://%zz:5432/mystcrag"]) {
+    assert.throws(
+      () => resolveCommerceDatabaseUrl({ COMMERCE_DATABASE_URL: value, DATABASE_URL: userDatabaseUrl }),
+      /COMMERCE_DATABASE_URL/,
+      `a host with invalid percent-encoding must fail closed: ${value}`
     );
   }
 });

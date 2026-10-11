@@ -12,10 +12,12 @@
  * connect, so the two sides cannot reach each other's database.
  *
  * It then proves, with fictional data only:
- *   1. missing, shared, alias-spelled, target-overriding and invalid
- *      COMMERCE_DATABASE_URL values fail closed before any connect; for the
- *      target-override case the installed driver chain itself is asked what it
- *      would connect to, so the refusal is proven against the real target
+ *   1. missing, shared, alias-spelled, target-overriding, percent-encoding and
+ *      invalid COMMERCE_DATABASE_URL values fail closed before any connect; for
+ *      the target-override and percent-encoding cases the installed driver
+ *      chain itself is asked what it would connect to - the percent-encoding
+ *      case even opens a real connection and reports current_database() - so
+ *      each refusal is proven against the driver's real target
  *   2. a stray local .env that declares COMMERCE_DATABASE_URL is refused and
  *      therefore never becomes the migration target, even though the Medusa CLI
  *      preloads .env before the config guard runs; checked for both spellings
@@ -52,13 +54,15 @@ const evidenceFile = path.join(evidenceDir, "probe-isolation.log");
 const localEnvPath = path.join(packageRoot, ".env");
 
 /**
- * The guards are only as good as the loaders they shadow, so two steps below
+ * The guards are only as good as the loaders they shadow, so three steps below
  * interrogate the installed Medusa dependency chain instead of trusting a
  * reading of its documentation:
  *   - DOTENV_GRAMMAR_SCRIPT asks the dotenv build the Medusa CLI resolves to
  *     what it parses out of one exact .env declaration line
  *   - DRIVER_TARGET_SCRIPT asks the pg / pg-connection-string build Medusa's
  *     MikroORM driver resolves to what host/port/database it would connect to
+ *   - CONNECTED_DATABASE_SCRIPT resolves pg through the same chain, connects,
+ *     and reports the database the server actually placed the session in
  */
 const DOTENV_GRAMMAR_SCRIPT = [
   'const { createRequire } = require("node:module");',
@@ -77,6 +81,21 @@ const DRIVER_TARGET_SCRIPT = [
   'const parse = createRequire(pcs)("pg-connection-string").parse;',
   'const connection = parse(process.argv[1]);',
   'process.stdout.write([connection.host, connection.port, connection.database].join("|"));'
+].join(" ");
+
+const CONNECTED_DATABASE_SCRIPT = [
+  'const { createRequire } = require("node:module");',
+  'const from = (base, name) => createRequire(base).resolve(name);',
+  'const framework = from(process.cwd() + "/index.js", "@medusajs/framework/utils");',
+  'const orm = from(framework, "@mikro-orm/postgresql");',
+  'const pg = from(orm, "pg");',
+  'const { Client } = createRequire(pg)("pg");',
+  'const client = new Client(process.argv[1]);',
+  'client',
+  '  .connect()',
+  '  .then(() => client.query("select current_database() as name"))',
+  '  .then((result) => { process.stdout.write(result.rows[0].name); return client.end(); })',
+  '  .catch((error) => { console.error(error.message); process.exit(1); });'
 ].join(" ");
 
 mkdirSync(evidenceDir, { recursive: true });
@@ -205,6 +224,9 @@ async function main() {
   const isolatedDatabase = "commerce_isolation_probe";
   const canaryDatabase = "mystcrag_user_canary_db";
   const decoyDatabase = "commerce_decoy_env_db";
+  // Deliberately percent-encoded name: the regression below proves the driver
+  // resolves "foo%253F" and "foo%3F" both to this literal database name.
+  const encodedSharedDatabase = "foo%3F";
 
   const pnpm = resolvePnpm();
   const initdb = resolveTool("initdb");
@@ -332,8 +354,10 @@ async function main() {
     run(createdb, ["-h", "127.0.0.1", "-p", String(pgPort), "-U", superuser, "-O", commerceRole, isolatedDatabase]);
     run(createdb, ["-h", "127.0.0.1", "-p", String(pgPort), "-U", superuser, "-O", userRole, canaryDatabase]);
     run(createdb, ["-h", "127.0.0.1", "-p", String(pgPort), "-U", superuser, "-O", commerceRole, decoyDatabase]);
-    for (const database of [isolatedDatabase, canaryDatabase, decoyDatabase]) {
-      psql("postgres", `REVOKE ALL ON DATABASE ${database} FROM PUBLIC`, `revoke public access on ${database}`);
+    run(createdb, ["-h", "127.0.0.1", "-p", String(pgPort), "-U", superuser, "-O", commerceRole, encodedSharedDatabase]);
+    for (const database of [isolatedDatabase, canaryDatabase, decoyDatabase, encodedSharedDatabase]) {
+      // Quoted so the deliberately percent-encoded name is a valid identifier.
+      psql("postgres", `REVOKE ALL ON DATABASE "${database}" FROM PUBLIC`, `revoke public access on ${database}`);
     }
     log("throwaway PostgreSQL cluster started with role-separated databases");
 
@@ -371,8 +395,10 @@ async function main() {
     const missingUrlEnv = { ...childEnv };
     delete missingUrlEnv.COMMERCE_DATABASE_URL;
 
-    // (2) Fail-closed checks. None of these may connect anywhere: the canary
-    // session count stays zero and the decoy database stays empty.
+    // (2) Fail-closed checks. None of the guarded migration attempts may reach
+    // a database: the canary session count stays zero and the decoy database
+    // stays empty. (The driver-chain ground-truth checks below deliberately
+    // connect, but only to the throwaway encoded-shared database.)
     const missingRun = runMedusaScript("medusa:migrate", missingUrlEnv, "fail-closed missing URL");
     assertTrue(missingRun.status !== 0, "missing COMMERCE_DATABASE_URL aborts migration with a non-zero exit");
     assertTrue(
@@ -475,6 +501,48 @@ async function main() {
       "the target-override URL reports the connection-target override guard message"
     );
     canarySessions("canary user database sessions after the target-override guard");
+
+    // Regression: pg-connection-string decodes the database name with decodeURI
+    // (reserved characters stay encoded) and the hostname with
+    // decodeURIComponent, so "foo%253F" and "foo%3F" are the same database and
+    // "127%2E0%2E0%2E1" is loopback. The installed chain is asked to connect
+    // for real and report current_database() for both spellings, then the guard
+    // must refuse the pair and the shared database must stay write-free.
+    const encodedDatabaseUrl = `postgres://${commerceRole}@127.0.0.1:${pgPort}/foo%253F`;
+    const encodedHostUrl = `postgres://${commerceRole}@127%2E0%2E0%2E1:${pgPort}/foo%3F`;
+    for (const url of [encodedDatabaseUrl, encodedHostUrl]) {
+      const connected = run(
+        pnpm.command,
+        [...pnpm.prefix, "exec", "node", "-e", CONNECTED_DATABASE_SCRIPT, url],
+        { cwd: packageRoot }
+      );
+      assertEqual(connected.status, 0, `the installed driver chain connects for ${url}`);
+      assertEqual(
+        connected.stdout.trim(),
+        encodedSharedDatabase,
+        `the installed driver chain resolves ${url} to the literal database "${encodedSharedDatabase}"`
+      );
+    }
+    const encodedRun = runMedusaScript(
+      "medusa:migrate",
+      { ...childEnv, DATABASE_URL: encodedDatabaseUrl, COMMERCE_DATABASE_URL: encodedHostUrl },
+      "fail-closed percent-encoded shared target"
+    );
+    assertTrue(encodedRun.status !== 0, "percent-encoded spellings of one driver target abort migration with a non-zero exit");
+    assertTrue(
+      `${encodedRun.stdout}${encodedRun.stderr}`.includes("must be a separate database"),
+      "percent-encoded spellings of one driver target report the isolation guard message"
+    );
+    assertEqual(
+      psql(
+        encodedSharedDatabase,
+        "select count(*) from pg_tables where schemaname not in ('pg_catalog', 'information_schema')",
+        "encoded shared-database tables"
+      ),
+      "0",
+      "the shared encoded database received zero tables (the guard refused the pair before any migration)"
+    );
+    canarySessions("canary user database sessions after the percent-encoding guard");
 
     const sharedVariants = [
       { label: "postgresql alias with a query parameter", url: `${canaryDatabaseUrl.replace(/^postgres:/, "postgresql:")}?sslmode=disable` },
@@ -752,8 +820,9 @@ async function main() {
     );
 
     log(
-      "ISOLATION PROBE PASSED: fail-closed guards (missing/shared/aliased/target-override/invalid URL, local .env in both loader spellings), "
-        + "driver and loader semantics checked against the installed builds, role-separated databases, "
+      "ISOLATION PROBE PASSED: fail-closed guards (missing/shared/aliased/target-override/percent-encoded/invalid URL, local .env in both loader spellings), "
+        + "driver and loader semantics checked against the installed builds (including a real driver-chain connection reporting current_database() for percent-encoded spellings), "
+        + "role-separated databases, "
         + "isolated migration under the dedicated role, cold start through pnpm run medusa:dev bound to 127.0.0.1 only with every "
         + "non-loopback interface refused, CN/CNY + TW/TWD manual region prices, restart persistence, canary user database untouched"
     );
