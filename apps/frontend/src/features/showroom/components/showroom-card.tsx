@@ -5,14 +5,13 @@ import { StarSurface } from "@mystcrag/ui";
 /**
  * TASK-COMMERCE-FE-VISUAL-001 — the curated showroom work card.
  *
- * Presentation only: every line is a caller-supplied display slot produced by the
- *服务端发布投影 in Task 5. The card never fetches, never infers a market from the
- * interface language, and never manufactures a price, stock line or destination.
- * Missing approved photography falls back to a labelled region instead of a fake
- * frame, and a card without a caller destination is not navigable at all.
+ * Presentation only: every line, including the note shown when no approved
+ * photography exists yet, is display copy handed in by the caller from the
+ * reviewed message tables. The card never fetches, never infers a market from the
+ * interface language, never manufactures a price, stock line or destination, and
+ * never falls back to wording of its own. A card without a caller destination is
+ * not navigable at all.
  */
-
-export const SHOWROOM_CARD_VISUAL_PENDING_LABEL = "作品影像尚在准备中";
 
 const CARD_FRAME_SIZES =
   "(max-width: 639px) calc(100vw - 2rem), (max-width: 1279px) calc(50vw - 3rem), calc((100vw - 12rem) / 3)";
@@ -40,6 +39,12 @@ export type ShowroomCardProps = {
   /** Approved display market, passed explicitly so language can never switch it. */
   region?: string;
   visual?: ShowroomCardVisual;
+  /**
+   * Reviewed note shown when no approved photography exists yet. The wording belongs
+   * to the caller's message tables, so the card holds no copy of its own; with
+   * neither a frame nor a note to show, the image region is omitted entirely.
+   */
+  visualPendingLabel?: string;
 };
 
 export function ShowroomCard({
@@ -50,31 +55,34 @@ export function ShowroomCard({
   name,
   price,
   region,
-  visual
+  visual,
+  visualPendingLabel
 }: ShowroomCardProps) {
   const content = (
     <>
-      <div
-        className="showroom-card__frame"
-        data-showroom-card-frame="true"
-        data-showroom-visual={visual ? "ready" : "pending"}
-      >
-        {visual ? (
-          <Image
-            alt={visual.alt}
-            fill
-            sizes={CARD_FRAME_SIZES}
-            src={visual.src}
-          />
-        ) : (
-          <p
-            className="showroom-card__visual-note"
-            data-showroom-visual-note="true"
-          >
-            {SHOWROOM_CARD_VISUAL_PENDING_LABEL}
-          </p>
-        )}
-      </div>
+      {visual || visualPendingLabel ? (
+        <div
+          className="showroom-card__frame"
+          data-showroom-card-frame="true"
+          data-showroom-visual={visual ? "ready" : "pending"}
+        >
+          {visual ? (
+            <Image
+              alt={visual.alt}
+              fill
+              sizes={CARD_FRAME_SIZES}
+              src={visual.src}
+            />
+          ) : (
+            <p
+              className="showroom-card__visual-note"
+              data-showroom-visual-note="true"
+            >
+              {visualPendingLabel}
+            </p>
+          )}
+        </div>
+      ) : null}
       <div className="showroom-card__body" data-showroom-card-body="true">
         <h3 className="showroom-card__name" data-showroom-card-slot="name">
           {name}

@@ -19,7 +19,6 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
-  SHOWROOM_CARD_VISUAL_PENDING_LABEL,
   ShowroomCard,
   type ShowroomCardProps
 } from "./showroom-card";
@@ -27,6 +26,11 @@ import {
 // `"jsx": "preserve"` makes tsx emit the classic runtime, so the @mystcrag/ui
 // primitives need a React global. Same shim as star-system-states.test.tsx.
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
+
+// Reviewer-approved display wording is owned by the caller (the i18n message
+// tables in Task 7). These fixtures stand in for it; the component must not
+// invent any of its own.
+const PENDING_LABEL_FIXTURE = "作品影像尚在准备中（测试夹具）";
 
 const FULL_CARD: ShowroomCardProps = {
   name: "月白叠霜（测试夹具）",
@@ -39,6 +43,7 @@ const FULL_CARD: ShowroomCardProps = {
     src: "/test-only/approved-work.jpg",
     alt: "测试夹具：单圈手串平铺于米白台面，十二毫米浅色珠与一枚金属隔珠"
   },
+  visualPendingLabel: PENDING_LABEL_FIXTURE,
   // Only a caller-supplied destination; Task 4 wires no storefront route.
   href: "/test-only/work"
 };
@@ -49,17 +54,23 @@ const LOCALIZED_FIXTURES = {
   "zh-CN": {
     name: "月白叠霜 · 玄圭星台一期手工串制十二毫米冰种与黄铜隔珠限定款（测试夹具）",
     credit: "设计师无野 · 合作系列「观星成串」第一段创作说明与材料署名（测试夹具）",
-    availability: "本作品目前仅在中国大陆地区经核准展示，暂未开放线上购买"
+    availability: "本作品目前仅在中国大陆地区经核准展示，暂未开放线上购买",
+    region: "本作品仅可在中国大陆地区经核准展示",
+    visualPendingLabel: "作品影像尚在准备中（测试夹具）"
   },
   "zh-TW": {
     name: "月白疊霜 · 玄圭星臺一期手工串製十二毫米冰種與黃銅隔珠限定款（測試夾具）",
     credit: "設計師無野 · 合作系列「觀星成串」第一段創作說明與材料署名（測試夾具）",
-    availability: "本作品目前僅在中國大陸地區經核准展示，暫未開放線上購買"
+    availability: "本作品目前僅在中國大陸地區經核准展示，暫未開放線上購買",
+    region: "本作品僅可在中國大陸地區經核准展示",
+    visualPendingLabel: "作品影像尚在準備中（測試夾具）"
   },
   "en-US": {
     name: "Moon Frost No.1 — hand-strung 12 mm icy quartz with brass spacers, limited observatory edition (fixture)",
     credit: "Designer Wuye · Star Observatory series, first creative note and material credit (fixture)",
-    availability: "Approved for display in China mainland only; online purchase is not open yet"
+    availability: "Approved for display in China mainland only; online purchase is not open yet",
+    region: "This work is approved for display in the China mainland market only",
+    visualPendingLabel: "Approved product photography is still being prepared (fixture)"
   }
 } as const;
 
@@ -231,13 +242,59 @@ test("absent price, region and material rows are omitted instead of faked", () =
   assert.equal(text.includes("0"), false, "an absent numeric field must not fall back to zero");
 });
 
-test("absent approved photography yields a labelled honest region, never a fake image", () => {
+test("absent approved photography shows the caller's honest note, never a fake image", () => {
   const markup = render(without(FULL_CARD, "visual"));
   assert.doesNotMatch(markup, /<img\b/, "a card without approved photography must not draw an image");
   assert.doesNotMatch(markup, /background-image/, "a filled block may not impersonate product photography");
   assert.match(markup, /data-showroom-visual="pending"/, "the pending frame must be identifiable for measurement");
-  assert.ok(visibleText(markup).includes(SHOWROOM_CARD_VISUAL_PENDING_LABEL), "the honest pending note must be readable text");
-  assert.doesNotMatch(markup, /aria-hidden="true"[^>]*>[^<]*作品影像尚在准备中/, "the pending note must stay announced");
+  assert.ok(visibleText(markup).includes(PENDING_LABEL_FIXTURE), "the caller's pending note must be readable text");
+  assert.doesNotMatch(markup, /aria-hidden="true"[^>]*>[^<]*尚在准备中/, "the pending note must stay announced");
+});
+
+test("the card ships no built-in pending-photography wording of its own", () => {
+  // The component must not hard-code Simplified Chinese: with no label supplied it
+  // renders no image region at all instead of inventing one.
+  const markup = render(without(FULL_CARD, "visual", "visualPendingLabel"));
+  assert.doesNotMatch(markup, /data-showroom-card-frame/, "an unlabelled frame would be an empty void");
+  assert.doesNotMatch(markup, /<img\b/, "no image may appear");
+  assert.ok(visibleText(markup).includes(FULL_CARD.name), "the work still reads");
+});
+
+test("the card adds no display text beyond its explicit props", () => {
+  const cases: ShowroomCardProps[] = [
+    FULL_CARD,
+    without(FULL_CARD, "visual"),
+    without(FULL_CARD, "visual", "visualPendingLabel")
+  ];
+  for (const props of cases) {
+    const text = visibleText(render(props)).replace(/\s+/g, "");
+    const expected = [
+      props.visual ? undefined : props.visualPendingLabel,
+      props.name,
+      props.credit,
+      props.material,
+      props.price,
+      props.region,
+      props.availability
+    ]
+      .filter(Boolean)
+      .join("")
+      .replace(/\s+/g, "");
+    assert.equal(text, expected, "the component must render the caller's copy and nothing it invented");
+  }
+});
+
+test("the pending note is rendered verbatim in simplified, traditional and english", () => {
+  for (const [locale, copy] of Object.entries(LOCALIZED_FIXTURES)) {
+    const markup = render({ ...FULL_CARD, ...copy, visual: undefined });
+    const text = visibleText(markup);
+    assert.ok(text.includes(copy.visualPendingLabel), `${locale} pending note must be emitted verbatim`);
+    assert.doesNotMatch(markup, /<img\b/, `${locale} must not fake photography`);
+    if (locale !== "zh-CN") {
+      // A built-in Simplified-Chinese default would leak into the other locales.
+      assert.ok(!text.includes("作品影像尚在准备中"), `${locale} must not inherit simplified copy`);
+    }
+  }
 });
 
 test("approved photography renders once through next/image with the reviewed alternative text", () => {
@@ -282,7 +339,9 @@ test("a card emits a card-level heading only and never implies a commercial acti
 
 test("long simplified, traditional and english display copy survives verbatim without clipping", () => {
   for (const [locale, copy] of Object.entries(LOCALIZED_FIXTURES)) {
-    const markup = render({ ...FULL_CARD, ...copy });
+    // No approved frame yet, so every supplied line — including the pending note —
+    // must reach the output intact.
+    const markup = render({ ...FULL_CARD, ...copy, visual: undefined });
     const text = visibleText(markup);
     for (const value of Object.values(copy)) {
       assert.ok(text.includes(value), `${locale} copy must be emitted in full`);
@@ -305,8 +364,8 @@ test("the card module exposes presentation only — no DTO, schema, fetcher or s
   const moduleKeys = Object.keys(await import("./showroom-card")).sort();
   assert.deepEqual(
     moduleKeys,
-    ["SHOWROOM_CARD_VISUAL_PENDING_LABEL", "ShowroomCard"],
-    "the card module must not grow a second product contract or an API helper"
+    ["ShowroomCard"],
+    "the card module must not grow a second product contract, an API helper or built-in copy"
   );
 
   const markup = render(FULL_CARD);

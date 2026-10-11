@@ -122,8 +122,9 @@
   margin-top: var(--star-space-1);
 }
 
-/* A price must never break mid-value, and the market note stays on one line so the
- * 320px card cannot wrap it into an unreadable fragment (benchmark §4.2). */
+/* A price must never break mid-value, so only the number keeps nowrap. The market
+ * note is a reviewed sentence and can be long in english: it wraps inside the card
+ * instead of being silently cut by the card's own overflow: hidden. */
 [data-showroom-card-price] {
   color: var(--star-ink);
   font-size: 0.9375rem;
@@ -133,10 +134,11 @@
 }
 
 .showroom-card__market {
+  min-width: 0;
   color: var(--star-brass-ink);
   font-size: 0.8125rem;
   letter-spacing: 0.01em;
-  white-space: nowrap;
+  overflow-wrap: break-word;
 }
 
 .showroom-card__availability {
