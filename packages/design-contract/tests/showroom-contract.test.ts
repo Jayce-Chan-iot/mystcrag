@@ -90,22 +90,27 @@ type ProductMarket = "CN" | "TW";
 
 const MARKET_AMOUNT_MINOR = { CN: 128_000, TW: 5_800 } as const;
 
-const productFor = (market: ProductMarket, locale: ProductLocale) => ({
-  slug: "wuye-obsidian-calm-bracelet",
-  publicRevision: 3,
-  ...copyByLocale[locale],
-  media: [
-    {
-      url: "/showroom/wuye/obsidian-calm-01.webp",
-      alt: copyByLocale[locale].alt,
-      width: 1600,
-      height: 1200
-    }
-  ],
-  price: { currency: SHOWROOM_MARKET_CURRENCY[market], amountMinor: MARKET_AMOUNT_MINOR[market] },
-  designer: { slug: "wuye-studio", displayName: "无野" },
-  availability: "AVAILABLE"
-});
+const productFor = (market: ProductMarket, locale: ProductLocale) => {
+  // The per-locale copy block also carries the media alt text; alt belongs to
+  // media items only and must never leak to the product top level.
+  const { alt, ...copy } = copyByLocale[locale];
+  return {
+    slug: "wuye-obsidian-calm-bracelet",
+    publicRevision: 3,
+    ...copy,
+    media: [
+      {
+        url: "/showroom/wuye/obsidian-calm-01.webp",
+        alt,
+        width: 1600,
+        height: 1200
+      }
+    ],
+    price: { currency: SHOWROOM_MARKET_CURRENCY[market], amountMinor: MARKET_AMOUNT_MINOR[market] },
+    designer: { slug: "wuye-studio", displayName: "无野" },
+    availability: "AVAILABLE"
+  };
+};
 
 const designerFor = (locale: ProductLocale) => ({
   slug: "wuye-studio",
