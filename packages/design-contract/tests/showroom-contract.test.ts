@@ -493,6 +493,34 @@ test("https media addresses must carry a valid host; host-less and userinfo form
   }
 });
 
+test("https addresses reject out-of-range ports and malformed host labels", () => {
+  const base = productFor("CN", "zh-CN");
+  const withUrl = (url: string) => ({
+    ...base,
+    media: [{ url, alt: "obsidian calm bracelet detail" }]
+  });
+
+  for (const url of [
+    "https://cdn.example.com/showroom/wuye/obsidian-calm-01.webp",
+    "https://cdn.example.com:8443/showroom/wuye/obsidian-calm-01.webp"
+  ]) {
+    assert.equal(ShowroomPublicProductSchema.safeParse(withUrl(url)).success, true, url);
+  }
+
+  // Address-format checks only; media authorization stays with the
+  // server-side publication boundary.
+  for (const url of [
+    "https://cdn.example.com:65536/showroom/x.webp",
+    "https://cdn.example.com:99999/showroom/x.webp",
+    "https://cdn..example.com/x.webp",
+    "https://cdn.-example.com/x.webp",
+    "https://cdn-.example.com/x.webp",
+    "https://cdn.example-.com/x.webp"
+  ]) {
+    assert.equal(ShowroomPublicProductSchema.safeParse(withUrl(url)).success, false, url);
+  }
+});
+
 test("internal cost, draft, license, and purchase authority fields cannot enter public showroom shapes", () => {
   const forbiddenProductFields: Record<string, unknown> = {
     unitCostMinor: 3200,
