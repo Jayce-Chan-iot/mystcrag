@@ -610,6 +610,25 @@ Presentation responses are display-only projections. They carry `sourceRevision`
 
 All three routes require verified bearer authentication and owner-scoped access. Missing and differently owned resources use the generic `FORBIDDEN` response, and unauthenticated requests use `401 UNAUTHORIZED`.
 
+## Showroom Public Read API
+
+Four anonymous, read-only routes expose the showroom's manually approved copy, media, and prices. Their executable DTOs live in [the strict showroom contract source](../packages/design-contract/src/schemas/showroom.schema.ts); every request and response is a strict object, so unknown fields are rejected at the boundary, and no route on this surface can create, edit, price, reserve, or persist anything.
+
+| Route | Request DTO | Response DTO | Behavior |
+| --- | --- | --- | --- |
+| `GET /api/showroom/products?market=...&locale=...` | `ShowroomPublicRequestSchema` | `ShowroomProductPageSchema` | Returns one page of approved products for the market. Items are strict `ShowroomPublicProductSchema` objects carrying approved copy, at least one approved media asset, reviewed specifications, and the manually approved price; unapproved, revoked, or incomplete work is excluded instead of returned partially. |
+| `GET /api/showroom/products/{slug}?market=...&locale=...` | `ShowroomPublicRequestSchema` | `ShowroomProductDetailSchema` | Returns one approved product together with the requested market and display locale. |
+| `GET /api/showroom/designers/{slug}?market=...&locale=...` | `ShowroomPublicRequestSchema` | `ShowroomDesignerDetailSchema` | Returns one `ShowroomPublicDesignerSchema` profile with its approved products under the same market predicate. |
+| `GET /api/showroom/collections/{slug}?market=...&locale=...` | `ShowroomPublicRequestSchema` | `ShowroomCollectionDetailSchema` | Returns one `ShowroomPublicCollectionSchema` with its approved products under the same market predicate. |
+
+`market` and `locale` are both required query parameters: only the `CN` and `TW` markets and the `zh-CN`, `zh-TW`, and `en-US` display locales are accepted, the market is never inferred from the display language, and a missing, unknown, or non-approved value is a `400 VALIDATION_ERROR` with field errors plus the shared envelope `requestId`. Unknown query parameters, including any currency override, are rejected the same way.
+
+Each market publishes only its manually approved prices: `CN` publishes `CNY` and `TW` publishes `TWD`. There is no automatic conversion between markets, a request can never select another currency, and every product page or detail rejects an item whose price is not the requested market's approved currency.
+
+Public showroom reads fail closed. A resource is served only when approved copy, at least one approved media asset, reviewed specifications, and the manually approved market price are all present; otherwise it is absent from list pages and detail routes return `404 NOT_FOUND`, the same response as an unknown slug, so unapproved, revoked, or withdrawn work never reveals its existence. If the showroom source read fails, the route returns `500 INTERNAL_ERROR` and never falls back to raw store responses, draft data, or the other market's content.
+
+These routes are anonymous and read-only: they require no authentication, never mutate state, and are served with `no-store` caching. Internal cost, margin, supplier, stock quantity, license, draft status, region rule, and purchase-authority fields are not representable in these DTOs.
+
 ## Community API
 
 GET /api/community/designs
