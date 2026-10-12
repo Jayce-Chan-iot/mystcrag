@@ -54,10 +54,12 @@ const ShowroomLabelSchema = z.string().trim().min(1).max(160);
 const ShowroomStorySchema = z.string().trim().min(1).max(2_000);
 const ShowroomAltTextSchema = z.string().trim().min(1).max(300);
 /**
- * Approved media address policy: a site-relative path with a single leading
- * slash or an absolute https:// URL. Dangerous schemes (javascript:, data:,
- * file:, blob:, vbscript:), plain http://, protocol-relative //, and hosts
- * without a leading slash cannot be represented.
+ * Media address format policy (format only, never an authorization): a
+ * site-relative path with a single leading slash or an absolute https:// URL
+ * with a valid host. Dangerous schemes (javascript:, data:, file:, blob:,
+ * vbscript:), plain http://, protocol-relative //, host-less https:// forms,
+ * and paths without a leading slash cannot be represented. Whether a media
+ * asset is approved, and its withdrawal, stay with the publication boundary.
  */
 const ShowroomMediaUrlSchema = z
   .string()
@@ -65,8 +67,8 @@ const ShowroomMediaUrlSchema = z
   .min(1)
   .max(2_048)
   .regex(
-    /^(?:\/(?!\/)[^\s\\]+|https:\/\/[^\s\\]+)$/,
-    "Expected a site-relative path or an https URL"
+    /^(?:\/(?!\/)[^\s\\]+|https:\/\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::\d{1,5})?(?:[\/?#][^\s\\]*)?)$/,
+    "Expected a site-relative path or an https URL with a valid host"
   );
 
 export const ShowroomMediaSchema = z.strictObject({
