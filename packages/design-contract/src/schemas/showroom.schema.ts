@@ -56,20 +56,46 @@ const ShowroomAltTextSchema = z.string().trim().min(1).max(300);
 /**
  * Media address format policy (format only, never an authorization): a
  * site-relative path with a single leading slash or an absolute https:// URL
- * with a valid host. Dangerous schemes (javascript:, data:, file:, blob:,
- * vbscript:), plain http://, protocol-relative //, host-less https:// forms,
- * and paths without a leading slash cannot be represented. Whether a media
- * asset is approved, and its withdrawal, stay with the publication boundary.
+ * whose host is dot-separated labels of letters, digits, and interior
+ * hyphens that start and end alphanumeric, with an optional port between 1
+ * and 65535. Dangerous schemes (javascript:, data:, file:, blob:, vbscript:),
+ * plain http://, protocol-relative //, host-less https:// forms, empty or
+ * hyphen-edged host labels, out-of-range ports, and paths without a leading
+ * slash cannot be represented. Whether a media asset is approved, and its
+ * withdrawal, stay with the publication boundary.
  */
+const ShowroomHostLabelPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 const ShowroomMediaUrlSchema = z
   .string()
   .trim()
   .min(1)
   .max(2_048)
   .regex(
-    /^(?:\/(?!\/)[^\s\\]+|https:\/\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::\d{1,5})?(?:[\/?#][^\s\\]*)?)$/,
-    "Expected a site-relative path or an https URL with a valid host"
-  );
+    /^(?:\/(?!\/)[^\s\\]+|https:\/\/[^\s\\]+)$/,
+    "Expected a site-relative path or an https URL"
+  )
+  .superRefine((value, context) => {
+    if (!value.startsWith("https://")) {
+      return;
+    }
+
+    const authority = value.slice("https://".length).split(/[\/?#]/, 1)[0] ?? "";
+    const [host = "", port, ...extraPortSegments] = authority.split(":");
+    const hostIsValid =
+      host.length > 0 &&
+      host.split(".").every((label) => ShowroomHostLabelPattern.test(label));
+    const portIsValid =
+      extraPortSegments.length === 0 &&
+      (port === undefined ||
+        (/^\d{1,5}$/.test(port) && Number(port) >= 1 && Number(port) <= 65_535));
+
+    if (!hostIsValid || !portIsValid) {
+      context.addIssue({
+        code: "custom",
+        message: "Expected an https URL with a valid host and a port between 1 and 65535"
+      });
+    }
+  });
 
 export const ShowroomMediaSchema = z.strictObject({
   url: ShowroomMediaUrlSchema,
