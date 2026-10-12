@@ -411,7 +411,7 @@ test("showroom products fail closed when approved copy, media, availability, pri
   );
 });
 
-test("approved media addresses are site-relative paths or https URLs; dangerous schemes are rejected", () => {
+test("media address format policy accepts single-slash site-relative paths and https URLs; dangerous schemes are rejected", () => {
   const base = productFor("CN", "zh-CN");
   const withUrl = (url: string) => ({
     ...base,
@@ -444,7 +444,7 @@ test("approved media addresses are site-relative paths or https URLs; dangerous 
     assert.equal(ShowroomPublicProductSchema.safeParse(withUrl(url)).success, false, url);
   }
 
-  // Designer and collection media follow the same approved address policy.
+  // Designer and collection media follow the same address format policy.
   assert.equal(
     ShowroomPublicDesignerSchema.safeParse({
       ...designerFor("zh-CN"),
@@ -459,6 +459,38 @@ test("approved media addresses are site-relative paths or https URLs; dangerous 
     }).success,
     false
   );
+});
+
+test("https media addresses must carry a valid host; host-less and userinfo forms are rejected", () => {
+  const base = productFor("CN", "zh-CN");
+  const withUrl = (url: string) => ({
+    ...base,
+    media: [{ url, alt: "obsidian calm bracelet detail" }]
+  });
+
+  for (const url of [
+    "https://cdn.example.com/showroom/wuye/obsidian-calm-01.webp",
+    "https://cdn.example.com:8443/showroom/wuye/obsidian-calm-01.webp",
+    "https://cdn.example.com",
+    "https://cdn.example.com?width=800"
+  ]) {
+    assert.equal(ShowroomPublicProductSchema.safeParse(withUrl(url)).success, true, url);
+  }
+
+  // Rejecting these forms proves address format only; it is not media
+  // authorization, which stays with the server-side publication boundary.
+  for (const url of [
+    "https:///",
+    "https://",
+    "https://?q=x",
+    "https://#frag",
+    "https://:8443/showroom/x.webp",
+    "https://.com/x.webp",
+    "https://-evil.example/x.webp",
+    "https://evil.example@other.example/x.webp"
+  ]) {
+    assert.equal(ShowroomPublicProductSchema.safeParse(withUrl(url)).success, false, url);
+  }
 });
 
 test("internal cost, draft, license, and purchase authority fields cannot enter public showroom shapes", () => {
