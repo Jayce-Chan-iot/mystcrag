@@ -1,7 +1,11 @@
 import { Modules } from "@medusajs/framework/utils";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
-import { computeTranslationFingerprint } from "../../../../showroom/publication-gate";
+import {
+  ShowroomApprovalNotFoundError,
+  ShowroomMediaWithdrawalTargetError,
+  computeTranslationFingerprint
+} from "../../../../showroom/publication-gate";
 import { SHOWROOM_PUBLICATION_MODULE } from "../../../../modules/showroom-publication";
 import type ShowroomPublicationService from "../../../../modules/showroom-publication/service";
 
@@ -231,10 +235,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const approval = await service.withdrawMedia("PRODUCT", productId, body.checksum, actorId, body.reason);
     res.status(200).json({ approval, audit: approval.audit });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const notFound = /^No showroom approval/.test(message);
-    res.status(notFound ? 404 : 400).json(
-      errorEnvelope(notFound ? "NOT_FOUND" : "VALIDATION_ERROR", message, req.requestId)
+    // A subject with no approval, or a media checksum the subject never carried,
+    // is a client-facing not-found. Anything else — a translation-module or
+    // database failure — is a server error whose internal detail must not leak.
+    if (error instanceof ShowroomApprovalNotFoundError || error instanceof ShowroomMediaWithdrawalTargetError) {
+      res.status(404).json(errorEnvelope("NOT_FOUND", error.message, req.requestId));
+      return;
+    }
+    res.status(500).json(
+      errorEnvelope("INTERNAL_ERROR", "The showroom approval decision could not be recorded.", req.requestId)
     );
   }
 }

@@ -10,14 +10,17 @@ import { resolveCommerceDatabaseUrl } from "../src/isolation/env";
 // TASK-COMMERCE-GATE-001 isolated publication integration.
 //
 // This is the end-to-end gate: it runs the generated showroom migrations against
-// a brand-new isolated PostgreSQL database, boots the delivered Medusa server
-// through the package dev script, and drives the real public/admin HTTP surface.
-// It proves the module registers, the database enforces one row per subject, the
-// gate serves only approved work, concurrent first approvals never duplicate or
-// lose an audit event, a withdrawn asset is never reintroduced by a replayed
-// APPROVE, an Admin translation edit after approval fails the public read closed,
-// a revoke propagates on the next read, and the Mystcrag user database is never
-// written to.
+// a brand-new isolated PostgreSQL database, boots two independent writer
+// processes (two Medusa servers sharing that database) through the package dev
+// script, and drives the real public/admin HTTP surface. It proves the module
+// registers, the database enforces one row per subject, the gate serves only
+// approved work, concurrent first approvals never duplicate or lose an audit
+// event, two independent writers acting on one existing approval row neither
+// lose an audit event nor overwrite a withdrawal, a withdrawn asset stays
+// withdrawn across an arbitrary sequence of later approvals, withdrawing an
+// unknown checksum is refused, an Admin translation edit after approval fails
+// the public read closed, a revoke propagates on the next read, and the Mystcrag
+// user database is never written to.
 //
 // It only runs when an explicit isolated database and a canary user-database URL
 // are supplied. Without them it is skipped, so the ordinary commerce test run
@@ -112,6 +115,57 @@ async function waitForHealth(origin: string, child: ReturnType<typeof spawn>, lo
   throw new Error(`timed out waiting for ${origin}/health; see ${logFile}`);
 }
 
+/**
+ * Holds a `SELECT ... FOR UPDATE` row lock on one approval record from an
+ * independent PostgreSQL connection, then returns a function that resolves once
+ * the lock holder has committed. Both writer processes make their decision while
+ * this lock is held, so both read the same committed snapshot — the exact
+ * condition under which a whole-row update without a database row lock loses one
+ * writer's change.
+ */
+async function holdRowLock(productId: string, seconds: number): Promise<() => Promise<void>> {
+  const parsed = new URL(isolatedUrl);
+  const database = decodeURI(parsed.pathname).replace(/^\/+/, "");
+  const sql =
+    "begin; " +
+    `select 1 from showroom_approval_record where subject_kind = 'PRODUCT' and subject_ref = '${productId}' for update; ` +
+    "select 'LOCKED' as lock_marker; " +
+    `select pg_sleep(${seconds}); ` +
+    "commit;";
+  const lockHolder = spawn(
+    "psql",
+    ["-h", parsed.hostname, "-p", parsed.port || "5432", "-U", psqlUser, "-d", database, "-tAq", "-c", sql],
+    { stdio: ["ignore", "pipe", "ignore"] }
+  );
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("psql did not acquire the approval row lock in time")), 20_000);
+    lockHolder.stdout?.on("data", (chunk) => {
+      if (String(chunk).includes("LOCKED")) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+    lockHolder.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    lockHolder.on("exit", (code) => {
+      clearTimeout(timer);
+      reject(new Error(`the psql row-lock holder exited early with code ${code}`));
+    });
+  });
+
+  return async () => {
+    if (lockHolder.exitCode !== null) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      lockHolder.on("exit", () => resolve());
+    });
+  };
+}
+
 test(
   "the isolated publication gate serves only approved work, closes on revoke, and never writes the user database",
   { skip: skipReason, timeout: 900_000 },
@@ -181,38 +235,52 @@ test(
     );
     assert.equal(user.status, 0, `a synthetic isolated admin user is created: ${user.stdout}${user.stderr}`);
 
-    // (3) Boot the delivered server through the same script developers use.
-    const origin = "http://127.0.0.1:9001";
-    const child = spawn(pnpm.command, [...pnpm.prefix, "run", "medusa:dev"], {
-      cwd: commerceRoot,
-      env: { ...env, PORT: "9001" },
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    child.stdout?.on("data", () => {});
-    child.stderr?.on("data", () => {});
-
-    const stop = async () => {
-      if (child.exitCode !== null) {
-        return;
-      }
-      try {
-        process.kill(-child.pid!, "SIGTERM");
-      } catch {
-        // already gone
-      }
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      if (child.exitCode === null) {
+    // (3) Boot two independent writer processes through the same script
+    // developers use. They share the isolated database, so a decision made by
+    // one process is visible to — and can race with — the other, exactly as two
+    // replicas would.
+    const startWriter = (port: number) => {
+      const child = spawn(pnpm.command, [...pnpm.prefix, "run", "medusa:dev"], {
+        cwd: commerceRoot,
+        env: { ...env, PORT: String(port) },
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+      child.stdout?.on("data", () => {});
+      child.stderr?.on("data", () => {});
+      const stop = async () => {
+        if (child.exitCode !== null) {
+          return;
+        }
         try {
-          process.kill(-child.pid!, "SIGKILL");
+          process.kill(-child.pid!, "SIGTERM");
         } catch {
           // already gone
         }
-      }
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        if (child.exitCode === null) {
+          try {
+            process.kill(-child.pid!, "SIGKILL");
+          } catch {
+            // already gone
+          }
+        }
+      };
+      return { origin: `http://127.0.0.1:${port}`, child, stop };
+    };
+
+    const writerOne = startWriter(9001);
+    const writerTwo = startWriter(9002);
+    const origin = writerOne.origin;
+    const originTwo = writerTwo.origin;
+
+    const stop = async () => {
+      await Promise.all([writerOne.stop(), writerTwo.stop()]);
     };
 
     try {
-      await waitForHealth(origin, child, serverLog);
+      await waitForHealth(origin, writerOne.child, serverLog);
+      await waitForHealth(originTwo, writerTwo.child, serverLog);
 
       const login = await fetchJson(`${origin}/auth/user/emailpass`, {
         method: "POST",
@@ -224,6 +292,16 @@ test(
       const adminPost = (route: string, body: unknown) =>
         fetchJson(`${origin}${route}`, { method: "POST", headers: adminHeaders, body: JSON.stringify(body) });
       const adminGet = (route: string) => fetchJson(`${origin}${route}`, { headers: adminHeaders });
+
+      const loginTwo = await fetchJson(`${originTwo}/auth/user/emailpass`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "showroom-gate@example.com", password: "showroom-synthetic-password" })
+      });
+      assert.equal(loginTwo.status, 200, "second writer admin login");
+      const adminHeadersTwo = { authorization: `Bearer ${loginTwo.body.token}`, "content-type": "application/json" };
+      const adminPostTwo = (route: string, body: unknown) =>
+        fetchJson(`${originTwo}${route}`, { method: "POST", headers: adminHeadersTwo, body: JSON.stringify(body) });
 
       const region = await adminPost("/admin/regions", {
         name: "Showroom Integration CN (fictional)",
@@ -268,31 +346,38 @@ test(
         return { id: String(product.body.product.id), handle: String(product.body.product.handle) };
       };
 
-      const approvePayload = (checksum: string) => ({
-        action: "APPROVE",
-        publicRevision: 1,
-        authorization: {
-          status: "APPROVED",
-          markets: ["CN", "TW"],
-          effectiveFrom: "2026-01-01T00:00:00.000Z",
-          expiresAt: "2027-01-01T00:00:00.000Z"
-        },
-        availability: "INQUIRY_ONLY",
-        prices: { CN: { currency: "CNY", amountMinor: 128000, regionId } },
-        locales: {
-          "zh-CN": {
-            reviewedRevision: 1,
-            title: "无野 · 静水手链",
-            summary: "天然的静水石与黄铜细节。",
-            materials: ["天然静水石", "黄铜"],
-            specifications: [{ label: "内径", value: "16cm" }],
-            designer: { slug: "designer-lin", displayName: "林也" }
-          }
-        },
-        media: [
-          { url: "/showroom/wuye/hero.webp", alt: "手链正视图", checksum, approved: true, withdrawn: false }
-        ]
-      });
+      const approvePayload = (checksums: string | string[]) => {
+        const list = Array.isArray(checksums) ? checksums : [checksums];
+        return {
+          action: "APPROVE",
+          publicRevision: 1,
+          authorization: {
+            status: "APPROVED",
+            markets: ["CN", "TW"],
+            effectiveFrom: "2026-01-01T00:00:00.000Z",
+            expiresAt: "2027-01-01T00:00:00.000Z"
+          },
+          availability: "INQUIRY_ONLY",
+          prices: { CN: { currency: "CNY", amountMinor: 128000, regionId } },
+          locales: {
+            "zh-CN": {
+              reviewedRevision: 1,
+              title: "无野 · 静水手链",
+              summary: "天然的静水石与黄铜细节。",
+              materials: ["天然静水石", "黄铜"],
+              specifications: [{ label: "内径", value: "16cm" }],
+              designer: { slug: "designer-lin", displayName: "林也" }
+            }
+          },
+          media: list.map((checksum, index) => ({
+            url: `/showroom/wuye/hero-${index}.webp`,
+            alt: `手链视图 ${index}`,
+            checksum,
+            approved: true,
+            withdrawn: false
+          }))
+        };
+      };
 
       const rowsFor = (productId: string) =>
         psql(
@@ -328,6 +413,19 @@ test(
       assert.deepEqual(approval.body.audit[0].markets, ["CN", "TW"]);
       assert.equal(approval.body.audit[0].approvedMedia.length, 1);
       assert.equal(approval.body.audit[0].approvedMedia[0].checksum, "sha256:integration-one");
+      // The event also stores the facts needed to rebuild the public state:
+      // the authorization window, the display state, the approved prices and the
+      // reviewed-locale / translation fingerprints of this decision.
+      assert.equal(approval.body.audit[0].effectiveFrom, "2026-01-01T00:00:00.000Z", "the authorization window start is audited");
+      assert.equal(approval.body.audit[0].expiresAt, "2027-01-01T00:00:00.000Z", "the authorization expiry is audited");
+      assert.equal(approval.body.audit[0].availability, "INQUIRY_ONLY", "the display state is audited");
+      assert.equal(approval.body.audit[0].approvedPrices.length, 1, "the approved price is audited");
+      assert.equal(approval.body.audit[0].approvedPrices[0].market, "CN");
+      assert.equal(approval.body.audit[0].approvedPrices[0].amountMinor, 128000);
+      assert.equal(typeof approval.body.audit[0].approvedPrices[0].fingerprint, "string");
+      assert.equal(approval.body.audit[0].reviewedLocales[0].locale, "zh-CN", "the reviewed locale is audited");
+      assert.equal(approval.body.audit[0].reviewedLocales[0].reviewedRevision, 1);
+      assert.equal(typeof approval.body.audit[0].reviewedLocales[0].translationFingerprint, "string", "the reviewed translation fingerprint is audited");
       assert.equal(rowsFor(one.id), "1", "exactly one approval row exists for the subject");
 
       const listed = await publicList();
@@ -384,6 +482,92 @@ test(
       assert.equal(await isListed(one.handle), false, "a replayed APPROVE never reintroduces a withdrawn asset");
       assert.equal((await publicDetail(one.handle)).status, 404, "the replayed APPROVE leaves the detail closed");
       assert.equal(rowsFor(one.id), "1", "the replay still keeps exactly one row");
+
+      // (6b) Withdrawing a checksum the subject never carried is refused with a
+      // not-found instead of being silently accepted.
+      const unknownChecksum = await adminPost(`/admin/showroom-approvals/${one.id}`, {
+        action: "WITHDRAW_MEDIA",
+        checksum: "sha256:does-not-exist"
+      });
+      assert.equal(
+        unknownChecksum.status,
+        404,
+        `withdrawing an unknown checksum must be a 404, never a silent 200: ${JSON.stringify(unknownChecksum.body)}`
+      );
+
+      // (6c) Two independent writers act on the same existing approval row at
+      // once. An independent database connection holds the row lock open while
+      // both writers read the same committed snapshot, so an implementation that
+      // updates the whole row without a row lock deterministically drops one
+      // decision's audit event — and may lose the withdrawal entirely.
+      const cross = await createProduct(4);
+      const crossChecksums = ["sha256:cross-a", "sha256:cross-b"];
+      const crossSeed = await adminPost(`/admin/showroom-approvals/${cross.id}`, approvePayload(crossChecksums));
+      assert.equal(crossSeed.status, 200, `the cross-process subject is approved: ${JSON.stringify(crossSeed.body)}`);
+      const releaseRowLock = await holdRowLock(cross.id, 8);
+      const [crossApprove, crossWithdraw] = await Promise.all([
+        adminPost(`/admin/showroom-approvals/${cross.id}`, approvePayload(crossChecksums)),
+        adminPostTwo(`/admin/showroom-approvals/${cross.id}`, {
+          action: "WITHDRAW_MEDIA",
+          checksum: "sha256:cross-a",
+          reason: "cross-process withdrawal"
+        })
+      ]);
+      await releaseRowLock;
+      assert.equal(crossApprove.status, 200, `the cross-process approval is accepted: ${JSON.stringify(crossApprove.body)}`);
+      assert.equal(crossWithdraw.status, 200, `the cross-process withdrawal is accepted: ${JSON.stringify(crossWithdraw.body)}`);
+      const crossStored = await adminGet(`/admin/showroom-approvals/${cross.id}`);
+      assert.equal(crossStored.status, 200);
+      assert.equal(
+        crossStored.body.audit.length,
+        3,
+        "both independent writers' decisions are audited; neither is lost to a lost update"
+      );
+      assert.deepEqual(
+        [...crossStored.body.audit.map((event: any) => event.action)].sort(),
+        ["APPROVED", "APPROVED", "MEDIA_WITHDRAWN"].sort(),
+        "the audit trail holds the seed, the concurrent approval and the concurrent withdrawal, in whichever order the two writers' locks were granted"
+      );
+      const crossAsset = crossStored.body.approval.media.find((asset: any) => asset.checksum === "sha256:cross-a");
+      assert.equal(crossAsset.withdrawn, true, "the cross-process withdrawal is not overwritten by the concurrent approval");
+      const crossDetail = await publicDetail(cross.handle);
+      assert.equal(crossDetail.status, 200, "the subject still serves through its surviving asset");
+      assert.equal(crossDetail.body.product.media.length, 1, "only the never-withdrawn asset is served");
+      assert.match(crossDetail.body.product.media[0].url, /hero-1\.webp$/, "the surviving asset is the one never withdrawn");
+
+      // (6d) A withdrawal stays effective across an arbitrary sequence of later
+      // approvals that omit the asset and then reintroduce it.
+      const sequence = await createProduct(5);
+      const sequenceChecksums = ["sha256:seq-a", "sha256:seq-b"];
+      assert.equal(
+        (await adminPost(`/admin/showroom-approvals/${sequence.id}`, approvePayload(sequenceChecksums))).status,
+        200,
+        "the sequence subject is approved with both assets"
+      );
+      assert.equal(
+        (await adminPost(`/admin/showroom-approvals/${sequence.id}`, { action: "WITHDRAW_MEDIA", checksum: "sha256:seq-a" })).status,
+        200,
+        "the first asset is withdrawn"
+      );
+      // An approval that omits A entirely must not drop the withdrawal fact.
+      assert.equal(
+        (await adminPost(`/admin/showroom-approvals/${sequence.id}`, approvePayload(["sha256:seq-b"]))).status,
+        200,
+        "an approval that omits the withdrawn asset is accepted"
+      );
+      // A later approval that reintroduces A must not revive it.
+      const revived = await adminPost(`/admin/showroom-approvals/${sequence.id}`, approvePayload(sequenceChecksums));
+      assert.equal(revived.status, 200, "an approval that reintroduces the withdrawn asset is accepted");
+      const revivedAsset = revived.body.approval.media.find((asset: any) => asset.checksum === "sha256:seq-a");
+      assert.equal(
+        revivedAsset.withdrawn,
+        true,
+        "the withdrawal fact survives an approval that omitted A and a later one that reintroduced A"
+      );
+      const sequenceDetail = await publicDetail(sequence.handle);
+      assert.equal(sequenceDetail.status, 200, "the subject still serves through its surviving asset");
+      assert.equal(sequenceDetail.body.product.media.length, 1, "only the surviving asset is served");
+      assert.match(sequenceDetail.body.product.media[0].url, /hero-1\.webp$/, "the surviving asset is the one never withdrawn");
 
       // (7) Concurrent first approvals: one row, every decision audited.
       const two = await createProduct(2);

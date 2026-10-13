@@ -15,9 +15,11 @@ import {
   evaluateShowroomDesigner,
   evaluateShowroomProduct,
   mergeWithdrawalFacts,
+  publicStateFacts,
   type ShowroomApprovalRecord,
   type ShowroomLiveProduct,
-  type ShowroomMarketContext
+  type ShowroomMarketContext,
+  type ShowroomMediaRecord
 } from "../src/showroom/publication-gate";
 
 // TASK-COMMERCE-GATE-001 publication predicate contract.
@@ -503,4 +505,85 @@ test("audit events retain the version, authorization and media facts of each dec
   assert.equal(withdrawn.audit[0].approvedMedia?.[0].checksum, "sha256:aaa");
   assert.equal(withdrawn.audit[1].withdrawnMedia?.checksum, "sha256:aaa");
   assert.equal(withdrawn.audit[1].publicRevision, 3);
+});
+
+// --- withdrawal facts survive an arbitrary sequence of later approvals ------
+
+test("a withdrawn asset stays withdrawn across an arbitrary sequence of later approvals", () => {
+  const [assetA, assetB] = approvedMedia();
+  const withdrawn = (assets: ShowroomMediaRecord[]) =>
+    assets.map((asset) => (asset.checksum === assetA.checksum ? { ...asset, withdrawn: true } : asset));
+  const checksumOfA = assetA.checksum;
+
+  // APPROVE [A, B]
+  let media = mergeWithdrawalFacts([], [assetA, assetB]);
+  // WITHDRAW_MEDIA A
+  media = mergeWithdrawalFacts(media, withdrawn(media));
+  assert.equal(
+    media.find((asset) => asset.checksum === checksumOfA)?.withdrawn,
+    true,
+    "the withdrawal takes effect"
+  );
+
+  // APPROVE only [B]: the subject must keep the A withdrawal tombstone even
+  // though A is absent from the incoming media set.
+  media = mergeWithdrawalFacts(media, [assetB]);
+  assert.equal(
+    media.find((asset) => asset.checksum === checksumOfA)?.withdrawn,
+    true,
+    "the withdrawal fact must survive an approval that omits A"
+  );
+
+  // APPROVE [A, B] again: reintroducing A must not revive it.
+  media = mergeWithdrawalFacts(media, [assetA, assetB]);
+  assert.equal(
+    media.find((asset) => asset.checksum === checksumOfA)?.withdrawn,
+    true,
+    "the withdrawal fact must survive a later approval that reintroduces A"
+  );
+
+  const record = makeApproval({ media });
+  const granted = evaluateShowroomProduct(makeProduct(), record, contextFor("CN", "zh-CN"));
+  assert.equal(granted.ok, true, "the subject still serves through its remaining approved asset");
+  if (granted.ok) {
+    assert.equal(granted.value.media.length, 1, "only the surviving asset is servable");
+    assert.equal(granted.value.media[0].url, assetB.url);
+  }
+
+  const allWithdrawn = makeApproval({ media: withdrawAll(media) });
+  expectDenied(evaluateShowroomProduct(makeProduct(), allWithdrawn, contextFor("CN", "zh-CN")), "NO_APPROVED_MEDIA");
+});
+
+function withdrawAll(assets: ShowroomMediaRecord[]) {
+  return assets.map((asset) => ({ ...asset, withdrawn: true }));
+}
+
+// --- audit facts rebuild the public state -----------------------------------
+
+test("the recorded public-state facts carry the authorization window, display state, approved prices and reviewed-locale fingerprints", () => {
+  const record = makeApproval({
+    locales: {
+      "zh-CN": { ...reviewedLocaleCopy(3), translationFingerprint: "fp-reviewed-zh" },
+      "zh-TW": reviewedLocaleCopy(3),
+      "en-US": reviewedLocaleCopy(3)
+    }
+  });
+  const facts = publicStateFacts(record);
+
+  assert.equal(facts.publicRevision, 3);
+  assert.equal(facts.authorizationStatus, "APPROVED");
+  assert.deepEqual(facts.markets, ["CN", "TW"]);
+  assert.equal(facts.effectiveFrom, record.authorization.effectiveFrom, "the authorization window start is recorded");
+  assert.equal(facts.expiresAt, record.authorization.expiresAt, "the authorization expiry is recorded");
+  assert.equal(facts.availability, "AVAILABLE", "the display state is recorded");
+  assert.equal(facts.approvedPrices.length, 2, "every approved market price is recorded");
+  const cn = facts.approvedPrices.find((price) => price.market === "CN");
+  assert.equal(cn?.amountMinor, CN_PRICE_MINOR);
+  assert.equal(cn?.currency, "CNY");
+  assert.equal(cn?.regionId, REGION_CN);
+  assert.equal(cn?.fingerprint, record.prices.CN?.fingerprint, "the approved price fingerprint is recorded");
+  assert.equal(facts.reviewedLocales.length, 3, "every reviewed locale is recorded");
+  const zh = facts.reviewedLocales.find((locale) => locale.locale === "zh-CN");
+  assert.equal(zh?.reviewedRevision, 3);
+  assert.equal(zh?.translationFingerprint, "fp-reviewed-zh", "the reviewed translation fingerprint is recorded");
 });

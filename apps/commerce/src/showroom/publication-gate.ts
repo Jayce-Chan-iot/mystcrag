@@ -50,9 +50,10 @@ export type ShowroomAuditAction = (typeof SHOWROOM_AUDIT_ACTIONS)[number];
 /**
  * One audited decision. Besides who decided and when, every event carries the
  * facts needed to reconstruct the public state at that decision: the public
- * revision it applied to, the resulting authorization status and markets, and
- * the media it affected. The history is therefore traceable without reading any
- * live Medusa row again.
+ * revision it applied to, the resulting authorization status, markets and
+ * effective window, the display availability, the approved price facts and the
+ * reviewed per-locale copy fingerprints, plus the media it affected. The history
+ * is therefore traceable without reading any live Medusa row again.
  */
 export type ShowroomAuditEvent = {
   action: ShowroomAuditAction;
@@ -65,10 +66,54 @@ export type ShowroomAuditEvent = {
   authorizationStatus?: ShowroomApprovalStatus;
   /** The markets the authorization covered after this decision. */
   markets?: ShowroomMarket[];
+  /** The start of the authorization window after this decision. */
+  effectiveFrom?: string;
+  /** The expiry of the authorization window after this decision. */
+  expiresAt?: string;
+  /** The display availability state after this decision. */
+  availability?: ShowroomAvailabilityState | null;
+  /** The approved price facts after this decision, one per approved market. */
+  approvedPrices?: ShowroomApprovedPriceFact[];
+  /** The reviewed per-locale copy fingerprints after this decision. */
+  reviewedLocales?: ShowroomReviewedLocaleFact[];
   /** The approved media set recorded by this APPROVE. */
   approvedMedia?: { checksum: string; url: string }[];
   /** The single media asset withdrawn by this MEDIA_WITHDRAWN. */
   withdrawnMedia?: { checksum: string; url: string };
+};
+
+/** The approved price fact a decision is audited against, per market. */
+export type ShowroomApprovedPriceFact = {
+  market: ShowroomMarket;
+  currency: string;
+  amountMinor: number;
+  regionId: string;
+  fingerprint: string;
+};
+
+/** The reviewed-copy fact a decision is audited against, per display locale. */
+export type ShowroomReviewedLocaleFact = {
+  locale: string;
+  reviewedRevision: number;
+  /** Fingerprint of the live Medusa translation the copy was reviewed against. */
+  translationFingerprint?: string;
+};
+
+/**
+ * The facts that describe the public state a decision established. The service
+ * spreads these into each audit event so the public state at any decision can be
+ * rebuilt from the audit trail alone, including the authorization window, the
+ * display state, the approved price fingerprints and the reviewed copy.
+ */
+export type ShowroomPublicStateFacts = {
+  publicRevision: number;
+  authorizationStatus: ShowroomApprovalStatus;
+  markets: ShowroomMarket[];
+  effectiveFrom: string;
+  expiresAt: string;
+  availability: ShowroomAvailabilityState | null;
+  approvedPrices: ShowroomApprovedPriceFact[];
+  reviewedLocales: ShowroomReviewedLocaleFact[];
 };
 
 export type ShowroomDesignerRefInput = {
@@ -318,22 +363,96 @@ function evaluateReviewedCopy(
 
 /**
  * Merges a new approval's media set with the withdrawal facts already recorded.
- * A checksum withdrawn under any earlier decision stays withdrawn even if the
- * same APPROVE payload is submitted again, so a re-submitted or replayed
- * decision can never reintroduce a withdrawn asset at the same version.
+ * A withdrawal is a tombstone: a checksum withdrawn under any earlier decision
+ * stays withdrawn across every later approval. Two facts are carried forward:
+ *   - an incoming asset whose checksum was withdrawn before is forced withdrawn,
+ *     so a replayed or re-submitted APPROVE never revives it; and
+ *   - a withdrawn checksum the incoming set no longer carries is retained as a
+ *     tombstone, so an approval that omits the asset and a still later approval
+ *     that reintroduces it both keep the withdrawal effective.
  */
 export function mergeWithdrawalFacts(
   previousMedia: ShowroomMediaRecord[],
   incomingMedia: ShowroomMediaRecord[]
 ): ShowroomMediaRecord[] {
+  const previous = previousMedia ?? [];
+  const incoming = incomingMedia ?? [];
   const withdrawnChecksums = new Set(
-    (previousMedia ?? [])
+    previous
       .filter((asset) => asset.withdrawn && asset.checksum.trim().length > 0)
       .map((asset) => asset.checksum.trim())
   );
-  return (incomingMedia ?? []).map((asset) =>
+  const incomingChecksums = new Set(
+    incoming
+      .filter((asset) => asset.checksum.trim().length > 0)
+      .map((asset) => asset.checksum.trim())
+  );
+  const merged = incoming.map((asset) =>
     withdrawnChecksums.has(asset.checksum.trim()) ? { ...asset, withdrawn: true } : { ...asset }
   );
+  const tombstones = previous
+    .filter(
+      (asset) =>
+        asset.withdrawn && asset.checksum.trim().length > 0 && !incomingChecksums.has(asset.checksum.trim())
+    )
+    .map((asset) => ({ ...asset, withdrawn: true }));
+  return [...merged, ...tombstones];
+}
+
+/**
+ * The facts that let the audit trail alone rebuild the public state a decision
+ * established: the public revision, the resulting authorization status and
+ * markets, the effective window, the display availability, the approved price
+ * fingerprints and the reviewed per-locale copy fingerprints.
+ */
+export function publicStateFacts(record: ShowroomApprovalRecord): ShowroomPublicStateFacts {
+  const prices = record.prices ?? {};
+  const locales = record.locales ?? {};
+  return {
+    publicRevision: record.publicRevision,
+    authorizationStatus: record.authorization.status,
+    markets: [...(record.authorization.markets ?? [])],
+    effectiveFrom: record.authorization.effectiveFrom,
+    expiresAt: record.authorization.expiresAt,
+    availability: record.availability ?? null,
+    approvedPrices: Object.values(prices)
+      .filter((price): price is ShowroomApprovedPrice => Boolean(price))
+      .map((price) => ({
+        market: price.market,
+        currency: price.currency,
+        amountMinor: price.amountMinor,
+        regionId: price.regionId,
+        fingerprint: price.fingerprint
+      })),
+    reviewedLocales: Object.entries(locales).map(([locale, copy]) => ({
+      locale,
+      reviewedRevision: copy.reviewedRevision,
+      ...(copy.translationFingerprint === undefined
+        ? {}
+        : { translationFingerprint: copy.translationFingerprint })
+    }))
+  };
+}
+
+/** Raised when a decision targets a subject that has no approval record. */
+export class ShowroomApprovalNotFoundError extends Error {
+  constructor(subjectKind: string, subjectRef: string) {
+    super(`No showroom approval exists for ${subjectKind} "${subjectRef}"`);
+    this.name = "ShowroomApprovalNotFoundError";
+  }
+}
+
+/**
+ * Raised when a media withdrawal names a checksum the subject's approved media
+ * set never carried. It is a not-found, never a silent success.
+ */
+export class ShowroomMediaWithdrawalTargetError extends Error {
+  constructor(subjectKind: string, subjectRef: string, checksum: string) {
+    super(
+      `The showroom approval for ${subjectKind} "${subjectRef}" carries no media asset with checksum "${checksum}"`
+    );
+    this.name = "ShowroomMediaWithdrawalTargetError";
+  }
 }
 
 /**

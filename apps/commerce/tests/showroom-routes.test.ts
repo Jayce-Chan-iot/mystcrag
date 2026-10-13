@@ -6,6 +6,8 @@ import test from "node:test";
 import {
   computePriceFingerprint,
   computeTranslationFingerprint,
+  ShowroomApprovalNotFoundError,
+  ShowroomMediaWithdrawalTargetError,
   type ShowroomApprovalRecord
 } from "../src/showroom/publication-gate";
 import { publicShowroomPolicy } from "../src/api/middlewares";
@@ -13,6 +15,7 @@ import { GET as listRoute } from "../src/api/api/showroom/products/route";
 import { GET as detailRoute } from "../src/api/api/showroom/products/[slug]/route";
 import { GET as designerRoute } from "../src/api/api/showroom/designers/[slug]/route";
 import { GET as collectionRoute } from "../src/api/api/showroom/collections/[slug]/route";
+import { POST as adminApprovalRoute } from "../src/api/admin/showroom-approvals/[productId]/route";
 
 // TASK-COMMERCE-GATE-001 public route contract.
 //
@@ -523,4 +526,126 @@ test("the public surface validates at runtime and cannot return raw store data",
     assert.match(source, /createShowroomDeps/, `${relative} must read through the publication projection`);
     assert.doesNotMatch(source, /\/store\/products|\/store\/collections|publishable-api-key/, `${relative} must not read the native Store`);
   }
+});
+
+// --- admin approval decision route -------------------------------------------
+
+function approveBody(overrides: Record<string, unknown> = {}) {
+  return {
+    action: "APPROVE",
+    publicRevision: 1,
+    authorization: {
+      status: "APPROVED",
+      markets: ["CN", "TW"],
+      effectiveFrom: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2027-01-01T00:00:00.000Z"
+    },
+    availability: "AVAILABLE",
+    prices: { CN: { currency: "CNY", amountMinor: CN_PRICE_MINOR, regionId: REGION_CN } },
+    locales: { "zh-CN": { reviewedRevision: 1, title: "无野 · 静水手链", summary: "天然的静水石。" } },
+    media: [{ url: "/showroom/wuye/hero.webp", alt: "正视图", checksum: "sha256:aaa", approved: true, withdrawn: false }],
+    ...overrides
+  };
+}
+
+function adminContainer({ service, failTranslations = false }: { service: any; failTranslations?: boolean }) {
+  return {
+    resolve(key: string) {
+      if (key === "translation") {
+        return {
+          async listTranslations() {
+            if (failTranslations) {
+              throw new Error("Failed to read the live product translations");
+            }
+            return [];
+          }
+        };
+      }
+      if (key === "showroom_publication") {
+        return service;
+      }
+      throw new Error(`unexpected container key ${key}`);
+    }
+  } as any;
+}
+
+test("an admin approval whose live-translation read fails is a 500 that never leaks the internal failure", async () => {
+  const service = {
+    async approve() {
+      throw new Error("approve must not be reached while the translation read is failing");
+    }
+  };
+  const res = fakeRes();
+  await adminApprovalRoute(
+    {
+      params: { productId: "prod_admin" },
+      requestId: "req-admin-500",
+      body: approveBody(),
+      scope: adminContainer({ service, failTranslations: true })
+    } as any,
+    res as any
+  );
+
+  assert.equal(res.statusCode, 500, "an internal module failure is a server error, not a client validation error");
+  assert.equal(res.body.error.code, "INTERNAL_ERROR");
+  assert.equal(res.body.error.requestId, "req-admin-500");
+  assert.equal(
+    /translation|live product|Failed to read/i.test(JSON.stringify(res.body)),
+    false,
+    "the internal failure message must never leak to the client"
+  );
+});
+
+test("a database failure on an admin decision is a 500 that never leaks the internal failure", async () => {
+  const service = {
+    async revoke() {
+      throw new Error("connection terminated unexpectedly");
+    }
+  };
+  const res = fakeRes();
+  await adminApprovalRoute(
+    { params: { productId: "prod_admin" }, requestId: "req-admin-db", body: { action: "REVOKE" }, scope: adminContainer({ service }) } as any,
+    res as any
+  );
+
+  assert.equal(res.statusCode, 500);
+  assert.equal(res.body.error.code, "INTERNAL_ERROR");
+  assert.equal(/connection terminated|terminated unexpectedly/i.test(JSON.stringify(res.body)), false);
+});
+
+test("withdrawing an unknown media checksum is refused, never silently accepted", async () => {
+  const service = {
+    async withdrawMedia() {
+      throw new ShowroomMediaWithdrawalTargetError("PRODUCT", "prod_admin", "sha256:absent");
+    }
+  };
+  const res = fakeRes();
+  await adminApprovalRoute(
+    {
+      params: { productId: "prod_admin" },
+      requestId: "req-withdraw",
+      body: { action: "WITHDRAW_MEDIA", checksum: "sha256:absent" },
+      scope: adminContainer({ service })
+    } as any,
+    res as any
+  );
+
+  assert.equal(res.statusCode, 404, "a withdrawal target that does not exist is a not-found, not a silent 200");
+  assert.equal(res.body.error.code, "NOT_FOUND");
+});
+
+test("a decision against a subject with no approval is a 404", async () => {
+  const service = {
+    async revoke() {
+      throw new ShowroomApprovalNotFoundError("PRODUCT", "prod_missing");
+    }
+  };
+  const res = fakeRes();
+  await adminApprovalRoute(
+    { params: { productId: "prod_missing" }, body: { action: "REVOKE" }, scope: adminContainer({ service }) } as any,
+    res as any
+  );
+
+  assert.equal(res.statusCode, 404);
+  assert.equal(res.body.error.code, "NOT_FOUND");
 });
