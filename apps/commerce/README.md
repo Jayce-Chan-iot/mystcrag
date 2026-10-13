@@ -17,6 +17,16 @@
 - 翻译模块已按 PoC 实测写法开启（`modules: ['@medusajs/medusa/translation']` + `featureFlags.translation`），公开读取闸门属 Task 3。
 - **尚未接入购买流程/真实支付**（无购物车/支付 provider 接入）、未接入现有 Prisma、未写任何 `apps/frontend`、`apps/backend`、`packages/**`。
 
+## 公开橱窗发布闸门（Phase 1 Task 3）
+
+`TASK-COMMERCE-GATE-001` 交付一个**失败关闭**的服务端发布闸门：四个匿名只读公共路由（`GET /api/showroom/products`、`/api/showroom/products/{slug}`、`/api/showroom/designers/{slug}`、`/api/showroom/collections/{slug}`）由**同一个纯谓词**（`src/showroom/publication-gate.ts`）决定列表与详情的可见性，绝不各自为政。
+
+- 一个资源只有在下列事实**全部一致**时才可能被服务：实时 Medusa 事实（Product 已 `published`）、带版本的授权（`APPROVED`、覆盖请求市场、在有效窗口内）、该市场的**人工批准价指纹**、请求语言的**已审校文案**、至少一个**已批准且未撤回、带来源校验和**的媒体。任何一项缺失或缺译，列表即排除、详情返回 `404 NOT_FOUND`（与未知 slug 相同，不泄露存在性）；上游读取失败返回 `500 INTERNAL_ERROR`，绝不回退到原生 Store 响应、草稿或另一语言/另一市场的文案。
+- **不换汇**：市场 `CN` 只发 `CNY`、`TW` 只发 `TWD`；市场与显示语言 `zh-CN`/`zh-TW`/`en-US` 严格分离，`zh-TW` 配 `CN` 仍为 `CNY`、`zh-CN` 配 `TW` 仍为 `TWD`。价格为**逐市场**批准：记录为每个市场保存一份指纹（`sha256(regionId|currency|amountMinor)`），只批准一个市场不会服务另一个市场。
+- 实时价格经 **Query 层**读取：Medusa 的 Product 模块从不 hydrate `variants.prices`，变体金额与地区 `region_id` 规则由 Pricing 模块经 `query.graph` 借 `variants.price_set.prices` 提供；价格在 Admin 侧被改动而未重新批准时指纹不再匹配，产品失败关闭（`PRICE_CHANGED_SINCE_APPROVAL`）。
+- Admin 审核路由 `GET|POST /admin/showroom-approvals/{productId}`（需 Medusa Admin 认证）记录**一次一条、带审计**的人工决策：`APPROVE`（版本化授权 + 逐市场批准价 + 逐语言审校文案 + 已批准媒体）、`REVOKE`（撤回整条授权）、`WITHDRAW_MEDIA`（按来源校验和撤回单个资产）。每个动作追加一条审计事件并在**下一次公共读取**生效；此面只做决策记录，从不写入商品、变体、价格行或媒体文件。公共 DTO 均由唯一的设计契约 Showroom schema 经**运行时 `safeParse`**产出，不存在仅类型校验的旁路。
+- 隔离集成测试 `tests/showroom-isolation.integration.test.ts` 仅在显式提供隔离库与 canary 用户库时运行：它把生成的 showroom 迁移应用到**全新隔离库**、经 `medusa:dev` 起真实服务、驱动真实公共/Admin HTTP 面，并断言 canary 用户库零表/零写入。
+
 ## 环境变量（`.env.example`）
 
 `COMMERCE_DATABASE_URL` 必填，且**不得写入 `.env`**（必须经进程环境变量提供）；`JWT_SECRET`、`COOKIE_SECRET` 必填；`STORE_CORS`/`ADMIN_CORS`/`AUTH_CORS` 缺省为 loopback。

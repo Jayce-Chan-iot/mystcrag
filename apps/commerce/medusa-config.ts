@@ -33,6 +33,13 @@ module.exports = defineConfig({
     {
       resolve: '@medusajs/medusa/translation',
     },
+    {
+      // Showroom publication approvals only (TASK-COMMERCE-GATE-001): the
+      // versioned manual authorization, approved price fingerprint, per-locale
+      // reviewed copy, approved media and audit trail. Products, prices and
+      // collections themselves stay in Medusa.
+      resolve: './src/modules/showroom-publication',
+    },
   ],
   featureFlags: {
     translation: true,

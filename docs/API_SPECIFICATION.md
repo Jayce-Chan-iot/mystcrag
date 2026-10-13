@@ -635,6 +635,17 @@ Public showroom reads fail closed. A resource is served only when approved copy,
 
 These routes are anonymous and read-only: they require no authentication, never mutate state, and are served with `no-store` caching. Internal cost, margin, supplier, stock quantity, license, draft status, region rule, and purchase-authority fields are not representable in these DTOs. Media address format policy: `ShowroomMediaSchema` accepts only site-relative paths with a single leading `/` or absolute `https://` URLs whose host is dot-separated labels of letters, digits, and interior hyphens that start and end alphanumeric, with an optional port between `1` and `65535`. It rejects `javascript:`, `data:`, `file:`, `blob:`, `vbscript:`, `http:`, protocol-relative (`//`), host-less `https://` forms, empty or hyphen-edged host labels, and out-of-range ports. Address-format validity is not media approval: which assets are authorized, their provenance, and their withdrawal stay with the server-side publication boundary, and this contract pins only the representable address format.
 
+### Administration
+
+| Route | Auth | Behavior |
+| --- | --- | --- |
+| `GET /admin/showroom-approvals/{productId}` | Medusa Admin | Returns the stored publication approval and its full audit trail, or `null` when the product has no recorded decision. |
+| `POST /admin/showroom-approvals/{productId}` | Medusa Admin | Records exactly one audited manual decision. `action` is `APPROVE`, `REVOKE`, or `WITHDRAW_MEDIA`. |
+
+`APPROVE` records a versioned publication: a positive `publicRevision`, an `APPROVED` `authorization` covering a non-empty subset of `CN`/`TW` with an effective window, an approved `availability` state, a per-market `prices` map (`CN`→`CNY`, `TW`→`TWD`, each entry carrying `currency`, `amountMinor`, and `regionId`), editorially reviewed `locales` copy (`reviewedRevision` plus title and summary), and an array of approved `media` assets, each with a url, alt, and non-empty provenance checksum. The server computes and stores one price fingerprint per market from the live row's region, currency, and amount.
+
+`REVOKE` withdraws the whole authorization; `WITHDRAW_MEDIA` withdraws one asset identified by its provenance `checksum`. Both take effect on the next public read and append exactly one audit event. The admin surface only records decisions: it never writes a product, variant, price row, or media file, and it exposes no way to edit or reintroduce a withdrawn asset. Every decision — `APPROVED`, `REVOKED`, or `MEDIA_WITHDRAWN` — is appended to the audit trail together with the acting admin and an optional reason, so the current public state is always reconstructable from the record and its history.
+
 ## Community API
 
 GET /api/community/designs

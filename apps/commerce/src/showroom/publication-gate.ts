@@ -1,0 +1,486 @@
+/**
+ * The single server-side publication predicate for the Mystcrag showroom
+ * (TASK-COMMERCE-GATE-001).
+ *
+ * Every anonymous public read — list, product detail, designer detail and
+ * collection detail — is decided here, by one pure predicate. A resource is
+ * served only when the live Medusa facts, the versioned authorization, the
+ * manually approved price, the editorially reviewed copy for the requested
+ * locale and at least one approved, non-withdrawn media asset all agree.
+ *
+ * The module is deliberately free of I/O: it receives what the projection
+ * already read from Medusa and the approval records, and it either grants a
+ * strictly parsed Design Contract DTO or names the exact fail-closed reason.
+ * Nothing here can fall back to another locale's copy, another market's
+ * currency, or a raw Medusa Store response; a shape that does not parse is a
+ * denial, never a partially served product.
+ */
+
+import { createHash } from "node:crypto";
+
+import {
+  SHOWROOM_MARKET_CURRENCY,
+  ShowroomPublicCollectionSchema,
+  ShowroomPublicDesignerSchema,
+  ShowroomPublicProductSchema,
+  type ShowroomLocale,
+  type ShowroomMarket,
+  type ShowroomPublicCollection,
+  type ShowroomPublicDesigner,
+  type ShowroomPublicProduct
+} from "@mystcrag/design-contract";
+
+export const SHOWROOM_SUBJECT_KINDS = ["PRODUCT", "DESIGNER", "COLLECTION"] as const;
+export type ShowroomSubjectKind = (typeof SHOWROOM_SUBJECT_KINDS)[number];
+
+export const SHOWROOM_APPROVAL_STATUSES = ["APPROVED", "REVOKED"] as const;
+export type ShowroomApprovalStatus = (typeof SHOWROOM_APPROVAL_STATUSES)[number];
+
+export const SHOWROOM_AVAILABILITY_STATES = [
+  "AVAILABLE",
+  "INQUIRY_ONLY",
+  "OUT_OF_STOCK",
+  "COMING_SOON"
+] as const;
+export type ShowroomAvailabilityState = (typeof SHOWROOM_AVAILABILITY_STATES)[number];
+
+export const SHOWROOM_AUDIT_ACTIONS = ["APPROVED", "REVOKED", "MEDIA_WITHDRAWN"] as const;
+export type ShowroomAuditAction = (typeof SHOWROOM_AUDIT_ACTIONS)[number];
+
+export type ShowroomAuditEvent = {
+  action: ShowroomAuditAction;
+  at: string;
+  actorId: string;
+  reason?: string;
+};
+
+export type ShowroomDesignerRefInput = {
+  slug: string;
+  displayName: string;
+};
+
+export type ShowroomSpecificationInput = {
+  label: string;
+  value: string;
+};
+
+/**
+ * The editorially reviewed copy for exactly one display locale. A locale key
+ * exists only after that locale's copy was reviewed at `reviewedRevision`;
+ * there is no partial or fallback copy, and a copy whose `reviewedRevision`
+ * trails the record's `publicRevision` is stale and fails closed.
+ */
+export type ShowroomLocaleCopy = {
+  reviewedRevision: number;
+  title: string;
+  summary: string;
+  story?: string;
+  materials?: string[];
+  specifications?: ShowroomSpecificationInput[];
+  designer?: ShowroomDesignerRefInput;
+  designers?: ShowroomDesignerRefInput[];
+};
+
+export type ShowroomMediaRecord = {
+  url: string;
+  alt: string;
+  /** Provenance checksum recorded when the asset was authorized. */
+  checksum: string;
+  approved: boolean;
+  withdrawn: boolean;
+  width?: number;
+  height?: number;
+};
+
+export type ShowroomApprovedPrice = {
+  market: ShowroomMarket;
+  currency: string;
+  amountMinor: number;
+  regionId: string;
+  /** Fingerprint of the price row this approval was granted for. */
+  fingerprint: string;
+};
+
+export type ShowroomAuthorization = {
+  status: ShowroomApprovalStatus;
+  markets: ShowroomMarket[];
+  effectiveFrom: string;
+  expiresAt: string;
+};
+
+/**
+ * One versioned publication approval. Products, designers and collections
+ * share the record; `subjectKind` and `subjectRef` identify the subject, and
+ * the kind-specific parts of `locales` are the only place editorial copy lives.
+ */
+export type ShowroomApprovalRecord = {
+  subjectKind: ShowroomSubjectKind;
+  subjectRef: string;
+  publicRevision: number;
+  authorization: ShowroomAuthorization;
+  availability: ShowroomAvailabilityState | null;
+  /**
+   * One manually approved price fingerprint per market. `CN` publishes `CNY`
+   * and `TW` publishes `TWD`; a market has no approved price until an admin
+   * records its exact fingerprint, and the map never lets one market's
+   * approval serve another.
+   */
+  prices: Partial<Record<ShowroomMarket, ShowroomApprovedPrice>>;
+  locales: Partial<Record<ShowroomLocale, ShowroomLocaleCopy>>;
+  media: ShowroomMediaRecord[];
+  audit: ShowroomAuditEvent[];
+};
+
+/** The live Medusa price row for one variant. */
+export type ShowroomLivePrice = {
+  regionId: string | null;
+  currencyCode: string;
+  amountMinor: number;
+};
+
+export type ShowroomLiveProduct = {
+  id: string;
+  handle: string | null;
+  status: string | null;
+  collectionId: string | null;
+  createdAt?: string | null;
+  categoryHandles?: string[];
+  variants: { id: string; prices: ShowroomLivePrice[] }[];
+};
+
+export type ShowroomMarketContext = {
+  market: ShowroomMarket;
+  locale: ShowroomLocale;
+  /** The Medusa region that publishes the requested market. */
+  regionId: string | null;
+  now: string;
+};
+
+export type ShowroomDenialReason =
+  | "NO_APPROVAL"
+  | "NOT_PUBLISHED"
+  | "INVALID_PUBLIC_REVISION"
+  | "AUTHORIZATION_REVOKED"
+  | "AUTHORIZATION_NOT_YET_EFFECTIVE"
+  | "AUTHORIZATION_EXPIRED"
+  | "MARKET_NOT_AUTHORIZED"
+  | "NO_AVAILABILITY_STATE"
+  | "NO_REVIEWED_COPY"
+  | "STALE_REVIEW"
+  | "NO_APPROVED_PRICE"
+  | "PRICE_NOT_APPROVED_FOR_MARKET"
+  | "NO_LIVE_PRICE"
+  | "PRICE_CHANGED_SINCE_APPROVAL"
+  | "NO_APPROVED_MEDIA"
+  | "INVALID_PUBLIC_SHAPE";
+
+export type ShowroomGateGrant<T> = { ok: true; value: T };
+export type ShowroomGateDenial = { ok: false; reason: ShowroomDenialReason };
+export type ShowroomGateResult<T> = ShowroomGateGrant<T> | ShowroomGateDenial;
+
+const grant = <T>(value: T): ShowroomGateGrant<T> => ({ ok: true, value });
+const deny = (reason: ShowroomDenialReason): ShowroomGateDenial => ({ ok: false, reason });
+
+/**
+ * The approved-price fingerprint. The approval stores the fingerprint of the
+ * exact price row that was approved; if the row's region, currency or amount
+ * later changes in Medusa Admin without a new approval, the recomputed
+ * fingerprint no longer matches and the product fails closed.
+ */
+export function computePriceFingerprint(
+  regionId: string,
+  currencyCode: string,
+  amountMinor: number
+): string {
+  return createHash("sha256")
+    .update(`${regionId}|${currencyCode.toLowerCase()}|${amountMinor}`)
+    .digest("hex");
+}
+
+/**
+ * Shared authorization predicate: the versioned authorization must be
+ * `APPROVED`, cover the requested market, and be inside its effective window
+ * at `now`.
+ */
+function evaluateAuthorization(
+  authorization: ShowroomAuthorization | undefined,
+  market: ShowroomMarket,
+  now: string
+): ShowroomDenialReason | undefined {
+  if (!authorization || authorization.status !== "APPROVED") {
+    return "AUTHORIZATION_REVOKED";
+  }
+  if (!authorization.markets.includes(market)) {
+    return "MARKET_NOT_AUTHORIZED";
+  }
+  const nowMs = Date.parse(now);
+  const fromMs = Date.parse(authorization.effectiveFrom);
+  const untilMs = Date.parse(authorization.expiresAt);
+  if (!Number.isFinite(nowMs) || !Number.isFinite(fromMs) || !Number.isFinite(untilMs)) {
+    return "AUTHORIZATION_EXPIRED";
+  }
+  if (nowMs < fromMs) {
+    return "AUTHORIZATION_NOT_YET_EFFECTIVE";
+  }
+  if (nowMs >= untilMs) {
+    return "AUTHORIZATION_EXPIRED";
+  }
+  return undefined;
+}
+
+/** Shared editorial-copy predicate for the requested locale. */
+function evaluateReviewedCopy(
+  record: ShowroomApprovalRecord,
+  locale: ShowroomLocale
+): ShowroomGateResult<ShowroomLocaleCopy> {
+  const copy = record.locales?.[locale];
+  if (!copy) {
+    return deny("NO_REVIEWED_COPY");
+  }
+  if (copy.reviewedRevision !== record.publicRevision) {
+    return deny("STALE_REVIEW");
+  }
+  return grant(copy);
+}
+
+/**
+ * Only approved, non-withdrawn assets that still carry a provenance checksum
+ * are servable. A withdrawn asset is dropped; if nothing remains the subject
+ * fails closed rather than showing unapproved media.
+ */
+function approvedMedia(record: ShowroomApprovalRecord): ShowroomMediaRecord[] {
+  return (record.media ?? []).filter(
+    (asset) => asset.approved && !asset.withdrawn && asset.checksum.trim().length > 0
+  );
+}
+
+/**
+ * The approved price for the requested market. The market is never inferred
+ * from the locale: `CN` publishes `CNY` and `TW` publishes `TWD`, and a price
+ * approved for any other market is refused instead of converted. A subject with
+ * no approved price at all denies `NO_APPROVED_PRICE`; a price approved only for
+ * another market denies `PRICE_NOT_APPROVED_FOR_MARKET`.
+ */
+function evaluateApprovedPrice(
+  record: ShowroomApprovalRecord,
+  market: ShowroomMarket
+): ShowroomGateResult<ShowroomApprovedPrice> {
+  const prices = record.prices ?? {};
+  const approved = prices[market];
+  if (!approved) {
+    return deny(Object.keys(prices).length > 0 ? "PRICE_NOT_APPROVED_FOR_MARKET" : "NO_APPROVED_PRICE");
+  }
+  const expectedCurrency = SHOWROOM_MARKET_CURRENCY[market];
+  if (approved.market !== market || approved.currency !== expectedCurrency) {
+    return deny("PRICE_NOT_APPROVED_FOR_MARKET");
+  }
+  return grant(approved);
+}
+
+function evaluateLivePrice(
+  product: ShowroomLiveProduct,
+  context: ShowroomMarketContext,
+  approved: ShowroomApprovedPrice
+): ShowroomGateResult<ShowroomLivePrice> {
+  const expectedCurrency = SHOWROOM_MARKET_CURRENCY[context.market];
+  const live = (product.variants ?? [])
+    .flatMap((variant) => variant.prices ?? [])
+    .find(
+      (price) =>
+        price.regionId === context.regionId &&
+        price.currencyCode.toLowerCase() === expectedCurrency.toLowerCase()
+    );
+  if (!live) {
+    return deny("NO_LIVE_PRICE");
+  }
+  const fingerprint = computePriceFingerprint(
+    String(context.regionId),
+    expectedCurrency,
+    live.amountMinor
+  );
+  if (fingerprint !== approved.fingerprint) {
+    return deny("PRICE_CHANGED_SINCE_APPROVAL");
+  }
+  return grant(live);
+}
+
+/** Shared: an approval must carry a display-only availability state. */
+function evaluateAvailability(
+  record: ShowroomApprovalRecord
+): ShowroomGateResult<ShowroomAvailabilityState> {
+  if (!record.availability) {
+    return deny("NO_AVAILABILITY_STATE");
+  }
+  return grant(record.availability);
+}
+
+function toMediaDto(assets: ShowroomMediaRecord[]) {
+  return assets.map((asset) => ({
+    url: asset.url,
+    alt: asset.alt,
+    ...(asset.width === undefined ? {} : { width: asset.width }),
+    ...(asset.height === undefined ? {} : { height: asset.height })
+  }));
+}
+
+/**
+ * Product predicate. Reuses the live Medusa Product/Variant/Price facts and the
+ * single Showroom DTO; the result is only a grant when the strict runtime
+ * `safeParse` succeeds.
+ */
+export function evaluateShowroomProduct(
+  product: ShowroomLiveProduct,
+  record: ShowroomApprovalRecord | null,
+  context: ShowroomMarketContext
+): ShowroomGateResult<ShowroomPublicProduct> {
+  if (!record || record.subjectKind !== "PRODUCT") {
+    return deny("NO_APPROVAL");
+  }
+  if (product.status !== "published") {
+    return deny("NOT_PUBLISHED");
+  }
+  if (!Number.isSafeInteger(record.publicRevision) || record.publicRevision < 1) {
+    return deny("INVALID_PUBLIC_REVISION");
+  }
+  const authorization = evaluateAuthorization(record.authorization, context.market, context.now);
+  if (authorization) {
+    return deny(authorization);
+  }
+  const availability = evaluateAvailability(record);
+  if (!availability.ok) {
+    return availability;
+  }
+  const copy = evaluateReviewedCopy(record, context.locale);
+  if (!copy.ok) {
+    return copy;
+  }
+  const approvedPrice = evaluateApprovedPrice(record, context.market);
+  if (!approvedPrice.ok) {
+    return approvedPrice;
+  }
+  const livePrice = evaluateLivePrice(product, context, approvedPrice.value);
+  if (!livePrice.ok) {
+    return livePrice;
+  }
+  const media = approvedMedia(record);
+  if (media.length === 0) {
+    return deny("NO_APPROVED_MEDIA");
+  }
+  const productCopy = copy.value;
+  if (!productCopy.designer) {
+    return deny("INVALID_PUBLIC_SHAPE");
+  }
+
+  const candidate = {
+    slug: product.handle ?? "",
+    publicRevision: record.publicRevision,
+    title: productCopy.title,
+    summary: productCopy.summary,
+    availability: availability.value,
+    media: toMediaDto(media),
+    materials: productCopy.materials ?? [],
+    specifications: productCopy.specifications ?? [],
+    price: {
+      currency: SHOWROOM_MARKET_CURRENCY[context.market],
+      amountMinor: livePrice.value.amountMinor
+    },
+    designer: {
+      slug: productCopy.designer.slug,
+      displayName: productCopy.designer.displayName
+    }
+  };
+
+  const parsed = ShowroomPublicProductSchema.safeParse(candidate);
+  if (!parsed.success) {
+    return deny("INVALID_PUBLIC_SHAPE");
+  }
+  return grant(parsed.data);
+}
+
+/** Designer predicate over the same authorization and copy predicates. */
+export function evaluateShowroomDesigner(
+  record: ShowroomApprovalRecord | null,
+  context: ShowroomMarketContext
+): ShowroomGateResult<ShowroomPublicDesigner> {
+  if (!record || record.subjectKind !== "DESIGNER") {
+    return deny("NO_APPROVAL");
+  }
+  if (!Number.isSafeInteger(record.publicRevision) || record.publicRevision < 1) {
+    return deny("INVALID_PUBLIC_REVISION");
+  }
+  const authorization = evaluateAuthorization(record.authorization, context.market, context.now);
+  if (authorization) {
+    return deny(authorization);
+  }
+  const copy = evaluateReviewedCopy(record, context.locale);
+  if (!copy.ok) {
+    return copy;
+  }
+  const media = approvedMedia(record);
+
+  const candidate = {
+    slug: record.subjectRef,
+    publicRevision: record.publicRevision,
+    displayName: copy.value.title,
+    summary: copy.value.summary,
+    story: copy.value.story ?? "",
+    media: toMediaDto(media)
+  };
+  const parsed = ShowroomPublicDesignerSchema.safeParse(candidate);
+  if (!parsed.success) {
+    return deny("INVALID_PUBLIC_SHAPE");
+  }
+  return grant(parsed.data);
+}
+
+/** Collection predicate; the collection identity comes from live Medusa. */
+export function evaluateShowroomCollection(
+  handle: string | null,
+  record: ShowroomApprovalRecord | null,
+  context: ShowroomMarketContext
+): ShowroomGateResult<ShowroomPublicCollection> {
+  if (!record || record.subjectKind !== "COLLECTION") {
+    return deny("NO_APPROVAL");
+  }
+  if (!Number.isSafeInteger(record.publicRevision) || record.publicRevision < 1) {
+    return deny("INVALID_PUBLIC_REVISION");
+  }
+  const authorization = evaluateAuthorization(record.authorization, context.market, context.now);
+  if (authorization) {
+    return deny(authorization);
+  }
+  const copy = evaluateReviewedCopy(record, context.locale);
+  if (!copy.ok) {
+    return copy;
+  }
+  const media = approvedMedia(record);
+
+  const candidate = {
+    slug: handle ?? "",
+    publicRevision: record.publicRevision,
+    title: copy.value.title,
+    summary: copy.value.summary,
+    media: toMediaDto(media),
+    designers: (copy.value.designers ?? []).map((designer) => ({
+      slug: designer.slug,
+      displayName: designer.displayName
+    }))
+  };
+  const parsed = ShowroomPublicCollectionSchema.safeParse(candidate);
+  if (!parsed.success) {
+    return deny("INVALID_PUBLIC_SHAPE");
+  }
+  return grant(parsed.data);
+}
+
+/**
+ * Builds a fresh, audited approval record. The service uses this so a
+ * re-import of the same approved revision is idempotent and every state change
+ * appends exactly one audit event.
+ */
+export function appendAuditEvent(
+  record: ShowroomApprovalRecord,
+  event: ShowroomAuditEvent
+): ShowroomApprovalRecord {
+  return { ...record, audit: [...(record.audit ?? []), event] };
+}
