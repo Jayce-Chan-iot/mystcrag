@@ -490,20 +490,22 @@ test("audit events retain the version, authorization and media facts of each dec
     publicRevision: 3,
     authorizationStatus: "APPROVED",
     markets: ["CN", "TW"],
-    approvedMedia: [{ checksum: "sha256:aaa", url: "/showroom/wuye/hero-1.webp" }]
+    approvedMedia: [{ checksum: "sha256:aaa", url: "/showroom/wuye/hero-1.webp", alt: "手链正视图" }]
   });
   const withdrawn = appendAuditEvent(approved, {
     action: "MEDIA_WITHDRAWN",
     at: NOW,
     actorId: "admin-2",
     publicRevision: 3,
-    withdrawnMedia: { checksum: "sha256:aaa", url: "/showroom/wuye/hero-1.webp" }
+    withdrawnMedia: { checksum: "sha256:aaa", url: "/showroom/wuye/hero-1.webp", alt: "手链正视图" }
   });
   assert.equal(withdrawn.audit.length, 2);
   assert.equal(withdrawn.audit[0].publicRevision, 3);
   assert.deepEqual(withdrawn.audit[0].markets, ["CN", "TW"]);
   assert.equal(withdrawn.audit[0].approvedMedia?.[0].checksum, "sha256:aaa");
+  assert.equal(withdrawn.audit[0].approvedMedia?.[0].alt, "手链正视图", "the media alt is part of the recorded fact");
   assert.equal(withdrawn.audit[1].withdrawnMedia?.checksum, "sha256:aaa");
+  assert.equal(withdrawn.audit[1].withdrawnMedia?.alt, "手链正视图", "the withdrawn media alt is recorded");
   assert.equal(withdrawn.audit[1].publicRevision, 3);
 });
 
@@ -560,7 +562,7 @@ function withdrawAll(assets: ShowroomMediaRecord[]) {
 
 // --- audit facts rebuild the public state -----------------------------------
 
-test("the recorded public-state facts carry the authorization window, display state, approved prices and reviewed-locale fingerprints", () => {
+test("the recorded public-state facts carry the authorization window, display state, approved prices and the full approved copy", () => {
   const record = makeApproval({
     locales: {
       "zh-CN": { ...reviewedLocaleCopy(3), translationFingerprint: "fp-reviewed-zh" },
@@ -582,8 +584,111 @@ test("the recorded public-state facts carry the authorization window, display st
   assert.equal(cn?.currency, "CNY");
   assert.equal(cn?.regionId, REGION_CN);
   assert.equal(cn?.fingerprint, record.prices.CN?.fingerprint, "the approved price fingerprint is recorded");
-  assert.equal(facts.reviewedLocales.length, 3, "every reviewed locale is recorded");
-  const zh = facts.reviewedLocales.find((locale) => locale.locale === "zh-CN");
-  assert.equal(zh?.reviewedRevision, 3);
-  assert.equal(zh?.translationFingerprint, "fp-reviewed-zh", "the reviewed translation fingerprint is recorded");
+  assert.equal(facts.approvedCopy.length, 3, "every approved locale is recorded");
+  const zh = facts.approvedCopy.find((fact) => fact.locale === "zh-CN");
+  assert.equal(zh?.copy.reviewedRevision, 3);
+  assert.equal(zh?.copy.title, "无野 · 静水手链", "the whole approved copy is recorded, not just a fingerprint");
+  assert.equal(zh?.copy.summary, "天然的静水石与黄铜细节，克制而当代。");
+  assert.deepEqual(zh?.copy.materials, ["天然静水石", "黄铜"]);
+  assert.deepEqual(zh?.copy.specifications, [{ label: "内径", value: "16cm" }]);
+  assert.equal(zh?.copy.designer?.slug, "designer-lin");
+  assert.equal(zh?.copy.translationFingerprint, "fp-reviewed-zh", "the reviewed translation fingerprint is recorded");
+});
+
+test("an APPROVE audit event alone rebuilds the copy and media a later APPROVE overwrote", () => {
+  // APPROVE A establishes copy A and media A on the record.
+  const copyA = {
+    reviewedRevision: 3,
+    title: "无野 · 静水手链（A 版）",
+    summary: "A 版摘要",
+    materials: ["天然静水石", "黄铜"],
+    specifications: [{ label: "内径", value: "16cm" }],
+    designer: { slug: "designer-lin", displayName: "林也" }
+  };
+  const mediaA = [
+    { url: "/showroom/wuye/hero-a.webp", alt: "A 版主图", checksum: "sha256:a", approved: true, withdrawn: false }
+  ];
+  const recordA = makeApproval({ locales: { "zh-CN": copyA }, media: mediaA });
+  const afterA = appendAuditEvent(recordA, {
+    action: "APPROVED",
+    at: NOW,
+    actorId: "admin-1",
+    ...publicStateFacts(recordA),
+    approvedMedia: mediaA.map((asset) => ({ checksum: asset.checksum, url: asset.url, alt: asset.alt }))
+  });
+
+  // APPROVE B overwrites the same subject's live copy and media in place.
+  const copyB = {
+    reviewedRevision: 4,
+    title: "无野 · 静水手链（B 版）",
+    summary: "B 版摘要",
+    materials: ["天然静水石"],
+    specifications: [{ label: "内径", value: "17cm" }],
+    designer: { slug: "designer-lin", displayName: "林也" }
+  };
+  const mediaB = [
+    { url: "/showroom/wuye/hero-b.webp", alt: "B 版主图", checksum: "sha256:b", approved: true, withdrawn: false }
+  ];
+  const recordB = makeApproval({
+    publicRevision: 4,
+    locales: { "zh-CN": copyB },
+    media: mediaB,
+    audit: afterA.audit
+  });
+  const afterB = appendAuditEvent(recordB, {
+    action: "APPROVED",
+    at: NOW,
+    actorId: "admin-2",
+    ...publicStateFacts(recordB),
+    approvedMedia: mediaB.map((asset) => ({ checksum: asset.checksum, url: asset.url, alt: asset.alt }))
+  });
+
+  // The live record now serves B; only the audit trail remembers A.
+  const eventA = afterB.audit[0];
+  const eventB = afterB.audit[1];
+  assert.equal(eventA.approvedCopy?.[0].copy.title, copyA.title, "A's event keeps A's own copy");
+  assert.equal(eventA.approvedCopy?.[0].copy.summary, copyA.summary);
+  assert.equal(eventA.approvedCopy?.[0].copy.reviewedRevision, 3);
+  assert.notEqual(
+    eventA.approvedCopy?.[0].copy.title,
+    eventB.approvedCopy?.[0].copy.title,
+    "B's overwrite is a distinct audited fact, not a rewrite of A's"
+  );
+  assert.equal(eventA.approvedMedia?.[0].checksum, "sha256:a", "A's event keeps A's own media");
+  assert.equal(eventA.approvedMedia?.[0].alt, "A 版主图", "A's event keeps A's own media alt");
+  assert.notEqual(eventA.approvedMedia?.[0].checksum, eventB.approvedMedia?.[0].checksum);
+
+  // Rebuild A's public read strictly from event A's facts and prove it serves A.
+  const rebuiltA: ShowroomApprovalRecord = {
+    subjectKind: "PRODUCT",
+    subjectRef: "prod_wuye_bracelet",
+    publicRevision: eventA.publicRevision as number,
+    authorization: {
+      status: eventA.authorizationStatus as ShowroomApprovalRecord["authorization"]["status"],
+      markets: eventA.markets as ShowroomApprovalRecord["authorization"]["markets"],
+      effectiveFrom: eventA.effectiveFrom as string,
+      expiresAt: eventA.expiresAt as string
+    },
+    availability: eventA.availability ?? null,
+    prices: Object.fromEntries(
+      (eventA.approvedPrices ?? []).map((fact) => [fact.market, fact])
+    ) as ShowroomApprovalRecord["prices"],
+    locales: Object.fromEntries(
+      (eventA.approvedCopy ?? []).map((fact) => [fact.locale, fact.copy])
+    ) as ShowroomApprovalRecord["locales"],
+    media: (eventA.approvedMedia ?? []).map((fact) => ({
+      ...fact,
+      approved: true,
+      withdrawn: false
+    })),
+    audit: []
+  };
+  const served = evaluateShowroomProduct(makeProduct(), rebuiltA, contextFor("CN", "zh-CN"));
+  assert.equal(served.ok, true, "A is served from the audit event alone");
+  if (served.ok) {
+    assert.equal(served.value.title, copyA.title, "the rebuilt public response is A, not B");
+    assert.equal(served.value.summary, copyA.summary);
+    assert.equal(served.value.media[0].url, mediaA[0].url);
+    assert.equal(served.value.media[0].alt, mediaA[0].alt);
+  }
 });

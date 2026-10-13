@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -19,8 +20,15 @@ import { resolveCommerceDatabaseUrl } from "../src/isolation/env";
 // lose an audit event nor overwrite a withdrawal, a withdrawn asset stays
 // withdrawn across an arbitrary sequence of later approvals, withdrawing an
 // unknown checksum is refused, an Admin translation edit after approval fails
-// the public read closed, a revoke propagates on the next read, and the Mystcrag
-// user database is never written to.
+// the public read closed, a revoke propagates on the next read, the full
+// approved copy is audited, and the Mystcrag user database is never written to.
+//
+// The cross-process case takes the approval row lock from an independent
+// connection and confirms it is actually held with a `FOR UPDATE NOWAIT` probe;
+// only then does it start the two writer requests and prove they overlap the
+// held-lock period (they stay in flight and the database reports them waiting on
+// the lock), and it releases the lock explicitly before awaiting them — no fixed
+// sleep stands in for that proof.
 //
 // It only runs when an explicit isolated database and a canary user-database URL
 // are supplied. Without them it is skipped, so the ordinary commerce test run
@@ -116,54 +124,111 @@ async function waitForHealth(origin: string, child: ReturnType<typeof spawn>, lo
 }
 
 /**
- * Holds a `SELECT ... FOR UPDATE` row lock on one approval record from an
- * independent PostgreSQL connection, then returns a function that resolves once
- * the lock holder has committed. Both writer processes make their decision while
- * this lock is held, so both read the same committed snapshot — the exact
- * condition under which a whole-row update without a database row lock loses one
- * writer's change.
+ * The `pg` client, resolved through Medusa's own dependency chain. The commerce
+ * package does not depend on `pg` directly, but the framework does, so the test
+ * reaches it the same way the running server does.
  */
-async function holdRowLock(productId: string, seconds: number): Promise<() => Promise<void>> {
-  const parsed = new URL(isolatedUrl);
-  const database = decodeURI(parsed.pathname).replace(/^\/+/, "");
-  const sql =
-    "begin; " +
-    `select 1 from showroom_approval_record where subject_kind = 'PRODUCT' and subject_ref = '${productId}' for update; ` +
-    "select 'LOCKED' as lock_marker; " +
-    `select pg_sleep(${seconds}); ` +
-    "commit;";
-  const lockHolder = spawn(
-    "psql",
-    ["-h", parsed.hostname, "-p", parsed.port || "5432", "-U", psqlUser, "-d", database, "-tAq", "-c", sql],
-    { stdio: ["ignore", "pipe", "ignore"] }
-  );
+type PgClient = {
+  connect(): Promise<void>;
+  query(sql: string, params?: unknown[]): Promise<{ rows: any[] }>;
+  end(): Promise<void>;
+};
 
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("psql did not acquire the approval row lock in time")), 20_000);
-    lockHolder.stdout?.on("data", (chunk) => {
-      if (String(chunk).includes("LOCKED")) {
-        clearTimeout(timer);
-        resolve();
-      }
-    });
-    lockHolder.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    lockHolder.on("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`the psql row-lock holder exited early with code ${code}`));
-    });
-  });
-
-  return async () => {
-    if (lockHolder.exitCode !== null) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      lockHolder.on("exit", () => resolve());
-    });
+function loadPgClient(): new (config: { connectionString: string }) => PgClient {
+  const requireFromCommerce = createRequire(path.join(commerceRoot, "index.js"));
+  const frameworkUtils = requireFromCommerce.resolve("@medusajs/framework/utils");
+  const orm = createRequire(frameworkUtils).resolve("@mikro-orm/postgresql");
+  const pg = createRequire(orm)("pg") as {
+    Client: new (config: { connectionString: string }) => PgClient;
   };
+  return pg.Client;
+}
+
+const LOCK_APPROVAL_ROW_SQL =
+  "select 1 from showroom_approval_record where subject_kind = 'PRODUCT' and subject_ref = $1 and deleted_at is null for update";
+
+/**
+ * Takes a `SELECT ... FOR UPDATE` row lock on one subject's approval record from
+ * an independent PostgreSQL connection. The returned `release` commits and closes
+ * that connection on demand — the lock is held until the test explicitly releases
+ * it, never for a fixed duration.
+ */
+async function acquireApprovalRowLock(productId: string): Promise<{ release: () => Promise<void> }> {
+  const Client = loadPgClient();
+  const holder = new Client({ connectionString: isolatedUrl });
+  await holder.connect();
+  await holder.query("begin");
+  await holder.query(LOCK_APPROVAL_ROW_SQL, [productId]);
+  return {
+    release: async () => {
+      await holder.query("commit");
+      await holder.end();
+    }
+  };
+}
+
+/**
+ * Confirms, from a second independent connection, that another backend actually
+ * holds the row lock right now. A `FOR UPDATE NOWAIT` probe is refused with
+ * PostgreSQL's `lock_not_available` (`55P03`) only when the row is genuinely
+ * locked by someone else.
+ */
+async function isApprovalRowLockHeld(productId: string): Promise<boolean> {
+  const Client = loadPgClient();
+  const probe = new Client({ connectionString: isolatedUrl });
+  await probe.connect();
+  try {
+    await probe.query(`${LOCK_APPROVAL_ROW_SQL} nowait`, [productId]);
+    return false;
+  } catch (error) {
+    return (error as { code?: string }).code === "55P03";
+  } finally {
+    await probe.end();
+  }
+}
+
+/**
+ * An asynchronous connection that reads `pg_stat_activity` without blocking the
+ * event loop, so the two in-flight write requests keep progressing while the
+ * test observes the database. A backend blocked waiting for a row lock reports
+ * `wait_event_type = 'Lock'`; counting them proves the writers are blocked on the
+ * row lock the holder still owns.
+ */
+async function openLockObserver(): Promise<{
+  waitingOnRowLocks: () => Promise<number>;
+  end: () => Promise<void>;
+}> {
+  const Client = loadPgClient();
+  const observer = new Client({ connectionString: isolatedUrl });
+  await observer.connect();
+  return {
+    waitingOnRowLocks: async () => {
+      const result = await observer.query(
+        "select count(*)::int as n from pg_stat_activity " +
+          "where datname = current_database() and wait_event_type = 'Lock'"
+      );
+      return Number(result.rows[0].n);
+    },
+    end: async () => observer.end()
+  };
+}
+
+/** Polls the database until at least `expected` writers wait on the row lock. */
+async function waitForWriterLockWaiters(
+  observer: { waitingOnRowLocks: () => Promise<number> },
+  expected: number,
+  timeoutMs: number
+): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  let seen = 0;
+  while (Date.now() < deadline) {
+    seen = await observer.waitingOnRowLocks();
+    if (seen >= expected) {
+      return seen;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return seen;
 }
 
 test(
@@ -413,9 +478,10 @@ test(
       assert.deepEqual(approval.body.audit[0].markets, ["CN", "TW"]);
       assert.equal(approval.body.audit[0].approvedMedia.length, 1);
       assert.equal(approval.body.audit[0].approvedMedia[0].checksum, "sha256:integration-one");
+      assert.equal(approval.body.audit[0].approvedMedia[0].alt, "手链视图 0", "the approved media alt is audited");
       // The event also stores the facts needed to rebuild the public state:
       // the authorization window, the display state, the approved prices and the
-      // reviewed-locale / translation fingerprints of this decision.
+      // full approved copy per reviewed locale of this decision.
       assert.equal(approval.body.audit[0].effectiveFrom, "2026-01-01T00:00:00.000Z", "the authorization window start is audited");
       assert.equal(approval.body.audit[0].expiresAt, "2027-01-01T00:00:00.000Z", "the authorization expiry is audited");
       assert.equal(approval.body.audit[0].availability, "INQUIRY_ONLY", "the display state is audited");
@@ -423,9 +489,14 @@ test(
       assert.equal(approval.body.audit[0].approvedPrices[0].market, "CN");
       assert.equal(approval.body.audit[0].approvedPrices[0].amountMinor, 128000);
       assert.equal(typeof approval.body.audit[0].approvedPrices[0].fingerprint, "string");
-      assert.equal(approval.body.audit[0].reviewedLocales[0].locale, "zh-CN", "the reviewed locale is audited");
-      assert.equal(approval.body.audit[0].reviewedLocales[0].reviewedRevision, 1);
-      assert.equal(typeof approval.body.audit[0].reviewedLocales[0].translationFingerprint, "string", "the reviewed translation fingerprint is audited");
+      assert.equal(approval.body.audit[0].approvedCopy.length, 1, "the approved locale is audited");
+      assert.equal(approval.body.audit[0].approvedCopy[0].locale, "zh-CN", "the approved locale is audited");
+      assert.equal(approval.body.audit[0].approvedCopy[0].copy.reviewedRevision, 1);
+      assert.equal(approval.body.audit[0].approvedCopy[0].copy.title, "无野 · 静水手链", "the whole approved copy is audited, not just a fingerprint");
+      assert.equal(approval.body.audit[0].approvedCopy[0].copy.summary, "天然的静水石与黄铜细节。");
+      assert.deepEqual(approval.body.audit[0].approvedCopy[0].copy.materials, ["天然静水石", "黄铜"]);
+      assert.equal(approval.body.audit[0].approvedCopy[0].copy.designer.slug, "designer-lin");
+      assert.equal(typeof approval.body.audit[0].approvedCopy[0].copy.translationFingerprint, "string", "the reviewed translation fingerprint is audited");
       assert.equal(rowsFor(one.id), "1", "exactly one approval row exists for the subject");
 
       const listed = await publicList();
@@ -471,6 +542,7 @@ test(
       assert.equal(withdrawn.body.audit[2].action, "MEDIA_WITHDRAWN");
       assert.equal(withdrawn.body.audit[2].publicRevision, 1, "the withdrawal records the revision it applied to");
       assert.equal(withdrawn.body.audit[2].withdrawnMedia.checksum, "sha256:integration-one");
+      assert.equal(withdrawn.body.audit[2].withdrawnMedia.alt, "手链视图 0", "the withdrawn media alt is audited");
       assert.equal(await isListed(one.handle), false, "the withdrawal closes the public list");
       assert.equal((await publicDetail(one.handle)).status, 404, "the withdrawal closes the public detail");
 
@@ -496,26 +568,76 @@ test(
       );
 
       // (6c) Two independent writers act on the same existing approval row at
-      // once. An independent database connection holds the row lock open while
-      // both writers read the same committed snapshot, so an implementation that
-      // updates the whole row without a row lock deterministically drops one
-      // decision's audit event — and may lose the withdrawal entirely.
+      // once. An independent PostgreSQL connection takes the row lock and is
+      // confirmed to hold it; both writers are then started while that lock is
+      // still held, and their blocking on it is observed in the database before
+      // the lock is explicitly released. An implementation that updates the whole
+      // row without a row lock deterministically drops one decision's audit event
+      // — and may lose the withdrawal entirely.
       const cross = await createProduct(4);
       const crossChecksums = ["sha256:cross-a", "sha256:cross-b"];
       const crossSeed = await adminPost(`/admin/showroom-approvals/${cross.id}`, approvePayload(crossChecksums));
       assert.equal(crossSeed.status, 200, `the cross-process subject is approved: ${JSON.stringify(crossSeed.body)}`);
-      const releaseRowLock = await holdRowLock(cross.id, 8);
-      const [crossApprove, crossWithdraw] = await Promise.all([
-        adminPost(`/admin/showroom-approvals/${cross.id}`, approvePayload(crossChecksums)),
-        adminPostTwo(`/admin/showroom-approvals/${cross.id}`, {
+
+      const lock = await acquireApprovalRowLock(cross.id);
+      const observer = await openLockObserver();
+      let approveSettled = false;
+      let withdrawSettled = false;
+      let approveResolvedAt = 0;
+      let withdrawResolvedAt = 0;
+      let releasedAt = 0;
+      let crossApprovePromise: Promise<{ status: number; body: any }> = Promise.resolve({ status: 0, body: null });
+      let crossWithdrawPromise: Promise<{ status: number; body: any }> = Promise.resolve({ status: 0, body: null });
+
+      try {
+        // First confirm the lock is actually held by another backend.
+        assert.equal(
+          await isApprovalRowLockHeld(cross.id),
+          true,
+          "an independent connection actually holds the approval row lock (FOR UPDATE NOWAIT is refused with 55P03)"
+        );
+
+        // Only now, with the lock still held, start the two writers' requests.
+        crossApprovePromise = adminPost(`/admin/showroom-approvals/${cross.id}`, approvePayload(crossChecksums)).then(
+          (result) => {
+            approveSettled = true;
+            approveResolvedAt = Date.now();
+            return result;
+          }
+        );
+        crossWithdrawPromise = adminPostTwo(`/admin/showroom-approvals/${cross.id}`, {
           action: "WITHDRAW_MEDIA",
           checksum: "sha256:cross-a",
           reason: "cross-process withdrawal"
-        })
-      ]);
-      await releaseRowLock;
+        }).then((result) => {
+          withdrawSettled = true;
+          withdrawResolvedAt = Date.now();
+          return result;
+        });
+
+        // While the lock is still held, both write requests must be blocked
+        // waiting on it. The database reports at least two ungranted row-lock
+        // waiters — a causal proof the two requests overlap the held-lock
+        // period, not a sleep — and neither request may have settled yet.
+        const waiters = await waitForWriterLockWaiters(observer, 2, 30_000);
+        assert.ok(
+          waiters >= 2,
+          `both write requests block on the held row lock before it is released (observed waiters: ${waiters})`
+        );
+        assert.equal(approveSettled, false, "the approval request is still in flight while the lock is held");
+        assert.equal(withdrawSettled, false, "the withdrawal request is still in flight while the lock is held");
+      } finally {
+        // Only now, with the overlap proven, release the lock explicitly.
+        releasedAt = Date.now();
+        await observer.end();
+        await lock.release();
+      }
+
+      const [crossApprove, crossWithdraw] = await Promise.all([crossApprovePromise, crossWithdrawPromise]);
       assert.equal(crossApprove.status, 200, `the cross-process approval is accepted: ${JSON.stringify(crossApprove.body)}`);
       assert.equal(crossWithdraw.status, 200, `the cross-process withdrawal is accepted: ${JSON.stringify(crossWithdraw.body)}`);
+      assert.ok(approveResolvedAt >= releasedAt, "the approval request resolved only after the row lock was released");
+      assert.ok(withdrawResolvedAt >= releasedAt, "the withdrawal request resolved only after the row lock was released");
       const crossStored = await adminGet(`/admin/showroom-approvals/${cross.id}`);
       assert.equal(crossStored.status, 200);
       assert.equal(

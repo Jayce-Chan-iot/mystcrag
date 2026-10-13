@@ -306,7 +306,7 @@ class ShowroomPublicationService extends MedusaService({
           const media = mergeWithdrawalFacts(existing?.record.media ?? [], input.media ?? []);
           const approvedMedia = media
             .filter((asset) => asset.approved && !asset.withdrawn && asset.checksum.trim().length > 0)
-            .map((asset) => ({ checksum: asset.checksum, url: asset.url }));
+            .map((asset) => ({ checksum: asset.checksum, url: asset.url, alt: asset.alt }));
           const base: ShowroomApproval = {
             subjectKind: input.subjectKind,
             subjectRef: input.subjectRef,
@@ -418,7 +418,7 @@ class ShowroomPublicationService extends MedusaService({
         actorId,
         ...(reason ? { reason } : {}),
         ...publicStateFacts(withdrawn),
-        withdrawnMedia: { checksum: target.checksum, url: target.url }
+        withdrawnMedia: { checksum: target.checksum, url: target.url, alt: target.alt }
       });
     });
   }

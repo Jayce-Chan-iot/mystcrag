@@ -49,11 +49,11 @@ export type ShowroomAuditAction = (typeof SHOWROOM_AUDIT_ACTIONS)[number];
 
 /**
  * One audited decision. Besides who decided and when, every event carries the
- * facts needed to reconstruct the public state at that decision: the public
+ * facts needed to reconstruct the public response at that decision: the public
  * revision it applied to, the resulting authorization status, markets and
- * effective window, the display availability, the approved price facts and the
- * reviewed per-locale copy fingerprints, plus the media it affected. The history
- * is therefore traceable without reading any live Medusa row again.
+ * effective window, the display availability, the approved price facts, the
+ * whole approved copy per reviewed locale, and the media it affected. The
+ * history is therefore traceable without reading any live Medusa row again.
  */
 export type ShowroomAuditEvent = {
   action: ShowroomAuditAction;
@@ -74,12 +74,17 @@ export type ShowroomAuditEvent = {
   availability?: ShowroomAvailabilityState | null;
   /** The approved price facts after this decision, one per approved market. */
   approvedPrices?: ShowroomApprovedPriceFact[];
-  /** The reviewed per-locale copy fingerprints after this decision. */
-  reviewedLocales?: ShowroomReviewedLocaleFact[];
+  /**
+   * The whole approved copy after this decision, one fact per reviewed locale.
+   * It is a snapshot, not a fingerprint: the public response a locale served at
+   * this decision is rebuildable from the event alone even after a later
+   * decision overwrote the record's live copy.
+   */
+  approvedCopy?: ShowroomApprovedCopyFact[];
   /** The approved media set recorded by this APPROVE. */
-  approvedMedia?: { checksum: string; url: string }[];
+  approvedMedia?: ShowroomApprovedMediaFact[];
   /** The single media asset withdrawn by this MEDIA_WITHDRAWN. */
-  withdrawnMedia?: { checksum: string; url: string };
+  withdrawnMedia?: ShowroomApprovedMediaFact;
 };
 
 /** The approved price fact a decision is audited against, per market. */
@@ -91,19 +96,32 @@ export type ShowroomApprovedPriceFact = {
   fingerprint: string;
 };
 
-/** The reviewed-copy fact a decision is audited against, per display locale. */
-export type ShowroomReviewedLocaleFact = {
+/**
+ * The approved-copy fact a decision is audited against, per display locale. It
+ * carries the whole reviewed copy — not merely a fingerprint — so the public
+ * response that locale served at this decision can be rebuilt from the audit
+ * event alone, including after a later decision overwrote the live copy.
+ */
+export type ShowroomApprovedCopyFact = {
   locale: string;
-  reviewedRevision: number;
-  /** Fingerprint of the live Medusa translation the copy was reviewed against. */
-  translationFingerprint?: string;
+  copy: ShowroomLocaleCopy;
+};
+
+/**
+ * The approved-media fact a decision is audited against, per servable asset. It
+ * carries the url and alt the public response rendered, not only a checksum.
+ */
+export type ShowroomApprovedMediaFact = {
+  checksum: string;
+  url: string;
+  alt: string;
 };
 
 /**
  * The facts that describe the public state a decision established. The service
  * spreads these into each audit event so the public state at any decision can be
  * rebuilt from the audit trail alone, including the authorization window, the
- * display state, the approved price fingerprints and the reviewed copy.
+ * display state, the approved price fingerprints and the approved copy.
  */
 export type ShowroomPublicStateFacts = {
   publicRevision: number;
@@ -113,7 +131,7 @@ export type ShowroomPublicStateFacts = {
   expiresAt: string;
   availability: ShowroomAvailabilityState | null;
   approvedPrices: ShowroomApprovedPriceFact[];
-  reviewedLocales: ShowroomReviewedLocaleFact[];
+  approvedCopy: ShowroomApprovedCopyFact[];
 };
 
 export type ShowroomDesignerRefInput = {
@@ -400,10 +418,31 @@ export function mergeWithdrawalFacts(
 }
 
 /**
- * The facts that let the audit trail alone rebuild the public state a decision
+ * A deep copy of one reviewed copy. The audit trail keeps its own snapshot: a
+ * stored event is never aliased to the live record's objects, so a later decision
+ * that overwrites the record cannot rewrite history.
+ */
+function cloneLocaleCopy(copy: ShowroomLocaleCopy): ShowroomLocaleCopy {
+  return {
+    reviewedRevision: copy.reviewedRevision,
+    title: copy.title,
+    summary: copy.summary,
+    ...(copy.story === undefined ? {} : { story: copy.story }),
+    ...(copy.materials === undefined ? {} : { materials: [...copy.materials] }),
+    ...(copy.specifications === undefined
+      ? {}
+      : { specifications: copy.specifications.map((spec) => ({ label: spec.label, value: spec.value })) }),
+    ...(copy.designer === undefined ? {} : { designer: { ...copy.designer } }),
+    ...(copy.designers === undefined ? {} : { designers: copy.designers.map((designer) => ({ ...designer })) }),
+    ...(copy.translationFingerprint === undefined ? {} : { translationFingerprint: copy.translationFingerprint })
+  };
+}
+
+/**
+ * The facts that let the audit trail alone rebuild the public response a decision
  * established: the public revision, the resulting authorization status and
  * markets, the effective window, the display availability, the approved price
- * fingerprints and the reviewed per-locale copy fingerprints.
+ * fingerprints and the whole approved copy per reviewed locale.
  */
 export function publicStateFacts(record: ShowroomApprovalRecord): ShowroomPublicStateFacts {
   const prices = record.prices ?? {};
@@ -424,12 +463,9 @@ export function publicStateFacts(record: ShowroomApprovalRecord): ShowroomPublic
         regionId: price.regionId,
         fingerprint: price.fingerprint
       })),
-    reviewedLocales: Object.entries(locales).map(([locale, copy]) => ({
+    approvedCopy: Object.entries(locales).map(([locale, copy]) => ({
       locale,
-      reviewedRevision: copy.reviewedRevision,
-      ...(copy.translationFingerprint === undefined
-        ? {}
-        : { translationFingerprint: copy.translationFingerprint })
+      copy: cloneLocaleCopy(copy)
     }))
   };
 }
