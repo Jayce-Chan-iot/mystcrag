@@ -10,9 +10,11 @@ import {
 import {
   appendAuditEvent,
   computePriceFingerprint,
+  computeTranslationFingerprint,
   evaluateShowroomCollection,
   evaluateShowroomDesigner,
   evaluateShowroomProduct,
+  mergeWithdrawalFacts,
   type ShowroomApprovalRecord,
   type ShowroomLiveProduct,
   type ShowroomMarketContext
@@ -400,4 +402,105 @@ test("audit events are appended immutably and revoked state reaches the predicat
     "AUTHORIZATION_REVOKED"
   );
   assert.equal(evaluateShowroomProduct(makeProduct(), withApproval, contextFor("CN", "zh-CN")).ok, true);
+});
+
+// --- live translation version and withdrawal facts --------------------------
+
+test("a translation edited in Medusa Admin after review fails closed through its fingerprint", () => {
+  const reviewed = computeTranslationFingerprint({ title: "无野 · 静水手链" });
+  const approval = makeApproval({
+    locales: {
+      "zh-CN": { ...reviewedLocaleCopy(3), translationFingerprint: reviewed },
+      "zh-TW": reviewedLocaleCopy(3),
+      "en-US": reviewedLocaleCopy(3)
+    }
+  });
+  assert.equal(
+    evaluateShowroomProduct(makeProduct({ translations: { "zh-CN": reviewed } }), approval, contextFor("CN", "zh-CN")).ok,
+    true,
+    "a copy pinned to the live version still serves"
+  );
+
+  const edited = computeTranslationFingerprint({ title: "无野 · 静水手链（Admin 改动）" });
+  expectDenied(
+    evaluateShowroomProduct(makeProduct({ translations: { "zh-CN": edited } }), approval, contextFor("CN", "zh-CN")),
+    "TRANSLATION_CHANGED_SINCE_REVIEW"
+  );
+});
+
+test("a reviewed copy with no pinned live-translation fingerprint fails closed when the live version is available", () => {
+  const live = computeTranslationFingerprint({ title: "无野 · 静水手链" });
+  expectDenied(
+    evaluateShowroomProduct(makeProduct({ translations: { "zh-CN": live } }), makeApproval(), contextFor("CN", "zh-CN")),
+    "TRANSLATION_CHANGED_SINCE_REVIEW"
+  );
+});
+
+test("creating a translation later changes the fingerprint from its empty sentinel", () => {
+  const empty = computeTranslationFingerprint(null);
+  assert.notEqual(empty, computeTranslationFingerprint({ title: "x" }));
+  const approval = makeApproval({
+    locales: {
+      "zh-CN": { ...reviewedLocaleCopy(3), translationFingerprint: empty },
+      "zh-TW": reviewedLocaleCopy(3),
+      "en-US": reviewedLocaleCopy(3)
+    }
+  });
+  assert.equal(
+    evaluateShowroomProduct(makeProduct({ translations: { "zh-CN": empty } }), approval, contextFor("CN", "zh-CN")).ok,
+    true,
+    "no stored translation still serves against its sentinel"
+  );
+  expectDenied(
+    evaluateShowroomProduct(
+      makeProduct({ translations: { "zh-CN": computeTranslationFingerprint({ title: "新增译文" }) } }),
+      approval,
+      contextFor("CN", "zh-CN")
+    ),
+    "TRANSLATION_CHANGED_SINCE_REVIEW"
+  );
+});
+
+test("re-submitting the original APPROVE never reintroduces a withdrawn media asset", () => {
+  const withdrawn = approvedMedia().map((asset) => ({ ...asset, withdrawn: true }));
+  const merged = mergeWithdrawalFacts(withdrawn, approvedMedia());
+  assert.equal(merged.every((asset) => asset.withdrawn), true, "the withdrawal fact survives a re-approval");
+  assert.equal(merged.length, approvedMedia().length, "the incoming approved set is preserved");
+
+  const fresh = mergeWithdrawalFacts(
+    [{ url: "/x.webp", alt: "x", checksum: "sha256:old", approved: true, withdrawn: true }],
+    [{ url: "/y.webp", alt: "y", checksum: "sha256:new", approved: true, withdrawn: false }]
+  );
+  assert.equal(fresh[0].withdrawn, false, "an unrelated new asset is not withdrawn");
+
+  const reintroduced = { ...makeApproval({ media: merged }) };
+  expectDenied(
+    evaluateShowroomProduct(makeProduct(), reintroduced, contextFor("CN", "zh-CN")),
+    "NO_APPROVED_MEDIA"
+  );
+});
+
+test("audit events retain the version, authorization and media facts of each decision", () => {
+  const approved = appendAuditEvent(makeApproval(), {
+    action: "APPROVED",
+    at: NOW,
+    actorId: "admin-1",
+    publicRevision: 3,
+    authorizationStatus: "APPROVED",
+    markets: ["CN", "TW"],
+    approvedMedia: [{ checksum: "sha256:aaa", url: "/showroom/wuye/hero-1.webp" }]
+  });
+  const withdrawn = appendAuditEvent(approved, {
+    action: "MEDIA_WITHDRAWN",
+    at: NOW,
+    actorId: "admin-2",
+    publicRevision: 3,
+    withdrawnMedia: { checksum: "sha256:aaa", url: "/showroom/wuye/hero-1.webp" }
+  });
+  assert.equal(withdrawn.audit.length, 2);
+  assert.equal(withdrawn.audit[0].publicRevision, 3);
+  assert.deepEqual(withdrawn.audit[0].markets, ["CN", "TW"]);
+  assert.equal(withdrawn.audit[0].approvedMedia?.[0].checksum, "sha256:aaa");
+  assert.equal(withdrawn.audit[1].withdrawnMedia?.checksum, "sha256:aaa");
+  assert.equal(withdrawn.audit[1].publicRevision, 3);
 });

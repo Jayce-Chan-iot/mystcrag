@@ -25,7 +25,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     request = parseListRequest(req.query as Record<string, unknown>);
   } catch (error) {
     if (error instanceof ShowroomRequestError) {
-      sendShowroomValidationError(res, error);
+      sendShowroomValidationError(res, error, req.requestId);
       return;
     }
     throw error;
@@ -35,6 +35,6 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const result = await listShowroomProducts(createShowroomDeps(req.scope), request);
     sendShowroomList(res, result);
   } catch {
-    sendShowroomUpstreamError(res);
+    sendShowroomUpstreamError(res, req.requestId);
   }
 }

@@ -1,5 +1,7 @@
+import { Modules } from "@medusajs/framework/utils";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import { computeTranslationFingerprint } from "../../../../showroom/publication-gate";
 import { SHOWROOM_PUBLICATION_MODULE } from "../../../../modules/showroom-publication";
 import type ShowroomPublicationService from "../../../../modules/showroom-publication/service";
 
@@ -13,6 +15,10 @@ import type ShowroomPublicationService from "../../../../modules/showroom-public
  * appends an audit event and takes effect on the next public read; there is no
  * path here that writes a product, a price row or a media file.
  *
+ * On `APPROVE` the server pins each reviewed locale to the live Medusa
+ * translation it was reviewed against; an Admin edit that is not followed by a
+ * new review then fails the public gate closed.
+ *
  * `GET` returns the current approval and its audit trail.
  */
 const ACTIONS = ["APPROVE", "REVOKE", "WITHDRAW_MEDIA"] as const;
@@ -21,6 +27,22 @@ type ApprovalAction = (typeof ACTIONS)[number];
 const AVAILABILITY_STATES = ["AVAILABLE", "INQUIRY_ONLY", "OUT_OF_STOCK", "COMING_SOON"];
 const MARKETS = ["CN", "TW"];
 const LOCALES = ["zh-CN", "zh-TW", "en-US"];
+
+function errorEnvelope(
+  code: string,
+  message: string,
+  requestId?: string,
+  fieldErrors?: { path: string; message: string }[]
+) {
+  return {
+    error: {
+      code,
+      message,
+      ...(fieldErrors ? { fieldErrors } : {}),
+      requestId: requestId && requestId.trim().length > 0 ? requestId : "unknown-request"
+    }
+  };
+}
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -96,6 +118,50 @@ function validateApproveBody(body: any): { path: string; message: string }[] {
   return errors;
 }
 
+/**
+ * The live per-locale translation fingerprint for the product, read from the
+ * Medusa translation module. Every display locale is covered: a locale with no
+ * stored translation reports the empty-payload fingerprint, so creating one
+ * later is itself a change. A failed read is surfaced, never skipped, so an
+ * approval can never be stamped against an unknown translation state.
+ */
+async function liveTranslationFingerprints(scope: any, productId: string): Promise<Record<string, string>> {
+  const byLocale: Record<string, string> = Object.fromEntries(
+    LOCALES.map((locale) => [locale, computeTranslationFingerprint(null)])
+  );
+  let rows: any[] = [];
+  try {
+    rows = (await scope
+      .resolve(Modules.TRANSLATION)
+      .listTranslations({ reference: "product", reference_id: productId })) ?? [];
+  } catch {
+    throw new Error("Failed to read the live product translations");
+  }
+  for (const row of rows) {
+    const locale = String(row?.locale_code ?? "");
+    if (LOCALES.includes(locale)) {
+      byLocale[locale] = computeTranslationFingerprint(row?.translations);
+    }
+  }
+  return byLocale;
+}
+
+/**
+ * Pins each reviewed locale copy to the live translation it was reviewed
+ * against, so an Admin edit that is not followed by a new editorial review
+ * fails the public gate closed instead of serving the superseded approval.
+ */
+function stampTranslationFingerprints(
+  locales: Record<string, any>,
+  fingerprints: Record<string, string>
+): Record<string, any> {
+  const stamped: Record<string, any> = {};
+  for (const [locale, copy] of Object.entries(locales)) {
+    stamped[locale] = { ...copy, translationFingerprint: fingerprints[locale] };
+  }
+  return stamped;
+}
+
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const productId = String(req.params.productId ?? "");
   const service = req.scope.resolve(SHOWROOM_PUBLICATION_MODULE) as ShowroomPublicationService;
@@ -110,33 +176,37 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const action = body.action as ApprovalAction;
 
   if (!ACTIONS.includes(action)) {
-    res.status(400).json({
-      code: "VALIDATION_ERROR",
-      message: `Expected action to be one of ${ACTIONS.join(", ")}.`,
-      fieldErrors: [{ path: "action", message: "Unknown approval action." }]
-    });
+    res.status(400).json(
+      errorEnvelope(
+        "VALIDATION_ERROR",
+        `Expected action to be one of ${ACTIONS.join(", ")}.`,
+        req.requestId,
+        [{ path: "action", message: "Unknown approval action." }]
+      )
+    );
     return;
   }
 
   if (action === "APPROVE") {
     const fieldErrors = validateApproveBody(body);
     if (fieldErrors.length > 0) {
-      res.status(400).json({ code: "VALIDATION_ERROR", message: "Invalid approval payload.", fieldErrors });
+      res.status(400).json(errorEnvelope("VALIDATION_ERROR", "Invalid approval payload.", req.requestId, fieldErrors));
       return;
     }
   }
   if (action === "WITHDRAW_MEDIA" && !isNonEmptyString(body.checksum)) {
-    res.status(400).json({
-      code: "VALIDATION_ERROR",
-      message: "A media checksum is required.",
-      fieldErrors: [{ path: "checksum", message: "Expected the withdrawn asset's provenance checksum." }]
-    });
+    res.status(400).json(
+      errorEnvelope("VALIDATION_ERROR", "A media checksum is required.", req.requestId, [
+        { path: "checksum", message: "Expected the withdrawn asset's provenance checksum." }
+      ])
+    );
     return;
   }
 
   const service = req.scope.resolve(SHOWROOM_PUBLICATION_MODULE) as ShowroomPublicationService;
   try {
     if (action === "APPROVE") {
+      const fingerprints = await liveTranslationFingerprints(req.scope, productId);
       const approval = await service.approve(
         {
           subjectKind: "PRODUCT",
@@ -145,7 +215,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           authorization: body.authorization,
           availability: body.availability,
           prices: body.prices ?? {},
-          locales: body.locales,
+          locales: stampTranslationFingerprints(body.locales, fingerprints),
           media: body.media
         },
         actorId
@@ -161,9 +231,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const approval = await service.withdrawMedia("PRODUCT", productId, body.checksum, actorId, body.reason);
     res.status(200).json({ approval, audit: approval.audit });
   } catch (error) {
-    res.status(400).json({
-      code: "VALIDATION_ERROR",
-      message: error instanceof Error ? error.message : String(error)
-    });
+    const message = error instanceof Error ? error.message : String(error);
+    const notFound = /^No showroom approval/.test(message);
+    res.status(notFound ? 404 : 400).json(
+      errorEnvelope(notFound ? "NOT_FOUND" : "VALIDATION_ERROR", message, req.requestId)
+    );
   }
 }

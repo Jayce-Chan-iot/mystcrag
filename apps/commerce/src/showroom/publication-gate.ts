@@ -47,11 +47,28 @@ export type ShowroomAvailabilityState = (typeof SHOWROOM_AVAILABILITY_STATES)[nu
 export const SHOWROOM_AUDIT_ACTIONS = ["APPROVED", "REVOKED", "MEDIA_WITHDRAWN"] as const;
 export type ShowroomAuditAction = (typeof SHOWROOM_AUDIT_ACTIONS)[number];
 
+/**
+ * One audited decision. Besides who decided and when, every event carries the
+ * facts needed to reconstruct the public state at that decision: the public
+ * revision it applied to, the resulting authorization status and markets, and
+ * the media it affected. The history is therefore traceable without reading any
+ * live Medusa row again.
+ */
 export type ShowroomAuditEvent = {
   action: ShowroomAuditAction;
   at: string;
   actorId: string;
   reason?: string;
+  /** The public revision this decision applied to. */
+  publicRevision?: number;
+  /** The authorization status after this decision. */
+  authorizationStatus?: ShowroomApprovalStatus;
+  /** The markets the authorization covered after this decision. */
+  markets?: ShowroomMarket[];
+  /** The approved media set recorded by this APPROVE. */
+  approvedMedia?: { checksum: string; url: string }[];
+  /** The single media asset withdrawn by this MEDIA_WITHDRAWN. */
+  withdrawnMedia?: { checksum: string; url: string };
 };
 
 export type ShowroomDesignerRefInput = {
@@ -79,6 +96,13 @@ export type ShowroomLocaleCopy = {
   specifications?: ShowroomSpecificationInput[];
   designer?: ShowroomDesignerRefInput;
   designers?: ShowroomDesignerRefInput[];
+  /**
+   * Fingerprint of the live Medusa translation this copy was reviewed against.
+   * When the live translation for the locale changes in Medusa Admin without a
+   * new editorial review, the recomputed fingerprint no longer matches and the
+   * locale fails closed.
+   */
+  translationFingerprint?: string;
 };
 
 export type ShowroomMediaRecord = {
@@ -146,6 +170,12 @@ export type ShowroomLiveProduct = {
   createdAt?: string | null;
   categoryHandles?: string[];
   variants: { id: string; prices: ShowroomLivePrice[] }[];
+  /**
+   * Live per-locale translation fingerprints read from the Medusa translation
+   * module, one entry per display locale. When present, the reviewed copy's
+   * pinned fingerprint must match it or the locale fails closed.
+   */
+  translations?: Record<string, string>;
 };
 
 export type ShowroomMarketContext = {
@@ -167,6 +197,7 @@ export type ShowroomDenialReason =
   | "NO_AVAILABILITY_STATE"
   | "NO_REVIEWED_COPY"
   | "STALE_REVIEW"
+  | "TRANSLATION_CHANGED_SINCE_REVIEW"
   | "NO_APPROVED_PRICE"
   | "PRICE_NOT_APPROVED_FOR_MARKET"
   | "NO_LIVE_PRICE"
@@ -195,6 +226,36 @@ export function computePriceFingerprint(
   return createHash("sha256")
     .update(`${regionId}|${currencyCode.toLowerCase()}|${amountMinor}`)
     .digest("hex");
+}
+
+/**
+ * Canonicalises a translation payload so the fingerprint depends only on the
+ * translated values, never on JSON key order as stored by the database.
+ */
+function canonicaliseTranslation(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicaliseTranslation);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value as Record<string, unknown>)
+        .sort()
+        .map((key) => [key, canonicaliseTranslation((value as Record<string, unknown>)[key])])
+    );
+  }
+  return value;
+}
+
+/**
+ * The live-translation fingerprint. It is derived from the translation module's
+ * own `translations` payload for the locale; a locale with no stored translation
+ * uses the constant fingerprint of an empty payload, so creating a translation
+ * later is itself a change. Because the fingerprint depends only on the
+ * translated values, an Admin edit changes it and the reviewed copy fails closed.
+ */
+export function computeTranslationFingerprint(translations: unknown): string {
+  const normalised = translations === null || translations === undefined ? {} : translations;
+  return createHash("sha256").update(JSON.stringify(canonicaliseTranslation(normalised))).digest("hex");
 }
 
 /**
@@ -228,10 +289,17 @@ function evaluateAuthorization(
   return undefined;
 }
 
-/** Shared editorial-copy predicate for the requested locale. */
+/**
+ * Shared editorial-copy predicate for the requested locale. When the live
+ * translation fingerprint for that locale is supplied, the reviewed copy must
+ * pin the same fingerprint; a copy with no pinned fingerprint, or one whose
+ * pinned fingerprint no longer matches a translation edited in Medusa Admin
+ * without a new review, fails closed.
+ */
 function evaluateReviewedCopy(
   record: ShowroomApprovalRecord,
-  locale: ShowroomLocale
+  locale: ShowroomLocale,
+  liveTranslationFingerprint?: string | null
 ): ShowroomGateResult<ShowroomLocaleCopy> {
   const copy = record.locales?.[locale];
   if (!copy) {
@@ -240,7 +308,32 @@ function evaluateReviewedCopy(
   if (copy.reviewedRevision !== record.publicRevision) {
     return deny("STALE_REVIEW");
   }
+  if (liveTranslationFingerprint !== undefined && liveTranslationFingerprint !== null) {
+    if (copy.translationFingerprint !== liveTranslationFingerprint) {
+      return deny("TRANSLATION_CHANGED_SINCE_REVIEW");
+    }
+  }
   return grant(copy);
+}
+
+/**
+ * Merges a new approval's media set with the withdrawal facts already recorded.
+ * A checksum withdrawn under any earlier decision stays withdrawn even if the
+ * same APPROVE payload is submitted again, so a re-submitted or replayed
+ * decision can never reintroduce a withdrawn asset at the same version.
+ */
+export function mergeWithdrawalFacts(
+  previousMedia: ShowroomMediaRecord[],
+  incomingMedia: ShowroomMediaRecord[]
+): ShowroomMediaRecord[] {
+  const withdrawnChecksums = new Set(
+    (previousMedia ?? [])
+      .filter((asset) => asset.withdrawn && asset.checksum.trim().length > 0)
+      .map((asset) => asset.checksum.trim())
+  );
+  return (incomingMedia ?? []).map((asset) =>
+    withdrawnChecksums.has(asset.checksum.trim()) ? { ...asset, withdrawn: true } : { ...asset }
+  );
 }
 
 /**
@@ -350,7 +443,7 @@ export function evaluateShowroomProduct(
   if (!availability.ok) {
     return availability;
   }
-  const copy = evaluateReviewedCopy(record, context.locale);
+  const copy = evaluateReviewedCopy(record, context.locale, product.translations?.[context.locale] ?? null);
   if (!copy.ok) {
     return copy;
   }

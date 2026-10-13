@@ -3,7 +3,11 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
-import { computePriceFingerprint, type ShowroomApprovalRecord } from "../src/showroom/publication-gate";
+import {
+  computePriceFingerprint,
+  computeTranslationFingerprint,
+  type ShowroomApprovalRecord
+} from "../src/showroom/publication-gate";
 import { publicShowroomPolicy } from "../src/api/middlewares";
 import { GET as listRoute } from "../src/api/api/showroom/products/route";
 import { GET as detailRoute } from "../src/api/api/showroom/products/[slug]/route";
@@ -22,6 +26,12 @@ const commerceRoot = path.resolve(__dirname, "..");
 const REGION_CN = "region_cn";
 const CN_PRICE_MINOR = 128_000;
 const NOW = new Date("2026-10-13T00:00:00.000Z");
+// The single live translation payload the fabricated products carry, and the
+// fingerprint a reviewed copy pins against it.
+const TRANSLATION_TITLE = "无野 · 静水手链";
+const LIVE_TRANSLATION_FINGERPRINT = computeTranslationFingerprint({ title: TRANSLATION_TITLE });
+
+const LOCALES = ["zh-CN", "zh-TW", "en-US"] as const;
 
 type Res = {
   statusCode: number;
@@ -55,11 +65,12 @@ function fakeRes(): Res {
 function reviewedCopy(reviewedRevision = 1) {
   return {
     reviewedRevision,
-    title: "无野 · 静水手链",
+    title: TRANSLATION_TITLE,
     summary: "天然的静水石与黄铜细节。",
     materials: ["天然静水石"],
     specifications: [{ label: "内径", value: "16cm" }],
-    designer: { slug: "designer-lin", displayName: "林也" }
+    designer: { slug: "designer-lin", displayName: "林也" },
+    translationFingerprint: LIVE_TRANSLATION_FINGERPRINT
   };
 }
 
@@ -111,13 +122,24 @@ function container({
   productRows,
   approvals,
   collectionRows = [],
-  failProducts = false
+  failProducts = false,
+  failTranslations = false,
+  translations
 }: {
   productRows: any[];
   approvals: ShowroomApprovalRecord[];
   collectionRows?: any[];
   failProducts?: boolean;
+  failTranslations?: boolean;
+  translations?: Record<string, Record<string, unknown>>;
 }) {
+  const defaultTranslations = Object.fromEntries(
+    productRows.map((row) => [
+      row.id,
+      Object.fromEntries(LOCALES.map((locale) => [locale, { title: TRANSLATION_TITLE }]))
+    ])
+  );
+  const translationPayloads = translations ?? defaultTranslations;
   return {
     resolve(key: string) {
       if (key === "product") {
@@ -162,6 +184,37 @@ function container({
         return { async listRegions() {
           return [{ id: REGION_CN, currency_code: "cny" }];
         } };
+      }
+      if (key === "translation") {
+        return {
+          async listTranslations(filter: any = {}, config: any = {}) {
+            if (failTranslations) {
+              throw new Error("upstream translation read failed");
+            }
+            const referenceId = filter?.reference_id;
+            const ids = referenceId === undefined
+              ? Object.keys(translationPayloads)
+              : Array.isArray(referenceId)
+                ? referenceId
+                : [referenceId];
+            const rows = [];
+            for (const id of ids) {
+              const byLocale = translationPayloads[id];
+              for (const locale of LOCALES) {
+                rows.push({
+                  reference: "product",
+                  reference_id: id,
+                  locale_code: locale,
+                  translations: byLocale?.[locale] ?? {}
+                });
+              }
+            }
+            const select = config?.select ?? [];
+            return rows.map((row) =>
+              select.length ? Object.fromEntries(select.map((field: string) => [field, (row as any)[field]])) : row
+            );
+          }
+        };
       }
       if (key === "showroom_publication") {
         return {
@@ -240,8 +293,10 @@ test("the list boundary rejects an unknown market, locale and any extra query pa
       res as any
     );
     assert.equal(res.statusCode, 400, `expected 400 for ${JSON.stringify(query)}`);
-    assert.equal(res.body.code, "VALIDATION_ERROR");
-    assert.ok(Array.isArray(res.body.fieldErrors));
+    assert.equal(res.body.error.code, "VALIDATION_ERROR");
+    assert.ok(Array.isArray(res.body.error.fieldErrors));
+    assert.equal(typeof res.body.error.requestId, "string");
+    assert.ok(res.body.error.requestId.length > 0, "the shared envelope carries a requestId");
   }
 });
 
@@ -253,9 +308,14 @@ test("the detail route returns 404 for an unapproved product and 200 for an appr
   const scope = container({ productRows: rows, approvals });
 
   const missing = fakeRes();
-  await detailRoute({ query: { market: "CN", locale: "zh-CN" }, params: { slug: "unknown" }, scope } as any, missing as any);
+  await detailRoute(
+    { query: { market: "CN", locale: "zh-CN" }, params: { slug: "unknown" }, scope, requestId: "req-detail-404" } as any,
+    missing as any
+  );
   assert.equal(missing.statusCode, 404);
-  assert.equal(missing.body.code, "NOT_FOUND");
+  assert.equal(missing.body.error.code, "NOT_FOUND");
+  assert.equal(missing.body.error.requestId, "req-detail-404", "the route threads Medusa's requestId into the envelope");
+  assert.equal(missing.body.code, undefined, "the legacy flat envelope is gone");
 
   const unapproved = fakeRes();
   await detailRoute({ query: { market: "CN", locale: "zh-CN" }, params: { slug: "draft-bracelet" }, scope } as any, unapproved as any);
@@ -285,7 +345,7 @@ test("designer and collection routes return 404 without an approved record", asy
     const res = fakeRes();
     await handler({ query: { market: "CN", locale: "zh-CN" }, params: { slug: "whatever" }, scope } as any, res as any);
     assert.equal(res.statusCode, 404);
-    assert.equal(res.body.code, "NOT_FOUND");
+    assert.equal(res.body.error.code, "NOT_FOUND");
   }
 });
 
@@ -302,7 +362,8 @@ test("an upstream catalog failure is a 500 and never a raw product fallback", as
     listRes as any
   );
   assert.equal(listRes.statusCode, 500);
-  assert.equal(listRes.body.code, "INTERNAL_ERROR");
+  assert.equal(listRes.body.error.code, "INTERNAL_ERROR");
+  assert.equal(typeof listRes.body.error.requestId, "string");
   assert.equal(listRes.body.items, undefined, "no partial or raw payload is returned");
 
   const detailRes = fakeRes();
@@ -347,20 +408,24 @@ test("the public bypass policy refuses non-GET methods and relayed store/admin c
   for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
     const res = fakeRes();
     let nextCalled = false;
-    publicShowroomPolicy({ method, headers: {} } as any, res as any, () => {
+    publicShowroomPolicy({ method, headers: {}, requestId: "req-method" } as any, res as any, () => {
       nextCalled = true;
     });
     assert.equal(res.statusCode, 405, `method ${method} must be refused`);
     assert.equal(nextCalled, false);
+    assert.equal(res.body.error.code, "METHOD_NOT_ALLOWED", "the middleware answers with the shared envelope");
+    assert.equal(res.body.error.requestId, "req-method");
   }
   for (const headers of [{ "x-publishable-api-key": "pk_test" }, { authorization: "Bearer token" }]) {
     const res = fakeRes();
     let nextCalled = false;
-    publicShowroomPolicy({ method: "GET", headers } as any, res as any, () => {
+    publicShowroomPolicy({ method: "GET", headers, requestId: "req-cred" } as any, res as any, () => {
       nextCalled = true;
     });
     assert.equal(res.statusCode, 400, `credentials ${JSON.stringify(headers)} must be refused`);
     assert.equal(nextCalled, false);
+    assert.equal(res.body.error.code, "VALIDATION_ERROR");
+    assert.equal(res.body.error.requestId, "req-cred");
   }
   const ok = fakeRes();
   let passed = false;
@@ -368,6 +433,66 @@ test("the public bypass policy refuses non-GET methods and relayed store/admin c
     passed = true;
   });
   assert.equal(passed, true, "an anonymous read-only request passes");
+});
+
+// --- live translation version changes ---------------------------------------
+
+test("an Admin translation edit after approval fails closed on the next public read", async () => {
+  const rows = [liveProduct("prod_ok", "approved-bracelet")];
+  const approvals = [approvalFor("prod_ok")];
+
+  const matching = fakeRes();
+  await listRoute(
+    { query: { market: "CN", locale: "zh-CN" }, params: {}, scope: container({ productRows: rows, approvals }) } as any,
+    matching as any
+  );
+  assert.equal(matching.statusCode, 200);
+  assert.equal(matching.body.items.length, 1, "the approved product serves while its translation is unchanged");
+
+  const edited = fakeRes();
+  await listRoute(
+    {
+      query: { market: "CN", locale: "zh-CN" },
+      params: {},
+      scope: container({
+        productRows: rows,
+        approvals,
+        translations: { prod_ok: { "zh-CN": { title: "无野 · 静水手链（Admin 改动）" } } }
+      })
+    } as any,
+    edited as any
+  );
+  assert.equal(edited.statusCode, 200);
+  assert.deepEqual(edited.body.items, [], "a translation edited after review excludes the product");
+
+  const editedDetail = fakeRes();
+  await detailRoute(
+    {
+      query: { market: "CN", locale: "zh-CN" },
+      params: { slug: "approved-bracelet" },
+      scope: container({
+        productRows: rows,
+        approvals,
+        translations: { prod_ok: { "zh-CN": { title: "无野 · 静水手链（Admin 改动）" } } }
+      })
+    } as any,
+    editedDetail as any
+  );
+  assert.equal(editedDetail.statusCode, 404, "the edited translation closes the detail too");
+});
+
+test("a failed translation read is a 500 and never a partially served page", async () => {
+  const res = fakeRes();
+  await listRoute(
+    {
+      query: { market: "CN", locale: "zh-CN" },
+      params: {},
+      scope: container({ productRows: [liveProduct("prod_ok", "approved-bracelet")], approvals: [approvalFor("prod_ok")], failTranslations: true })
+    } as any,
+    res as any
+  );
+  assert.equal(res.statusCode, 500);
+  assert.equal(res.body.error.code, "INTERNAL_ERROR");
 });
 
 // --- source-level guarantees -------------------------------------------------

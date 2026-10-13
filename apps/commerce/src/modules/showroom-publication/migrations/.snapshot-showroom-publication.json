@@ -228,6 +228,15 @@
           "expression": "CREATE INDEX IF NOT EXISTS \"IDX_showroom_approval_record_deleted_at\" ON \"showroom_approval_record\" (\"deleted_at\") WHERE deleted_at IS NULL"
         },
         {
+          "keyName": "IDX_showroom_approval_record_subject_kind_subject_ref_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_showroom_approval_record_subject_kind_subject_ref_unique\" ON \"showroom_approval_record\" (\"subject_kind\", \"subject_ref\") WHERE deleted_at IS NULL"
+        },
+        {
           "keyName": "showroom_approval_record_pkey",
           "columnNames": [
             "id"

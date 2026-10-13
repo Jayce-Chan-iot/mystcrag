@@ -24,6 +24,15 @@ export const ShowroomApprovalRecord = model.define("showroom_approval_record", {
   locales: model.json(),
   media: model.json(),
   audit: model.json(),
-});
+})
+  // One approval per subject, enforced by the database rather than by a
+  // read-then-write race: two concurrent first approvals for the same
+  // subject_kind + subject_ref can never persist two rows.
+  .indexes([
+    {
+      on: ["subject_kind", "subject_ref"],
+      unique: true,
+    },
+  ]);
 
 export default ShowroomApprovalRecord;

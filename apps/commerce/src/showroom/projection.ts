@@ -16,6 +16,7 @@ import {
   ShowroomCollectionDetailSchema,
   ShowroomDesignerDetailSchema,
   ShowroomListRequestSchema,
+  ShowroomLocaleSchema,
   ShowroomProductDetailSchema,
   ShowroomProductPageSchema,
   ShowroomPublicRequestSchema,
@@ -29,6 +30,7 @@ import {
 } from "@mystcrag/design-contract";
 
 import {
+  computeTranslationFingerprint,
   evaluateShowroomCollection,
   evaluateShowroomDesigner,
   evaluateShowroomProduct,
@@ -38,6 +40,8 @@ import {
   type ShowroomMarketContext,
   type ShowroomSubjectKind
 } from "./publication-gate";
+
+const SHOWROOM_LOCALES = ShowroomLocaleSchema.options as readonly ShowroomLocale[];
 
 /**
  * A mandatory upstream read failed. The route maps this to `500 INTERNAL_ERROR`
@@ -453,7 +457,46 @@ export function createShowroomDeps(scope: ShowroomScope, now: () => Date = () =>
   const query = () => scope.resolve(ContainerRegistrationKeys.QUERY);
   const productModule = () => scope.resolve(Modules.PRODUCT);
   const regionModule = () => scope.resolve(Modules.REGION);
+  const translationModule = () => scope.resolve(Modules.TRANSLATION);
   const approvalModule = () => scope.resolve(SHOWROOM_PUBLICATION_MODULE);
+
+  /**
+   * The live per-locale translation fingerprint for each product, read from the
+   * Medusa translation module. Every display locale is covered: a locale with no
+   * stored translation reports the empty-payload fingerprint, so creating one
+   * later is itself a change. A failed read is a `500`, never a silent skip.
+   */
+  async function translationFingerprints(
+    productIds: string[]
+  ): Promise<Record<string, Record<string, string>>> {
+    const byId: Record<string, Record<string, string>> = {};
+    for (const id of productIds) {
+      byId[id] = Object.fromEntries(
+        SHOWROOM_LOCALES.map((locale) => [locale, computeTranslationFingerprint(null)])
+      );
+    }
+    if (productIds.length === 0) {
+      return byId;
+    }
+    let rows: any[] = [];
+    try {
+      rows = (await translationModule().listTranslations({
+        reference: "product",
+        reference_id: productIds
+      })) ?? [];
+    } catch (error) {
+      throw new ShowroomUpstreamError("Failed to read the live product translations", error);
+    }
+    for (const row of rows) {
+      const id = String(row?.reference_id ?? "");
+      const locale = String(row?.locale_code ?? "");
+      if (!byId[id] || !(SHOWROOM_LOCALES as readonly string[]).includes(locale)) {
+        continue;
+      }
+      byId[id][locale] = computeTranslationFingerprint(row?.translations);
+    }
+    return byId;
+  }
 
   async function readProducts(filters: Record<string, unknown>, take?: number) {
     const { data } = await query().graph({
@@ -462,7 +505,9 @@ export function createShowroomDeps(scope: ShowroomScope, now: () => Date = () =>
       filters,
       ...(take === undefined ? {} : { pagination: { take } })
     });
-    return (data ?? []).map(toLiveProduct);
+    const products: ShowroomLiveProduct[] = ((data ?? []) as any[]).map(toLiveProduct);
+    const fingerprints = await translationFingerprints(products.map((product) => product.id));
+    return products.map((product) => ({ ...product, translations: fingerprints[product.id] }));
   }
 
   return {
@@ -515,38 +560,58 @@ export function createShowroomDeps(scope: ShowroomScope, now: () => Date = () =>
 
 // --- route response helpers -------------------------------------------------
 
+import { randomUUID } from "node:crypto";
+
 const NO_STORE = "no-store";
+
+/**
+ * The shared public error envelope: `{ error: { code, message, fieldErrors?, requestId } }`,
+ * exactly as `docs/API_SPECIFICATION.md` specifies for every public boundary.
+ * `requestId` is Medusa's own request id when the route supplies it and a fresh
+ * id otherwise, so a failure is always attributable.
+ */
+function errorEnvelope(
+  code: string,
+  message: string,
+  requestId?: string | null,
+  fieldErrors?: { path: string; message: string }[]
+): { error: { code: string; message: string; fieldErrors?: { path: string; message: string }[]; requestId: string } } {
+  return {
+    error: {
+      code,
+      message,
+      ...(fieldErrors ? { fieldErrors } : {}),
+      requestId: requestId && requestId.trim().length > 0 ? requestId : randomUUID()
+    }
+  };
+}
 
 export function sendShowroomList(res: any, result: ShowroomListResult) {
   res.setHeader("Cache-Control", NO_STORE);
   res.status(result.status).json(result.body);
 }
 
-export function sendShowroomDetail(res: any, result: ShowroomDetailResult) {
+export function sendShowroomDetail(res: any, result: ShowroomDetailResult, requestId?: string | null) {
   res.setHeader("Cache-Control", NO_STORE);
   if (result.status === 200) {
     res.status(200).json(result.body);
     return;
   }
-  res.status(404).json({
-    code: "NOT_FOUND",
-    message: "The requested showroom resource is not published for this market and locale."
-  });
+  res.status(404).json(
+    errorEnvelope(
+      "NOT_FOUND",
+      "The requested showroom resource is not published for this market and locale.",
+      requestId
+    )
+  );
 }
 
-export function sendShowroomValidationError(res: any, error: ShowroomRequestError) {
+export function sendShowroomValidationError(res: any, error: ShowroomRequestError, requestId?: string | null) {
   res.setHeader("Cache-Control", NO_STORE);
-  res.status(400).json({
-    code: "VALIDATION_ERROR",
-    message: error.message,
-    fieldErrors: error.fieldErrors
-  });
+  res.status(400).json(errorEnvelope("VALIDATION_ERROR", error.message, requestId, error.fieldErrors));
 }
 
-export function sendShowroomUpstreamError(res: any) {
+export function sendShowroomUpstreamError(res: any, requestId?: string | null) {
   res.setHeader("Cache-Control", NO_STORE);
-  res.status(500).json({
-    code: "INTERNAL_ERROR",
-    message: "The showroom source could not be read."
-  });
+  res.status(500).json(errorEnvelope("INTERNAL_ERROR", "The showroom source could not be read.", requestId));
 }

@@ -23,9 +23,12 @@
 
 - 一个资源只有在下列事实**全部一致**时才可能被服务：实时 Medusa 事实（Product 已 `published`）、带版本的授权（`APPROVED`、覆盖请求市场、在有效窗口内）、该市场的**人工批准价指纹**、请求语言的**已审校文案**、至少一个**已批准且未撤回、带来源校验和**的媒体。任何一项缺失或缺译，列表即排除、详情返回 `404 NOT_FOUND`（与未知 slug 相同，不泄露存在性）；上游读取失败返回 `500 INTERNAL_ERROR`，绝不回退到原生 Store 响应、草稿或另一语言/另一市场的文案。
 - **不换汇**：市场 `CN` 只发 `CNY`、`TW` 只发 `TWD`；市场与显示语言 `zh-CN`/`zh-TW`/`en-US` 严格分离，`zh-TW` 配 `CN` 仍为 `CNY`、`zh-CN` 配 `TW` 仍为 `TWD`。价格为**逐市场**批准：记录为每个市场保存一份指纹（`sha256(regionId|currency|amountMinor)`），只批准一个市场不会服务另一个市场。
-- 实时价格经 **Query 层**读取：Medusa 的 Product 模块从不 hydrate `variants.prices`，变体金额与地区 `region_id` 规则由 Pricing 模块经 `query.graph` 借 `variants.price_set.prices` 提供；价格在 Admin 侧被改动而未重新批准时指纹不再匹配，产品失败关闭（`PRICE_CHANGED_SINCE_APPROVAL`）。
+- 实时价格经 **Query 层**读取：Medusa 的 Product 模块从不 hydrate `variants.prices`，变体金额与地区 `region_id` 规则由 Pricing 模块经 `query.graph` 借 `variants.price_set.prices` 提供；价格在 Admin 侧被改动而未重新批准时指纹不再匹配，产品失败关闭（`PRICE_CHANGED_SINCE_APPROVAL`）。译文同理：`APPROVE` 时服务端为每个已审校语言写入其**实时 Medusa 译文指纹**，公共读取每次从翻译模块重算该语言指纹并比对，Admin 在审批后改动译文而未重新审校时该语言立即失败关闭（`TRANSLATION_CHANGED_SINCE_REVIEW`，列表排除、详情 `404`）；无译文行按空载荷指纹比较，故之后新增译文本身即视为变更。
 - Admin 审核路由 `GET|POST /admin/showroom-approvals/{productId}`（需 Medusa Admin 认证）记录**一次一条、带审计**的人工决策：`APPROVE`（版本化授权 + 逐市场批准价 + 逐语言审校文案 + 已批准媒体）、`REVOKE`（撤回整条授权）、`WITHDRAW_MEDIA`（按来源校验和撤回单个资产）。每个动作追加一条审计事件并在**下一次公共读取**生效；此面只做决策记录，从不写入商品、变体、价格行或媒体文件。公共 DTO 均由唯一的设计契约 Showroom schema 经**运行时 `safeParse`**产出，不存在仅类型校验的旁路。
-- 隔离集成测试 `tests/showroom-isolation.integration.test.ts` 仅在显式提供隔离库与 canary 用户库时运行：它把生成的 showroom 迁移应用到**全新隔离库**、经 `medusa:dev` 起真实服务、驱动真实公共/Admin HTTP 面，并断言 canary 用户库零表/零写入。
+- 同一 `subject_kind + subject_ref` **仅有一行**：由生成的唯一索引在持久层保证；同进程内对同一 subject 的决策串行化，并发首次审批中输掉插入竞争的一方转为更新获胜行。因此重复导入同一条 `APPROVE` 幂等（一行 + 追加一条审计），并发首次审批既不产生第二行也不丢审计事件。撤回是记录**事实**而非可清除字段：某校验和被撤回后始终为撤回，重放/重复导入原 `APPROVE` 绝不会在同版本重新引入该资产。
+- 审计事件携带可重建当时公开状态的事实：所应用的 `publicRevision`、决策后的 `authorizationStatus`/`markets`、`APPROVE` 授权的 `approvedMedia`（checksum + url）、`WITHDRAW_MEDIA` 撤回的 `withdrawnMedia`（checksum + url），无需再读实时 Medusa 行即可追溯。
+- 公共 `400/404/500` 一律使用仓库共享信封 `{ error: { code, message, fieldErrors?, requestId } }`（requestId 取 Medusa 请求 id，拒绝策略同样如此），不为该面放宽规范。
+- 隔离集成测试 `tests/showroom-isolation.integration.test.ts` 仅在显式提供隔离库与 canary 用户库时运行：它把生成的 showroom 迁移应用到**全新隔离库**、经 `medusa:dev` 起真实服务、驱动真实公共/Admin HTTP 面，并断言迁移含唯一索引、并发首次审批单行且审计不丢、撤回后重放原 `APPROVE` 不恢复资产、Admin 改动译文后公开读取关闭、撤回/撤销在下次读取生效，以及 canary 用户库零表/零写入。
 
 ## 环境变量（`.env.example`）
 
