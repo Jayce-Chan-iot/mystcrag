@@ -27,6 +27,23 @@ Fixtures are available from `@mystcrag/design-contract/fixtures`.
 
 The server-only `InternalCommercialDesignV1Schema` is intentionally isolated at `@mystcrag/design-contract/internal`. Frontend and community code must not import this subpath.
 
+## Runtime distribution (ESM, CommonJS, Node16)
+
+`src/**` remains the single source of truth: Zod schemas are still the source of the types, every entry point keeps runtime `safeParse`, and no DTO is copied by hand. Pin the three subpaths (`.`, `./fixtures`, `./internal`) to generated runtime entry points:
+
+```sh
+pnpm --filter @mystcrag/design-contract build
+```
+
+The build runs `scripts/build-interop.mjs`, which type-checks and emits a deterministic `dist/esm` tree (ESM JavaScript plus declarations whose relative specifiers carry explicit `.js` extensions) and a `dist/cjs` tree (CommonJS JavaScript plus declarations, marked `{"type":"commonjs"}`). `dist` is ignored build output: it is never hand-edited and never committed.
+
+`package.json` exposes both trees through per-condition `exports`, so every consumer resolves the format it actually loads:
+
+- Node ESM (`import`) and bundlers (`moduleResolution: Bundler`) use `dist/esm`.
+- Node CommonJS (`require`), including `ts-node --swc` and Node16 `tsc`, use `dist/cjs`.
+
+Because `dist` is transient, run the package build before any runtime or Node16 consumer check that resolves these exports.
+
 ## Trust boundaries
 
 Parse all network, provider, persistence, and migration input as `unknown` before it enters domain logic:

@@ -3,14 +3,44 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "./dist/cjs/index.js",
+  "types": "./dist/cjs/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./fixtures": "./src/fixtures/index.ts",
-    "./internal": "./src/schemas/internal-commercial.schema.ts"
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./fixtures": {
+      "import": {
+        "types": "./dist/esm/fixtures/index.d.ts",
+        "default": "./dist/esm/fixtures/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/fixtures/index.d.ts",
+        "default": "./dist/cjs/fixtures/index.js"
+      }
+    },
+    "./internal": {
+      "import": {
+        "types": "./dist/esm/schemas/internal-commercial.schema.d.ts",
+        "default": "./dist/esm/schemas/internal-commercial.schema.js"
+      },
+      "require": {
+        "types": "./dist/cjs/schemas/internal-commercial.schema.d.ts",
+        "default": "./dist/cjs/schemas/internal-commercial.schema.js"
+      }
+    }
   },
   "scripts": {
-    "build": "tsc --noEmit",
+    "build": "node scripts/build-interop.mjs",
     "lint": "tsc --noEmit",
+    "prepare": "node scripts/build-interop.mjs",
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
