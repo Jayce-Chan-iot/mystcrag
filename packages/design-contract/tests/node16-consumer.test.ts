@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,14 +33,13 @@ export const probe: unknown[] = [
 ];
 `;
 
-/** Build is transient and ignored; produce it before any runtime check. */
-function ensureBuilt(): void {
-  if (!existsSync(buildScript)) {
-    return;
-  }
-  if (existsSync(path.join(packageDir, "dist", "esm", "index.js"))) {
-    return;
-  }
+/**
+ * `dist` is transient and ignored, so it may be stale, partial, or absent.
+ * Rebuild it unconditionally before any probe: an existing `dist/esm/index.js`
+ * must never short-circuit the build, or a stale artifact could make the
+ * consumer checks pass without the current source having been emitted.
+ */
+function rebuildContract(): void {
   const built = spawnSync(process.execPath, [buildScript], {
     cwd: packageDir,
     encoding: "utf8"
@@ -52,7 +51,7 @@ function ensureBuilt(): void {
   );
 }
 
-ensureBuilt();
+rebuildContract();
 
 function node(script: string, options: { esm?: boolean } = {}) {
   const args = options.esm ? ["--input-type=module", "-e", script] : ["-e", script];
