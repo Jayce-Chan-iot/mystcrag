@@ -441,12 +441,43 @@ test("the public bypass policy refuses non-GET methods and relayed store/admin c
 // --- live price amount mapping -----------------------------------------------
 
 /**
- * The Medusa Query price row the projection reads. `price` is deliberately
- * unconstrained so a test can hand it a null amount, an absent key, a
- * non-finite value or an unsafe integer — exactly as a partial or broken read
- * would.
+ * The production Medusa Query price row: a variant's money amounts live on
+ * `price_set.prices`, and the region rule is a `price_rules` entry rather than a
+ * flattened field. `price` is deliberately unconstrained so a test can hand it a
+ * null amount, an absent key, a non-finite value or an unsafe integer — exactly
+ * as a partial or broken production read would.
  */
-function liveProductWithPriceAmount(id: string, handle: string, price: Record<string, unknown>) {
+function liveProductWithPriceSetAmount(id: string, handle: string, price: Record<string, unknown>) {
+  return {
+    id,
+    handle,
+    status: "published",
+    collection_id: null,
+    created_at: "2026-09-01T00:00:00.000Z",
+    categories: [],
+    variants: [
+      {
+        id: `${id}_v1`,
+        price_set: {
+          prices: [
+            {
+              currency_code: "cny",
+              price_rules: [{ attribute: "region_id", value: REGION_CN }],
+              ...price
+            }
+          ]
+        }
+      }
+    ]
+  };
+}
+
+/**
+ * The Admin-remapped fallback shape the projection also reads when a row carries
+ * no `price_set`: the amounts sit on `variants.prices` and the region rule is the
+ * flattened `rules.region_id`.
+ */
+function liveProductWithFallbackAmount(id: string, handle: string, price: Record<string, unknown>) {
   return {
     id,
     handle,
@@ -475,7 +506,7 @@ function zeroPriceApproval(subjectRef: string): ShowroomApprovalRecord {
 
 const ZERO_PRICE_HANDLE = "zero-price-bracelet";
 
-test("a live price amount that is missing or not a safe integer fails closed instead of publishing a zero price", async () => {
+test("a production-shape price_set.prices amount that is missing or not a safe integer fails closed instead of publishing a zero price", async () => {
   const approval = zeroPriceApproval("prod_zero");
   // Approving a legal zero is never a licence to publish a vanishable amount: a
   // row whose amount is null, absent, non-finite, fractional or outside the safe
@@ -490,7 +521,7 @@ test("a live price amount that is missing or not a safe integer fails closed ins
   ];
   for (const [label, price] of brokenAmounts) {
     const scope = container({
-      productRows: [liveProductWithPriceAmount("prod_zero", ZERO_PRICE_HANDLE, price)],
+      productRows: [liveProductWithPriceSetAmount("prod_zero", ZERO_PRICE_HANDLE, price)],
       approvals: [approval]
     });
     const list = fakeRes();
@@ -508,7 +539,7 @@ test("a live price amount that is missing or not a safe integer fails closed ins
 
   // A genuinely zero amount that was manually approved is a real price and still serves.
   const zeroScope = container({
-    productRows: [liveProductWithPriceAmount("prod_zero", ZERO_PRICE_HANDLE, { amount: 0 })],
+    productRows: [liveProductWithPriceSetAmount("prod_zero", ZERO_PRICE_HANDLE, { amount: 0 })],
     approvals: [approval]
   });
   const zeroList = fakeRes();
@@ -523,6 +554,44 @@ test("a live price amount that is missing or not a safe integer fails closed ins
   );
   assert.equal(zeroDetail.statusCode, 200, "the approved zero-price detail serves");
   assert.equal(zeroDetail.body.product.price.amountMinor, 0);
+});
+
+test("the Admin-remapped variants.prices fallback also fails a missing amount closed", async () => {
+  // The projection reads `price_set.prices` when it exists and falls back to the
+  // Admin-remapped `variants.prices` when it does not; both shapes route through
+  // the same amount guard, so the fallback fails a vanishable amount closed too.
+  const approval = zeroPriceApproval("prod_fallback_zero");
+  const brokenAmounts: Array<[string, Record<string, unknown>]> = [
+    ["null", { amount: null }],
+    ["absent", {}]
+  ];
+  for (const [label, price] of brokenAmounts) {
+    const scope = container({
+      productRows: [liveProductWithFallbackAmount("prod_fallback_zero", ZERO_PRICE_HANDLE, price)],
+      approvals: [approval]
+    });
+    const list = fakeRes();
+    await listRoute({ query: { market: "CN", locale: "zh-CN" }, params: {}, scope } as any, list as any);
+    assert.equal(list.statusCode, 200);
+    assert.deepEqual(list.body.items, [], `the fallback shape must not publish a ${label} amount as a zero price`);
+    const detail = fakeRes();
+    await detailRoute(
+      { query: { market: "CN", locale: "zh-CN" }, params: { slug: ZERO_PRICE_HANDLE }, scope } as any,
+      detail as any
+    );
+    assert.equal(detail.statusCode, 404, `the fallback shape must close the public detail of a ${label} amount`);
+  }
+
+  // A genuinely zero amount that was manually approved still serves in this shape.
+  const zeroScope = container({
+    productRows: [liveProductWithFallbackAmount("prod_fallback_zero", ZERO_PRICE_HANDLE, { amount: 0 })],
+    approvals: [approval]
+  });
+  const zeroList = fakeRes();
+  await listRoute({ query: { market: "CN", locale: "zh-CN" }, params: {}, scope: zeroScope } as any, zeroList as any);
+  assert.equal(zeroList.statusCode, 200);
+  assert.equal(zeroList.body.items.length, 1, "an approved zero in the fallback shape still serves");
+  assert.equal(zeroList.body.items[0].price.amountMinor, 0);
 });
 
 // --- live translation version changes ---------------------------------------
