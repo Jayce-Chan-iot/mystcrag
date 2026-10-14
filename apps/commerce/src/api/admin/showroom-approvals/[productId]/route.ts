@@ -167,10 +167,13 @@ function stampTranslationFingerprints(
 }
 
 /**
- * The live product public facts an approval must record so the audit event alone
- * can rebuild the public response: the handle (the public slug) and the Medusa
- * status. A read failure is surfaced; a product that does not exist is `null`,
- * so no decision is ever recorded against unknown facts.
+ * The live product public facts an approval records: the handle (the public slug)
+ * and the Medusa status. They are observed at approval time — not an atomic
+ * snapshot of the public response, which is recomputed per read from the live
+ * catalog together with the record — and recorded so the event carries the
+ * catalog facts that decision saw. A read failure is surfaced; a product that
+ * does not exist is `null`, so no decision is ever recorded against unknown
+ * facts.
  */
 async function liveProductPublicFacts(
   scope: any,

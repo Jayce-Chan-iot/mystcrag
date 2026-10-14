@@ -49,11 +49,14 @@ export type ShowroomAuditAction = (typeof SHOWROOM_AUDIT_ACTIONS)[number];
 
 /**
  * One audited decision. Besides who decided and when, every event carries the
- * facts needed to reconstruct the public response at that decision: the public
- * revision it applied to, the resulting authorization status, markets and
- * effective window, the display availability, the approved price facts, the
- * whole approved copy per reviewed locale, and the media it affected. The
- * history is therefore traceable without reading any live Medusa row again.
+ * approval-record-side facts that decision applied: the public revision it
+ * applied to, the resulting authorization status, markets and effective window,
+ * the display availability, the approved price facts, the whole approved copy
+ * per reviewed locale, and the media it affected. This records the decision's
+ * own facts, not a guaranteed reproduction of the live response served at that
+ * instant — the public response is recomputed per read from the live catalog
+ * together with the record — but the history is traceable without reading any
+ * live Medusa row again.
  */
 export type ShowroomAuditEvent = {
   action: ShowroomAuditAction;
@@ -76,9 +79,9 @@ export type ShowroomAuditEvent = {
   approvedPrices?: ShowroomApprovedPriceFact[];
   /**
    * The whole approved copy after this decision, one fact per reviewed locale.
-   * It is a snapshot, not a fingerprint: the public response a locale served at
-   * this decision is rebuildable from the event alone even after a later
-   * decision overwrote the record's live copy.
+   * It is a snapshot, not a fingerprint: that locale's approved copy at this
+   * decision is rebuildable from the event alone even after a later decision
+   * overwrote the record's live copy.
    */
   approvedCopy?: ShowroomApprovedCopyFact[];
   /** The approved media facts after this decision, one per servable asset. */
@@ -87,7 +90,9 @@ export type ShowroomAuditEvent = {
   withdrawnMedia?: ShowroomApprovedMediaFact;
   /**
    * The live product handle — its public slug — observed at this decision, so
-   * the `slug` the public response served is rebuildable from the event.
+   * the handle the product carried at this decision is recorded on the event
+   * (an observation at decision time, not an atomic snapshot of a served
+   * response).
    */
   handle?: string;
   /** The live Medusa product status observed at this decision. */
@@ -456,10 +461,10 @@ function cloneLocaleCopy(copy: ShowroomLocaleCopy): ShowroomLocaleCopy {
 }
 
 /**
- * The facts that let the audit trail alone rebuild the public response a decision
- * established: the public revision, the resulting authorization status and
- * markets, the effective window, the display availability, the approved price
- * fingerprints and the whole approved copy per reviewed locale.
+ * The approval-record-side facts a decision established: the public revision,
+ * the resulting authorization status and markets, the effective window, the
+ * display availability, the approved price fingerprints and the whole approved
+ * copy per reviewed locale.
  */
 export function publicStateFacts(record: ShowroomApprovalRecord): ShowroomPublicStateFacts {
   const prices = record.prices ?? {};

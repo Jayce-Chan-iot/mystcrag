@@ -26,15 +26,16 @@ import { resolveCommerceDatabaseUrl } from "../src/isolation/env";
 // The cross-process case takes the approval row lock from an independent
 // connection, reads that connection's backend PID (`pg_backend_pid()`), and
 // confirms the lock is actually held with a `FOR UPDATE NOWAIT` probe; only then
-// does it start the two writer requests and prove they overlap the held-lock
-// period. The database links each blocked writer backend to the lock holder
-// through the `pg_blocking_pids(pid)` block chain — followed transitively,
-// because the two writers queue behind each other — which the test asserts on,
-// and both requests stay in flight while it is observed. The holder and observer
-// connections are released in a `finally`, including on timeout or assertion
-// failure, and the two requests are always awaited, so no connection is leaked
-// and no unhandled rejection is left behind. No fixed sleep stands in for that
-// proof.
+// does it start the two writer requests — one at a time, so the database links
+// each blocked writer backend to its own HTTP write request through the
+// `pg_blocking_pids(pid)` block chain, followed transitively because the two
+// writers queue behind each other. Both requests stay in flight while the chain
+// is observed and before the lock is released, and the test asserts each is bound
+// to a distinct backend waiting on the approval-row `FOR UPDATE` statement. The
+// holder and observer connections are released in a `finally`, including on
+// timeout or assertion failure, and the two requests are always awaited, so no
+// connection is leaked and no unhandled rejection is left behind. No fixed sleep
+// stands in for that proof.
 //
 // It only runs when an explicit isolated database and a canary user-database URL
 // are supplied. Without them it is skipped, so the ordinary commerce test run
@@ -157,9 +158,11 @@ const LOCK_APPROVAL_ROW_SQL =
  * Takes a `SELECT ... FOR UPDATE` row lock on one subject's approval record from
  * an independent PostgreSQL connection and returns that connection's backend PID
  * (`pg_backend_pid()`), so the blocked writer backends can be linked to this
- * exact holder afterwards. The returned `release` commits and closes the
- * connection on demand — the lock is held until the test explicitly releases it,
- * never for a fixed duration.
+ * exact holder afterwards. The lock is held until the test explicitly releases
+ * it, never for a fixed duration. Connection cleanup is total: a failed `BEGIN`
+ * or lock acquisition closes the connection before rethrowing, and `release`
+ * commits, rolls back a failed commit and always closes the client, so no path —
+ * timeout, assertion failure or commit error — can leak the holder.
  */
 async function acquireApprovalRowLock(
   productId: string
@@ -167,15 +170,35 @@ async function acquireApprovalRowLock(
   const Client = loadPgClient();
   const holder = new Client({ connectionString: isolatedUrl });
   await holder.connect();
-  await holder.query("begin");
-  await holder.query(LOCK_APPROVAL_ROW_SQL, [productId]);
-  const pidRow = await holder.query("select pg_backend_pid() as pid");
-  const holderPid = Number(pidRow.rows[0].pid);
+  let holderPid: number;
+  try {
+    await holder.query("begin");
+    await holder.query(LOCK_APPROVAL_ROW_SQL, [productId]);
+    const pidRow = await holder.query("select pg_backend_pid() as pid");
+    holderPid = Number(pidRow.rows[0].pid);
+  } catch (error) {
+    // The transaction never took the lock, so close the orphaned connection here
+    // instead of leaking it.
+    await holder.end().catch(() => {});
+    throw error;
+  }
+  let released = false;
   return {
     holderPid,
     release: async () => {
-      await holder.query("commit");
-      await holder.end();
+      if (released) {
+        return;
+      }
+      released = true;
+      try {
+        await holder.query("commit");
+      } catch {
+        // A failed commit must still tear the connection down; roll back first so
+        // the server does not keep the transaction open, then close in `finally`.
+        await holder.query("rollback").catch(() => {});
+      } finally {
+        await holder.end().catch(() => {});
+      }
     }
   };
 }
@@ -208,27 +231,30 @@ async function isApprovalRowLockHeld(productId: string): Promise<boolean> {
  * names the backend(s) it waits behind. Two writers contending for one row queue
  * behind each other, so PostgreSQL forms a chain — the holder, then the first
  * waiter, then the second — and the second waiter's `pg_blocking_pids` names the
- * first waiter, not the holder. `blockedBy` therefore follows the block chain
- * transitively: a backend is linked to the holder when the holder appears
- * anywhere along its blocking path, so both writers are shown to wait on the
- * held lock rather than merely counted.
+ * first waiter, not the holder. `waiters` therefore follows the block chain
+ * transitively and, for each waiting backend, also returns the exact statement it
+ * is blocked on, so a waiting backend is linked both to the holder and to the
+ * lock it waits on rather than merely counted.
  */
 async function openLockObserver(): Promise<{
-  blockedBy: (holderPid: number) => Promise<number[]>;
+  waiters: (holderPid: number) => Promise<Array<{ pid: number; query: string }>>;
   end: () => Promise<void>;
 }> {
   const Client = loadPgClient();
   const observer = new Client({ connectionString: isolatedUrl });
   await observer.connect();
   return {
-    blockedBy: async (holderPid: number) => {
+    waiters: async (holderPid: number) => {
       const result = await observer.query(
-        "select pid, pg_blocking_pids(pid) as blockers from pg_stat_activity " +
+        "select pid, pg_blocking_pids(pid) as blockers, query from pg_stat_activity " +
           "where datname = current_database() and wait_event_type = 'Lock'"
       );
       const waits = new Map<number, number[]>();
+      const queries = new Map<number, string>();
       for (const row of result.rows as any[]) {
-        waits.set(Number(row.pid), (row.blockers ?? []).map(Number));
+        const pid = Number(row.pid);
+        waits.set(pid, (row.blockers ?? []).map(Number));
+        queries.set(pid, String(row.query ?? ""));
       }
       const reachesHolder = (start: number): boolean => {
         const seen = new Set<number>();
@@ -248,7 +274,9 @@ async function openLockObserver(): Promise<{
         }
         return false;
       };
-      return [...waits.keys()].filter(reachesHolder);
+      return [...waits.keys()]
+        .filter(reachesHolder)
+        .map((pid) => ({ pid, query: queries.get(pid) ?? "" }));
     },
     end: async () => observer.end()
   };
@@ -256,28 +284,33 @@ async function openLockObserver(): Promise<{
 
 /**
  * Polls the database until at least `expected` distinct writer backends are
- * blocked behind the lock held by `holderPid`, and returns those backend PIDs.
- * The block chain comes from `pg_blocking_pids`, followed transitively, so this
- * proves the writers wait on that specific holder connection — the first
- * directly and the second through the first — not merely that some backend
- * waits.
+ * blocked behind the lock held by `holderPid`, and returns each waiting backend
+ * with the statement it is blocked on. The block chain comes from
+ * `pg_blocking_pids`, followed transitively, so this proves the writers wait on
+ * that specific holder connection — the first directly and the second through
+ * the first — and the returned statement proves each waits on the approval-row
+ * lock rather than an unrelated lock.
  */
-async function waitForBlockedWriterBackends(
-  observer: { blockedBy: (holderPid: number) => Promise<number[]> },
+async function waitForLockWaiters(
+  observer: { waiters: (holderPid: number) => Promise<Array<{ pid: number; query: string }>> },
   holderPid: number,
   expected: number,
   timeoutMs: number
-): Promise<number[]> {
+): Promise<Array<{ pid: number; query: string }>> {
   const deadline = Date.now() + timeoutMs;
-  let pids: number[] = [];
+  let waiters: Array<{ pid: number; query: string }> = [];
   while (Date.now() < deadline) {
-    pids = [...new Set(await observer.blockedBy(holderPid))];
-    if (pids.length >= expected) {
-      return pids;
+    const byPid = new Map<number, string>();
+    for (const waiter of await observer.waiters(holderPid)) {
+      byPid.set(waiter.pid, waiter.query);
+    }
+    waiters = [...byPid.entries()].map(([pid, query]) => ({ pid, query }));
+    if (waiters.length >= expected) {
+      return waiters;
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  return pids;
+  return waiters;
 }
 
 test(
@@ -637,26 +670,29 @@ test(
       // (6c) Two independent writers act on the same existing approval row at
       // once. An independent PostgreSQL connection takes the row lock; its
       // backend PID is read with `pg_backend_pid()` and the lock is confirmed
-      // held with a `FOR UPDATE NOWAIT` probe. Both writers are then started
-      // while that lock is still held, and the database links each blocked
-      // writer backend to that holder through `pg_blocking_pids(pid)` before the
-      // lock is explicitly released. An implementation that updates the whole
-      // row without a row lock deterministically drops one decision's audit
-      // event — and may lose the withdrawal entirely.
+      // held with a `FOR UPDATE NOWAIT` probe. The two writers are then started
+      // one at a time while that lock is still held, so each blocked backend the
+      // database reports through the transitive `pg_blocking_pids(pid)` chain is
+      // bound to its own HTTP write request before the lock is explicitly
+      // released. An implementation that updates the whole row without a row lock
+      // deterministically drops one decision's audit event — and may lose the
+      // withdrawal entirely.
       const cross = await createProduct(4);
       const crossChecksums = ["sha256:cross-a", "sha256:cross-b"];
       const crossSeed = await adminPost(`/admin/showroom-approvals/${cross.id}`, approvePayload(crossChecksums));
       assert.equal(crossSeed.status, 200, `the cross-process subject is approved: ${JSON.stringify(crossSeed.body)}`);
 
       let holderPid = 0;
-      let blockedBackendPids: number[] = [];
+      let approveWriterPid = 0;
+      let withdrawWriterPid = 0;
+      let blockedWaiterRows: Array<{ pid: number; query: string }> = [];
       let approveSettled = false;
       let withdrawSettled = false;
       let approveResolvedAt = 0;
       let withdrawResolvedAt = 0;
       let releasedAt = 0;
       let lock: { holderPid: number; release: () => Promise<void> } | null = null;
-      let observer: { blockedBy: (holderPid: number) => Promise<number[]>; end: () => Promise<void> } | null = null;
+      let observer: { waiters: (holderPid: number) => Promise<Array<{ pid: number; query: string }>>; end: () => Promise<void> } | null = null;
       let inFlight: Promise<{ status: number; body: any }>[] = [];
       let overlapError: unknown = null;
 
@@ -672,7 +708,12 @@ test(
           "an independent connection actually holds the approval row lock (FOR UPDATE NOWAIT is refused with 55P03)"
         );
 
-        // Only now, with the lock still held, start the two writers' requests.
+        // Start the first writer's request while the lock is still held, then wait
+        // until the database reports a backend waiting behind the holder. Only the
+        // first request has been sent, so that single waiter can only belong to it:
+        // the first HTTP write is bound to the first blocked backend PID and to the
+        // approval-row `FOR UPDATE` statement it is blocked on — a causal link, not
+        // a sleep.
         const approvePromise = adminPost(`/admin/showroom-approvals/${cross.id}`, approvePayload(crossChecksums)).then(
           (result) => {
             approveSettled = true;
@@ -680,6 +721,28 @@ test(
             return result;
           }
         );
+        inFlight = [approvePromise];
+
+        const approveWaiters = await waitForLockWaiters(observer, holderPid, 1, 30_000);
+        assert.equal(
+          approveWaiters.length >= 1,
+          true,
+          `the approval writer blocks behind the lock holder ${holderPid} (observed waiters: ${JSON.stringify(approveWaiters)})`
+        );
+        approveWriterPid = approveWaiters[0].pid;
+        assert.notEqual(approveWriterPid, holderPid, "the blocked approval backend is distinct from the lock holder");
+        assert.match(
+          approveWaiters[0].query,
+          /showroom_approval_record[\s\S]*for update/is,
+          "the blocked approval backend waits on the approval-row FOR UPDATE statement"
+        );
+        assert.equal(approveSettled, false, "the approval request is still in flight while the lock is held");
+
+        // Only now start the second writer, so any additional backend the database
+        // reports belongs to this second request. The second writer queues behind
+        // the first through PostgreSQL's block chain — `pg_blocking_pids` for it
+        // names the first waiter, not the holder — so `waitForLockWaiters` follows
+        // the chain transitively and the new PID is bound to the withdrawal request.
         const withdrawPromise = adminPostTwo(`/admin/showroom-approvals/${cross.id}`, {
           action: "WITHDRAW_MEDIA",
           checksum: "sha256:cross-a",
@@ -691,23 +754,31 @@ test(
         });
         inFlight = [approvePromise, withdrawPromise];
 
-        // While the lock is still held, both write requests must be blocked
-        // waiting on it. `pg_blocking_pids` names the holder backend as the
-        // blocker of two distinct writer backends — a causal link from the
-        // holder PID to each writer PID, not a sleep — and neither request may
-        // have settled yet.
-        blockedBackendPids = await waitForBlockedWriterBackends(observer, holderPid, 2, 30_000);
+        const bothWaiters = await waitForLockWaiters(observer, holderPid, 2, 30_000);
         assert.equal(
-          blockedBackendPids.length >= 2,
+          bothWaiters.length >= 2,
           true,
-          `two distinct writer backends block behind the lock holder ${holderPid} (observed: ${blockedBackendPids.join(",")})`
+          `two distinct writer backends block behind the lock holder ${holderPid} through the transitive block chain (observed: ${JSON.stringify(bothWaiters)})`
         );
+        const newWaiters = bothWaiters.filter((waiter) => waiter.pid !== approveWriterPid);
         assert.equal(
-          blockedBackendPids.includes(holderPid),
-          false,
-          "the blocking writer backends are distinct from the lock holder"
+          newWaiters.length >= 1,
+          true,
+          `the withdrawal writer adds a second blocked backend (observed: ${JSON.stringify(bothWaiters)})`
         );
-        assert.equal(approveSettled, false, "the approval request is still in flight while the lock is held");
+        withdrawWriterPid = newWaiters[0].pid;
+        assert.notEqual(withdrawWriterPid, holderPid, "the blocked withdrawal backend is distinct from the lock holder");
+        assert.notEqual(
+          withdrawWriterPid,
+          approveWriterPid,
+          "each HTTP write request is bound to its own distinct blocked backend"
+        );
+        assert.match(
+          newWaiters[0].query,
+          /showroom_approval_record[\s\S]*for update/is,
+          "the blocked withdrawal backend also waits on the approval-row FOR UPDATE statement"
+        );
+        blockedWaiterRows = bothWaiters;
         assert.equal(withdrawSettled, false, "the withdrawal request is still in flight while the lock is held");
       } catch (error) {
         overlapError = error;
@@ -743,6 +814,21 @@ test(
       assert.equal(crossWithdraw.status, 200, `the cross-process withdrawal is accepted: ${JSON.stringify(crossWithdraw.body)}`);
       assert.ok(approveResolvedAt >= releasedAt, "the approval request resolved only after the row lock was released");
       assert.ok(withdrawResolvedAt >= releasedAt, "the withdrawal request resolved only after the row lock was released");
+      // And each HTTP write request was bound to its own blocked backend while the
+      // lock was held: two distinct backends, one per request, both reported by
+      // `pg_blocking_pids` as waiting — transitively — behind the lock holder.
+      assert.notEqual(approveWriterPid, 0, "the approval request was bound to a blocked backend PID");
+      assert.notEqual(withdrawWriterPid, 0, "the withdrawal request was bound to a blocked backend PID");
+      assert.equal(
+        new Set([approveWriterPid, withdrawWriterPid, holderPid]).size,
+        3,
+        "the two writer backends and the lock holder are three distinct backends"
+      );
+      assert.deepEqual(
+        blockedWaiterRows.map((waiter) => waiter.pid).sort((a, b) => a - b),
+        [approveWriterPid, withdrawWriterPid].sort((a, b) => a - b),
+        "the lock waiters observed while the lock was held are exactly the two writer requests' backends"
+      );
       const crossStored = await adminGet(`/admin/showroom-approvals/${cross.id}`);
       assert.equal(crossStored.status, 200);
       assert.equal(
