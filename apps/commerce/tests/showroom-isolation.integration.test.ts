@@ -22,6 +22,11 @@ import { resolveCommerceDatabaseUrl } from "../src/isolation/env";
 // unknown checksum is refused, an Admin translation edit after approval fails
 // the public read closed, a revoke propagates on the next read, the full
 // approved copy is audited, and the Mystcrag user database is never written to.
+// It also proves the admin decision surface is Medusa-authenticated (an
+// anonymous read and an anonymous decision are both refused and record nothing,
+// while the same requests carrying a real admin token are authorized) and that a
+// product a native Store read returns while it is still unapproved never leaks
+// through the Xuanji public entry.
 //
 // The cross-process case takes the approval row lock from an independent
 // connection, reads that connection's backend PID (`pg_backend_pid()`), and
@@ -467,6 +472,7 @@ test(
       const apiKey = await adminPost("/admin/api-keys", { title: "Showroom Integration Key (fictional)", type: "publishable" });
       assert.equal(apiKey.status, 200, "create the publishable key");
       await adminPost(`/admin/api-keys/${apiKey.body.api_key.id}/sales-channels`, { add: [salesChannelId] });
+      const publishableKey = String(apiKey.body.api_key.token);
 
       const collection = await adminPost("/admin/collections", {
         title: "Showroom Integration Collection (fictional)",
@@ -553,6 +559,57 @@ test(
       assert.equal(before.status, 200, "the public list answers before approval");
       assert.deepEqual(before.body.items, [], "an unapproved product is excluded from the public list");
       assert.equal((await publicDetail(one.handle)).status, 404, "an unapproved product detail is 404");
+
+      // (3b) The admin decision surface is Medusa-authenticated: an anonymous
+      // caller can neither read nor write a publication decision, and the
+      // refused decision records nothing, while the same requests carrying a
+      // real admin token are authorized.
+      const anonymousRead = await fetchJson(`${origin}/admin/showroom-approvals/${one.id}`);
+      assert.equal(
+        anonymousRead.status,
+        401,
+        `an anonymous admin read must be refused by Medusa default auth: ${JSON.stringify(anonymousRead.body)}`
+      );
+      const anonymousDecision = await fetchJson(`${origin}/admin/showroom-approvals/${one.id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(approvePayload("sha256:anonymous-attempt"))
+      });
+      assert.equal(
+        anonymousDecision.status,
+        401,
+        `an anonymous admin decision must be refused by Medusa default auth: ${JSON.stringify(anonymousDecision.body)}`
+      );
+      assert.equal(rowsFor(one.id), "0", "the refused anonymous decision records no approval row");
+      const authorizedRead = await adminGet(`/admin/showroom-approvals/${one.id}`);
+      assert.equal(authorizedRead.status, 200, "the same read carrying a real admin token is authorized");
+
+      // (3c) The native Store is a separate surface: a publishable-key read
+      // returns the published product the showroom has not approved, while the
+      // Xuanji public entry keeps that very same product hidden. Confining the
+      // native Store to the network is the later Task 8 acceptance; this proves
+      // only that the public entry never relays native Store data.
+      const nativeStore = await fetchJson(`${origin}/store/products?limit=100`, {
+        headers: { "x-publishable-api-key": publishableKey }
+      });
+      assert.equal(
+        nativeStore.status,
+        200,
+        `the native Store answers a publishable-key read: ${JSON.stringify(nativeStore.body)}`
+      );
+      assert.equal(
+        (nativeStore.body.products ?? []).some((product: any) => product.handle === one.handle),
+        true,
+        "the native Store returns the published product the showroom has not approved"
+      );
+      const publicAfterNativeRead = await publicList();
+      assert.equal(publicAfterNativeRead.status, 200);
+      assert.deepEqual(
+        publicAfterNativeRead.body.items,
+        [],
+        "the product a native Store read returns stays out of the Xuanji public list"
+      );
+      assert.equal((await publicDetail(one.handle)).status, 404, "and its Xuanji detail stays 404");
 
       // (4) A first approval is one audited decision and publishes on the next read.
       const approval = await adminPost(`/admin/showroom-approvals/${one.id}`, approvePayload("sha256:integration-one"));

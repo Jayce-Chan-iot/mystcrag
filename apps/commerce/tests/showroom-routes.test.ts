@@ -438,6 +438,93 @@ test("the public bypass policy refuses non-GET methods and relayed store/admin c
   assert.equal(passed, true, "an anonymous read-only request passes");
 });
 
+// --- live price amount mapping -----------------------------------------------
+
+/**
+ * The Medusa Query price row the projection reads. `price` is deliberately
+ * unconstrained so a test can hand it a null amount, an absent key, a
+ * non-finite value or an unsafe integer — exactly as a partial or broken read
+ * would.
+ */
+function liveProductWithPriceAmount(id: string, handle: string, price: Record<string, unknown>) {
+  return {
+    id,
+    handle,
+    status: "published",
+    collection_id: null,
+    created_at: "2026-09-01T00:00:00.000Z",
+    categories: [],
+    variants: [{ id: `${id}_v1`, prices: [{ currency_code: "cny", rules: { region_id: REGION_CN }, ...price }] }]
+  };
+}
+
+/** An approval for one genuine zero price: a manual approval of `0` is legal. */
+function zeroPriceApproval(subjectRef: string): ShowroomApprovalRecord {
+  return approvalFor(subjectRef, {
+    prices: {
+      CN: {
+        market: "CN",
+        currency: "CNY",
+        amountMinor: 0,
+        regionId: REGION_CN,
+        fingerprint: computePriceFingerprint(REGION_CN, "CNY", 0)
+      }
+    }
+  });
+}
+
+const ZERO_PRICE_HANDLE = "zero-price-bracelet";
+
+test("a live price amount that is missing or not a safe integer fails closed instead of publishing a zero price", async () => {
+  const approval = zeroPriceApproval("prod_zero");
+  // Approving a legal zero is never a licence to publish a vanishable amount: a
+  // row whose amount is null, absent, non-finite, fractional or outside the safe
+  // integer range carries no price, so the subject must be excluded and 404.
+  const brokenAmounts: Array<[string, Record<string, unknown>]> = [
+    ["null", { amount: null }],
+    ["absent", {}],
+    ["NaN", { amount: Number.NaN }],
+    ["Infinity", { amount: Number.POSITIVE_INFINITY }],
+    ["unsafe integer", { amount: Number.MAX_SAFE_INTEGER + 2 }],
+    ["fractional", { amount: 0.5 }]
+  ];
+  for (const [label, price] of brokenAmounts) {
+    const scope = container({
+      productRows: [liveProductWithPriceAmount("prod_zero", ZERO_PRICE_HANDLE, price)],
+      approvals: [approval]
+    });
+    const list = fakeRes();
+    await listRoute({ query: { market: "CN", locale: "zh-CN" }, params: {}, scope } as any, list as any);
+    assert.equal(list.statusCode, 200);
+    assert.deepEqual(list.body.items, [], `a ${label} amount must not be published as a zero price`);
+    const detail = fakeRes();
+    await detailRoute(
+      { query: { market: "CN", locale: "zh-CN" }, params: { slug: ZERO_PRICE_HANDLE }, scope } as any,
+      detail as any
+    );
+    assert.equal(detail.statusCode, 404, `a ${label} amount must close the public detail`);
+    assert.equal(detail.body.error.code, "NOT_FOUND");
+  }
+
+  // A genuinely zero amount that was manually approved is a real price and still serves.
+  const zeroScope = container({
+    productRows: [liveProductWithPriceAmount("prod_zero", ZERO_PRICE_HANDLE, { amount: 0 })],
+    approvals: [approval]
+  });
+  const zeroList = fakeRes();
+  await listRoute({ query: { market: "CN", locale: "zh-CN" }, params: {}, scope: zeroScope } as any, zeroList as any);
+  assert.equal(zeroList.statusCode, 200);
+  assert.equal(zeroList.body.items.length, 1, "an approved zero price is a real price and still serves");
+  assert.equal(zeroList.body.items[0].price.amountMinor, 0);
+  const zeroDetail = fakeRes();
+  await detailRoute(
+    { query: { market: "CN", locale: "zh-CN" }, params: { slug: ZERO_PRICE_HANDLE }, scope: zeroScope } as any,
+    zeroDetail as any
+  );
+  assert.equal(zeroDetail.statusCode, 200, "the approved zero-price detail serves");
+  assert.equal(zeroDetail.body.product.price.amountMinor, 0);
+});
+
 // --- live translation version changes ---------------------------------------
 
 test("an Admin translation edit after approval fails closed on the next public read", async () => {

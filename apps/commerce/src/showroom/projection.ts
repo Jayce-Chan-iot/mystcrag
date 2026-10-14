@@ -421,6 +421,17 @@ const SHOWROOM_PRODUCT_FIELDS = [
 /** The Medusa container scope a route handler resolves services from. */
 export type ShowroomScope = { resolve: (key: string) => any };
 
+/**
+ * A live price row's amount is only usable when it is a non-negative safe
+ * integer. A missing or null amount, a non-finite value and anything outside the
+ * safe integer range carry no price at all, so the row is dropped and the gate
+ * denies `NO_LIVE_PRICE`; the amount is never defaulted to zero, which an
+ * approval of a genuine zero price would otherwise let through.
+ */
+function toLiveAmountMinor(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
 function toLiveProduct(row: any): ShowroomLiveProduct {
   return {
     id: row.id,
@@ -435,15 +446,24 @@ function toLiveProduct(row: any): ShowroomLiveProduct {
       id: variant.id,
       // Medusa's query layer exposes money amounts through the variant's
       // price set; the Admin fields remap this to `variants.prices` and turn
-      // `price_rules` into `rules`, so both shapes are read here.
-      prices: (variant.price_set?.prices ?? variant.prices ?? []).map((price: any) => ({
-        regionId:
-          price.rules?.region_id ??
-          (price.price_rules ?? []).find((rule: any) => rule?.attribute === "region_id")?.value ??
-          null,
-        currencyCode: price.currency_code ?? "",
-        amountMinor: Number(price.amount ?? 0)
-      }))
+      // `price_rules` into `rules`, so both shapes are read here. A row whose
+      // amount is not a non-negative safe integer is dropped, never defaulted.
+      prices: (variant.price_set?.prices ?? variant.prices ?? []).flatMap((price: any) => {
+        const amountMinor = toLiveAmountMinor(price.amount);
+        if (amountMinor === null) {
+          return [];
+        }
+        return [
+          {
+            regionId:
+              price.rules?.region_id ??
+              (price.price_rules ?? []).find((rule: any) => rule?.attribute === "region_id")?.value ??
+              null,
+            currencyCode: price.currency_code ?? "",
+            amountMinor
+          }
+        ];
+      })
     }))
   };
 }
