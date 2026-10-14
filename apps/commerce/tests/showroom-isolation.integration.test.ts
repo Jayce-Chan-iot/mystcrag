@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { createWriteStream, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -24,11 +24,17 @@ import { resolveCommerceDatabaseUrl } from "../src/isolation/env";
 // approved copy is audited, and the Mystcrag user database is never written to.
 //
 // The cross-process case takes the approval row lock from an independent
-// connection and confirms it is actually held with a `FOR UPDATE NOWAIT` probe;
-// only then does it start the two writer requests and prove they overlap the
-// held-lock period (they stay in flight and the database reports them waiting on
-// the lock), and it releases the lock explicitly before awaiting them — no fixed
-// sleep stands in for that proof.
+// connection, reads that connection's backend PID (`pg_backend_pid()`), and
+// confirms the lock is actually held with a `FOR UPDATE NOWAIT` probe; only then
+// does it start the two writer requests and prove they overlap the held-lock
+// period. The database links each blocked writer backend to the lock holder
+// through the `pg_blocking_pids(pid)` block chain — followed transitively,
+// because the two writers queue behind each other — which the test asserts on,
+// and both requests stay in flight while it is observed. The holder and observer
+// connections are released in a `finally`, including on timeout or assertion
+// failure, and the two requests are always awaited, so no connection is leaked
+// and no unhandled rejection is left behind. No fixed sleep stands in for that
+// proof.
 //
 // It only runs when an explicit isolated database and a canary user-database URL
 // are supplied. Without them it is skipped, so the ordinary commerce test run
@@ -149,17 +155,24 @@ const LOCK_APPROVAL_ROW_SQL =
 
 /**
  * Takes a `SELECT ... FOR UPDATE` row lock on one subject's approval record from
- * an independent PostgreSQL connection. The returned `release` commits and closes
- * that connection on demand — the lock is held until the test explicitly releases
- * it, never for a fixed duration.
+ * an independent PostgreSQL connection and returns that connection's backend PID
+ * (`pg_backend_pid()`), so the blocked writer backends can be linked to this
+ * exact holder afterwards. The returned `release` commits and closes the
+ * connection on demand — the lock is held until the test explicitly releases it,
+ * never for a fixed duration.
  */
-async function acquireApprovalRowLock(productId: string): Promise<{ release: () => Promise<void> }> {
+async function acquireApprovalRowLock(
+  productId: string
+): Promise<{ holderPid: number; release: () => Promise<void> }> {
   const Client = loadPgClient();
   const holder = new Client({ connectionString: isolatedUrl });
   await holder.connect();
   await holder.query("begin");
   await holder.query(LOCK_APPROVAL_ROW_SQL, [productId]);
+  const pidRow = await holder.query("select pg_backend_pid() as pid");
+  const holderPid = Number(pidRow.rows[0].pid);
   return {
+    holderPid,
     release: async () => {
       await holder.query("commit");
       await holder.end();
@@ -188,47 +201,83 @@ async function isApprovalRowLockHeld(productId: string): Promise<boolean> {
 }
 
 /**
- * An asynchronous connection that reads `pg_stat_activity` without blocking the
- * event loop, so the two in-flight write requests keep progressing while the
- * test observes the database. A backend blocked waiting for a row lock reports
- * `wait_event_type = 'Lock'`; counting them proves the writers are blocked on the
- * row lock the holder still owns.
+ * An asynchronous connection that reads `pg_stat_activity` and its
+ * `pg_blocking_pids()` without blocking the event loop, so the in-flight write
+ * requests keep progressing while the test observes the database. Every backend
+ * waiting on a lock reports `wait_event_type = 'Lock'`, and `pg_blocking_pids(pid)`
+ * names the backend(s) it waits behind. Two writers contending for one row queue
+ * behind each other, so PostgreSQL forms a chain — the holder, then the first
+ * waiter, then the second — and the second waiter's `pg_blocking_pids` names the
+ * first waiter, not the holder. `blockedBy` therefore follows the block chain
+ * transitively: a backend is linked to the holder when the holder appears
+ * anywhere along its blocking path, so both writers are shown to wait on the
+ * held lock rather than merely counted.
  */
 async function openLockObserver(): Promise<{
-  waitingOnRowLocks: () => Promise<number>;
+  blockedBy: (holderPid: number) => Promise<number[]>;
   end: () => Promise<void>;
 }> {
   const Client = loadPgClient();
   const observer = new Client({ connectionString: isolatedUrl });
   await observer.connect();
   return {
-    waitingOnRowLocks: async () => {
+    blockedBy: async (holderPid: number) => {
       const result = await observer.query(
-        "select count(*)::int as n from pg_stat_activity " +
+        "select pid, pg_blocking_pids(pid) as blockers from pg_stat_activity " +
           "where datname = current_database() and wait_event_type = 'Lock'"
       );
-      return Number(result.rows[0].n);
+      const waits = new Map<number, number[]>();
+      for (const row of result.rows as any[]) {
+        waits.set(Number(row.pid), (row.blockers ?? []).map(Number));
+      }
+      const reachesHolder = (start: number): boolean => {
+        const seen = new Set<number>();
+        const stack = [start];
+        while (stack.length > 0) {
+          const pid = stack.pop()!;
+          if (seen.has(pid)) {
+            continue;
+          }
+          seen.add(pid);
+          for (const blocker of waits.get(pid) ?? []) {
+            if (blocker === holderPid) {
+              return true;
+            }
+            stack.push(blocker);
+          }
+        }
+        return false;
+      };
+      return [...waits.keys()].filter(reachesHolder);
     },
     end: async () => observer.end()
   };
 }
 
-/** Polls the database until at least `expected` writers wait on the row lock. */
-async function waitForWriterLockWaiters(
-  observer: { waitingOnRowLocks: () => Promise<number> },
+/**
+ * Polls the database until at least `expected` distinct writer backends are
+ * blocked behind the lock held by `holderPid`, and returns those backend PIDs.
+ * The block chain comes from `pg_blocking_pids`, followed transitively, so this
+ * proves the writers wait on that specific holder connection — the first
+ * directly and the second through the first — not merely that some backend
+ * waits.
+ */
+async function waitForBlockedWriterBackends(
+  observer: { blockedBy: (holderPid: number) => Promise<number[]> },
+  holderPid: number,
   expected: number,
   timeoutMs: number
-): Promise<number> {
+): Promise<number[]> {
   const deadline = Date.now() + timeoutMs;
-  let seen = 0;
+  let pids: number[] = [];
   while (Date.now() < deadline) {
-    seen = await observer.waitingOnRowLocks();
-    if (seen >= expected) {
-      return seen;
+    pids = [...new Set(await observer.blockedBy(holderPid))];
+    if (pids.length >= expected) {
+      return pids;
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  return seen;
+  return pids;
 }
 
 test(
@@ -304,6 +353,7 @@ test(
     // developers use. They share the isolated database, so a decision made by
     // one process is visible to — and can race with — the other, exactly as two
     // replicas would.
+    const serverLogStream = createWriteStream(serverLog, { flags: "a" });
     const startWriter = (port: number) => {
       const child = spawn(pnpm.command, [...pnpm.prefix, "run", "medusa:dev"], {
         cwd: commerceRoot,
@@ -311,8 +361,10 @@ test(
         detached: true,
         stdio: ["ignore", "pipe", "pipe"]
       });
-      child.stdout?.on("data", () => {});
-      child.stderr?.on("data", () => {});
+      // Capture both writers' output into the evidence log the health check
+      // references, so a stalled or failed boot is diagnosable after the fact.
+      child.stdout?.pipe(serverLogStream);
+      child.stderr?.pipe(serverLogStream);
       const stop = async () => {
         if (child.exitCode !== null) {
           return;
@@ -439,7 +491,9 @@ test(
             alt: `手链视图 ${index}`,
             checksum,
             approved: true,
-            withdrawn: false
+            withdrawn: false,
+            width: 1200,
+            height: 900
           }))
         };
       };
@@ -479,6 +533,12 @@ test(
       assert.equal(approval.body.audit[0].approvedMedia.length, 1);
       assert.equal(approval.body.audit[0].approvedMedia[0].checksum, "sha256:integration-one");
       assert.equal(approval.body.audit[0].approvedMedia[0].alt, "手链视图 0", "the approved media alt is audited");
+      assert.equal(approval.body.audit[0].approvedMedia[0].width, 1200, "the approved media width is audited");
+      assert.equal(approval.body.audit[0].approvedMedia[0].height, 900, "the approved media height is audited");
+      // The event also records the live product public facts a rebuild needs:
+      // the handle (the public slug) and the Medusa status.
+      assert.equal(approval.body.audit[0].handle, one.handle, "the live product handle is audited");
+      assert.equal(approval.body.audit[0].productStatus, "published", "the live product status is audited");
       // The event also stores the facts needed to rebuild the public state:
       // the authorization window, the display state, the approved prices and the
       // full approved copy per reviewed locale of this decision.
@@ -543,6 +603,13 @@ test(
       assert.equal(withdrawn.body.audit[2].publicRevision, 1, "the withdrawal records the revision it applied to");
       assert.equal(withdrawn.body.audit[2].withdrawnMedia.checksum, "sha256:integration-one");
       assert.equal(withdrawn.body.audit[2].withdrawnMedia.alt, "手链视图 0", "the withdrawn media alt is audited");
+      assert.equal(withdrawn.body.audit[2].withdrawnMedia.width, 1200, "the withdrawn media width is audited");
+      assert.equal(withdrawn.body.audit[2].withdrawnMedia.height, 900, "the withdrawn media height is audited");
+      assert.deepEqual(
+        withdrawn.body.audit[2].approvedMedia,
+        [],
+        "the withdrawal event records that no servable media remains"
+      );
       assert.equal(await isListed(one.handle), false, "the withdrawal closes the public list");
       assert.equal((await publicDetail(one.handle)).status, 404, "the withdrawal closes the public detail");
 
@@ -568,29 +635,37 @@ test(
       );
 
       // (6c) Two independent writers act on the same existing approval row at
-      // once. An independent PostgreSQL connection takes the row lock and is
-      // confirmed to hold it; both writers are then started while that lock is
-      // still held, and their blocking on it is observed in the database before
-      // the lock is explicitly released. An implementation that updates the whole
-      // row without a row lock deterministically drops one decision's audit event
-      // — and may lose the withdrawal entirely.
+      // once. An independent PostgreSQL connection takes the row lock; its
+      // backend PID is read with `pg_backend_pid()` and the lock is confirmed
+      // held with a `FOR UPDATE NOWAIT` probe. Both writers are then started
+      // while that lock is still held, and the database links each blocked
+      // writer backend to that holder through `pg_blocking_pids(pid)` before the
+      // lock is explicitly released. An implementation that updates the whole
+      // row without a row lock deterministically drops one decision's audit
+      // event — and may lose the withdrawal entirely.
       const cross = await createProduct(4);
       const crossChecksums = ["sha256:cross-a", "sha256:cross-b"];
       const crossSeed = await adminPost(`/admin/showroom-approvals/${cross.id}`, approvePayload(crossChecksums));
       assert.equal(crossSeed.status, 200, `the cross-process subject is approved: ${JSON.stringify(crossSeed.body)}`);
 
-      const lock = await acquireApprovalRowLock(cross.id);
-      const observer = await openLockObserver();
+      let holderPid = 0;
+      let blockedBackendPids: number[] = [];
       let approveSettled = false;
       let withdrawSettled = false;
       let approveResolvedAt = 0;
       let withdrawResolvedAt = 0;
       let releasedAt = 0;
-      let crossApprovePromise: Promise<{ status: number; body: any }> = Promise.resolve({ status: 0, body: null });
-      let crossWithdrawPromise: Promise<{ status: number; body: any }> = Promise.resolve({ status: 0, body: null });
+      let lock: { holderPid: number; release: () => Promise<void> } | null = null;
+      let observer: { blockedBy: (holderPid: number) => Promise<number[]>; end: () => Promise<void> } | null = null;
+      let inFlight: Promise<{ status: number; body: any }>[] = [];
+      let overlapError: unknown = null;
 
       try {
-        // First confirm the lock is actually held by another backend.
+        lock = await acquireApprovalRowLock(cross.id);
+        holderPid = lock.holderPid;
+        observer = await openLockObserver();
+
+        // First confirm the lock is actually held by that backend.
         assert.equal(
           await isApprovalRowLockHeld(cross.id),
           true,
@@ -598,14 +673,14 @@ test(
         );
 
         // Only now, with the lock still held, start the two writers' requests.
-        crossApprovePromise = adminPost(`/admin/showroom-approvals/${cross.id}`, approvePayload(crossChecksums)).then(
+        const approvePromise = adminPost(`/admin/showroom-approvals/${cross.id}`, approvePayload(crossChecksums)).then(
           (result) => {
             approveSettled = true;
             approveResolvedAt = Date.now();
             return result;
           }
         );
-        crossWithdrawPromise = adminPostTwo(`/admin/showroom-approvals/${cross.id}`, {
+        const withdrawPromise = adminPostTwo(`/admin/showroom-approvals/${cross.id}`, {
           action: "WITHDRAW_MEDIA",
           checksum: "sha256:cross-a",
           reason: "cross-process withdrawal"
@@ -614,26 +689,56 @@ test(
           withdrawResolvedAt = Date.now();
           return result;
         });
+        inFlight = [approvePromise, withdrawPromise];
 
         // While the lock is still held, both write requests must be blocked
-        // waiting on it. The database reports at least two ungranted row-lock
-        // waiters — a causal proof the two requests overlap the held-lock
-        // period, not a sleep — and neither request may have settled yet.
-        const waiters = await waitForWriterLockWaiters(observer, 2, 30_000);
-        assert.ok(
-          waiters >= 2,
-          `both write requests block on the held row lock before it is released (observed waiters: ${waiters})`
+        // waiting on it. `pg_blocking_pids` names the holder backend as the
+        // blocker of two distinct writer backends — a causal link from the
+        // holder PID to each writer PID, not a sleep — and neither request may
+        // have settled yet.
+        blockedBackendPids = await waitForBlockedWriterBackends(observer, holderPid, 2, 30_000);
+        assert.equal(
+          blockedBackendPids.length >= 2,
+          true,
+          `two distinct writer backends block behind the lock holder ${holderPid} (observed: ${blockedBackendPids.join(",")})`
+        );
+        assert.equal(
+          blockedBackendPids.includes(holderPid),
+          false,
+          "the blocking writer backends are distinct from the lock holder"
         );
         assert.equal(approveSettled, false, "the approval request is still in flight while the lock is held");
         assert.equal(withdrawSettled, false, "the withdrawal request is still in flight while the lock is held");
+      } catch (error) {
+        overlapError = error;
       } finally {
-        // Only now, with the overlap proven, release the lock explicitly.
+        // Release the lock and close the observer on every path — including a
+        // timeout or a failed assertion — so no connection is leaked.
         releasedAt = Date.now();
-        await observer.end();
-        await lock.release();
+        if (observer) {
+          await observer.end().catch(() => {});
+        }
+        if (lock) {
+          await lock.release().catch(() => {});
+        }
       }
 
-      const [crossApprove, crossWithdraw] = await Promise.all([crossApprovePromise, crossWithdrawPromise]);
+      // Always await both requests, even after a failed assertion, so they
+      // settle and no unhandled rejection or dangling socket is left behind.
+      const settled = await Promise.allSettled(inFlight);
+      if (overlapError) {
+        throw overlapError;
+      }
+      const crossApprove = settled[0].status === "fulfilled"
+        ? settled[0].value
+        : (() => {
+            throw settled[0].reason;
+          })();
+      const crossWithdraw = settled[1].status === "fulfilled"
+        ? settled[1].value
+        : (() => {
+            throw settled[1].reason;
+          })();
       assert.equal(crossApprove.status, 200, `the cross-process approval is accepted: ${JSON.stringify(crossApprove.body)}`);
       assert.equal(crossWithdraw.status, 200, `the cross-process withdrawal is accepted: ${JSON.stringify(crossWithdraw.body)}`);
       assert.ok(approveResolvedAt >= releasedAt, "the approval request resolved only after the row lock was released");
@@ -649,6 +754,12 @@ test(
         [...crossStored.body.audit.map((event: any) => event.action)].sort(),
         ["APPROVED", "APPROVED", "MEDIA_WITHDRAWN"].sort(),
         "the audit trail holds the seed, the concurrent approval and the concurrent withdrawal, in whichever order the two writers' locks were granted"
+      );
+      const withdrawalEvent = crossStored.body.audit.find((event: any) => event.action === "MEDIA_WITHDRAWN");
+      assert.deepEqual(
+        withdrawalEvent.approvedMedia.map((fact: any) => fact.checksum),
+        ["sha256:cross-b"],
+        "the withdrawal event records the remaining servable media, not the withdrawn asset"
       );
       const crossAsset = crossStored.body.approval.media.find((asset: any) => asset.checksum === "sha256:cross-a");
       assert.equal(crossAsset.withdrawn, true, "the cross-process withdrawal is not overwritten by the concurrent approval");

@@ -81,10 +81,17 @@ export type ShowroomAuditEvent = {
    * decision overwrote the record's live copy.
    */
   approvedCopy?: ShowroomApprovedCopyFact[];
-  /** The approved media set recorded by this APPROVE. */
+  /** The approved media facts after this decision, one per servable asset. */
   approvedMedia?: ShowroomApprovedMediaFact[];
   /** The single media asset withdrawn by this MEDIA_WITHDRAWN. */
   withdrawnMedia?: ShowroomApprovedMediaFact;
+  /**
+   * The live product handle — its public slug — observed at this decision, so
+   * the `slug` the public response served is rebuildable from the event.
+   */
+  handle?: string;
+  /** The live Medusa product status observed at this decision. */
+  productStatus?: string;
 };
 
 /** The approved price fact a decision is audited against, per market. */
@@ -109,12 +116,15 @@ export type ShowroomApprovedCopyFact = {
 
 /**
  * The approved-media fact a decision is audited against, per servable asset. It
- * carries the url and alt the public response rendered, not only a checksum.
+ * carries the url, alt and intrinsic dimensions the public response rendered,
+ * not only a checksum.
  */
 export type ShowroomApprovedMediaFact = {
   checksum: string;
   url: string;
   alt: string;
+  width?: number;
+  height?: number;
 };
 
 /**
@@ -132,6 +142,13 @@ export type ShowroomPublicStateFacts = {
   availability: ShowroomAvailabilityState | null;
   approvedPrices: ShowroomApprovedPriceFact[];
   approvedCopy: ShowroomApprovedCopyFact[];
+  /**
+   * The servable media set after this decision — the remaining approved,
+   * non-withdrawn assets with their url, alt and dimensions. It is what a
+   * `WITHDRAW_MEDIA` or `REVOKE` leaves servable, not only what an `APPROVE`
+   * authorized.
+   */
+  approvedMedia: ShowroomApprovedMediaFact[];
 };
 
 export type ShowroomDesignerRefInput = {
@@ -466,7 +483,8 @@ export function publicStateFacts(record: ShowroomApprovalRecord): ShowroomPublic
     approvedCopy: Object.entries(locales).map(([locale, copy]) => ({
       locale,
       copy: cloneLocaleCopy(copy)
-    }))
+    })),
+    approvedMedia: approvedMediaFacts(record)
   };
 }
 
@@ -500,6 +518,23 @@ function approvedMedia(record: ShowroomApprovalRecord): ShowroomMediaRecord[] {
   return (record.media ?? []).filter(
     (asset) => asset.approved && !asset.withdrawn && asset.checksum.trim().length > 0
   );
+}
+
+/**
+ * The servable media facts of a decision: the approved, non-withdrawn assets,
+ * each with the url, alt and intrinsic dimensions the public response rendered.
+ * This is the snapshot every audit event records — for an `APPROVE` it is the
+ * authorized set, and for a `WITHDRAW_MEDIA` or `REVOKE` it is what remains
+ * servable after the decision.
+ */
+function approvedMediaFacts(record: ShowroomApprovalRecord): ShowroomApprovedMediaFact[] {
+  return approvedMedia(record).map((asset) => ({
+    checksum: asset.checksum,
+    url: asset.url,
+    alt: asset.alt,
+    ...(asset.width === undefined ? {} : { width: asset.width }),
+    ...(asset.height === undefined ? {} : { height: asset.height })
+  }));
 }
 
 /**

@@ -548,7 +548,15 @@ function approveBody(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function adminContainer({ service, failTranslations = false }: { service: any; failTranslations?: boolean }) {
+function adminContainer({
+  service,
+  failTranslations = false,
+  productRows = []
+}: {
+  service: any;
+  failTranslations?: boolean;
+  productRows?: any[];
+}) {
   return {
     resolve(key: string) {
       if (key === "translation") {
@@ -558,6 +566,14 @@ function adminContainer({ service, failTranslations = false }: { service: any; f
               throw new Error("Failed to read the live product translations");
             }
             return [];
+          }
+        };
+      }
+      if (key === "query") {
+        return {
+          async graph({ filters }: any = {}) {
+            const id = filters?.id;
+            return { data: id === undefined ? productRows : productRows.filter((row: any) => row.id === id) };
           }
         };
       }
@@ -648,4 +664,53 @@ test("a decision against a subject with no approval is a 404", async () => {
 
   assert.equal(res.statusCode, 404);
   assert.equal(res.body.error.code, "NOT_FOUND");
+});
+
+test("an approval records the live product handle and status it read from the catalog", async () => {
+  let received: any = null;
+  const service = {
+    async approve(input: any) {
+      received = input;
+      return { subjectKind: "PRODUCT", subjectRef: input.subjectRef, audit: [] };
+    }
+  };
+  const res = fakeRes();
+  await adminApprovalRoute(
+    {
+      params: { productId: "prod_ok" },
+      requestId: "req-admin-approve",
+      body: approveBody(),
+      scope: adminContainer({
+        service,
+        productRows: [{ id: "prod_ok", handle: "approved-bracelet", status: "published" }]
+      })
+    } as any,
+    res as any
+  );
+
+  assert.equal(res.statusCode, 200, "the approval is recorded");
+  assert.equal(received.handle, "approved-bracelet", "the live product handle is passed to the decision");
+  assert.equal(received.productStatus, "published", "the live product status is passed to the decision");
+});
+
+test("an approval for a product that does not exist is a 404 and records nothing", async () => {
+  const service = {
+    async approve() {
+      throw new Error("approve must not be reached for a product that does not exist");
+    }
+  };
+  const res = fakeRes();
+  await adminApprovalRoute(
+    {
+      params: { productId: "prod_missing" },
+      requestId: "req-admin-404",
+      body: approveBody(),
+      scope: adminContainer({ service, productRows: [] })
+    } as any,
+    res as any
+  );
+
+  assert.equal(res.statusCode, 404, "an approval for an unknown product is a not-found");
+  assert.equal(res.body.error.code, "NOT_FOUND");
+  assert.equal(res.body.error.requestId, "req-admin-404");
 });

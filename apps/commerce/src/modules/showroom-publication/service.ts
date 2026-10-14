@@ -80,6 +80,13 @@ export type UpsertApprovalInput = {
   >;
   locales: Partial<Record<string, ShowroomLocaleCopy>>;
   media: ShowroomMediaRecord[];
+  /**
+   * The live product public facts the approval records so the audit event alone
+   * can rebuild the public response: the handle (the public slug) and the Medusa
+   * status. They are read from the live product at decision time, never inferred.
+   */
+  handle: string;
+  productStatus: string;
 };
 
 const isKnownSubjectKind = (value: string): value is ShowroomSubjectKind =>
@@ -304,9 +311,6 @@ class ShowroomPublicationService extends MedusaService({
           // the incoming set omits is retained, so a replayed, omitting or
           // reintroducing APPROVE can never revive it.
           const media = mergeWithdrawalFacts(existing?.record.media ?? [], input.media ?? []);
-          const approvedMedia = media
-            .filter((asset) => asset.approved && !asset.withdrawn && asset.checksum.trim().length > 0)
-            .map((asset) => ({ checksum: asset.checksum, url: asset.url, alt: asset.alt }));
           const base: ShowroomApproval = {
             subjectKind: input.subjectKind,
             subjectRef: input.subjectRef,
@@ -323,7 +327,8 @@ class ShowroomPublicationService extends MedusaService({
             at,
             actorId,
             ...publicStateFacts(base),
-            approvedMedia
+            handle: input.handle,
+            productStatus: input.productStatus
           });
 
           if (existing) {
@@ -418,7 +423,13 @@ class ShowroomPublicationService extends MedusaService({
         actorId,
         ...(reason ? { reason } : {}),
         ...publicStateFacts(withdrawn),
-        withdrawnMedia: { checksum: target.checksum, url: target.url, alt: target.alt }
+        withdrawnMedia: {
+          checksum: target.checksum,
+          url: target.url,
+          alt: target.alt,
+          ...(target.width === undefined ? {} : { width: target.width }),
+          ...(target.height === undefined ? {} : { height: target.height })
+        }
       });
     });
   }

@@ -1,4 +1,4 @@
-import { Modules } from "@medusajs/framework/utils";
+import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils";
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import {
@@ -166,6 +166,34 @@ function stampTranslationFingerprints(
   return stamped;
 }
 
+/**
+ * The live product public facts an approval must record so the audit event alone
+ * can rebuild the public response: the handle (the public slug) and the Medusa
+ * status. A read failure is surfaced; a product that does not exist is `null`,
+ * so no decision is ever recorded against unknown facts.
+ */
+async function liveProductPublicFacts(
+  scope: any,
+  productId: string
+): Promise<{ handle: string; status: string } | null> {
+  let rows: any[] = [];
+  try {
+    const { data } = await scope.resolve(ContainerRegistrationKeys.QUERY).graph({
+      entity: "product",
+      fields: ["id", "handle", "status"],
+      filters: { id: productId }
+    });
+    rows = data ?? [];
+  } catch {
+    throw new Error("Failed to read the live product");
+  }
+  const row = rows[0];
+  if (!row) {
+    return null;
+  }
+  return { handle: String(row.handle ?? ""), status: String(row.status ?? "") };
+}
+
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const productId = String(req.params.productId ?? "");
   const service = req.scope.resolve(SHOWROOM_PUBLICATION_MODULE) as ShowroomPublicationService;
@@ -211,6 +239,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   try {
     if (action === "APPROVE") {
       const fingerprints = await liveTranslationFingerprints(req.scope, productId);
+      const productFacts = await liveProductPublicFacts(req.scope, productId);
+      if (!productFacts) {
+        res.status(404).json(errorEnvelope("NOT_FOUND", "The product does not exist.", req.requestId));
+        return;
+      }
       const approval = await service.approve(
         {
           subjectKind: "PRODUCT",
@@ -220,7 +253,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           availability: body.availability,
           prices: body.prices ?? {},
           locales: stampTranslationFingerprints(body.locales, fingerprints),
-          media: body.media
+          media: body.media,
+          handle: productFacts.handle,
+          productStatus: productFacts.status
         },
         actorId
       );

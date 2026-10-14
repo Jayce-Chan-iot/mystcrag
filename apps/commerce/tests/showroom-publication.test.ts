@@ -37,6 +37,9 @@ const REGION_TW = "region_tw_taiwan";
 const CN_PRICE_MINOR = 128_000;
 const TW_PRICE_MINOR = 560_000;
 
+// The live product handle (its public slug) the approved subject serves under.
+const PRODUCT_HANDLE = "wuye-calm-water-bracelet";
+
 const MARKETS: ShowroomMarket[] = ["CN", "TW"];
 const LOCALES: ShowroomLocale[] = ["zh-CN", "zh-TW", "en-US"];
 
@@ -593,20 +596,51 @@ test("the recorded public-state facts carry the authorization window, display st
   assert.deepEqual(zh?.copy.specifications, [{ label: "内径", value: "16cm" }]);
   assert.equal(zh?.copy.designer?.slug, "designer-lin");
   assert.equal(zh?.copy.translationFingerprint, "fp-reviewed-zh", "the reviewed translation fingerprint is recorded");
+  assert.equal(facts.approvedMedia.length, 2, "the servable media set of the decision is recorded");
+  assert.equal(facts.approvedMedia[0].width, 1200, "the recorded media keeps its width");
+  assert.equal(facts.approvedMedia[0].height, 1200, "the recorded media keeps its height");
 });
 
-test("an APPROVE audit event alone rebuilds the copy and media a later APPROVE overwrote", () => {
-  // APPROVE A establishes copy A and media A on the record.
+test("the recorded public-state facts carry the remaining servable media after a withdrawal", () => {
+  const [withdrawnAsset, remainingAsset] = approvedMedia();
+  const record = makeApproval({
+    media: [
+      { ...withdrawnAsset, withdrawn: true },
+      { ...remainingAsset, width: 800, height: 600 }
+    ]
+  });
+  const facts = publicStateFacts(record);
+  assert.deepEqual(
+    facts.approvedMedia.map((fact) => fact.checksum),
+    [remainingAsset.checksum],
+    "a withdrawn asset is absent from the recorded servable set"
+  );
+  assert.equal(facts.approvedMedia[0].width, 800, "the remaining media keeps its width");
+  assert.equal(facts.approvedMedia[0].height, 600, "the remaining media keeps its height");
+});
+
+test("an APPROVE audit event alone rebuilds the copy, media and product facts a later APPROVE overwrote", () => {
+  // APPROVE A establishes copy A, media A (with its intrinsic dimensions) and
+  // the subject's public handle and product status.
   const copyA = {
     reviewedRevision: 3,
     title: "无野 · 静水手链（A 版）",
     summary: "A 版摘要",
     materials: ["天然静水石", "黄铜"],
     specifications: [{ label: "内径", value: "16cm" }],
-    designer: { slug: "designer-lin", displayName: "林也" }
+    designer: { slug: "designer-lin", displayName: "林也" },
+    translationFingerprint: "fp-a"
   };
   const mediaA = [
-    { url: "/showroom/wuye/hero-a.webp", alt: "A 版主图", checksum: "sha256:a", approved: true, withdrawn: false }
+    {
+      url: "/showroom/wuye/hero-a.webp",
+      alt: "A 版主图",
+      checksum: "sha256:a",
+      approved: true,
+      withdrawn: false,
+      width: 1200,
+      height: 900
+    }
   ];
   const recordA = makeApproval({ locales: { "zh-CN": copyA }, media: mediaA });
   const afterA = appendAuditEvent(recordA, {
@@ -614,20 +648,30 @@ test("an APPROVE audit event alone rebuilds the copy and media a later APPROVE o
     at: NOW,
     actorId: "admin-1",
     ...publicStateFacts(recordA),
-    approvedMedia: mediaA.map((asset) => ({ checksum: asset.checksum, url: asset.url, alt: asset.alt }))
+    handle: PRODUCT_HANDLE,
+    productStatus: "published"
   });
 
-  // APPROVE B overwrites the same subject's live copy and media in place.
+  // APPROVE B overwrites the same subject's live copy, media and revision.
   const copyB = {
     reviewedRevision: 4,
     title: "无野 · 静水手链（B 版）",
     summary: "B 版摘要",
     materials: ["天然静水石"],
     specifications: [{ label: "内径", value: "17cm" }],
-    designer: { slug: "designer-lin", displayName: "林也" }
+    designer: { slug: "designer-lin", displayName: "林也" },
+    translationFingerprint: "fp-b"
   };
   const mediaB = [
-    { url: "/showroom/wuye/hero-b.webp", alt: "B 版主图", checksum: "sha256:b", approved: true, withdrawn: false }
+    {
+      url: "/showroom/wuye/hero-b.webp",
+      alt: "B 版主图",
+      checksum: "sha256:b",
+      approved: true,
+      withdrawn: false,
+      width: 640,
+      height: 640
+    }
   ];
   const recordB = makeApproval({
     publicRevision: 4,
@@ -640,7 +684,8 @@ test("an APPROVE audit event alone rebuilds the copy and media a later APPROVE o
     at: NOW,
     actorId: "admin-2",
     ...publicStateFacts(recordB),
-    approvedMedia: mediaB.map((asset) => ({ checksum: asset.checksum, url: asset.url, alt: asset.alt }))
+    handle: PRODUCT_HANDLE,
+    productStatus: "published"
   });
 
   // The live record now serves B; only the audit trail remembers A.
@@ -656,10 +701,39 @@ test("an APPROVE audit event alone rebuilds the copy and media a later APPROVE o
   );
   assert.equal(eventA.approvedMedia?.[0].checksum, "sha256:a", "A's event keeps A's own media");
   assert.equal(eventA.approvedMedia?.[0].alt, "A 版主图", "A's event keeps A's own media alt");
+  assert.equal(eventA.approvedMedia?.[0].width, 1200, "A's event keeps A's own media width");
+  assert.equal(eventA.approvedMedia?.[0].height, 900, "A's event keeps A's own media height");
   assert.notEqual(eventA.approvedMedia?.[0].checksum, eventB.approvedMedia?.[0].checksum);
 
-  // Rebuild A's public read strictly from event A's facts and prove it serves A.
-  const rebuiltA: ShowroomApprovalRecord = {
+  // Rebuild A's public read strictly from event A's own facts — the copy, media
+  // and price facts, plus the live product public facts (handle, status, price
+  // rows, translation versions) it recorded. No fabricated product or record is
+  // used to supply history the event does not carry.
+  const market = (eventA.markets as ShowroomMarket[])[0];
+  const locale = eventA.approvedCopy![0].locale as ShowroomLocale;
+  const priceFact = eventA.approvedPrices!.find((fact) => fact.market === market)!;
+  const rebuiltProduct: ShowroomLiveProduct = {
+    id: "prod_wuye_bracelet",
+    handle: eventA.handle as string,
+    status: eventA.productStatus as string,
+    collectionId: null,
+    variants: [
+      {
+        id: "variant-rebuilt-from-audit",
+        prices: eventA.approvedPrices!.map((fact) => ({
+          regionId: fact.regionId,
+          currencyCode: fact.currency,
+          amountMinor: fact.amountMinor
+        }))
+      }
+    ],
+    translations: Object.fromEntries(
+      eventA.approvedCopy!
+        .filter((fact) => fact.copy.translationFingerprint !== undefined)
+        .map((fact) => [fact.locale, fact.copy.translationFingerprint as string])
+    )
+  };
+  const rebuiltRecord: ShowroomApprovalRecord = {
     subjectKind: "PRODUCT",
     subjectRef: "prod_wuye_bracelet",
     publicRevision: eventA.publicRevision as number,
@@ -683,12 +757,21 @@ test("an APPROVE audit event alone rebuilds the copy and media a later APPROVE o
     })),
     audit: []
   };
-  const served = evaluateShowroomProduct(makeProduct(), rebuiltA, contextFor("CN", "zh-CN"));
+  const served = evaluateShowroomProduct(rebuiltProduct, rebuiltRecord, {
+    market,
+    locale,
+    regionId: priceFact.regionId,
+    now: eventA.at
+  });
   assert.equal(served.ok, true, "A is served from the audit event alone");
   if (served.ok) {
+    assert.equal(served.value.slug, PRODUCT_HANDLE, "the product handle is rebuilt from the event");
     assert.equal(served.value.title, copyA.title, "the rebuilt public response is A, not B");
     assert.equal(served.value.summary, copyA.summary);
+    assert.equal(served.value.price.amountMinor, priceFact.amountMinor);
     assert.equal(served.value.media[0].url, mediaA[0].url);
     assert.equal(served.value.media[0].alt, mediaA[0].alt);
+    assert.equal(served.value.media[0].width, 1200, "the rebuilt media keeps the audited width");
+    assert.equal(served.value.media[0].height, 900, "the rebuilt media keeps the audited height");
   }
 });
